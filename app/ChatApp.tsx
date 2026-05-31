@@ -789,6 +789,76 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     emptyRunner()
   );
 
+  // === Runner helper（P1-3）===
+  // 为了避免 stale closure,所有 helper 都从 ref 读最新 active key/snapshot:
+  // setState 异步,但 ref 同步 mutate,callbacks 里读 activeKeyRef.current 永远是最新值。
+  const activeKeyRef = useRef<RunnerKey>(DRAFT_KEY);
+  useEffect(() => {
+    activeKeyRef.current = activeKey;
+  }, [activeKey]);
+
+  /** 把 patch 写入指定 runner;若该 runner 是当前活跃的,同步 setActiveSnapshot 触发渲染。 */
+  const updateRunner = useCallback(
+    (
+      key: RunnerKey,
+      patch:
+        | Partial<RunnerState>
+        | ((prev: RunnerState) => Partial<RunnerState>)
+    ) => {
+      const cur = runnersRef.current.get(key);
+      if (!cur) return; // 已被 LRU 淘汰或还没 lazy 加载,丢弃
+      const delta = typeof patch === "function" ? patch(cur) : patch;
+      const next: RunnerState = {
+        ...cur,
+        ...delta,
+        lastTouched: Date.now(),
+      };
+      runnersRef.current.set(key, next);
+      if (key === activeKeyRef.current) {
+        setActiveSnapshot(next);
+      }
+    },
+    []
+  );
+
+  /** 写当前活跃 runner —— 等价于 updateRunner(activeKey, patch),但永远走 active 路径。 */
+  const updateActive = useCallback(
+    (
+      patch:
+        | Partial<RunnerState>
+        | ((prev: RunnerState) => Partial<RunnerState>)
+    ) => {
+      updateRunner(activeKeyRef.current, patch);
+    },
+    [updateRunner]
+  );
+
+  /**
+   * 切换活跃 runner。
+   *  - 不关任何 SSE(让后台流式继续)
+   *  - 目标 runner 必须已经存在于 Map(草稿/已切换过的);冷启动选历史会话由调用方
+   *    先 runnersRef.current.set(key, runnerWithCtx) 再 switchTo(key)。
+   */
+  const switchTo = useCallback((newKey: RunnerKey) => {
+    const target = runnersRef.current.get(newKey);
+    if (!target) {
+      // 目标不存在 —— 调用方该先 lazy create runner 再 switchTo。
+      // 这里兜底建一个空 runner,避免渲染崩。
+      const fresh = emptyRunner();
+      runnersRef.current.set(newKey, fresh);
+      activeKeyRef.current = newKey;
+      setActiveKey(newKey);
+      setActiveSnapshot(fresh);
+      return;
+    }
+    // 更新 lastTouched 进 LRU 表
+    const touched: RunnerState = { ...target, lastTouched: Date.now() };
+    runnersRef.current.set(newKey, touched);
+    activeKeyRef.current = newKey;
+    setActiveKey(newKey);
+    setActiveSnapshot(touched);
+  }, []);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   // 用户是否"贴底"：贴底时新内容自动跟随，往上滚一旦离开底部 64px 就停止跟随。
