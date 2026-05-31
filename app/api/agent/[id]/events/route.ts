@@ -32,7 +32,14 @@ export async function GET(
 
   const url = new URL(req.url);
   const sinceRaw = url.searchParams.get("since");
-  const since = sinceRaw ? Number(sinceRaw) : -1;
+  // EventSource 自动重连时会带 Last-Event-ID 头(我们 sseEncode 的 `id:` 字段)
+  // 优先用 ?since= 显式查询;没有就 fallback 到 Last-Event-ID
+  const lastEventId = req.headers.get("last-event-id");
+  const since = sinceRaw
+    ? Number(sinceRaw)
+    : lastEventId
+      ? Number(lastEventId)
+      : -1;
 
   const encoder = new TextEncoder();
   let unsub: (() => void) | null = null;
