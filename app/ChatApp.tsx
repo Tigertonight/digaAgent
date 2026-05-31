@@ -1101,74 +1101,91 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   }, [agentSessionId, selectedId, agentId]);
 
   // 拉当前 agent 的 forkable user messages
-  const refreshForkList = useCallback(async (aid: string) => {
-    try {
-      const r = await fetch(
-        `/api/agent/${aid}?action=user_messages_for_forking`
-      );
-      const data = await r.json();
-      if (Array.isArray(data.messages)) {
-        setForkableUserMessages(data.messages as ForkableUserMessage[]);
+  // refreshForkList / refreshStats / refreshToolsCount 写到指定 runner;
+  // ownerKey 缺省 = 当前活跃 runner —— 兼容老调用点。
+  const refreshForkList = useCallback(
+    async (aid: string, ownerKey?: RunnerKey) => {
+      try {
+        const r = await fetch(
+          `/api/agent/${aid}?action=user_messages_for_forking`
+        );
+        const data = await r.json();
+        if (Array.isArray(data.messages)) {
+          updateRunner(ownerKey ?? activeKeyRef.current, {
+            forkableUserMessages: data.messages as ForkableUserMessage[],
+          });
+        }
+      } catch (e) {
+        console.warn("refreshForkList failed", e);
       }
-    } catch (e) {
-      console.warn("refreshForkList failed", e);
-    }
-  }, []);
+    },
+    [updateRunner]
+  );
 
   // 拉 token/cost/context window HUD
-  const refreshStats = useCallback(async (aid: string) => {
-    try {
-      const r = await fetch(`/api/agent/${aid}?action=stats`);
-      if (!r.ok) return;
-      const d = (await r.json()) as {
-        stats?: {
-          tokens?: {
-            input?: number;
-            output?: number;
-            cacheRead?: number;
-            total?: number;
+  const refreshStats = useCallback(
+    async (aid: string, ownerKey?: RunnerKey) => {
+      try {
+        const r = await fetch(`/api/agent/${aid}?action=stats`);
+        if (!r.ok) return;
+        const d = (await r.json()) as {
+          stats?: {
+            tokens?: {
+              input?: number;
+              output?: number;
+              cacheRead?: number;
+              total?: number;
+            };
+            cost?: number;
           };
-          cost?: number;
+          contextUsage?: {
+            tokens?: number | null;
+            percentage?: number | null;
+          } | null;
+          contextWindow?: number | null;
         };
-        contextUsage?: {
-          tokens?: number | null;
-          percentage?: number | null;
-        } | null;
-        contextWindow?: number | null;
-      };
-      const t = d.stats?.tokens ?? {};
-      setStats({
-        input: t.input ?? 0,
-        output: t.output ?? 0,
-        cacheRead: t.cacheRead ?? 0,
-        total: t.total ?? 0,
-        cost: d.stats?.cost ?? 0,
-        ctxTokens: d.contextUsage?.tokens ?? null,
-        ctxPct: d.contextUsage?.percentage ?? null,
-        ctxWindow: d.contextWindow ?? null,
-      });
-    } catch (e) {
-      console.warn("refreshStats failed", e);
-    }
-  }, []);
+        const t = d.stats?.tokens ?? {};
+        updateRunner(ownerKey ?? activeKeyRef.current, {
+          stats: {
+            input: t.input ?? 0,
+            output: t.output ?? 0,
+            cacheRead: t.cacheRead ?? 0,
+            total: t.total ?? 0,
+            cost: d.stats?.cost ?? 0,
+            ctxTokens: d.contextUsage?.tokens ?? null,
+            ctxPct: d.contextUsage?.percentage ?? null,
+            ctxWindow: d.contextWindow ?? null,
+          },
+        });
+      } catch (e) {
+        console.warn("refreshStats failed", e);
+      }
+    },
+    [updateRunner]
+  );
 
   // 拉工具启用计数（Tools pill 用）
-  const refreshToolsCount = useCallback(async (aid: string) => {
-    try {
-      const r = await fetch(`/api/agent/${aid}?action=get_tools`);
-      if (!r.ok) return;
-      const d = (await r.json()) as {
-        tools?: Array<unknown>;
-        active?: string[];
-      };
-      setToolsCount({
-        active: Array.isArray(d.active) ? d.active.length : 0,
-        total: Array.isArray(d.tools) ? d.tools.length : 0,
-      });
-    } catch (e) {
-      console.warn("refreshToolsCount failed", e);
-    }
-  }, []);
+  const refreshToolsCount = useCallback(
+    async (aid: string, ownerKey?: RunnerKey) => {
+      try {
+        const r = await fetch(`/api/agent/${aid}?action=get_tools`);
+        if (!r.ok) return;
+        const d = (await r.json()) as {
+          tools?: Array<unknown>;
+          active?: string[];
+        };
+        updateRunner(ownerKey ?? activeKeyRef.current, {
+          toolsCount: {
+            active: Array.isArray(d.active) ? d.active.length : 0,
+            total: Array.isArray(d.tools) ? d.tools.length : 0,
+          },
+        });
+      } catch (e) {
+        console.warn("refreshToolsCount failed", e);
+      }
+    },
+    [updateRunner]
+  );
 
   // 通用 agent action POST
   const agentAction = useCallback(
@@ -1273,7 +1290,12 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       es.onmessage = (ev) => {
         try {
           const event = JSON.parse(ev.data);
-          handleAgentEvent(event, aid);
+          // 后端 SSE envelope 带 id: <seq>,浏览器把它写到 ev.lastEventId
+          const seq = ev.lastEventId ? Number(ev.lastEventId) : NaN;
+          if (Number.isFinite(seq)) {
+            updateRunner(key, { lastSeq: seq });
+          }
+          handleAgentEvent(event, aid, key);
         } catch (e) {
           console.error("bad sse data", e, ev.data);
         }
@@ -1299,41 +1321,54 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     [attachSseFor]
   );
 
+  /**
+   * 处理一条 SSE 事件并把状态写到对应 runner(P1-6)。
+   *
+   * ownerKey 是事件归属的 runner key —— 不一定是当前活跃的:
+   * 切到 B 时 A 的 SSE 仍在跑,A 的事件会带 ownerKey=A 的写法路由到 runnersRef.get(A);
+   * updateRunner 内部判断 key === activeKey 才同步 setActiveSnapshot,
+   * 所以 A 的事件不会污染 B 的渲染。
+   *
+   * playDoneSound / refreshSessions 这类全局副作用,无论 owner 是谁都触发。
+   */
   function handleAgentEvent(
     ev: { type: string; [k: string]: unknown },
-    aidForEvents: string
+    aidForEvents: string,
+    ownerKey: RunnerKey
   ) {
-    // 顶层 control 事件
     switch (ev.type) {
       case "agent_start":
-        setStreaming(true);
-        setAgentPhase({ kind: "waiting_model" });
+        updateRunner(ownerKey, {
+          streaming: true,
+          agentPhase: { kind: "waiting_model" },
+        });
         return;
       case "agent_end":
-        setStreaming(false);
-        setAgentPhase(null);
-        setRetryInfo(null);
+        updateRunner(ownerKey, {
+          streaming: false,
+          agentPhase: null,
+          retryInfo: null,
+        });
         playDoneSound();
-        // 刷新左侧
         refreshSessions();
-        // 刷新可 fork 列表（用 aidForEvents 避免 stale closure）
         if (aidForEvents) {
-          void refreshForkList(aidForEvents);
-          void refreshStats(aidForEvents);
+          void refreshForkList(aidForEvents, ownerKey);
+          void refreshStats(aidForEvents, ownerKey);
         }
         return;
       case "compaction_start":
       case "auto_compaction_start":
-        setCompacting(true);
-        setCompactError(null);
+        updateRunner(ownerKey, { compacting: true, compactError: null });
         return;
       case "compaction_end":
       case "auto_compaction_end": {
-        setCompacting(false);
         const err = (ev as { error?: string; errorMessage?: string }).error
           ?? (ev as { errorMessage?: string }).errorMessage;
-        if (err) setCompactError(err);
-        if (aidForEvents) void refreshStats(aidForEvents);
+        updateRunner(ownerKey, {
+          compacting: false,
+          ...(err ? { compactError: err } : {}),
+        });
+        if (aidForEvents) void refreshStats(aidForEvents, ownerKey);
         return;
       }
       case "auto_retry_start": {
@@ -1343,71 +1378,69 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           errorMessage?: string;
         };
         if (e.attempt && e.maxAttempts) {
-          setRetryInfo({
-            attempt: e.attempt,
-            maxAttempts: e.maxAttempts,
-            errorMessage: e.errorMessage,
+          updateRunner(ownerKey, {
+            retryInfo: {
+              attempt: e.attempt,
+              maxAttempts: e.maxAttempts,
+              errorMessage: e.errorMessage,
+            },
           });
         }
         return;
       }
       case "auto_retry_end":
-        setRetryInfo(null);
+        updateRunner(ownerKey, { retryInfo: null });
         return;
       case "thinking_level_changed": {
         const lv = (ev as { level?: ThinkingLevel }).level;
-        if (lv) setThinkingLevelState(lv);
+        if (lv) updateRunner(ownerKey, { thinkingLevel: lv });
         return;
       }
-      // 其余事件交给 reducer
+      // reducer-driven 事件
       case "message_start":
       case "message_update":
       case "message_end":
       case "tool_execution_start":
       case "tool_execution_update":
       case "tool_execution_end":
-        setChatState((prev) => applyEvent(prev, ev));
-        // phase 派生：跟 pi-web 对齐
-        if (ev.type === "message_update") {
-          const sub = (ev as { assistantMessageEvent?: { type?: string } })
-            .assistantMessageEvent;
-          if (sub?.type === "thinking_delta") {
-            setAgentPhase((prev) =>
-              prev?.kind === "running_tools" ? prev : { kind: "thinking" }
-            );
-          } else if (sub?.type === "text_delta") {
-            // 出现正文输出时清掉 phase（避免和 t/s pill 重叠）
-            setAgentPhase((prev) =>
-              prev?.kind === "running_tools" ? prev : null
-            );
-          }
-        } else if (ev.type === "message_end") {
-          setAgentPhase({ kind: "waiting_model" });
-        } else if (ev.type === "tool_execution_start") {
-          const id = (ev as { toolCallId?: string }).toolCallId;
-          const name = (ev as { toolName?: string }).toolName;
-          if (id && name) {
-            setAgentPhase((prev) => {
+        updateRunner(ownerKey, (s) => {
+          const nextChat = applyEvent(s.chatState, ev);
+          // phase 派生:跟 pi-web 对齐
+          let nextPhase = s.agentPhase;
+          if (ev.type === "message_update") {
+            const sub = (ev as { assistantMessageEvent?: { type?: string } })
+              .assistantMessageEvent;
+            if (sub?.type === "thinking_delta") {
+              if (nextPhase?.kind !== "running_tools")
+                nextPhase = { kind: "thinking" };
+            } else if (sub?.type === "text_delta") {
+              if (nextPhase?.kind !== "running_tools") nextPhase = null;
+            }
+          } else if (ev.type === "message_end") {
+            nextPhase = { kind: "waiting_model" };
+          } else if (ev.type === "tool_execution_start") {
+            const id = (ev as { toolCallId?: string }).toolCallId;
+            const name = (ev as { toolName?: string }).toolName;
+            if (id && name) {
               const tools =
-                prev?.kind === "running_tools" ? [...prev.tools] : [];
+                nextPhase?.kind === "running_tools" ? [...nextPhase.tools] : [];
               if (!tools.some((t) => t.id === id)) tools.push({ id, name });
-              return { kind: "running_tools", tools };
-            });
+              nextPhase = { kind: "running_tools", tools };
+            }
+          } else if (ev.type === "tool_execution_end") {
+            const id = (ev as { toolCallId?: string }).toolCallId;
+            if (id && nextPhase?.kind === "running_tools") {
+              const tools = nextPhase.tools.filter((t) => t.id !== id);
+              nextPhase =
+                tools.length === 0
+                  ? { kind: "waiting_model" }
+                  : { kind: "running_tools", tools };
+            }
           }
-        } else if (ev.type === "tool_execution_end") {
-          const id = (ev as { toolCallId?: string }).toolCallId;
-          if (id) {
-            setAgentPhase((prev) => {
-              if (prev?.kind !== "running_tools") return prev;
-              const tools = prev.tools.filter((t) => t.id !== id);
-              if (tools.length === 0) return { kind: "waiting_model" };
-              return { kind: "running_tools", tools };
-            });
-          }
-        }
+          return { chatState: nextChat, agentPhase: nextPhase };
+        });
         return;
       default:
-        // turn_*/queue_update/auto_retry_*/session_info_changed 等先忽略
         return;
     }
   }
