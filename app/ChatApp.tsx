@@ -11,7 +11,7 @@ import type {
   ImageContentLite,
   ForkableUserMessage,
 } from "@/lib/types";
-import { THINKING_LEVELS, THINKING_LEVEL_LABELS } from "@/lib/types";
+import { THINKING_LEVEL_LABELS } from "@/lib/types";
 import {
   fileToImageContent,
   extractImagesFromClipboard,
@@ -179,47 +179,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       return next;
     });
   }, [selectedId, sessions]);
-  const [chatState, setChatState] = useState<ReducerState>(() =>
-    createInitialState()
-  );
-
-  // Fork：SDK 返回的"当前 branch 上可作为 fork target 的 user message"列表
-  const [forkableUserMessages, setForkableUserMessages] = useState<
-    ForkableUserMessage[]
-  >([]);
-  // 哪条 user message 正在被编辑（messages 数组的 index）；null 表示未在编辑
-  const [forkingIndex, setForkingIndex] = useState<number | null>(null);
-  const [forkText, setForkText] = useState("");
-  const [forkBusy, setForkBusy] = useState(false);
-
-  /**
-   * 把 forkableUserMessages 按顺序回填到 chatState.messages 里的 user message 上。
-   * 假设：SDK 返回的列表顺序 == 前端展示的 user message 顺序。
-   * 若数量不一致（比如刚发完一条但还没收到 agent_end 时拉的旧列表），多余的 user 不挂 entryId。
-   */
-  const messages = useMemo<ChatMessage[]>(() => {
-    if (forkableUserMessages.length === 0) return chatState.messages;
-    const out: ChatMessage[] = [];
-    let cursor = 0;
-    for (const m of chatState.messages) {
-      if (m.role === "user" && cursor < forkableUserMessages.length) {
-        out.push({ ...m, entryId: forkableUserMessages[cursor].entryId });
-        cursor++;
-      } else {
-        out.push(m);
-      }
-    }
-    return out;
-  }, [chatState.messages, forkableUserMessages]);
-
-  // 给 minimap 用：按 visible(user/assistant) 数量准备 ref 数组
-  const visibleMessageCount = useMemo(
-    () =>
-      messages.filter((m) => m.role === "user" || m.role === "assistant")
-        .length,
-    [messages]
-  );
-  const messageRefs = useMessageRefs(visibleMessageCount);
+  // chatState / forkable* 等 per-runner 字段已挪到 RunnerState。
+  // messages / visibleMessageCount / messageRefs 依赖 chatState/forkableUserMessages,
+  // 已下移到 activeSnapshot 解构之后(否则用前先声明会报错)。
 
   /**
    * 把扁平 sessions 按 parentSessionPath 分组：
@@ -244,53 +206,20 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     return { parents, childrenByParent };
   }, [sessions]);
 
-  const [agentId, setAgentId] = useState<string | null>(null);
-  const [agentSessionId, setAgentSessionId] = useState<string | null>(null);
-  const [input, setInput] = useState("");
+  // agentId / agentSessionId / input / pending* / streaming / phase / compacting /
+  // compactError / retryInfo / stats / toolsCount 已挪到 RunnerState(见下方解构区)。
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
-  // ===== 输入框 @ / 自动补全 =====
+  // ===== 输入框 @ / 自动补全(全局,不分会话) =====
   const [acMode, setAcMode] = useState<"@" | "/" | null>(null);
   const [acQuery, setAcQuery] = useState("");
   const [acItems, setAcItems] = useState<AutocompleteItem[]>([]);
   const [acIndex, setAcIndex] = useState(0);
   /** 触发字符在 input 中的绝对索引（含 @ 或 /） */
   const acTriggerPosRef = useRef<number>(-1);
-  const [pendingImages, setPendingImages] = useState<ImageContentLite[]>([]);
-  const [pendingFiles, setPendingFiles] = useState<PendingAttachment[]>([]);
-  const [streaming, setStreaming] = useState(false);
-  const [agentPhase, setAgentPhase] = useState<AgentPhase>(null);
   const { soundEnabled, onSoundToggle, playDoneSound } = useAudio();
-  const [compacting, setCompacting] = useState(false);
-  const [compactError, setCompactError] = useState<string | null>(null);
-  const [retryInfo, setRetryInfo] = useState<{
-    attempt: number;
-    maxAttempts: number;
-    errorMessage?: string;
-  } | null>(null);
-  // compactError 3 秒自动消失
-  useEffect(() => {
-    if (!compactError) return;
-    const id = setTimeout(() => setCompactError(null), 3000);
-    return () => clearTimeout(id);
-  }, [compactError]);
-  /** Token / Cost / Context window HUD（轮询 ?action=stats） */
-  const [stats, setStats] = useState<{
-    input: number;
-    output: number;
-    cacheRead: number;
-    total: number;
-    cost: number;
-    ctxTokens: number | null;
-    ctxPct: number | null;
-    ctxWindow: number | null;
-  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cwd, setCwd] = useState(defaultCwd);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [toolsCount, setToolsCount] = useState<{
-    active: number;
-    total: number;
-  } | null>(null);
 
   /** 把一组 File 转 ImageContentLite 并 append 到 pendingImages */
   const addImageFiles = useCallback(async (files: File[] | FileList) => {
@@ -398,13 +327,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     if (modelId) localStorage.setItem("pi-model-id", modelId);
   }, [modelId]);
 
-  // thinking
-  const [thinkingLevel, setThinkingLevelState] =
-    useState<ThinkingLevel>("medium");
-  const [availableThinkingLevels, setAvailableThinkingLevels] = useState<
-    ThinkingLevel[]
-  >(THINKING_LEVELS);
-  const [supportsThinking, setSupportsThinking] = useState(true);
+  // thinking 字段(thinkingLevel / availableThinkingLevels / supportsThinking)
+  // 已挪到 RunnerState。见下方 activeSnapshot 解构区。
 
   // theme（首屏由 layout 里的 inline script 设置）
   const [theme, setTheme] = useState<Theme>("dark");
@@ -495,10 +419,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const [systemPromptText, setSystemPromptText] = useState<string | null>(
     null
   );
-  /** SSE 连接状态 HUD —— pi-web 风格 "Live sync active" / "Connection lost" */
-  const [sseStatus, setSseStatus] = useState<"idle" | "active" | "lost">(
-    "idle"
-  );
+  // sseStatus 已挪到 RunnerState(每个会话独立的 SSE 状态)。
   /** 折叠 fork 按钮（pi-web 风格 Collapse/Expand forks） */
   const [forksCollapsed, setForksCollapsed] = useState(false);
   useEffect(() => {
@@ -598,10 +519,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       .catch((e) => console.warn("getAppInfo failed", e));
   }, []);
 
-  // 当前 agent 的 session file
-  const [currentSessionFile, setCurrentSessionFile] = useState<string | null>(
-    null
-  );
+  // currentSessionFile 已挪到 RunnerState.sessionFile(下方解构提供同名别名)。
 
   // 启动时拉 providers
   // applyDefaults 时:优先尊重当前 state(来自 localStorage),仅当为空或失效才用后端 default
@@ -858,6 +776,206 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     setActiveKey(newKey);
     setActiveSnapshot(touched);
   }, []);
+
+  // ===== 当前活跃 runner 的解构(P1-4)=====
+  // 所有下游 callbacks/render 通过这些同名变量读取,行为与原 useState 完全一致。
+  const {
+    chatState,
+    forkableUserMessages,
+    forkingIndex,
+    forkText,
+    forkBusy,
+    agentId,
+    agentSessionId,
+    sessionFile: currentSessionFile,
+    input,
+    pendingImages,
+    pendingFiles,
+    streaming,
+    agentPhase,
+    compacting,
+    compactError,
+    retryInfo,
+    stats,
+    toolsCount,
+    thinkingLevel,
+    availableThinkingLevels,
+    supportsThinking,
+    sseStatus,
+  } = activeSnapshot;
+
+  // ===== Setter wrappers(同名,所有调用点不动)=====
+  // 通用 helper:把 React 风格的 setter (value | (prev) => value) 路由到 updateActive。
+  // 为每个字段写一个 useCallback,保持稳定的函数 identity,避免下游误触发。
+  type Updater<T> = T | ((prev: T) => T);
+  const resolve = <T,>(prev: T, v: Updater<T>): T =>
+    typeof v === "function" ? (v as (p: T) => T)(prev) : v;
+
+  const setChatState = useCallback(
+    (v: Updater<ReducerState>) =>
+      updateActive((s) => ({ chatState: resolve(s.chatState, v) })),
+    [updateActive]
+  );
+  const setForkableUserMessages = useCallback(
+    (v: Updater<ForkableUserMessage[]>) =>
+      updateActive((s) => ({
+        forkableUserMessages: resolve(s.forkableUserMessages, v),
+      })),
+    [updateActive]
+  );
+  const setForkingIndex = useCallback(
+    (v: Updater<number | null>) =>
+      updateActive((s) => ({ forkingIndex: resolve(s.forkingIndex, v) })),
+    [updateActive]
+  );
+  const setForkText = useCallback(
+    (v: Updater<string>) =>
+      updateActive((s) => ({ forkText: resolve(s.forkText, v) })),
+    [updateActive]
+  );
+  const setForkBusy = useCallback(
+    (v: Updater<boolean>) =>
+      updateActive((s) => ({ forkBusy: resolve(s.forkBusy, v) })),
+    [updateActive]
+  );
+  const setAgentId = useCallback(
+    (v: Updater<string | null>) =>
+      updateActive((s) => ({ agentId: resolve(s.agentId, v) })),
+    [updateActive]
+  );
+  const setAgentSessionId = useCallback(
+    (v: Updater<string | null>) =>
+      updateActive((s) => ({ agentSessionId: resolve(s.agentSessionId, v) })),
+    [updateActive]
+  );
+  const setCurrentSessionFile = useCallback(
+    (v: Updater<string | null>) =>
+      updateActive((s) => ({ sessionFile: resolve(s.sessionFile, v) })),
+    [updateActive]
+  );
+  const setInput = useCallback(
+    (v: Updater<string>) =>
+      updateActive((s) => ({ input: resolve(s.input, v) })),
+    [updateActive]
+  );
+  const setPendingImages = useCallback(
+    (v: Updater<ImageContentLite[]>) =>
+      updateActive((s) => ({ pendingImages: resolve(s.pendingImages, v) })),
+    [updateActive]
+  );
+  const setPendingFiles = useCallback(
+    (v: Updater<PendingAttachment[]>) =>
+      updateActive((s) => ({ pendingFiles: resolve(s.pendingFiles, v) })),
+    [updateActive]
+  );
+  const setStreaming = useCallback(
+    (v: Updater<boolean>) =>
+      updateActive((s) => ({ streaming: resolve(s.streaming, v) })),
+    [updateActive]
+  );
+  const setAgentPhase = useCallback(
+    (v: Updater<AgentPhase>) =>
+      updateActive((s) => ({ agentPhase: resolve(s.agentPhase, v) })),
+    [updateActive]
+  );
+  const setCompacting = useCallback(
+    (v: Updater<boolean>) =>
+      updateActive((s) => ({ compacting: resolve(s.compacting, v) })),
+    [updateActive]
+  );
+  const setCompactError = useCallback(
+    (v: Updater<string | null>) =>
+      updateActive((s) => ({ compactError: resolve(s.compactError, v) })),
+    [updateActive]
+  );
+  const setRetryInfo = useCallback(
+    (
+      v: Updater<{
+        attempt: number;
+        maxAttempts: number;
+        errorMessage?: string;
+      } | null>
+    ) => updateActive((s) => ({ retryInfo: resolve(s.retryInfo, v) })),
+    [updateActive]
+  );
+  const setStats = useCallback(
+    (
+      v: Updater<{
+        input: number;
+        output: number;
+        cacheRead: number;
+        total: number;
+        cost: number;
+        ctxTokens: number | null;
+        ctxPct: number | null;
+        ctxWindow: number | null;
+      } | null>
+    ) => updateActive((s) => ({ stats: resolve(s.stats, v) })),
+    [updateActive]
+  );
+  const setToolsCount = useCallback(
+    (v: Updater<{ active: number; total: number } | null>) =>
+      updateActive((s) => ({ toolsCount: resolve(s.toolsCount, v) })),
+    [updateActive]
+  );
+  const setThinkingLevelState = useCallback(
+    (v: Updater<ThinkingLevel>) =>
+      updateActive((s) => ({ thinkingLevel: resolve(s.thinkingLevel, v) })),
+    [updateActive]
+  );
+  const setAvailableThinkingLevels = useCallback(
+    (v: Updater<ThinkingLevel[]>) =>
+      updateActive((s) => ({
+        availableThinkingLevels: resolve(s.availableThinkingLevels, v),
+      })),
+    [updateActive]
+  );
+  const setSupportsThinking = useCallback(
+    (v: Updater<boolean>) =>
+      updateActive((s) => ({ supportsThinking: resolve(s.supportsThinking, v) })),
+    [updateActive]
+  );
+  const setSseStatus = useCallback(
+    (v: Updater<"idle" | "active" | "lost">) =>
+      updateActive((s) => ({ sseStatus: resolve(s.sseStatus, v) })),
+    [updateActive]
+  );
+
+  // compactError 3 秒自动消失（原本贴在 useState 旁,现在挪到 wrapper 之后）
+  useEffect(() => {
+    if (!compactError) return;
+    const id = setTimeout(() => setCompactError(null), 3000);
+    return () => clearTimeout(id);
+  }, [compactError, setCompactError]);
+
+  /**
+   * 把 forkableUserMessages 按顺序回填到 chatState.messages 里的 user message 上。
+   * 假设：SDK 返回的列表顺序 == 前端展示的 user message 顺序。
+   * 若数量不一致（比如刚发完一条但还没收到 agent_end 时拉的旧列表），多余的 user 不挂 entryId。
+   */
+  const messages = useMemo<ChatMessage[]>(() => {
+    if (forkableUserMessages.length === 0) return chatState.messages;
+    const out: ChatMessage[] = [];
+    let cursor = 0;
+    for (const m of chatState.messages) {
+      if (m.role === "user" && cursor < forkableUserMessages.length) {
+        out.push({ ...m, entryId: forkableUserMessages[cursor].entryId });
+        cursor++;
+      } else {
+        out.push(m);
+      }
+    }
+    return out;
+  }, [chatState.messages, forkableUserMessages]);
+
+  // 给 minimap 用：按 visible(user/assistant) 数量准备 ref 数组
+  const visibleMessageCount = useMemo(
+    () =>
+      messages.filter((m) => m.role === "user" || m.role === "assistant")
+        .length,
+    [messages]
+  );
+  const messageRefs = useMessageRefs(visibleMessageCount);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
