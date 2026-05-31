@@ -37,6 +37,7 @@ export async function GET(
   const encoder = new TextEncoder();
   let unsub: (() => void) | null = null;
   let heartbeat: NodeJS.Timeout | null = null;
+  let flushTimer: NodeJS.Timeout | null = null;
   let lastSentSeq = since;
   let closed = false;
 
@@ -58,14 +59,22 @@ export async function GET(
         lastSentSeq = seq;
       }
 
-      // 2. 监听新事件
-      const flush = () => {
+      // 2. 监听新事件 —— 用 16ms 节流合并同帧内的高频 token
+      //    SDK 一个 text_delta 事件可能 5-20ms 一发,纯文本流式 50-100 events/s。
+      //    每个 event 都立即 flush + 立即 SSE write 会让前端 React commit 也变成 50-100/s。
+      //    把同一 16ms 窗内的事件累积一次 enqueue,前端最多 60fps 触发,刚好对齐 RAF。
+      const flushNow = () => {
+        flushTimer = null;
         for (const { seq, event } of getEventsSince(id, lastSentSeq)) {
           safeEnqueue(sseEncode(seq, event));
           lastSentSeq = seq;
         }
       };
-      unsub = onNewEvent(id, flush);
+      const scheduleFlush = () => {
+        if (flushTimer) return;
+        flushTimer = setTimeout(flushNow, 16);
+      };
+      unsub = onNewEvent(id, scheduleFlush);
 
       // 3. 心跳，避免代理/浏览器断流
       heartbeat = setInterval(() => {
@@ -77,6 +86,7 @@ export async function GET(
         closed = true;
         if (unsub) unsub();
         if (heartbeat) clearInterval(heartbeat);
+        if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
         try {
           controller.close();
         } catch {}
@@ -86,6 +96,7 @@ export async function GET(
       closed = true;
       if (unsub) unsub();
       if (heartbeat) clearInterval(heartbeat);
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
     },
   });
 

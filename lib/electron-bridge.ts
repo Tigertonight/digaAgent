@@ -48,6 +48,8 @@ export interface ElectronApi {
   selectDirectory(opts?: SelectDirectoryOptions): Promise<string | null>;
   revealInFinder(path: string): Promise<boolean>;
   openExternal(url: string): Promise<boolean>;
+  /** 同步取拖入 File 的绝对路径；Electron 32+ 之后必须经 webUtils 走 */
+  getPathForFile(file: File): string;
   settings: SettingsApi;
 }
 

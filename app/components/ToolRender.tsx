@@ -10,6 +10,7 @@
 import { useState } from "react";
 import type { MessagePart } from "@/lib/types";
 import { unifiedDiff, isNoChange, type DiffLine } from "@/lib/diff-utils";
+import { previewStore } from "@/lib/preview-store";
 
 type ToolPart = Extract<MessagePart, { kind: "tool" }>;
 
@@ -301,13 +302,12 @@ function ToolImages({ tool }: { tool: ToolPart }) {
       {images.map((img, i) => {
         const src = `data:${img.mimeType};base64,${img.data}`;
         return (
-          <a
+          <button
             key={i}
-            href={src}
-            target="_blank"
-            rel="noreferrer"
-            className="block rounded overflow-hidden border"
-            style={{ borderColor: "var(--border-soft)" }}
+            type="button"
+            onClick={() => previewStore.openImage(src, `tool image ${i + 1}`)}
+            className="block rounded overflow-hidden border p-0"
+            style={{ borderColor: "var(--border-soft)", background: "none", cursor: "zoom-in" }}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -315,7 +315,7 @@ function ToolImages({ tool }: { tool: ToolPart }) {
               alt={`tool image ${i + 1}`}
               style={{ maxWidth: 320, maxHeight: 320, display: "block" }}
             />
-          </a>
+          </button>
         );
       })}
     </div>

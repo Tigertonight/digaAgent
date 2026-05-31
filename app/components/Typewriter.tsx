@@ -2,25 +2,12 @@
 
 import { useEffect, useState } from "react";
 
+// 同一句话的多语言轮播：「只要相信光,我来为你解决难题」—— 致敬Tigertonight
 export const TYPEWRITER_PHRASES = [
-  "ready when you are.",
-  "ask me anything.",
-  "let's build something cool.",
-  "explore your codebase.",
-  "draft an email.",
-  "summarize that paper.",
-  "plan your weekend.",
-  "explain it like I'm five.",
-  "pair-program with me.",
-  "fix that pesky bug.",
-  "translate to 中文.",
-  "write a haiku.",
-  "brainstorm ideas.",
-  "review my pull request.",
-  "what should we cook tonight?",
-  "ship it.",
-  "make it pretty.",
-  "rubber-duck with me.",
+  "只要相信光,我来为你解决难题。",
+  "Just believe in the light — I'll solve your problems.",
+  "光を信じれば、私が君の問題を解決する。",
+  "빛을 믿기만 하면, 제가 당신의 문제를 해결해드릴게요.",
 ];
 
 export function Typewriter({ phrases }: { phrases: string[] }) {

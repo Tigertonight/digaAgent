@@ -82,16 +82,48 @@ export const previewStore = {
     };
     emit(req);
   },
+  /**
+   * 图片打开走独立的全屏 lightbox（不再塞进右侧 FileBrowser tab）。
+   * - 弹层支持下载、缩放、ESC/点击背景关闭
+   * - 不触发 sideEffects（不切右侧面板）
+   */
   openImage(src: string, title?: string): void {
-    const req: PreviewRequest = {
-      kind: "image",
-      id: `image://${src}`,
-      payload: src,
-      title: title ?? "图片预览",
-    };
-    emit(req);
+    imageLightboxStore.open(src, title);
   },
 };
+
+/**
+ * 全屏图片预览 store。
+ * - 独立于 previewStore（图片不再算"文件预览"，单独走蒙层）
+ * - 渲染由 <ImageLightbox /> 组件订阅
+ */
+type LightboxState = { src: string; title?: string } | null;
+type LightboxListener = (state: LightboxState) => void;
+
+export const imageLightboxStore = (() => {
+  const subs = new Set<LightboxListener>();
+  let current: LightboxState = null;
+  return {
+    open(src: string, title?: string) {
+      current = { src, title };
+      subs.forEach((fn) => fn(current));
+    },
+    close() {
+      current = null;
+      subs.forEach((fn) => fn(null));
+    },
+    subscribe(fn: LightboxListener): () => void {
+      subs.add(fn);
+      return () => subs.delete(fn);
+    },
+    getSnapshot(): LightboxState {
+      return current;
+    },
+    getServerSnapshot(): LightboxState {
+      return null;
+    },
+  };
+})();
 
 /** html 内容按 id 存内存(避免在 tab path 里塞整段 HTML) */
 const htmlContentStore = new Map<string, string>();

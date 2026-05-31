@@ -124,6 +124,30 @@ console.log(
   `[server-wrapper] starting standalone server (parent=${PARENT_PID}, entry=${ENTRY}, cwd=${process.cwd()})`
 );
 
+// 首次 http server listen 成功就向 parent 发 ready；让 main 进程不再 200ms 步进探测
+// （200-400ms 量级冷启动开销）。失败则 main 端的 waitForHttp 兜底，无回归风险。
+const http = require("node:http");
+const _origListen = http.Server.prototype.listen;
+let readyNotified = false;
+http.Server.prototype.listen = function patchedListen(...args) {
+  const ret = _origListen.apply(this, args);
+  this.once("listening", () => {
+    if (readyNotified) return;
+    readyNotified = true;
+    try {
+      const addr = this.address();
+      const port = typeof addr === "object" && addr ? addr.port : null;
+      if (typeof process.send === "function") {
+        process.send({ type: "server-ready", port });
+        console.log(`[server-wrapper] notified parent: server-ready port=${port}`);
+      }
+    } catch (e) {
+      console.warn("[server-wrapper] failed to notify parent:", e?.message);
+    }
+  });
+  return ret;
+};
+
 // 直接 require，等价于 `node server.js`
 // asar 内 require .js 在 Electron 二进制 + ELECTRON_RUN_AS_NODE=1（fork 默认）下 work
 require(ENTRY);

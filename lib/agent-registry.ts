@@ -25,13 +25,20 @@ import os from "node:os";
 interface AgentRecord {
   id: string;
   session: AgentSession;
-  /** 事件 ring buffer：最近 N 条事件 + 序号 */
-  events: Array<{ seq: number; event: AgentSessionEvent }>;
+  /**
+   * 事件 ring buffer:固定容量环形数组,避免每次满了 splice(O(n))。
+   * - 写:events[head++ % MAX],覆盖最旧
+   * - 读:遍历 [head - count, head),根据 seq 过滤
+   * - count = min(nextSeq, MAX),buffer 满之前 count == nextSeq
+   */
+  events: Array<{ seq: number; event: AgentSessionEvent } | undefined>;
   nextSeq: number;
   /** notify all SSE listeners */
   listeners: Set<() => void>;
   /** 用来在 dispose 时取消订阅 */
   unsubscribe: () => void;
+  /** 当前是否在跑(agent_start/end 之间为 true);给 sidebar 标"运行中"用 */
+  isStreaming: boolean;
 }
 
 const MAX_EVENTS_PER_AGENT = 5000;
@@ -137,18 +144,20 @@ export async function createAgent(opts: CreateOptions): Promise<{
   const record: AgentRecord = {
     id,
     session,
-    events: [],
+    events: new Array(MAX_EVENTS_PER_AGENT),
     nextSeq: 0,
     listeners: new Set(),
     unsubscribe: () => {},
+    isStreaming: false,
   };
 
   // 把 AgentSession 的事件流接到 ring buffer + 通知 listeners
   record.unsubscribe = session.subscribe((event) => {
-    record.events.push({ seq: record.nextSeq++, event });
-    if (record.events.length > MAX_EVENTS_PER_AGENT) {
-      record.events.splice(0, record.events.length - MAX_EVENTS_PER_AGENT);
-    }
+    // 维护"是否正在跑"flag —— sidebar 状态点直接读它
+    if (event.type === "agent_start") record.isStreaming = true;
+    else if (event.type === "agent_end") record.isStreaming = false;
+    const seq = record.nextSeq++;
+    record.events[seq % MAX_EVENTS_PER_AGENT] = { seq, event };
     for (const l of record.listeners) l();
   });
 
@@ -172,6 +181,7 @@ export function getAgent(id: string): AgentRecord | undefined {
 export function getRunningSessionFiles(): Set<string> {
   const out = new Set<string>();
   for (const rec of reg.agents.values()) {
+    if (!rec.isStreaming) continue;
     const f = rec.session.sessionFile;
     if (f) out.add(f);
   }
@@ -186,14 +196,22 @@ export function disposeAgent(id: string) {
   reg.agents.delete(id);
 }
 
-/** 给 SSE 用：拿从某个 seq 之后的所有事件 */
+/** 给 SSE 用：拿从某个 seq 之后的所有事件（按 seq 升序） */
 export function getEventsSince(
   agentId: string,
   sinceSeq: number
 ): Array<{ seq: number; event: AgentSessionEvent }> {
   const rec = reg.agents.get(agentId);
   if (!rec) return [];
-  return rec.events.filter((e) => e.seq > sinceSeq);
+  // ring buffer 物理顺序≠seq 顺序（环到头会从下标 0 重新覆盖）。
+  // 遍历整个 buffer，跳过 undefined 与 seq<=since 的项；最后按 seq 升序排。
+  // 一次回放最多 MAX_EVENTS_PER_AGENT 条，sort 成本可接受。
+  const out: Array<{ seq: number; event: AgentSessionEvent }> = [];
+  for (const e of rec.events) {
+    if (e && e.seq > sinceSeq) out.push(e);
+  }
+  out.sort((a, b) => a.seq - b.seq);
+  return out;
 }
 
 /** 注册一个事件监听器（用于 SSE 长连接），返回取消函数 */
