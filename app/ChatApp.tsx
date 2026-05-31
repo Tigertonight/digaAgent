@@ -783,6 +783,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
    *  - 目标 runner 必须已经存在于 Map(草稿/已切换过的);冷启动选历史会话由调用方
    *    先 runnersRef.current.set(key, runnerWithCtx) 再 switchTo(key)。
    */
+  // lruEvict 的前向引用容器(switchTo 在 lruEvict 之前定义,需要通过 ref 调用)
+  const lruEvictRef = useRef<(() => void) | null>(null);
+
   const switchTo = useCallback((newKey: RunnerKey) => {
     const target = runnersRef.current.get(newKey);
     if (!target) {
@@ -793,6 +796,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       activeKeyRef.current = newKey;
       setActiveKey(newKey);
       setActiveSnapshot(fresh);
+      lruEvictRef.current?.();
       return;
     }
     // 更新 lastTouched 进 LRU 表
@@ -801,7 +805,46 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     activeKeyRef.current = newKey;
     setActiveKey(newKey);
     setActiveSnapshot(touched);
+    lruEvictRef.current?.();
   }, []);
+
+  /**
+   * LRU 淘汰: runners > MAX 时,挑出"最久未触达"的非活跃/非流式/非压缩 runner 踢掉。
+   *
+   * 踢的语义:
+   *   - 关该 runner 的 SSE(esMapRef.delete + es.close())
+   *   - runnersRef.delete(key)
+   *   - 不调 abort(后端 agent 继续跑;用户切回该 session 时会冷启动重连或新建)
+   *   - draft runner 永不淘汰(全局只有一个)
+   */
+  const MAX_RUNNERS = 8;
+  const lruEvict = useCallback(() => {
+    const map = runnersRef.current;
+    if (map.size <= MAX_RUNNERS) return;
+    const candidates: { key: RunnerKey; touched: number }[] = [];
+    for (const [key, r] of map) {
+      if (key === DRAFT_KEY) continue;
+      if (key === activeKeyRef.current) continue;
+      if (r.streaming) continue;
+      if (r.compacting) continue;
+      candidates.push({ key, touched: r.lastTouched });
+    }
+    candidates.sort((a, b) => a.touched - b.touched);
+    const need = map.size - MAX_RUNNERS;
+    for (let i = 0; i < Math.min(need, candidates.length); i++) {
+      const key = candidates[i].key;
+      const es = esMapRef.current.get(key);
+      if (es) {
+        try { es.close(); } catch {}
+        esMapRef.current.delete(key);
+      }
+      map.delete(key);
+    }
+  }, []);
+
+  useEffect(() => {
+    lruEvictRef.current = lruEvict;
+  }, [lruEvict]);
 
   // ===== 当前活跃 runner 的解构(P1-4)=====
   // 所有下游 callbacks/render 通过这些同名变量读取,行为与原 useState 完全一致。
