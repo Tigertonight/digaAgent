@@ -28,6 +28,12 @@ import {
   ctxToMessages,
   type ReducerState,
 } from "@/lib/chat-reducer";
+import {
+  emptyRunner,
+  DRAFT_KEY,
+  type RunnerKey,
+  type RunnerState,
+} from "@/lib/session-runner";
 import Markdown from "./components/Markdown";
 import ToolRender from "./components/ToolRender";
 import FileBrowser from "./components/FileBrowser";
@@ -768,6 +774,21 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   );
 
   const esRef = useRef<EventSource | null>(null);
+
+  // ===== 多会话 runner 容器(P1) =====
+  // runnersRef 是所有会话工作面的"权威存储":未在视野中的 runner(SSE 仍连)在这里继续累积事件。
+  // esMapRef 是每个 runner 的 SSE 连接;切换会话时不关 SSE,让后台流式继续。
+  // [activeKey, setActiveKey] 触发渲染:UI 从 activeSnapshot 读当前活跃 runner 的不可变快照。
+  // 当前(P1-2)只是建容器,不接管现有 useState;后续 step 才把 useState 替换为 snapshot 解构。
+  const runnersRef = useRef<Map<RunnerKey, RunnerState>>(
+    new Map([[DRAFT_KEY, emptyRunner()]])
+  );
+  const esMapRef = useRef<Map<RunnerKey, EventSource>>(new Map());
+  const [activeKey, setActiveKey] = useState<RunnerKey>(DRAFT_KEY);
+  const [activeSnapshot, setActiveSnapshot] = useState<RunnerState>(() =>
+    emptyRunner()
+  );
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   // 用户是否"贴底"：贴底时新内容自动跟随，往上滚一旦离开底部 64px 就停止跟随。
