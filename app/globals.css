@@ -1,0 +1,124 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  主题：用 [data-theme=light|dark] 切。
+  默认 light（对齐上游 @agegr/pi-web 的视觉基线）。
+  Token 命名跟上游对齐，旧名作 alias 仍可用，迁移完一处删一处。
+  详见 docs/design-tokens.md。
+*/
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* 颜色（上游对齐） */
+  --bg: #ffffff;
+  --bg-panel: #f5f5f5;
+  --bg-hover: #eeeeee;
+  --bg-selected: #e8e8e8;
+  --bg-subtle: rgba(0, 0, 0, 0.03);
+  --border: #e0e0e0;
+  --text: #1a1a1a;
+  --text-muted: #6b7280;
+  --text-dim: #9ca3af;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --user-bg: #eff6ff;
+  --assistant-bg: #ffffff;
+  --tool-bg: #f9fafb;
+
+  /* 旧名 alias —— 给未迁移组件用，后续清理 */
+  --bg-app: var(--bg);
+  --bg-panel-2: var(--bg-selected);
+  --border-soft: var(--border);
+  --fg: var(--text);
+  --fg-muted: var(--text-muted);
+  --fg-faint: var(--text-dim);
+
+  /* 过渡 */
+  --transition-duration: 150ms;
+  --transition-timing: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #1a1a1a;
+  --bg-panel: #242424;
+  --bg-hover: #2e2e2e;
+  --bg-selected: #383838;
+  --bg-subtle: rgba(255, 255, 255, 0.04);
+  --border: #3a3a3a;
+  --text: #e8e8e8;
+  --text-muted: #9ca3af;
+  --text-dim: #6b7280;
+  --accent: #60a5fa;
+  --accent-hover: #93c5fd;
+  --user-bg: #1e293b;
+  --assistant-bg: #1a1a1a;
+  --tool-bg: #1f2937;
+
+  --bg-app: var(--bg);
+  --bg-panel-2: var(--bg-selected);
+  --border-soft: var(--border);
+  --fg: var(--text);
+  --fg-muted: var(--text-muted);
+  --fg-faint: var(--text-dim);
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+  /* upstream 默认 sans，仅 brand/特定区域用 mono（用 .font-mono 启用） */
+  font-family:
+    -apple-system, system-ui, "Segoe UI", Roboto, "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  word-break: break-word;
+  font-variant-numeric: tabular-nums;
+  transition:
+    background var(--transition-duration) var(--transition-timing),
+    color var(--transition-duration) var(--transition-timing);
+}
+
+.font-mono {
+  font-family:
+    var(--font-noto-mono), "JetBrains Mono", "Fira Code", Consolas,
+    ui-monospace, "PingFang SC", "Microsoft YaHei", monospace !important;
+}
+
+/* upstream layout 元类 */
+.sidebar-container {
+  display: flex;
+  flex-direction: column;
+  width: 260px;
+  height: 100%;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.sidebar-container.sidebar-closed {
+  width: 0;
+  border-right: 0;
+}
+
+/* 拖拽图片 overlay */
+@keyframes drop-zone-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes drop-ripple {
+  0%   { transform: scale(0); opacity: 0.6; }
+  100% { transform: scale(1); opacity: 0; }
+}
+
+/* sidebar 会话"运行中"状态点的脉冲 */
+@keyframes session-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(251,191,36,0.55); }
+  70%  { box-shadow: 0 0 0 6px rgba(251,191,36,0);   }
+  100% { box-shadow: 0 0 0 0 rgba(251,191,36,0);     }
+}

@@ -1,0 +1,131 @@
+{
+  "name": "mini-pi-web",
+  "version": "0.1.0",
+  "description": "Self-hosted UI for pi-coding-agent (mini fork of pi-web). Web + Electron.",
+  "license": "MIT",
+  "keywords": [
+    "pi",
+    "pi-coding-agent",
+    "ai",
+    "agent",
+    "claude",
+    "openai",
+    "llm",
+    "self-hosted",
+    "ui",
+    "nextjs"
+  ],
+  "bin": {
+    "mini-pi-web": "bin/mini-pi-web.js"
+  },
+  "//main-comment": "electron 入口仅本地开发使用；用 scripts 显式传入而不写 main，避免 npm publish 把 electron/main.js 打进 tarball。",
+  "files": [
+    "bin/",
+    ".next/server/",
+    ".next/static/",
+    ".next/BUILD_ID",
+    ".next/app-path-routes-manifest.json",
+    ".next/build-manifest.json",
+    ".next/export-marker.json",
+    ".next/fallback-build-manifest.json",
+    ".next/images-manifest.json",
+    ".next/next-minimal-server.js.nft.json",
+    ".next/next-server.js.nft.json",
+    ".next/package.json",
+    ".next/prerender-manifest.json",
+    ".next/react-loadable-manifest.json",
+    ".next/required-server-files.js",
+    ".next/required-server-files.json",
+    ".next/routes-manifest.json",
+    "public/",
+    "next.config.ts",
+    "next.config.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "MINI_PI_NO_STANDALONE=1 next build --webpack",
+    "build:electron": "next build --webpack && node scripts/copy-standalone-assets.mjs",
+    "start": "next start -p 3000",
+    "lint": "eslint .",
+    "electron:dev": "ELECTRON_DEV=1 electron electron/main.js",
+    "electron:start": "electron electron/main.js",
+    "clean": "rm -rf dist .next",
+    "electron:build": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --mac --arm64"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "^0.78.0",
+    "@earendil-works/pi-coding-agent": "^0.78.0",
+    "@lobehub/icons": "^5.10.0",
+    "lucide-react": "^0.468.0",
+    "next": "^16.2.6",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-markdown": "^10.1.0",
+    "react-syntax-highlighter": "^16.1.1",
+    "remark-gfm": "^4.0.1"
+  },
+  "optionalDependencies": {
+    "keytar": "^7.9.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
+    "@eslint/eslintrc": "^3.3.5",
+    "@tailwindcss/typography": "^0.5.19",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/react-syntax-highlighter": "^15.5.13",
+    "autoprefixer": "^10.4.20",
+    "electron": "^42.3.0",
+    "electron-builder": "^26.8.1",
+    "eslint": "^9.39.4",
+    "eslint-config-next": "^16.2.6",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.15",
+    "typescript": "^5.6.3"
+  },
+  "build": {
+    "appId": "io.minipi.web",
+    "productName": "mini-pi-web",
+    "asar": true,
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**/*",
+      ".next/standalone/**/*",
+      ".next/standalone/node_modules/**/*",
+      ".next/standalone/.next/**/*",
+      ".next/static/**/*",
+      "public/**/*",
+      "package.json",
+      "!**/.DS_Store"
+    ],
+    "asarUnpack": [
+      "**/*.node",
+      "electron/server-wrapper.js",
+      "node_modules/keytar/**/*",
+      "**/.next/standalone/node_modules/@earendil-works/pi-coding-agent/**/*"
+    ],
+    "extraResources": [],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": {
+        "target": "dmg",
+        "arch": [
+          "arm64"
+        ]
+      },
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "writeUpdateInfo": false
+    },
+    "npmRebuild": false
+  }
+}

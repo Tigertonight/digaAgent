@@ -1,0 +1,28 @@
+# mini-pi-web npm 发布过滤
+#
+# package.json "files" 已是白名单（bin/, .next/, public/, next.config.*, README, LICENSE），
+# 这里只在 .next/ 内部再排除一些 build artifact 噪声（节省 publish 体积）。
+
+.next/cache/
+.next/trace
+.next/trace-build
+.next/turbopack
+.next/types/
+.next/diagnostics/
+
+# Source maps（生产部署不需要）
+**/*.map
+
+# 平台 / 编辑器噪声
+.DS_Store
+node_modules/
+src/
+app/
+scripts/
+electron/
+docs/
+build/
+*.tsbuildinfo
+tsconfig*.json
+postcss.config.*
+tailwind.config.*

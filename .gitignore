@@ -1,0 +1,14 @@
+node_modules
+.next
+out
+dist
+build
+.env*.local
+*.log
+.DS_Store
+tsconfig.tsbuildinfo
+*.tgz
+*.backup
+.package-lock.json.backup
+.package.json.backup
+--full-page

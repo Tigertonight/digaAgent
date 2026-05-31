@@ -1,0 +1,77 @@
+import { promises as fs } from "node:fs";
+import { NextResponse } from "next/server";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { findSessionPathById, getSessionDetail } from "@/lib/sessions";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+export async function GET(
+  _req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  try {
+    const detail = await getSessionDetail(id);
+    if (!detail) {
+      return NextResponse.json({ error: "session not found" }, { status: 404 });
+    }
+    return NextResponse.json(detail);
+  } catch (e) {
+    return NextResponse.json(
+      { error: (e as Error).message },
+      { status: 500 }
+    );
+  }
+}
+
+/** PATCH: 重命名 session（写一条 session_info entry） */
+export async function PATCH(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  try {
+    const body = (await req.json()) as { name?: unknown };
+    const name = typeof body?.name === "string" ? body.name.trim() : "";
+    if (!name) {
+      return NextResponse.json(
+        { error: "name is required" },
+        { status: 400 }
+      );
+    }
+    const path = await findSessionPathById(id);
+    if (!path) {
+      return NextResponse.json({ error: "session not found" }, { status: 404 });
+    }
+    const sm = SessionManager.open(path);
+    sm.appendSessionInfo(name);
+    return NextResponse.json({ ok: true, id, name });
+  } catch (e) {
+    return NextResponse.json(
+      { error: (e as Error).message },
+      { status: 500 }
+    );
+  }
+}
+
+/** DELETE: 删除 session 文件 */
+export async function DELETE(
+  _req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  try {
+    const path = await findSessionPathById(id);
+    if (!path) {
+      return NextResponse.json({ error: "session not found" }, { status: 404 });
+    }
+    await fs.unlink(path);
+    return NextResponse.json({ ok: true, id });
+  } catch (e) {
+    return NextResponse.json(
+      { error: (e as Error).message },
+      { status: 500 }
+    );
+  }
+}
