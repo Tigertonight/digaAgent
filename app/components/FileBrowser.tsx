@@ -1,0 +1,1342 @@
+"use client";
+
+/**
+ * 右侧文件浏览器面板（接 /api/files）。
+ *
+ * 行为：
+ * - 起点 = props.initialPath（一般是 session.cwd）
+ * - 上方 toolbar：返回上级 / 路径输入框 / 刷新 / 关闭
+ * - 列表：懒加载（点击文件夹展开）
+ * - 点击文件 → 下半部分显示内容（Markdown 高亮）
+ * - 文本文件可编辑保存（PUT /api/files）
+ */
+import { CornerDownRight, File, FileText, Folder, Link2, WrapText } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Markdown from "./Markdown";
+import {
+  previewStore,
+  parseVirtualPath,
+  isVirtualPath,
+} from "@/lib/preview-store";
+
+interface Props {
+  initialPath: string;
+  onClose: () => void;
+  /** 若提供，文件/目录条目会显示一个 ↪ 按钮，点击后把绝对路径传给回调（用于"插入到对话"） */
+  onPickPath?: (absPath: string) => void;
+  /** 若提供，顶栏会显示"用此目录"按钮，点击后把当前 root 传出（用于切换 cwd） */
+  onPickDir?: (absPath: string) => void;
+  /** 当 tree/viewer 折叠状态变化时通知外层,以便外层容器同步收缩宽度 */
+  onLayoutChange?: (state: {
+    treeCollapsed: boolean;
+    viewerHidden: boolean;
+  }) => void;
+}
+
+interface DirEntry {
+  name: string;
+  isDir: boolean;
+  isFile: boolean;
+  isSymlink: boolean;
+}
+
+interface DirResponse {
+  kind: "dir";
+  path: string;
+  entries: DirEntry[];
+}
+
+interface FileResponse {
+  kind: "file";
+  path: string;
+  size: number;
+  modified: string;
+  content: string;
+  binary?: boolean;
+  mime?: string;
+  dataBase64?: string;
+}
+
+type FetchResp = DirResponse | FileResponse | { error: string };
+
+const LANG_BY_EXT: Record<string, string> = {
+  ts: "typescript",
+  tsx: "tsx",
+  js: "javascript",
+  jsx: "jsx",
+  mjs: "javascript",
+  cjs: "javascript",
+  json: "json",
+  md: "markdown",
+  mdx: "markdown",
+  py: "python",
+  rs: "rust",
+  go: "go",
+  java: "java",
+  kt: "kotlin",
+  swift: "swift",
+  c: "c",
+  h: "c",
+  cpp: "cpp",
+  hpp: "cpp",
+  css: "css",
+  scss: "scss",
+  html: "html",
+  xml: "xml",
+  yml: "yaml",
+  yaml: "yaml",
+  toml: "toml",
+  sh: "bash",
+  bash: "bash",
+  zsh: "bash",
+  sql: "sql",
+  rb: "ruby",
+  php: "php",
+};
+
+function langFor(name: string): string {
+  const m = name.toLowerCase().match(/\.([^.]+)$/);
+  if (!m) return "";
+  return LANG_BY_EXT[m[1]] ?? "";
+}
+
+function isProbablyText(name: string, content: string): boolean {
+  // /api/files 已经 utf8 读了，再做一道粗判：含 NUL byte 视为 binary
+  if (content.indexOf("\u0000") >= 0) return false;
+  return true;
+}
+
+function basename(p: string): string {
+  const i = p.lastIndexOf("/");
+  return i >= 0 ? p.slice(i + 1) : p;
+}
+
+function dirname(p: string): string {
+  if (p === "/" || p === "") return "/";
+  const trimmed = p.replace(/\/+$/, "");
+  const i = trimmed.lastIndexOf("/");
+  if (i <= 0) return "/";
+  return trimmed.slice(0, i);
+}
+
+function joinPath(dir: string, name: string): string {
+  if (dir === "/") return `/${name}`;
+  return `${dir.replace(/\/+$/, "")}/${name}`;
+}
+
+/** ============ 单个目录节点（递归） ============ */
+function DirNode({
+  path,
+  level,
+  selectedFile,
+  onSelectFile,
+  onPickPath,
+  onEnterDir,
+}: {
+  path: string;
+  level: number;
+  selectedFile: string | null;
+  onSelectFile: (p: string) => void;
+  onPickPath?: (absPath: string) => void;
+  /** 双击文件夹时调用：把该路径设为新 root */
+  onEnterDir?: (absPath: string) => void;
+}) {
+  const [open, setOpen] = useState(level === 0); // 根默认展开
+  const [entries, setEntries] = useState<DirEntry[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const resp = await fetch(
+        `/api/files?path=${encodeURIComponent(path)}`
+      );
+      const data: FetchResp = await resp.json();
+      if (!resp.ok || "error" in data) {
+        throw new Error("error" in data ? data.error : `HTTP ${resp.status}`);
+      }
+      if (data.kind !== "dir") throw new Error("not a directory");
+      // 排序：文件夹在前，按名字
+      const sorted = [...data.entries].sort((a, b) => {
+        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      setEntries(sorted);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [path]);
+
+  useEffect(() => {
+    if (open && entries === null && !loading) {
+      void load();
+    }
+  }, [open, entries, loading, load]);
+
+  // 父路径变化（例如根 path 改了）时重置
+  useEffect(() => {
+    setEntries(null);
+  }, [path]);
+
+  const indent = { paddingLeft: level * 12 };
+
+  return (
+    <div>
+      <div
+        className="w-full flex items-center gap-1 px-2 py-0.5 text-xs hover:opacity-80"
+        style={{ ...indent, color: "var(--fg)" }}
+      >
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          onDoubleClick={() => {
+            if (level > 0 && onEnterDir) onEnterDir(path);
+          }}
+          className="flex-1 min-w-0 flex items-center gap-1 text-left"
+          title={
+            level > 0 && onEnterDir
+              ? `${path}\n双击进入此目录`
+              : path
+          }
+        >
+          <span
+            className="w-3 inline-block text-center"
+            style={{ color: "var(--fg-muted)" }}
+          >
+            {open ? "▾" : "▸"}
+          </span>
+          <Folder size={12} style={{ color: "var(--fg-muted)" }} />
+          <span className="truncate">
+            {level === 0 ? path : basename(path)}
+          </span>
+        </button>
+        {level === 0 && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              void load();
+            }}
+            className="ml-auto text-[10px] px-1"
+            style={{ color: "var(--fg-faint)" }}
+            title="reload"
+          >
+            ↻
+          </button>
+        )}
+      </div>
+      {open && (
+        <div>
+          {loading && (
+            <div
+              className="text-[10px] px-2 py-0.5"
+              style={{ ...indent, paddingLeft: (level + 1) * 12, color: "var(--fg-faint)" }}
+            >
+              loading…
+            </div>
+          )}
+          {err && (
+            <div
+              className="text-[10px] px-2 py-0.5 text-red-400"
+              style={{ paddingLeft: (level + 1) * 12 }}
+            >
+              {err}
+            </div>
+          )}
+          {entries &&
+            entries.map((e) => {
+              const child = joinPath(path, e.name);
+              if (e.isDir) {
+                return (
+                  <DirNode
+                    key={child}
+                    path={child}
+                    level={level + 1}
+                    selectedFile={selectedFile}
+                    onSelectFile={onSelectFile}
+                    onPickPath={onPickPath}
+                    onEnterDir={onEnterDir}
+                  />
+                );
+              }
+              const active = selectedFile === child;
+              return (
+                <div
+                  key={child}
+                  className="w-full flex items-center gap-1 text-xs hover:opacity-90"
+                  style={{
+                    paddingLeft: (level + 1) * 12 + 14,
+                    background: active ? "var(--bg-panel-2)" : "transparent",
+                    color: "var(--fg)",
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => onSelectFile(child)}
+                    className="flex-1 min-w-0 flex items-center gap-1 px-2 py-0.5 text-left"
+                    title={child}
+                  >
+                    {e.isSymlink ? (
+                      <Link2 size={11} style={{ color: "var(--fg-muted)" }} />
+                    ) : (
+                      <File size={11} style={{ color: "var(--fg-muted)" }} />
+                    )}
+                    <span className="truncate">{e.name}</span>
+                  </button>
+                  {onPickPath && (
+                    <button
+                      type="button"
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        onPickPath(child);
+                      }}
+                      className="px-1 text-[10px] opacity-70 hover:opacity-100"
+                      style={{ color: "var(--fg-faint)" }}
+                      title="Insert path into chat"
+                    >
+                      <CornerDownRight size={11} />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          {entries && entries.length === 0 && (
+            <div
+              className="text-[10px] px-2 py-0.5"
+              style={{ paddingLeft: (level + 1) * 12, color: "var(--fg-faint)" }}
+            >
+              (empty)
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** ============ 文件 viewer ============ */
+function FileViewer({
+  path,
+  onClose,
+}: {
+  path: string;
+  onClose: () => void;
+}) {
+  const [file, setFile] = useState<FileResponse | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [wrap, setWrap] = useState(true);
+  // html 文件可在源码 / 渲染两种视图切换
+  const [htmlRendered, setHtmlRendered] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const resp = await fetch(
+        `/api/files?path=${encodeURIComponent(path)}`
+      );
+      const data: FetchResp = await resp.json();
+      if (!resp.ok || "error" in data) {
+        throw new Error("error" in data ? data.error : `HTTP ${resp.status}`);
+      }
+      if (data.kind !== "file") throw new Error("not a file");
+      setFile(data);
+      setDraft(data.content);
+      setEditing(false);
+    } catch (e) {
+      setErr((e as Error).message);
+      setFile(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [path]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const save = useCallback(async () => {
+    if (!file) return;
+    setSaving(true);
+    setErr(null);
+    try {
+      const resp = await fetch(
+        `/api/files?path=${encodeURIComponent(file.path)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "text/plain" },
+          body: draft,
+        }
+      );
+      if (!resp.ok) {
+        const txt = await resp.text();
+        throw new Error(`HTTP ${resp.status}: ${txt}`);
+      }
+      // 重新加载以刷新 size/modified
+      await load();
+      setEditing(false);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }, [file, draft, load]);
+
+  const language = useMemo(() => (file ? langFor(file.path) : ""), [file]);
+  const text = file?.content ?? "";
+  const isImage = !!file?.binary && !!file?.mime?.startsWith("image/");
+  const isAudio = !!file?.binary && !!file?.mime?.startsWith("audio/");
+  const isHtml =
+    !!file &&
+    !file.binary &&
+    /\.(html?|xhtml)$/i.test(file.path);
+  const isText = file
+    ? !file.binary && isProbablyText(file.path, text)
+    : true;
+
+  return (
+    <div
+      className="flex flex-col h-full min-h-0"
+      style={{
+        background: "var(--bg-panel)",
+      }}
+    >
+      <div
+        className="flex items-center gap-2 px-2 py-1 border-b text-xs"
+        style={{ borderColor: "var(--border-soft)" }}
+      >
+        <span className="truncate flex-1 inline-flex items-center gap-1" title={path}>
+          <FileText size={12} style={{ color: "var(--fg-muted)" }} />
+          {basename(path)}
+        </span>
+        {file && !editing && (
+          <>
+            <span style={{ color: "var(--fg-faint)" }}>
+              {file.size}B
+            </span>
+            {isText && !language && (
+              <button
+                type="button"
+                onClick={() => setWrap((w) => !w)}
+                className="px-1.5 py-0.5 rounded border hover:opacity-80"
+                style={{
+                  borderColor: "var(--border)",
+                  background: wrap ? "var(--bg-panel-2)" : "transparent",
+                }}
+                title={wrap ? "关闭自动换行" : "开启自动换行"}
+              >
+                <WrapText size={11} />
+              </button>
+            )}
+            {isHtml && (
+              <button
+                type="button"
+                onClick={() => setHtmlRendered((v) => !v)}
+                className="px-1.5 py-0.5 rounded border hover:opacity-80"
+                style={{
+                  borderColor: "var(--border)",
+                  background: htmlRendered
+                    ? "var(--bg-panel-2)"
+                    : "transparent",
+                }}
+                title={htmlRendered ? "查看源码" : "渲染 HTML"}
+              >
+                {htmlRendered ? "</>" : "👁"}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              className="px-1.5 py-0.5 rounded border hover:opacity-80"
+              style={{ borderColor: "var(--border)" }}
+              disabled={!isText}
+              title={isText ? "edit" : "binary file, edit disabled"}
+            >
+              ✎
+            </button>
+          </>
+        )}
+        {editing && (
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                setEditing(false);
+                setDraft(file?.content ?? "");
+              }}
+              className="px-1.5 py-0.5 rounded border hover:opacity-80"
+              style={{ borderColor: "var(--border)" }}
+              disabled={saving}
+            >
+              cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void save()}
+              className="px-1.5 py-0.5 rounded text-white"
+              style={{ background: "var(--accent)" }}
+              disabled={saving}
+            >
+              {saving ? "saving…" : "save"}
+            </button>
+          </>
+        )}
+        <button
+          type="button"
+          onClick={() => void load()}
+          className="px-1.5 py-0.5 rounded border hover:opacity-80"
+          style={{ borderColor: "var(--border)" }}
+          title="reload"
+        >
+          ↻
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="px-1.5 py-0.5 rounded border hover:opacity-80"
+          style={{ borderColor: "var(--border)" }}
+          title="close viewer"
+        >
+          ✕
+        </button>
+      </div>
+      <div className="flex-1 overflow-auto">
+        {loading && (
+          <div className="p-3 text-xs" style={{ color: "var(--fg-faint)" }}>
+            loading…
+          </div>
+        )}
+        {err && (
+          <div className="p-3 text-xs text-red-400">{err}</div>
+        )}
+        {!loading && !err && file && !editing && (
+          isImage ? (
+            <div
+              className="p-3 flex items-center justify-center"
+              style={{ minHeight: "100%", background: "var(--bg-app)" }}
+            >
+              <img
+                src={`data:${file.mime};base64,${file.dataBase64}`}
+                alt={basename(file.path)}
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).replaceWith(
+                    document.createTextNode("Failed to load image")
+                  );
+                }}
+                style={{
+                  maxWidth: "100%",
+                  maxHeight: "100%",
+                  objectFit: "contain",
+                  imageRendering: "auto",
+                }}
+              />
+            </div>
+          ) : isAudio ? (
+            <div
+              className="p-3 flex flex-col items-center justify-center gap-2"
+              style={{ minHeight: "100%", background: "var(--bg-app)" }}
+            >
+              <audio
+                controls
+                src={`data:${file.mime};base64,${file.dataBase64}`}
+                onError={(e) =>
+                  (e.currentTarget as HTMLAudioElement).replaceWith(
+                    document.createTextNode("Failed to load audio")
+                  )
+                }
+                style={{ width: "100%", maxWidth: 480 }}
+              />
+              <div
+                className="text-[10px]"
+                style={{ color: "var(--fg-faint)" }}
+              >
+                {file.mime} · {file.size}B
+              </div>
+            </div>
+          ) : isHtml && htmlRendered ? (
+            <iframe
+              title={basename(file.path)}
+              srcDoc={text}
+              sandbox=""
+              style={{
+                width: "100%",
+                height: "100%",
+                border: "none",
+                background: "#fff",
+              }}
+            />
+          ) : isText ? (
+            language ? (
+              <div className="p-2 text-[12px]">
+                <Markdown
+                  size="small"
+                  text={`\`\`\`${language}\n${text}\n\`\`\``}
+                />
+              </div>
+            ) : (
+              <pre
+                className={
+                  wrap
+                    ? "p-3 text-[12px] whitespace-pre-wrap break-words"
+                    : "p-3 text-[12px] whitespace-pre"
+                }
+                style={{ color: "var(--fg)" }}
+              >
+                {text}
+              </pre>
+            )
+          ) : (
+            <div className="p-3 text-xs" style={{ color: "var(--fg-faint)" }}>
+              (binary file, {file.size} bytes — preview disabled)
+            </div>
+          )
+        )}
+        {!loading && !err && file && editing && (
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            className="w-full h-full p-2 text-[12px] font-mono outline-none resize-none"
+            style={{
+              background: "var(--bg-panel)",
+              color: "var(--fg)",
+              minHeight: 200,
+            }}
+            spellCheck={false}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** ============ 虚拟预览:HTML 字符串 ============ */
+function HtmlPreviewViewer({
+  content,
+  onClose,
+}: {
+  content: string;
+  onClose: () => void;
+}) {
+  const [showSource, setShowSource] = useState(false);
+  return (
+    <div
+      className="flex flex-col h-full min-h-0"
+      style={{ background: "var(--bg-panel)" }}
+    >
+      <div
+        className="flex items-center gap-2 px-2 py-1 border-b text-xs"
+        style={{ borderColor: "var(--border-soft)" }}
+      >
+        <span
+          className="truncate flex-1 inline-flex items-center gap-1"
+          style={{ color: "var(--fg-muted)" }}
+        >
+          <FileText size={12} />
+          HTML 预览
+        </span>
+        <button
+          type="button"
+          onClick={() => setShowSource((v) => !v)}
+          className="px-1.5 py-0.5 rounded border hover:opacity-80"
+          style={{
+            borderColor: "var(--border)",
+            background: showSource ? "var(--bg-panel-2)" : "transparent",
+          }}
+          title={showSource ? "渲染" : "查看源码"}
+        >
+          {showSource ? "👁" : "</>"}
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="px-1.5 py-0.5 rounded border hover:opacity-80"
+          style={{ borderColor: "var(--border)" }}
+          title="关闭"
+        >
+          ✕
+        </button>
+      </div>
+      <div className="flex-1 min-h-0 overflow-auto">
+        {showSource ? (
+          <pre
+            className="p-3 text-[12px] whitespace-pre-wrap break-words"
+            style={{ color: "var(--fg)" }}
+          >
+            {content}
+          </pre>
+        ) : (
+          <iframe
+            title="HTML 预览"
+            srcDoc={content}
+            sandbox="allow-scripts allow-forms"
+            style={{
+              width: "100%",
+              height: "100%",
+              border: "none",
+              background: "#fff",
+            }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** ============ 虚拟预览:URL ============ */
+function UrlPreviewViewer({
+  href,
+  onClose,
+}: {
+  href: string;
+  onClose: () => void;
+}) {
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [bumpKey, setBumpKey] = useState(0);
+
+  // X-Frame-Options/CSP 拒绝时,iframe load 不会触发 error,但不会成功;
+  // 用 8s 超时兜底:仍 loading 视作可能被拒绝
+  useEffect(() => {
+    setLoading(true);
+    setLoadFailed(false);
+    const t = setTimeout(() => {
+      setLoading((cur) => {
+        if (cur) setLoadFailed(true);
+        return cur;
+      });
+    }, 8000);
+    return () => clearTimeout(t);
+  }, [href, bumpKey]);
+
+  return (
+    <div
+      className="flex flex-col h-full min-h-0"
+      style={{ background: "var(--bg-panel)" }}
+    >
+      <div
+        className="flex items-center gap-2 px-2 py-1 border-b text-xs"
+        style={{ borderColor: "var(--border-soft)" }}
+      >
+        <Link2 size={12} style={{ color: "var(--fg-muted)" }} />
+        <span
+          className="truncate flex-1"
+          title={href}
+          style={{ color: "var(--fg)" }}
+        >
+          {href}
+        </span>
+        <button
+          type="button"
+          onClick={() => setBumpKey((v) => v + 1)}
+          className="px-1.5 py-0.5 rounded border hover:opacity-80"
+          style={{ borderColor: "var(--border)" }}
+          title="reload"
+        >
+          ↻
+        </button>
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="px-1.5 py-0.5 rounded border hover:opacity-80"
+          style={{ borderColor: "var(--border)", color: "var(--fg)" }}
+          title="在浏览器打开"
+        >
+          ↗
+        </a>
+        <button
+          type="button"
+          onClick={onClose}
+          className="px-1.5 py-0.5 rounded border hover:opacity-80"
+          style={{ borderColor: "var(--border)" }}
+          title="关闭"
+        >
+          ✕
+        </button>
+      </div>
+      <div className="flex-1 min-h-0 overflow-hidden relative">
+        {loadFailed ? (
+          <div
+            className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-xs text-center"
+            style={{ color: "var(--fg-muted)" }}
+          >
+            <span>该网站拒绝在框架内嵌入(X-Frame-Options / CSP)</span>
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3 py-1 rounded text-white"
+              style={{ background: "var(--accent)" }}
+            >
+              在浏览器打开
+            </a>
+          </div>
+        ) : (
+          <iframe
+            key={bumpKey}
+            title={href}
+            src={href}
+            sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+            referrerPolicy="no-referrer"
+            onLoad={() => {
+              setLoading(false);
+            }}
+            style={{
+              width: "100%",
+              height: "100%",
+              border: "none",
+              background: "#fff",
+            }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** ============ 虚拟预览:图片 ============ */
+function ImagePreviewViewer({
+  src,
+  onClose,
+}: {
+  src: string;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="flex flex-col h-full min-h-0"
+      style={{ background: "var(--bg-panel)" }}
+    >
+      <div
+        className="flex items-center gap-2 px-2 py-1 border-b text-xs"
+        style={{ borderColor: "var(--border-soft)" }}
+      >
+        <span
+          className="truncate flex-1"
+          style={{ color: "var(--fg-muted)" }}
+          title={src}
+        >
+          图片预览
+        </span>
+        <a
+          href={src}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="px-1.5 py-0.5 rounded border hover:opacity-80"
+          style={{ borderColor: "var(--border)", color: "var(--fg)" }}
+          title="在新标签页打开"
+        >
+          ↗
+        </a>
+        <button
+          type="button"
+          onClick={onClose}
+          className="px-1.5 py-0.5 rounded border hover:opacity-80"
+          style={{ borderColor: "var(--border)" }}
+          title="关闭"
+        >
+          ✕
+        </button>
+      </div>
+      <div
+        className="flex-1 min-h-0 overflow-auto flex items-center justify-center p-3"
+        style={{ background: "var(--bg-app)" }}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={src}
+          alt=""
+          style={{
+            maxWidth: "100%",
+            maxHeight: "100%",
+            objectFit: "contain",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** ============ 主面板（tree 左 + viewer 右，viewer 顶部 tab 多开） ============ */
+export default function FileBrowser({
+  initialPath,
+  onClose,
+  onPickPath,
+  onPickDir,
+  onLayoutChange,
+}: Props) {
+  const [root, setRoot] = useState(initialPath);
+  const [pathDraft, setPathDraft] = useState(initialPath);
+
+  /** 已打开的预览 tabs（按打开顺序）。可能是文件绝对路径,或虚拟 path(html:// / url:// / image://) */
+  const [tabs, setTabs] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState<string | null>(null);
+  /** 虚拟 tab 的标题映射(文件类 tab 不放,直接用 basename) */
+  const [tabTitles, setTabTitles] = useState<Record<string, string>>({});
+  const [bumpKey, setBumpKey] = useState(0);
+
+  /** 订阅 previewStore:外部触发 html/url/image 预览 */
+  useEffect(() => {
+    return previewStore.subscribe((req) => {
+      setTabs((cur) => (cur.includes(req.id) ? cur : [...cur, req.id]));
+      setActiveTab(req.id);
+      if (req.title) {
+        setTabTitles((m) => ({ ...m, [req.id]: req.title! }));
+      }
+      // 有新预览来:viewer 必须可见
+      setViewerHidden(false);
+    });
+  }, []);
+
+  /** tree 列宽（带二级 splitter） */
+  const [treeWidth, setTreeWidth] = useState(240);
+  /** tree 列折叠到 28px 窄条 */
+  const [treeCollapsed, setTreeCollapsed] = useState(false);
+  /** viewer 区域整体隐藏(无 tab 时点 ✕ 收起,新 tab 触发时自动恢复) */
+  const [viewerHidden, setViewerHidden] = useState(false);
+  useEffect(() => {
+    try {
+      const t = localStorage.getItem("fileBrowser.treeCollapsed");
+      if (t === "1") setTreeCollapsed(true);
+      const v = localStorage.getItem("fileBrowser.viewerHidden");
+      if (v === "1") setViewerHidden(true);
+    } catch {}
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "fileBrowser.treeCollapsed",
+        treeCollapsed ? "1" : "0"
+      );
+    } catch {}
+  }, [treeCollapsed]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "fileBrowser.viewerHidden",
+        viewerHidden ? "1" : "0"
+      );
+    } catch {}
+  }, [viewerHidden]);
+  // 把折叠状态向外汇报,让 ChatApp 容器跟着收缩
+  useEffect(() => {
+    onLayoutChange?.({ treeCollapsed, viewerHidden });
+  }, [treeCollapsed, viewerHidden, onLayoutChange]);
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem("fileBrowser.treeWidth");
+      if (v) {
+        const n = Number(v);
+        if (Number.isFinite(n) && n >= 160) setTreeWidth(n);
+      }
+    } catch {}
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem("fileBrowser.treeWidth", String(treeWidth));
+    } catch {}
+  }, [treeWidth]);
+  const treeDragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const onTreeSplitterDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    treeDragRef.current = { startX: e.clientX, startW: treeWidth };
+    const onMove = (ev: MouseEvent) => {
+      const ref = treeDragRef.current;
+      if (!ref) return;
+      const dx = ev.clientX - ref.startX;
+      setTreeWidth(Math.min(480, Math.max(160, ref.startW + dx)));
+    };
+    const onUp = () => {
+      treeDragRef.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    document.body.style.cursor = "ew-resize";
+    document.body.style.userSelect = "none";
+  };
+
+  // initialPath 变了（session 切换） → 同步
+  const prevInitial = useRef(initialPath);
+  useEffect(() => {
+    if (prevInitial.current !== initialPath) {
+      prevInitial.current = initialPath;
+      setRoot(initialPath);
+      setPathDraft(initialPath);
+      setTabs([]);
+      setActiveTab(null);
+      setTabTitles({});
+    }
+  }, [initialPath]);
+
+  const goUp = useCallback(() => {
+    const up = dirname(root);
+    setRoot(up);
+    setPathDraft(up);
+  }, [root]);
+
+  const applyDraft = useCallback(() => {
+    if (pathDraft && pathDraft !== root) setRoot(pathDraft);
+  }, [pathDraft, root]);
+
+  const openFile = useCallback((p: string) => {
+    setTabs((cur) => (cur.includes(p) ? cur : [...cur, p]));
+    setActiveTab(p);
+    setViewerHidden(false);
+  }, []);
+
+  const closeTab = useCallback(
+    (p: string) => {
+      setTabs((cur) => {
+        const idx = cur.indexOf(p);
+        if (idx === -1) return cur;
+        const next = [...cur.slice(0, idx), ...cur.slice(idx + 1)];
+        if (activeTab === p) {
+          const fallback = next[idx] ?? next[idx - 1] ?? null;
+          setActiveTab(fallback);
+        }
+        return next;
+      });
+      setTabTitles((m) => {
+        if (!(p in m)) return m;
+        const { [p]: _, ...rest } = m;
+        return rest;
+      });
+    },
+    [activeTab]
+  );
+
+  return (
+    <aside
+      className="border-l flex min-w-0 h-full min-h-0"
+      style={{
+        borderColor: "var(--border-soft)",
+        background: "var(--bg-app)",
+      }}
+    >
+      {/* 左：tree */}
+      {treeCollapsed ? (
+        <div
+          className="flex flex-col items-center py-1.5 gap-2"
+          style={{
+            width: 28,
+            flexShrink: 0,
+            borderRight: "1px solid var(--border-soft)",
+            background: "var(--bg-panel)",
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setTreeCollapsed(false)}
+            title="展开文件列表"
+            className="px-1 py-0.5 rounded hover:bg-[color:var(--bg-hover)]"
+            style={{ color: "var(--fg-muted)", fontSize: 12 }}
+          >
+            »
+          </button>
+          <div
+            style={{
+              writingMode: "vertical-rl",
+              fontSize: 11,
+              color: "var(--fg-muted)",
+              userSelect: "none",
+            }}
+          >
+            Files
+          </div>
+        </div>
+      ) : (
+      <div
+        className="flex flex-col min-h-0"
+        style={{
+          width: treeWidth,
+          flexShrink: 0,
+          borderRight: "1px solid var(--border-soft)",
+        }}
+      >
+        <div
+          className="px-2 py-1.5 border-b flex items-center gap-1 text-xs"
+          style={{ borderColor: "var(--border-soft)" }}
+        >
+          <button
+            type="button"
+            onClick={() => setTreeCollapsed(true)}
+            className="px-1 py-0.5 rounded hover:bg-[color:var(--bg-hover)]"
+            style={{ color: "var(--fg-muted)" }}
+            title="折叠文件列表"
+          >
+            «
+          </button>
+          <span className="font-semibold flex-1">Files</span>
+          <button
+            type="button"
+            onClick={goUp}
+            className="px-1.5 py-0.5 rounded border hover:opacity-80"
+            style={{ borderColor: "var(--border)" }}
+            title="up"
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            onClick={() => setBumpKey((v) => v + 1)}
+            className="px-1.5 py-0.5 rounded border hover:opacity-80"
+            style={{ borderColor: "var(--border)" }}
+            title="reload root"
+          >
+            ↻
+          </button>
+          {onPickDir && (
+            <button
+              type="button"
+              onClick={() => onPickDir(root)}
+              className="px-2 py-0.5 rounded text-white"
+              style={{ background: "var(--accent)" }}
+              title={`使用此目录作为 cwd: ${root}`}
+            >
+              用此目录
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-1.5 py-0.5 rounded border hover:opacity-80"
+            style={{ borderColor: "var(--border)" }}
+            title="close panel"
+          >
+            ✕
+          </button>
+        </div>
+        <div
+          className="px-2 py-1 border-b"
+          style={{ borderColor: "var(--border-soft)" }}
+        >
+          <input
+            value={pathDraft}
+            onChange={(e) => setPathDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") applyDraft();
+            }}
+            onBlur={applyDraft}
+            className="w-full text-[11px] px-1 py-0.5 rounded border outline-none"
+            style={{
+              background: "var(--bg-panel)",
+              borderColor: "var(--border)",
+              color: "var(--fg)",
+            }}
+            spellCheck={false}
+          />
+        </div>
+        <div className="flex-1 min-h-0 overflow-auto py-1">
+          <DirNode
+            key={`${root}#${bumpKey}`}
+            path={root}
+            level={0}
+            selectedFile={activeTab}
+            onSelectFile={openFile}
+            onPickPath={onPickPath}
+            onEnterDir={(p) => {
+              setRoot(p);
+              setPathDraft(p);
+            }}
+          />
+        </div>
+      </div>
+      )}
+
+      {/* tree/viewer 之间的 splitter — 仅当两侧都展示时才渲染 */}
+      {!treeCollapsed && !viewerHidden && (
+        <div
+          onMouseDown={onTreeSplitterDown}
+          title="拖动调整列宽"
+          style={{
+            width: 4,
+            cursor: "ew-resize",
+            background: "transparent",
+            flexShrink: 0,
+            transition: "background 0.12s",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "var(--accent)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "transparent";
+          }}
+        />
+      )}
+
+      {/* 右：tabs + viewer(可被整体隐藏) */}
+      {!viewerHidden && (
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
+        {tabs.length > 0 ? (
+          <>
+            <div
+              className="flex items-stretch border-b text-xs overflow-x-auto"
+              style={{
+                borderColor: "var(--border-soft)",
+                background: "var(--bg-panel)",
+              }}
+            >
+              {tabs.map((p) => {
+                const active = p === activeTab;
+                return (
+                  <div
+                    key={p}
+                    className="flex items-center gap-1 px-2 py-1 cursor-pointer border-r"
+                    style={{
+                      borderColor: "var(--border-soft)",
+                      background: active
+                        ? "var(--bg-app)"
+                        : "var(--bg-panel)",
+                      color: active ? "var(--fg)" : "var(--fg-muted)",
+                      minWidth: 0,
+                      boxShadow: active
+                        ? "inset 0 -2px 0 0 var(--accent)"
+                        : undefined,
+                    }}
+                    onClick={() => setActiveTab(p)}
+                    onAuxClick={(e) => {
+                      if (e.button === 1) {
+                        e.preventDefault();
+                        closeTab(p);
+                      }
+                    }}
+                    title={p}
+                  >
+                    <span
+                      className="truncate"
+                      style={{ maxWidth: 200, fontFamily: "var(--font-mono)" }}
+                    >
+                      {tabTitles[p] ?? basename(p)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closeTab(p);
+                      }}
+                      className="ml-1 px-1 opacity-50 hover:opacity-100 rounded hover:bg-[color:var(--bg-hover)]"
+                      title="关闭"
+                      aria-label={`Close ${basename(p)}`}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex-1 min-h-0 overflow-hidden">
+              {activeTab &&
+                (() => {
+                  if (isVirtualPath(activeTab)) {
+                    const v = parseVirtualPath(activeTab);
+                    if (!v) {
+                      return (
+                        <div
+                          className="p-3 text-xs"
+                          style={{ color: "var(--fg-faint)" }}
+                        >
+                          预览内容已失效,请重新打开
+                        </div>
+                      );
+                    }
+                    if (v.kind === "html")
+                      return (
+                        <HtmlPreviewViewer
+                          key={activeTab}
+                          content={v.payload}
+                          onClose={() => closeTab(activeTab)}
+                        />
+                      );
+                    if (v.kind === "url")
+                      return (
+                        <UrlPreviewViewer
+                          key={activeTab}
+                          href={v.payload}
+                          onClose={() => closeTab(activeTab)}
+                        />
+                      );
+                    return (
+                      <ImagePreviewViewer
+                        key={activeTab}
+                        src={v.payload}
+                        onClose={() => closeTab(activeTab)}
+                      />
+                    );
+                  }
+                  return (
+                    <FileViewer
+                      key={activeTab}
+                      path={activeTab}
+                      onClose={() => closeTab(activeTab)}
+                    />
+                  );
+                })()}
+            </div>
+          </>
+        ) : (
+          <div
+            className="flex-1 flex flex-col items-center justify-center gap-3 text-xs"
+            style={{ color: "var(--fg-faint)" }}
+          >
+            <span>选择文件预览</span>
+            <button
+              type="button"
+              onClick={() => setViewerHidden(true)}
+              className="px-2 py-0.5 rounded border hover:opacity-80"
+              style={{ borderColor: "var(--border)" }}
+              title="收起预览区"
+            >
+              ✕ 收起预览区
+            </button>
+          </div>
+        )}
+      </div>
+      )}
+
+      {/* viewer 隐藏时,在边缘提供一个重新打开预览入口 */}
+      {viewerHidden && (
+        <div
+          className="flex flex-col items-center py-1.5 gap-2"
+          style={{
+            width: 28,
+            flexShrink: 0,
+            borderLeft: "1px solid var(--border-soft)",
+            background: "var(--bg-panel)",
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setViewerHidden(false)}
+            title="展开预览区"
+            className="px-1 py-0.5 rounded hover:bg-[color:var(--bg-hover)]"
+            style={{ color: "var(--fg-muted)", fontSize: 12 }}
+          >
+            «
+          </button>
+          <div
+            style={{
+              writingMode: "vertical-rl",
+              fontSize: 11,
+              color: "var(--fg-muted)",
+              userSelect: "none",
+            }}
+          >
+            预览
+          </div>
+        </div>
+      )}
+    </aside>
+  );
+}
