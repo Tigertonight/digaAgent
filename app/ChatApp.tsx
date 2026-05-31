@@ -655,15 +655,29 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           setError(data.error);
           return;
         }
-        // 如果删的是当前打开的，重置
-        if (selectedId === id) {
-          setSelectedId(null);
-          setAgentId(null);
-          setChatState(createInitialState());
-          if (esRef.current) {
-            esRef.current.close();
-            esRef.current = null;
+        // 把对应 runner 从 Map 里删掉(如果有),关其 SSE
+        const sel = sessions.find((s) => s.id === id);
+        if (sel) {
+          const key: RunnerKey = sel.path;
+          const es = esMapRef.current.get(key);
+          if (es) {
+            es.close();
+            esMapRef.current.delete(key);
           }
+          runnersRef.current.delete(key);
+          // 删的是当前活跃的 → 切回 draft
+          if (activeKeyRef.current === key) {
+            setSelectedId(null);
+            if (!runnersRef.current.has(DRAFT_KEY)) {
+              runnersRef.current.set(DRAFT_KEY, emptyRunner());
+            }
+            activeKeyRef.current = DRAFT_KEY;
+            setActiveKey(DRAFT_KEY);
+            setActiveSnapshot(runnersRef.current.get(DRAFT_KEY)!);
+          }
+        } else if (selectedId === id) {
+          // 兜底:列表没找到但 selectedId 匹配,清掉显示
+          setSelectedId(null);
         }
         refreshSessions();
       } catch (e) {
@@ -673,7 +687,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         setPendingDeleteId(null);
       }
     },
-    [refreshSessions, selectedId]
+    [refreshSessions, selectedId, sessions]
   );
 
   /** 触发 inline 删除确认（替代原生 confirm） */
@@ -1053,21 +1067,29 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streaming, messageRefs]);
 
-  // 选已有 session → 拉 context，重置 chat state
+  // 选已有 session(P1-8):
+  //  - runnersRef 已有该 session 的 runner → 直接 switchTo(不动 SSE,后台流式继续)
+  //  - 没有 → 冷启动:emptyRunner + fetch context 填 chatState + switchTo
+  //          (不立即 attachSse;用户发送时 send() 会走 create-with-sessionPath 路径)
   useEffect(() => {
     if (!selectedId) return;
     setError(null);
-    setChatState(createInitialState());
-    setForkableUserMessages([]);
-    setForkingIndex(null);
-    setAgentId(null);
-    setAgentSessionId(null);
     const sel = sessions.find((s) => s.id === selectedId);
-    setCurrentSessionFile(sel?.path ?? null);
-    if (esRef.current) {
-      esRef.current.close();
-      esRef.current = null;
+    if (!sel) return;
+    const key: RunnerKey = sel.path;
+
+    if (runnersRef.current.has(key)) {
+      // 已有 runner —— 直接切。后台 SSE 继续,切回时累积内容立即可见。
+      switchTo(key);
+      return;
     }
+
+    // 冷启动:建空 runner,先切过去显示空(很快),再异步填 context
+    const fresh = emptyRunner();
+    fresh.sessionFile = sel.path;
+    runnersRef.current.set(key, fresh);
+    switchTo(key);
+
     void fetch(`/api/sessions/${selectedId}/context`)
       .then((r) => r.json())
       .then((ctx) => {
@@ -1075,12 +1097,15 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           setError(ctx.error);
           return;
         }
-        setChatState(createInitialState(ctxToMessages(ctx.messages ?? [])));
-        if (Array.isArray(ctx.forkableUserMessages)) {
-          setForkableUserMessages(
-            ctx.forkableUserMessages as ForkableUserMessage[]
-          );
-        }
+        updateRunner(key, {
+          chatState: createInitialState(ctxToMessages(ctx.messages ?? [])),
+          ...(Array.isArray(ctx.forkableUserMessages)
+            ? {
+                forkableUserMessages:
+                  ctx.forkableUserMessages as ForkableUserMessage[],
+              }
+            : {}),
+        });
       })
       .catch((e) => setError(String(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
