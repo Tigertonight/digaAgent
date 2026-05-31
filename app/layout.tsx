@@ -10,8 +10,11 @@ const notoMono = Noto_Sans_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "mini-pi-web",
-  description: "Self-hosted pi agent UI",
+  title: "Diga Agent",
+  description: "Diga Agent — self-hosted coding agent UI",
+  icons: {
+    icon: "/brand/diga-logo-main.webp",
+  },
 };
 
 // 在 hydrate 前同步把 theme 应用到 <html>，避免 FOUC

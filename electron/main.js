@@ -172,7 +172,21 @@ async function startStandaloneServer() {
     }
   });
 
-  const ready = await waitForHttp(`http://127.0.0.1:${port}/api/health`);
+  // 优先用 wrapper 的 IPC ready 信号（HTTP listen 一就绪立刻收到），
+  // 失败回退到 200ms 步进的 waitForHttp 探测。省 200-400ms 冷启动。
+  const ipcReady = new Promise((resolve) => {
+    const onMsg = (msg) => {
+      if (msg && msg.type === "server-ready") {
+        serverChild?.off?.("message", onMsg);
+        resolve(true);
+      }
+    };
+    serverChild.on("message", onMsg);
+  });
+  const ready = await Promise.race([
+    ipcReady,
+    waitForHttp(`http://127.0.0.1:${port}/api/health`),
+  ]);
   if (!ready) {
     throw new Error(`standalone server failed to become ready on :${port}`);
   }
@@ -280,13 +294,17 @@ async function createWindow() {
     height: 800,
     minWidth: 800,
     minHeight: 600,
-    title: "mini-pi-web",
+    title: "Diga Agent",
     webPreferences: {
       // 渲染进程就是 Next 的页面，sandbox 模式下走 preload 安全暴露 IPC
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
       preload: path.join(__dirname, "preload.js"),
+      // 中文/拼音 IME 下 Chromium spellcheck 会卡输入；本应用纯代码/聊天，关掉
+      spellcheck: false,
+      // 流式期间窗口被遮挡也不要降帧（Electron 默认 30s 后会节流）
+      backgroundThrottling: false,
     },
     backgroundColor: "#0a0a0a",
   });
@@ -327,12 +345,14 @@ async function openSettingsWindow() {
     height: 600,
     minWidth: 600,
     minHeight: 480,
-    title: "mini-pi-web · 设置",
+    title: "Diga Agent · 设置",
     webPreferences: {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
       preload: path.join(__dirname, "preload.js"),
+      spellcheck: false,
+      backgroundThrottling: false,
     },
     backgroundColor: "#0a0a0a",
     parent: BrowserWindow.getAllWindows()[0] ?? undefined,

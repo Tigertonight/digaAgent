@@ -12,3 +12,5 @@ tsconfig.tsbuildinfo
 .package-lock.json.backup
 .package.json.backup
 --full-page
+# agent 工作产物（imagegen 输出 / debug dump 等）,不入仓
+output/

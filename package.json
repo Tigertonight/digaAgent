@@ -87,9 +87,10 @@
     "typescript": "^5.6.3"
   },
   "build": {
-    "appId": "io.minipi.web",
-    "productName": "mini-pi-web",
+    "appId": "io.diga.agent",
+    "productName": "Diga Agent",
     "asar": true,
+    "compression": "maximum",
     "directories": {
       "output": "dist",
       "buildResources": "build"

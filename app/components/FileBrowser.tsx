@@ -883,7 +883,32 @@ export default function FileBrowser({
   const [tabTitles, setTabTitles] = useState<Record<string, string>>({});
   const [bumpKey, setBumpKey] = useState(0);
 
-  /** 订阅 previewStore:外部触发 html/url/image 预览 */
+  /** tree 列宽（带二级 splitter） */
+  const [treeWidth, setTreeWidth] = useState(240);
+  /** tree 列折叠到 28px 窄条
+   *  用 lazy init 直接从 localStorage 读初值；放到 useEffect 里读会出现"先 false 再 true"的回旋,
+   *  且会和 previewStore.subscribe 的 setViewerHidden(false) 抢同一个 commit 周期 → 第二次 preview 看着像没打开。 */
+  const [treeCollapsed, setTreeCollapsed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return localStorage.getItem("fileBrowser.treeCollapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  /** viewer 区域整体隐藏(无 tab 时点 ✕ 收起,新 tab 触发时自动恢复) */
+  const [viewerHidden, setViewerHidden] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return localStorage.getItem("fileBrowser.viewerHidden") === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  /** 订阅 previewStore:外部触发 html/url/image 预览
+   *  注意:此 effect 必须放在 viewerHidden state 声明之后；要在每次 mount 时
+   *  先确保 viewer 不被 localStorage 持久化的 hidden 状态盖掉 —— 见上方 lazy init。 */
   useEffect(() => {
     return previewStore.subscribe((req) => {
       setTabs((cur) => (cur.includes(req.id) ? cur : [...cur, req.id]));
@@ -894,21 +919,6 @@ export default function FileBrowser({
       // 有新预览来:viewer 必须可见
       setViewerHidden(false);
     });
-  }, []);
-
-  /** tree 列宽（带二级 splitter） */
-  const [treeWidth, setTreeWidth] = useState(240);
-  /** tree 列折叠到 28px 窄条 */
-  const [treeCollapsed, setTreeCollapsed] = useState(false);
-  /** viewer 区域整体隐藏(无 tab 时点 ✕ 收起,新 tab 触发时自动恢复) */
-  const [viewerHidden, setViewerHidden] = useState(false);
-  useEffect(() => {
-    try {
-      const t = localStorage.getItem("fileBrowser.treeCollapsed");
-      if (t === "1") setTreeCollapsed(true);
-      const v = localStorage.getItem("fileBrowser.viewerHidden");
-      if (v === "1") setViewerHidden(true);
-    } catch {}
   }, []);
   useEffect(() => {
     try {

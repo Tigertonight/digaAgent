@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   SessionInfoLite,
   ChatMessage,
@@ -31,6 +31,7 @@ import {
 import Markdown from "./components/Markdown";
 import ToolRender from "./components/ToolRender";
 import FileBrowser from "./components/FileBrowser";
+import ImageLightbox from "./components/ImageLightbox";
 import SidebarExplorer from "./components/SidebarExplorer";
 import BranchesPopover from "./components/BranchesPopover";
 import SkillsPanel from "./components/SkillsPanel";
@@ -42,6 +43,7 @@ import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
 import { Typewriter, TYPEWRITER_PHRASES } from "./components/Typewriter";
 import { PillSelect } from "./components/PillSelect";
 import { ProviderIcon } from "./components/ProviderIcon";
+import { BrandLogo } from "./components/BrandLogo";
 import {
   InputAutocomplete,
   type AutocompleteItem,
@@ -68,6 +70,12 @@ import {
   Volume2,
   VolumeX,
   Minimize2,
+  Folder,
+  FileArchive,
+  FileSpreadsheet,
+  FileCode,
+  Paperclip,
+  X,
 } from "lucide-react";
 
 interface Props {
@@ -242,6 +250,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   /** 触发字符在 input 中的绝对索引（含 @ 或 /） */
   const acTriggerPosRef = useRef<number>(-1);
   const [pendingImages, setPendingImages] = useState<ImageContentLite[]>([]);
+  const [pendingFiles, setPendingFiles] = useState<PendingAttachment[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [agentPhase, setAgentPhase] = useState<AgentPhase>(null);
   const { soundEnabled, onSoundToggle, playDoneSound } = useAudio();
@@ -293,12 +302,58 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     setPendingImages((prev) => prev.filter((_, i) => i !== idx));
   }, []);
 
+  /**
+   * 拖入分流:
+   *   - 图片(image/*) → 转 base64 进 pendingImages 内联预览
+   *   - 其它(zip/pdf/csv/md/txt/word/folder) → 通过 Electron webUtils 拿绝对路径,
+   *     以"附件 chip"塞进 pendingFiles,发送时自动拼成 @path 注入 prompt 头
+   *
+   * Web 模式没有 webUtils → 文件路径不可得,提示用户改用文件浏览器。
+   */
   const onDropFiles = useCallback(
     (files: File[]) => {
-      void addImageFiles(files);
+      const images = files.filter((f) => f.type.startsWith("image/"));
+      const others = files.filter((f) => !f.type.startsWith("image/"));
+
+      if (images.length) void addImageFiles(images);
+
+      if (others.length === 0) return;
+
+      const api = getElectronApi();
+      if (!api?.getPathForFile) {
+        setError(
+          "拖拽非图片文件需要在桌面端使用（浏览器无法获取绝对路径）。请用左下文件浏览器选择文件。"
+        );
+        return;
+      }
+      const newAttachments: PendingAttachment[] = [];
+      for (const f of others) {
+        const p = api.getPathForFile(f);
+        if (!p) continue;
+        // File API 给文件夹时 type === "" 且 size === 0,作为粗略识别
+        const isFolder = f.type === "" && f.size === 0 && !/\.[a-z0-9]{1,8}$/i.test(f.name);
+        newAttachments.push({
+          path: p,
+          name: f.name || p.split("/").pop() || p,
+          size: isFolder ? null : f.size,
+          kind: isFolder ? "folder" : kindFromName(f.name),
+        });
+      }
+      if (newAttachments.length === 0) {
+        setError("无法获取拖入文件的路径。");
+        return;
+      }
+      setPendingFiles((prev) => {
+        const seen = new Set(prev.map((a) => a.path));
+        return [...prev, ...newAttachments.filter((a) => !seen.has(a.path))];
+      });
     },
     [addImageFiles]
   );
+
+  const removePendingFile = useCallback((path: string) => {
+    setPendingFiles((prev) => prev.filter((a) => a.path !== path));
+  }, []);
   const {
     isDragOver,
     handleDragEnter,
@@ -320,8 +375,22 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
   // provider/model 选择
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
-  const [providerId, setProviderId] = useState<string>("");
-  const [modelId, setModelId] = useState<string>("");
+  // provider/model 选择持久化:用户切过模型后,刷新/重启都保留;
+  // 仅当 localStorage 没值时才用后端 defaultProvider/defaultModelId 兜底。
+  const [providerId, setProviderId] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem("pi-provider-id") ?? "";
+  });
+  const [modelId, setModelId] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem("pi-model-id") ?? "";
+  });
+  useEffect(() => {
+    if (providerId) localStorage.setItem("pi-provider-id", providerId);
+  }, [providerId]);
+  useEffect(() => {
+    if (modelId) localStorage.setItem("pi-model-id", modelId);
+  }, [modelId]);
 
   // thinking
   const [thinkingLevel, setThinkingLevelState] =
@@ -529,16 +598,38 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   );
 
   // 启动时拉 providers
+  // applyDefaults 时:优先尊重当前 state(来自 localStorage),仅当为空或失效才用后端 default
   const reloadProviders = useCallback((applyDefaults: boolean) => {
     void fetch("/api/providers")
       .then((r) => r.json() as Promise<ProvidersResponse>)
       .then((data) => {
         if (!data.providers) return;
         setProviders(data.providers);
-        if (applyDefaults && data.defaultProvider && data.defaultModelId) {
-          setProviderId(data.defaultProvider);
-          setModelId(data.defaultModelId);
-        }
+        if (!applyDefaults) return;
+        // 用 setter 拿当前值判断,避免把 providerId/modelId 写进 useCallback 依赖
+        setProviderId((curProv) => {
+          setModelId((curModel) => {
+            const provExists = data.providers.some(
+              (p) => p.provider === (curProv || "")
+            );
+            const modelExists =
+              provExists &&
+              data.providers
+                .find((p) => p.provider === curProv)
+                ?.models?.some((m) => m.id === curModel);
+            // 当前选择仍然有效 → 不动
+            if (provExists && modelExists) return curModel;
+            // 失效或没值 → 落到后端 default
+            if (data.defaultModelId) return data.defaultModelId;
+            return curModel;
+          });
+          const provExists = data.providers.some(
+            (p) => p.provider === (curProv || "")
+          );
+          if (provExists) return curProv;
+          if (data.defaultProvider) return data.defaultProvider;
+          return curProv;
+        });
       })
       .catch((e) => console.warn("load providers failed", e));
   }, []);
@@ -570,9 +661,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   }, []);
 
   /**
-   * 轻量轮询 session 列表 —— 让"运行中"状态、modified 时间、未读标记跟上后台
-   * 别的 agent 的进展。当前流式时已经会通过 refreshSessions 主动刷新,
-   * 没必要叠加;tab 不可见时也跳过。
+   * 轻量轮询 session 列表 —— 用来追踪"别的 agent"在后台的进展。
+   * 自己的 agent_end 事件已经会主动 refreshSessions（见 reducer 监听）,
+   * 所以这里只负责兜底跨 session 同步,15s 间隔足够;tab 不可见时跳过。
    */
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -580,8 +671,16 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       if (document.visibilityState !== "visible") return;
       refreshSessions();
     };
-    const id = setInterval(tick, 5000);
-    return () => clearInterval(id);
+    const id = setInterval(tick, 15000);
+    // 标签页从隐藏切回可见时立即拉一次（避免要等到下一个 15s 周期）
+    const onVis = () => {
+      if (document.visibilityState === "visible") refreshSessions();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }, [refreshSessions]);
 
   // session 菜单操作
@@ -673,18 +772,65 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   // 用户是否"贴底"：贴底时新内容自动跟随，往上滚一旦离开底部 64px 就停止跟随。
   const stickToBottomRef = useRef(true);
+  // send 后锚定到刚发的 user 消息:记 send 时的 user 消息总数,
+  // 等新 user 消息从 SSE 回来后扫到对应那条,把它滚到屏顶。
+  // null = 不锚定(普通贴底跟随);number = 期望"这条 user 一出现就锚"
+  const pendingPinUserCountRef = useRef<number | null>(null);
+  // 锚定阶段:仅此期间渲染 60vh 底部占位,让最后一条 user 能被 scroll-to-top
+  // 一旦锚定完成或被取消,移除占位,避免列表底部一大片空白可滚。
+  const [pinSpacer, setPinSpacer] = useState(false);
 
   function handleMessagesScroll() {
     const el = messagesScrollRef.current;
     if (!el) return;
     const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     stickToBottomRef.current = distanceToBottom < 64;
+    // 用户主动滚动 = 取消锚定意图(占位也跟着移除,见 effect)
+    if (pendingPinUserCountRef.current !== null) {
+      pendingPinUserCountRef.current = null;
+      setPinSpacer(false);
+    }
   }
 
   useEffect(() => {
+    // 兜底:streaming 已结束还留着锚定/占位的话清掉,避免占位永久滞留
+    if (!streaming && pendingPinUserCountRef.current !== null) {
+      pendingPinUserCountRef.current = null;
+      setPinSpacer(false);
+    }
+    // 优先级 1:有锚定目标 → 等那条 user 消息从 SSE 回来后锚到屏顶,只锚一次
+    const targetCount = pendingPinUserCountRef.current;
+    if (targetCount !== null) {
+      // 走 visible(user/assistant) 顺序计算 user 在 refs 里的下标
+      let visibleIdx = -1;
+      let lastUserVisibleIdx = -1;
+      let userCount = 0;
+      for (const m of messages) {
+        if (m.role === "user" || m.role === "assistant") {
+          visibleIdx++;
+          if (m.role === "user") {
+            userCount++;
+            lastUserVisibleIdx = visibleIdx;
+          }
+        }
+      }
+      if (userCount >= targetCount && lastUserVisibleIdx >= 0) {
+        const el = messageRefs.current?.[lastUserVisibleIdx];
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "start" });
+          // 锚定完成 → 清意图 + 移除占位,列表底部回到"最后一条 + padding"
+          pendingPinUserCountRef.current = null;
+          setPinSpacer(false);
+          return;
+        }
+      }
+      // 目标消息还没到/ref 还没挂上,这一轮先不滚,等下一次 messages 更新再试
+      return;
+    }
+    // 优先级 2:贴底时跟随新内容
     if (!stickToBottomRef.current) return;
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streaming]);
+  }, [messages, streaming, messageRefs]);
 
   // 选已有 session → 拉 context，重置 chat state
   useEffect(() => {
@@ -1022,7 +1168,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
   // 发送
   const send = useCallback(async () => {
-    if (!input.trim() && pendingImages.length === 0) return;
+    if (!input.trim() && pendingImages.length === 0 && pendingFiles.length === 0) return;
     let aid = agentId;
     if (!aid) {
       if (!providerId || !modelId) {
@@ -1063,15 +1209,29 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       void refreshStats(data.id);
       void refreshToolsCount(data.id);
     }
-    const text = input;
+    const userText = input;
     const images = pendingImages;
+    const attachments = pendingFiles;
+    // 拼最终 prompt:把所有 @path 顶在前面,后端按引用语法读文件/列文件夹
+    const refLine = attachments.map((a) => `@${a.path}`).join(" ");
+    const finalText = refLine
+      ? userText
+        ? `${refLine}\n${userText}`
+        : refLine
+      : userText;
     setInput("");
     setPendingImages([]);
+    setPendingFiles([]);
     setError(null);
+    // 锚定:期望"现有 user 数 + 1"那条新消息一出现就滚到屏顶
+    // 同时启用底部 60vh 占位,确保最后一条 user 能被滚到屏顶;锚定完成后会自动移除。
+    const currentUserCount = messages.filter((m) => m.role === "user").length;
+    pendingPinUserCountRef.current = currentUserCount + 1;
+    setPinSpacer(true);
     try {
       await agentAction(aid!, {
         type: "prompt",
-        text: text || "(image)",
+        text: finalText || "(image)",
         images: images.length > 0 ? images : undefined,
       });
     } catch {
@@ -1080,7 +1240,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   }, [
     agentId,
     input,
+    messages,
     pendingImages,
+    pendingFiles,
     cwd,
     selectedId,
     sessions,
@@ -1301,33 +1463,39 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const onSteer = useCallback(async () => {
     if (!agentId) return;
     const text = input.trim();
-    if (!text && pendingImages.length === 0) return;
+    if (!text && pendingImages.length === 0 && pendingFiles.length === 0) return;
+    const refLine = pendingFiles.map((a) => `@${a.path}`).join(" ");
+    const finalText = refLine ? (text ? `${refLine}\n${text}` : refLine) : text;
     try {
       await agentAction(agentId, {
         type: "steer",
-        text,
+        text: finalText,
         ...(pendingImages.length ? { images: pendingImages } : {}),
       });
       setInput("");
       setPendingImages([]);
+      setPendingFiles([]);
     } catch {}
-  }, [agentId, agentAction, input, pendingImages]);
+  }, [agentId, agentAction, input, pendingImages, pendingFiles]);
 
   /** Follow-up：streaming 时把输入框内容排队到当前 turn 结束后追发 */
   const onFollowUp = useCallback(async () => {
     if (!agentId) return;
     const text = input.trim();
-    if (!text && pendingImages.length === 0) return;
+    if (!text && pendingImages.length === 0 && pendingFiles.length === 0) return;
+    const refLine = pendingFiles.map((a) => `@${a.path}`).join(" ");
+    const finalText = refLine ? (text ? `${refLine}\n${text}` : refLine) : text;
     try {
       await agentAction(agentId, {
         type: "follow_up",
-        text,
+        text: finalText,
         ...(pendingImages.length ? { images: pendingImages } : {}),
       });
       setInput("");
       setPendingImages([]);
+      setPendingFiles([]);
     } catch {}
-  }, [agentId, agentAction, input, pendingImages]);
+  }, [agentId, agentAction, input, pendingImages, pendingFiles]);
 
   const onChangeThinking = useCallback(
     async (lv: ThinkingLevel) => {
@@ -1615,10 +1783,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         >
           <div className="flex items-center justify-between mb-2">
             <span
-              className="font-mono text-[15px] font-bold tracking-tight"
+              className="font-mono text-[15px] font-bold tracking-tight inline-flex items-center gap-1.5"
               style={{ color: "var(--text)" }}
             >
-              Pi Agent Web
+              <BrandLogo size={32} />
+              Diga Agent
             </span>
           </div>
           <button
@@ -2008,6 +2177,21 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                 strokeWidth="1.6"
               />
             </svg>
+            <div
+              style={{
+                position: "absolute",
+                bottom: "22%",
+                left: 0,
+                right: 0,
+                textAlign: "center",
+                fontSize: 13,
+                color: "rgba(37,99,235,0.8)",
+                fontFamily: "var(--font-mono)",
+                letterSpacing: 0.2,
+              }}
+            >
+              松手添加 · 图片直接预览,文件/文件夹以 @path 形式注入
+            </div>
           </div>
         )}
         <header
@@ -2156,23 +2340,14 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                 <div
                   style={{
                     display: "flex",
-                    alignItems: "baseline",
+                    alignItems: "center",
                     gap: 10,
                     minWidth: 0,
                     flex: 1,
                     lineHeight: 1.4,
                   }}
                 >
-                  <span
-                    style={{
-                      fontSize: 28,
-                      fontWeight: 700,
-                      letterSpacing: "-0.02em",
-                      color: "var(--text)",
-                    }}
-                  >
-                    π
-                  </span>
+                  <BrandLogo size={56} />
                   <span
                     style={{
                       fontSize: 22,
@@ -2181,7 +2356,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                       letterSpacing: "-0.01em",
                     }}
                   >
-                    Pi Agent Web
+                    Diga Agent
                   </span>
                   <span
                     style={{
@@ -2250,6 +2425,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                 const currentRefIdx = isVisible ? refIdx++ : -1;
                 const isLastAssistant =
                   m.role === "assistant" && i === lastAssistantIdx;
+                // key 稳定：优先 entryId（user message 有），否则 timestamp，否则 index
+                // 用稳定 key 让 React diff 不会把第 N 条的 state 错误地复用到第 N+1 条
+                const stableKey = m.entryId ?? (m.timestamp != null ? `t${m.timestamp}` : `i${i}`);
                 const view = (
                   <MessageView
                     msg={m}
@@ -2282,12 +2460,13 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                       isLastAssistant && streaming ? agentPhase : undefined
                     }
                     isStreaming={isLastAssistant && streaming}
+                    cwd={cwd}
                   />
                 );
-                if (!isVisible) return <div key={i}>{view}</div>;
+                if (!isVisible) return <div key={stableKey}>{view}</div>;
                 return (
                   <div
-                    key={i}
+                    key={stableKey}
                     ref={(el) => {
                       messageRefs.current[currentRefIdx] = el;
                     }}
@@ -2297,8 +2476,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                 );
               });
             })()}
-            {/* 流式期间塞一个占位，把最新 user 消息推到接近屏顶 */}
-            {streaming && <div aria-hidden style={{ minHeight: "60vh" }} />}
+            {/* 仅在"刚发送 → 锚定那条 user 到屏顶"的窗口期塞 60vh 占位;
+                锚定完成或用户主动滚动后即移除,避免向下滚到无内容空白区。 */}
+            {pinSpacer && <div aria-hidden style={{ minHeight: "60vh" }} />}
+            {/* 列表底部留一点 padding,让最后一条气泡和输入框之间不贴边 */}
+            <div aria-hidden style={{ height: 24 }} />
             <div ref={messagesEndRef} />
           </div>
         </div>
@@ -2379,6 +2561,17 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                 ))}
               </div>
             )}
+            {pendingFiles.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {pendingFiles.map((att) => (
+                  <FileChip
+                    key={att.path}
+                    att={att}
+                    onRemove={() => removePendingFile(att.path)}
+                  />
+                ))}
+              </div>
+            )}
             {/* 卡片：textarea + 内嵌 Send */}
             <div
               className="relative rounded-xl border transition-colors focus-within:border-[color:var(--accent)]"
@@ -2438,7 +2631,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                     <button
                       type="button"
                       onClick={() => void onSteer()}
-                      disabled={!input.trim() && pendingImages.length === 0}
+                      disabled={!input.trim() && pendingImages.length === 0 && pendingFiles.length === 0}
                       className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md text-xs hover:bg-[color:var(--bg-hover)] disabled:opacity-40"
                       style={{ color: "var(--text-muted)" }}
                       title="Steer：立即注入当前 turn（不打断）"
@@ -2449,7 +2642,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                     <button
                       type="button"
                       onClick={() => void onFollowUp()}
-                      disabled={!input.trim() && pendingImages.length === 0}
+                      disabled={!input.trim() && pendingImages.length === 0 && pendingFiles.length === 0}
                       className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md text-xs hover:bg-[color:var(--bg-hover)] disabled:opacity-40"
                       style={{ color: "var(--text-muted)" }}
                       title="Follow-up：排队，当前 turn 结束后自动发送"
@@ -2471,7 +2664,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                   <button
                     onClick={() => void send()}
                     disabled={
-                      (!input.trim() && pendingImages.length === 0) ||
+                      (!input.trim() && pendingImages.length === 0 && pendingFiles.length === 0) ||
                       (!agentId && (!providerId || !modelId))
                     }
                     className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-[13px] font-medium text-white disabled:opacity-40 transition-opacity"
@@ -2793,6 +2986,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           }}
         />
       )}
+      <ImageLightbox />
     </div>
   );
 }
@@ -2893,9 +3087,18 @@ interface MessageViewProps {
   /** 仅最后一条 assistant + 正在 streaming 时传入：用于 phase 标签 + t/s pill */
   streamingPhase?: AgentPhase;
   isStreaming?: boolean;
+  /** 当前会话 cwd：传给 Markdown 用于解析消息里出现的相对图片路径 */
+  cwd?: string;
 }
 
-function MessageView({
+/**
+ * MessageView：用 React.memo 包裹，shallow-compare props。
+ * 流式期间只有最后一条 assistant 的 msg/streamingPhase/meta 变，其它 N-1 条 props 引用不变直接跳过 reconcile。
+ *
+ * 关键前提：父组件传的回调要稳定（用 useCallback 包），否则 shallow-equal 始终不命中。
+ * 当前 startFork/cancelFork/setForkText/submitFork/forkToNewSession 已是 setState 包装或 useCallback。
+ */
+const MessageView = memo(function MessageView({
   msg,
   index,
   canFork,
@@ -2911,6 +3114,7 @@ function MessageView({
   meta,
   streamingPhase,
   isStreaming,
+  cwd,
 }: MessageViewProps) {
   // user：右侧气泡（支持 text + image parts 混合）
   if (msg.role === "user") {
@@ -2947,6 +3151,7 @@ function MessageView({
               );
             }
             if (p.kind === "image") {
+              const src = `data:${p.mimeType};base64,${p.data}`;
               return (
                 <div
                   key={i}
@@ -2957,9 +3162,11 @@ function MessageView({
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={`data:${p.mimeType};base64,${p.data}`}
+                    src={src}
                     alt={`user-img-${i}`}
+                    onClick={() => previewStore.openImage(src, "我发送的图片")}
                     className="block max-w-full max-h-80 object-contain"
+                    style={{ cursor: "zoom-in" }}
                   />
                 </div>
               );
@@ -3107,7 +3314,16 @@ function MessageView({
         )}
       </div>
       <div className="space-y-2 text-sm">
-        {parts.map((p, i) => {
+        {(() => {
+          // 流式中只有"最后一个 text part"在累积 token,提前算好它的 index,
+          // 给那个 Markdown 标 streaming=true(走纯 pre,跳过 ReactMarkdown)
+          let tailTextIdx = -1;
+          if (isStreaming) {
+            for (let j = parts.length - 1; j >= 0; j--) {
+              if (parts[j].kind === "text") { tailTextIdx = j; break; }
+            }
+          }
+          return parts.map((p, i) => {
           if (p.kind === "thinking") {
             return (
               <ThinkingBlock
@@ -3121,7 +3337,7 @@ function MessageView({
           if (p.kind === "text") {
             return (
               <div key={i} style={{ color: "var(--text)" }}>
-                <Markdown text={p.text} />
+                <Markdown text={p.text} streaming={i === tailTextIdx} cwd={cwd} />
               </div>
             );
           }
@@ -3144,7 +3360,8 @@ function MessageView({
             );
           }
           return null;
-        })}
+        });
+        })()}
       </div>
       <div
         className="text-[11px] mt-2 flex items-center gap-2"
@@ -3177,6 +3394,88 @@ function MessageView({
           </span>
         )}
       </div>
+    </div>
+  );
+});
+
+type PendingAttachmentKind = "folder" | "doc" | "archive" | "code" | "table" | "pdf" | "other";
+
+/**
+ * 拖入的非图片附件(zip/pdf/csv/md/txt/word/folder ...)。
+ * 仅持有"显示元信息+绝对路径";发送时自动以 @path 形式拼到 prompt 头部,
+ * 保留 chip 视觉,避免输入框被一长串 @path 污染。
+ */
+interface PendingAttachment {
+  path: string;
+  name: string;
+  /** 字节数;文件夹/未知时为 null */
+  size: number | null;
+  kind: PendingAttachmentKind;
+}
+
+/** 按扩展名粗分类,只用来选附件 chip 的 icon/底色 */
+function kindFromName(name: string): Exclude<PendingAttachmentKind, "folder"> {
+  const lower = name.toLowerCase();
+  if (/\.(zip|tar|gz|tgz|bz2|7z|rar|xz)$/.test(lower)) return "archive";
+  if (/\.pdf$/.test(lower)) return "pdf";
+  if (/\.(csv|tsv|xlsx?|ods|numbers)$/.test(lower)) return "table";
+  if (/\.(md|markdown|txt|rtf|docx?|pages|odt)$/.test(lower)) return "doc";
+  if (/\.(js|jsx|ts|tsx|py|go|rs|java|c|cc|cpp|cs|rb|php|swift|kt|sh|bash|zsh|json|toml|yaml|yml|xml|html?|css|scss|sql)$/.test(lower)) return "code";
+  return "other";
+}
+
+/** 拖入附件 chip：图标 + 文件名 + 大小 + ✕ 移除 */
+function FileChip({
+  att,
+  onRemove,
+}: {
+  att: PendingAttachment;
+  onRemove: () => void;
+}) {
+  const Icon =
+    att.kind === "folder"
+      ? Folder
+      : att.kind === "archive"
+      ? FileArchive
+      : att.kind === "table"
+      ? FileSpreadsheet
+      : att.kind === "code"
+      ? FileCode
+      : att.kind === "doc" || att.kind === "pdf"
+      ? FileText
+      : Paperclip;
+  return (
+    <div
+      className="inline-flex items-center gap-1.5 rounded-md border pl-2 pr-1 py-1 max-w-[260px]"
+      style={{
+        background: "var(--bg-panel)",
+        borderColor: "var(--border)",
+      }}
+      title={att.path}
+    >
+      <Icon size={14} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
+      <span
+        className="truncate text-[12px] font-mono"
+        style={{ color: "var(--text)" }}
+      >
+        {att.name}
+      </span>
+      <span
+        className="text-[10px] shrink-0"
+        style={{ color: "var(--text-muted)" }}
+      >
+        {att.size == null ? "dir" : formatBytes(att.size)}
+      </span>
+      <button
+        type="button"
+        onClick={onRemove}
+        className="inline-flex items-center justify-center w-4 h-4 rounded hover:bg-[color:var(--bg-hover)]"
+        style={{ color: "var(--text-muted)", flexShrink: 0 }}
+        title="移除"
+        aria-label="移除附件"
+      >
+        <X size={12} />
+      </button>
     </div>
   );
 }

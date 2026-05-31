@@ -118,9 +118,13 @@ async function deleteKey(provider) {
  */
 async function buildEnvFromKeytar() {
   const stored = await listStoredProviders();
+  // keytar 每个 getPassword 是一次进程间 IPC（macOS Keychain Access）。
+  // 串行 6-10 个 provider 累计 200ms+；并发拉一次性返回，启动 -100~200ms。
+  const entries = await Promise.all(
+    stored.map(async (provider) => [provider, await getKey(provider)])
+  );
   const env = {};
-  for (const provider of stored) {
-    const value = await getKey(provider);
+  for (const [provider, value] of entries) {
     if (!value) continue;
     const envNames = PROVIDER_ENV_MAP[provider];
     if (!envNames) {

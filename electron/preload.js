@@ -9,9 +9,22 @@
  *  - 业务 API 继续走 fetch("/api/...")，保证 Web 端代码不分叉
  *  - 渲染进程通过 `if (window.miniPi)` 判断是否在桌面环境
  */
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("miniPi", {
+  /**
+   * 返回拖入的 File 对象在系统上的绝对路径。
+   * Electron 32+ 把 File.path 移除了,必须走 webUtils.getPathForFile。
+   * 浏览器 web 模式下渲染进程没有 webUtils,getElectronApi() 会返回 null,调用方自行兜底。
+   */
+  getPathForFile: (file) => {
+    try {
+      return webUtils?.getPathForFile?.(file) ?? "";
+    } catch {
+      return "";
+    }
+  },
+
   /** 标识符 + 版本，用于 renderer 判断 */
   getAppInfo: () => ipcRenderer.invoke("app:getInfo"),
 
