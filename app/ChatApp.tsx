@@ -1682,13 +1682,16 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
   const onCompact = useCallback(async () => {
     if (!agentId) return;
+    const ownerKey = activeKeyRef.current;
     try {
-      setCompactError(null);
+      updateRunner(ownerKey, { compactError: null });
       await agentAction(agentId, { type: "compact" });
     } catch (e) {
-      setCompactError(e instanceof Error ? e.message : "compact failed");
+      updateRunner(ownerKey, {
+        compactError: e instanceof Error ? e.message : "compact failed",
+      });
     }
-  }, [agentId, agentAction]);
+  }, [agentId, agentAction, updateRunner]);
 
   const onAbortCompaction = useCallback(async () => {
     if (!agentId) return;
@@ -1876,18 +1879,20 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
   const onChangeThinking = useCallback(
     async (lv: ThinkingLevel) => {
-      setThinkingLevelState(lv);
+      const ownerKey = activeKeyRef.current;
+      updateRunner(ownerKey, { thinkingLevel: lv });
       if (agentId) {
         try {
           await agentAction(agentId, { type: "set_thinking_level", level: lv });
         } catch {}
       }
     },
-    [agentId, agentAction]
+    [agentId, agentAction, updateRunner]
   );
 
   const onChangeModel = useCallback(
     async (provider: string, mid: string) => {
+      const ownerKey = activeKeyRef.current;
       setProviderId(provider);
       setModelId(mid);
       if (agentId) {
@@ -1897,20 +1902,24 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             provider,
             modelId: mid,
           });
-          // 切完模型后，thinking 能力可能变了，重新拉一下
+          // 切完模型后,thinking 能力可能变了,重新拉一下(写回触发本次操作的 runner)
           const meta = await fetch(`/api/agent/${agentId}`).then((r) =>
             r.json()
           );
-          if (meta.thinkingLevel) setThinkingLevelState(meta.thinkingLevel);
-          if (meta.availableThinkingLevels)
-            setAvailableThinkingLevels(meta.availableThinkingLevels);
-          if (typeof meta.supportsThinking === "boolean")
-            setSupportsThinking(meta.supportsThinking);
+          updateRunner(ownerKey, {
+            ...(meta.thinkingLevel ? { thinkingLevel: meta.thinkingLevel } : {}),
+            ...(meta.availableThinkingLevels
+              ? { availableThinkingLevels: meta.availableThinkingLevels }
+              : {}),
+            ...(typeof meta.supportsThinking === "boolean"
+              ? { supportsThinking: meta.supportsThinking }
+              : {}),
+          });
           void data;
         } catch {}
       }
     },
-    [agentId, agentAction]
+    [agentId, agentAction, updateRunner]
   );
 
   // ===== Fork handlers =====
@@ -1962,16 +1971,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           setError(fd.error || "fork failed");
           return;
         }
-        // 2. 关旧 SSE，准备打开新 agent
-        if (esRef.current) {
-          esRef.current.close();
-          esRef.current = null;
-        }
-        setAgentId(null);
-        setAgentSessionId(null);
-        setForkableUserMessages([]);
-        setForkingIndex(null);
-        // 3. 创建新 agent，绑定新 session 文件
+        // 2. 创建新 agent,绑定新 session 文件(不动父 runner)
         const ar = await fetch("/api/agent/new", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1989,38 +1989,45 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           return;
         }
         const newAid = ad.id as string;
-        setAgentId(newAid);
-        setAgentSessionId(ad.sessionId);
-        setCurrentSessionFile(ad.sessionFile ?? null);
-        attachSse(newAid);
-        // 4. 把 leaf 截到 fork 点
+        const newKey: RunnerKey = ad.sessionFile ?? fd.path;
+        // 3. 为 fork 出来的 session 建一个全新 runner,放进 Map
+        const forkRunner = emptyRunner();
+        forkRunner.agentId = newAid;
+        forkRunner.agentSessionId = ad.sessionId;
+        forkRunner.sessionFile = ad.sessionFile ?? fd.path;
+        runnersRef.current.set(newKey, forkRunner);
+        // 4. 切到新 runner(父 runner 仍保留在 Map 里,SSE 也不动)
+        switchTo(newKey);
+        attachSseFor(newKey, newAid);
+        // 5. 把 leaf 截到 fork 点
         await agentAction(newAid, {
           type: "navigate_tree",
           targetId: entryId,
           summarize: false,
         });
-        // 5. 重新拉 context 渲染
+        // 6. 重新拉 context 渲染到新 runner
         try {
           const ctx = await fetch(`/api/sessions/${ad.sessionId}/context`).then(
             (r) => r.json()
           );
           if (!ctx.error) {
-            setChatState(
-              createInitialState(ctxToMessages(ctx.messages ?? []))
-            );
-            if (Array.isArray(ctx.forkableUserMessages)) {
-              setForkableUserMessages(
-                ctx.forkableUserMessages as ForkableUserMessage[]
-              );
-            }
+            updateRunner(newKey, {
+              chatState: createInitialState(ctxToMessages(ctx.messages ?? [])),
+              ...(Array.isArray(ctx.forkableUserMessages)
+                ? {
+                    forkableUserMessages:
+                      ctx.forkableUserMessages as ForkableUserMessage[],
+                  }
+                : {}),
+            });
           }
         } catch {
           /* ignore */
         }
-        await refreshForkList(newAid);
-        void refreshStats(newAid);
-        void refreshToolsCount(newAid);
-        // 6. 列表更新 + 选中新 session
+        await refreshForkList(newAid, newKey);
+        void refreshStats(newAid, newKey);
+        void refreshToolsCount(newAid, newKey);
+        // 7. 列表更新 + 选中新 session
         setSelectedId(ad.sessionId);
         refreshSessions();
       } catch (e) {
@@ -2034,7 +2041,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       modelId,
       cwd,
       thinkingLevel,
-      attachSse,
+      switchTo,
+      attachSseFor,
+      updateRunner,
       agentAction,
       refreshForkList,
       refreshSessions,
@@ -2050,7 +2059,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         setError("fork 文本不能为空");
         return;
       }
-      // 没 agent 就基于当前 session 现起一个（用户可能直接打开历史 session 就 hover Edit）
+      const ownerKey = activeKeyRef.current;
+      // 没 agent 就基于当前 session 现起一个(用户可能直接打开历史 session 就 hover Edit)
       let aid = agentId;
       if (!aid) {
         if (!providerId || !modelId) {
@@ -2081,47 +2091,50 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           return;
         }
         aid = data.id as string;
-        setAgentId(aid);
-        setAgentSessionId(data.sessionId);
-        setCurrentSessionFile(data.sessionFile ?? null);
-        attachSse(aid);
+        updateRunner(ownerKey, {
+          agentId: aid,
+          agentSessionId: data.sessionId,
+          sessionFile: data.sessionFile ?? null,
+        });
+        attachSseFor(ownerKey, aid);
       }
-      setForkBusy(true);
+      updateRunner(ownerKey, { forkBusy: true });
       setError(null);
       try {
-        // 1. 切到该 entry（不 summarize，直接截断）
+        // 1. 切到该 entry(不 summarize,直接截断)
         await agentAction(aid, {
           type: "navigate_tree",
           targetId: entryId,
           summarize: false,
         });
-        // 2. 重新拉 session context（reducer 从头来）
+        // 2. 重新拉 session context(reducer 从头来)
         if (selectedId || agentSessionId) {
-          // session 文件可能没立刻 flush；优先用 sessionId
+          // session 文件可能没立刻 flush;优先用 sessionId
           const sid = agentSessionId ?? selectedId;
           try {
             const ctx = await fetch(`/api/sessions/${sid}/context`).then((r) =>
               r.json()
             );
             if (!ctx.error) {
-              setChatState(
-                createInitialState(ctxToMessages(ctx.messages ?? []))
-              );
+              updateRunner(ownerKey, {
+                chatState: createInitialState(
+                  ctxToMessages(ctx.messages ?? [])
+                ),
+              });
             }
           } catch {
-            /* 忽略：发完 prompt 后 SSE 也会重建 messages */
+            /* 忽略:发完 prompt 后 SSE 也会重建 messages */
           }
         }
         // 3. 用新文本发 prompt
         await agentAction(aid, { type: "prompt", text });
         // 4. 关编辑器、刷 fork 列表
-        setForkingIndex(null);
-        setForkText("");
-        await refreshForkList(aid);
+        updateRunner(ownerKey, { forkingIndex: null, forkText: "" });
+        await refreshForkList(aid, ownerKey);
       } catch (e) {
         setError(String(e));
       } finally {
-        setForkBusy(false);
+        updateRunner(ownerKey, { forkBusy: false });
       }
     },
     [
@@ -2134,7 +2147,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       cwd,
       thinkingLevel,
       forkText,
-      attachSse,
+      attachSseFor,
+      updateRunner,
       agentAction,
       refreshForkList,
     ]
