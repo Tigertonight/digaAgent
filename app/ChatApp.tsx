@@ -1238,12 +1238,38 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     }
   }, [cwd, providerId, modelId, thinkingLevel, refreshStats]);
 
-  const attachSse = useCallback(
-    (aid: string) => {
-      if (esRef.current) esRef.current.close();
+  /**
+   * 关掉指定 runner 的 SSE(P1-5)。LRU 淘汰、组件卸载、显式重置 都走这里。
+   * 不改任何 runner 状态;仅释放 EventSource。
+   */
+  const closeSseFor = useCallback((key: RunnerKey) => {
+    const es = esMapRef.current.get(key);
+    if (es) {
+      es.close();
+      esMapRef.current.delete(key);
+    }
+    // 兼容期:把单实例 esRef 也清掉,避免残留
+    if (esRef.current && !esMapRef.current.size) {
+      esRef.current = null;
+    }
+  }, []);
+
+  /**
+   * 为指定 runner 打开 SSE(P1-5)。每个 runner 一个独立 EventSource,
+   * 路由到 handleAgentEvent(ev, agentId) —— P1-6 里会再加 ownerKey。
+   * 当前(P1-5):活跃 runner 的事件继续走 setX wrapper(写入 active runner);
+   * 非活跃 runner 还无法被切到(P1-7/8 才有),所以路由到 active 等价于路由到自身。
+   */
+  const attachSseFor = useCallback(
+    (key: RunnerKey, aid: string) => {
+      // 已存在则先关掉,避免泄漏
+      const prev = esMapRef.current.get(key);
+      if (prev) prev.close();
       const es = new EventSource(`/api/agent/${aid}/events`);
-      esRef.current = es;
-      es.onopen = () => setSseStatus("active");
+      esMapRef.current.set(key, es);
+      // 兼容旧逻辑:active runner 的 SSE 也写一份到 esRef 兜底
+      if (key === activeKeyRef.current) esRef.current = es;
+      es.onopen = () => updateRunner(key, { sseStatus: "active" });
       es.onmessage = (ev) => {
         try {
           const event = JSON.parse(ev.data);
@@ -1254,12 +1280,23 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       };
       es.onerror = (e) => {
         console.warn("sse error", e);
-        setSseStatus("lost");
+        updateRunner(key, { sseStatus: "lost" });
       };
     },
-    // handleAgentEvent 是函数声明，每次 render 重建；故依赖刷新 attachSse 的时机由 ref 控制
+    // handleAgentEvent 是函数声明,每次 render 重建;依赖刷新由 ref 控制
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    []
+    [updateRunner]
+  );
+
+  /**
+   * 兼容 shim:旧的 attachSse(aid) 调用点全部转发到 attachSseFor(activeKey, aid)。
+   * P1-7/8 完成后再批量替换调用点为 attachSseFor。
+   */
+  const attachSse = useCallback(
+    (aid: string) => {
+      attachSseFor(activeKeyRef.current, aid);
+    },
+    [attachSseFor]
   );
 
   function handleAgentEvent(
