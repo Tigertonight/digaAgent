@@ -3,7 +3,17 @@ import { listAllSessions } from "@/lib/sessions";
 
 export const dynamic = "force-dynamic";
 
-export default async function Home() {
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  // E2E 模式:跳过 server-side 真实 sessions / cwd 读取,让 client 端 mock 接管
+  const sp = await searchParams;
+  if (sp?.e2e === "1") {
+    return <ChatApp initialSessions={[]} defaultCwd="/tmp/e2e-cwd" />;
+  }
+
   const sessions = await listAllSessions();
   const cwd = process.cwd();
   return (

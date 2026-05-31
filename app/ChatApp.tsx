@@ -741,6 +741,22 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     activeKeyRef.current = activeKey;
   }, [activeKey]);
 
+  // E2E 诊断钩子:仅在 window.__E2E__=true 时挂载,把 runner 状态暴露给测试断言。
+  // 不影响 prod 行为,默认 noop。
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const w = window as unknown as { __E2E__?: boolean; __chatAppDiag?: unknown };
+    if (!w.__E2E__) return;
+    w.__chatAppDiag = {
+      runners: runnersRef,
+      esMap: esMapRef,
+      activeKey: () => activeKeyRef.current,
+      runnerCount: () => runnersRef.current.size,
+      runnerKeys: () => [...runnersRef.current.keys()],
+      sseKeys: () => [...esMapRef.current.keys()],
+    };
+  }, []);
+
   /** 把 patch 写入指定 runner;若该 runner 是当前活跃的,同步 setActiveSnapshot 触发渲染。 */
   const updateRunner = useCallback(
     (
@@ -1554,6 +1570,33 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // 发送
   const send = useCallback(async () => {
     if (!input.trim() && pendingImages.length === 0 && pendingFiles.length === 0) return;
+    // 草稿升级:把 DRAFT_KEY runner 重命名到 sessionFile,留一个空 draft 给下次 +New chat。
+    // 在 send() 两条分支(冷启 + startNewSession 已 eager create)都需要触发。
+    const upgradeDraftIfNeeded = (sessionFilePath: string | null) => {
+      if (activeKeyRef.current !== DRAFT_KEY || !sessionFilePath) return;
+      const newKey: RunnerKey = sessionFilePath;
+      if (runnersRef.current.has(newKey)) return; // 已迁过
+      const upgraded = runnersRef.current.get(DRAFT_KEY);
+      if (!upgraded) return;
+      runnersRef.current.set(newKey, upgraded);
+      runnersRef.current.delete(DRAFT_KEY);
+      // SSE onmessage 闭包捕获了旧 key(DRAFT_KEY),必须 close + reattach 让后续事件写到新 key。
+      // 重连有几条 token 损耗,但 +New chat 的 eager SSE 通常还没真正推数据,代价可控。
+      const oldEs = esMapRef.current.get(DRAFT_KEY);
+      if (oldEs) {
+        try { oldEs.close(); } catch {}
+        esMapRef.current.delete(DRAFT_KEY);
+      }
+      activeKeyRef.current = newKey;
+      setActiveKey(newKey);
+      const idFromPath = extractSessionIdFromPath(sessionFilePath);
+      if (idFromPath) setSelectedId(idFromPath);
+      runnersRef.current.set(DRAFT_KEY, emptyRunner());
+      const aid = upgraded.agentId;
+      if (aid) attachSseFor(newKey, aid);
+      lruEvictRef.current?.();
+    };
+
     let aid = agentId;
     if (!aid) {
       if (!providerId || !modelId) {
@@ -1599,34 +1642,15 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           : {}),
       });
 
-      // 草稿升级:把当前 draft runner 重命名到 sessionFile,留一个空 draft 给下次 +New chat
-      if (ownerKey === DRAFT_KEY && data.sessionFile) {
-        const newKey: RunnerKey = data.sessionFile;
-        const upgraded = runnersRef.current.get(DRAFT_KEY);
-        if (upgraded) {
-          runnersRef.current.set(newKey, upgraded);
-          runnersRef.current.delete(DRAFT_KEY);
-          // 同时把 SSE 也搬到新 key(如果已经存在)
-          const es = esMapRef.current.get(DRAFT_KEY);
-          if (es) {
-            esMapRef.current.set(newKey, es);
-            esMapRef.current.delete(DRAFT_KEY);
-          }
-          // 切活跃指针 + sidebar 选中
-          activeKeyRef.current = newKey;
-          setActiveKey(newKey);
-          // 根据 sessionFile 反查 session.id —— 此时 sessions 列表可能还没刷新到这条
-          // 兜底:从 path 解 UUID(文件名 _<uuid>.jsonl 形态)
-          const idFromPath = extractSessionIdFromPath(data.sessionFile);
-          if (idFromPath) setSelectedId(idFromPath);
-          // 重新建一个空 draft
-          runnersRef.current.set(DRAFT_KEY, emptyRunner());
-        }
-      }
+      upgradeDraftIfNeeded(data.sessionFile ?? null);
 
       attachSseFor(activeKeyRef.current, data.id);
       void refreshStats(data.id, activeKeyRef.current);
       void refreshToolsCount(data.id, activeKeyRef.current);
+    } else {
+      // Fast path:agent 已被 startNewSession eager create。这里也要做 draft → sessionFile 升级,
+      // 否则 +New chat 之后所有 session 都积压在 DRAFT_KEY 上,LRU/多 session 全失效。
+      upgradeDraftIfNeeded(currentSessionFile);
     }
     const userText = input;
     const images = pendingImages;
@@ -1668,6 +1692,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     providerId,
     modelId,
     thinkingLevel,
+    currentSessionFile,
     attachSseFor,
     agentAction,
     refreshStats,
