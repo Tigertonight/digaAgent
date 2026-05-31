@@ -108,6 +108,18 @@ const SLASH_COMMANDS = [
 type SlashName = (typeof SLASH_COMMANDS)[number]["name"];
 
 /**
+ * 从 .jsonl 路径解出 session UUID。
+ * 形如 ".../<timestamp>_<uuid>.jsonl" 或 ".../<uuid>.jsonl"。
+ * 解不出返回 null —— 调用方走兜底(等 refreshSessions 后从列表里匹配)。
+ */
+function extractSessionIdFromPath(p: string): string | null {
+  const base = p.split("/").pop() ?? "";
+  const noExt = base.replace(/\.jsonl$/, "");
+  const m = noExt.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+  return m ? m[1] : null;
+}
+
+/**
  * 检测光标处的触发 token：返回 { mode, query, triggerPos }。
  * 触发条件：紧邻光标向左找到 `@` 或 `/`，且其左侧是行首/空白/换行。
  * `/` 仅在文本最前面（光标 ≤ 第一个非空白后）才算 slash 命令。
@@ -1205,56 +1217,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     []
   );
 
-  // 创建新 agent
-  const startNewSession = useCallback(async () => {
-    setError(null);
-    setChatState(createInitialState());
-    setForkableUserMessages([]);
-    setForkingIndex(null);
-    setSelectedId(null);
-    if (esRef.current) {
-      esRef.current.close();
-      esRef.current = null;
-    }
-    if (!providerId || !modelId) {
-      setError("请先选择 provider 和 model");
-      return;
-    }
-    try {
-      const r = await fetch("/api/agent/new", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          provider: providerId,
-          modelId,
-          cwd,
-          thinkingLevel,
-        }),
-      });
-      const data = await r.json();
-      if (data.error) {
-        setError(data.error);
-        return;
-      }
-      setAgentId(data.id);
-      setAgentSessionId(data.sessionId);
-      setCurrentSessionFile(data.sessionFile ?? null);
-      if (data.thinkingLevel)
-        setThinkingLevelState(data.thinkingLevel as ThinkingLevel);
-      if (data.availableThinkingLevels)
-        setAvailableThinkingLevels(
-          data.availableThinkingLevels as ThinkingLevel[]
-        );
-      if (typeof data.supportsThinking === "boolean")
-        setSupportsThinking(data.supportsThinking);
-      attachSse(data.id);
-      void refreshStats(data.id);
-      void refreshToolsCount(data.id);
-    } catch (e) {
-      setError(String(e));
-    }
-  }, [cwd, providerId, modelId, thinkingLevel, refreshStats]);
-
   /**
    * 关掉指定 runner 的 SSE(P1-5)。LRU 淘汰、组件卸载、显式重置 都走这里。
    * 不改任何 runner 状态;仅释放 EventSource。
@@ -1320,6 +1282,82 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     },
     [attachSseFor]
   );
+
+  /**
+   * +New chat:
+   * 1) 先确保 draft runner 存在(初始化已经建过,做兜底)
+   * 2) 切到 draft —— 用户切走再切回时输入框/状态都还在
+   * 3) 仍然 eager create 一个 agent 绑到 draft,这样 thinking pill / 模型能力
+   *    立即就有数据(老 UX 保留)。首次发送时 send() 会把 draft 升级到 sessionFile key。
+   */
+  const startNewSession = useCallback(async () => {
+    setError(null);
+    if (!providerId || !modelId) {
+      setError("请先选择 provider 和 model");
+      return;
+    }
+    // 兜底:draft 槽如果被异常清掉了,重建一个
+    if (!runnersRef.current.has(DRAFT_KEY)) {
+      runnersRef.current.set(DRAFT_KEY, emptyRunner());
+    }
+    setSelectedId(null);
+    switchTo(DRAFT_KEY);
+    // draft 已经有上一次留下的 agent? 关掉它再起新的 —— +New chat 语义就是"重置"
+    closeSseFor(DRAFT_KEY);
+    runnersRef.current.set(DRAFT_KEY, emptyRunner());
+    setActiveSnapshot(runnersRef.current.get(DRAFT_KEY)!);
+
+    try {
+      const r = await fetch("/api/agent/new", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: providerId,
+          modelId,
+          cwd,
+          thinkingLevel,
+        }),
+      });
+      const data = await r.json();
+      if (data.error) {
+        setError(data.error);
+        return;
+      }
+      updateRunner(DRAFT_KEY, {
+        agentId: data.id,
+        agentSessionId: data.sessionId,
+        sessionFile: data.sessionFile ?? null,
+        ...(data.thinkingLevel
+          ? { thinkingLevel: data.thinkingLevel as ThinkingLevel }
+          : {}),
+        ...(data.availableThinkingLevels
+          ? {
+              availableThinkingLevels:
+                data.availableThinkingLevels as ThinkingLevel[],
+            }
+          : {}),
+        ...(typeof data.supportsThinking === "boolean"
+          ? { supportsThinking: data.supportsThinking }
+          : {}),
+      });
+      attachSseFor(DRAFT_KEY, data.id);
+      void refreshStats(data.id, DRAFT_KEY);
+      void refreshToolsCount(data.id, DRAFT_KEY);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [
+    cwd,
+    providerId,
+    modelId,
+    thinkingLevel,
+    refreshStats,
+    refreshToolsCount,
+    switchTo,
+    closeSseFor,
+    attachSseFor,
+    updateRunner,
+  ]);
 
   /**
    * 处理一条 SSE 事件并把状态写到对应 runner(P1-6)。
@@ -1473,20 +1511,54 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         return;
       }
       aid = data.id;
-      setAgentId(data.id);
-      setAgentSessionId(data.sessionId);
-      setCurrentSessionFile(data.sessionFile ?? null);
-      if (data.thinkingLevel)
-        setThinkingLevelState(data.thinkingLevel as ThinkingLevel);
-      if (data.availableThinkingLevels)
-        setAvailableThinkingLevels(
-          data.availableThinkingLevels as ThinkingLevel[]
-        );
-      if (typeof data.supportsThinking === "boolean")
-        setSupportsThinking(data.supportsThinking);
-      attachSse(data.id);
-      void refreshStats(data.id);
-      void refreshToolsCount(data.id);
+      // 当前活跃 runner 接收 agent 信息(可能是 draft,也可能是 session.path)
+      const ownerKey = activeKeyRef.current;
+      updateRunner(ownerKey, {
+        agentId: data.id,
+        agentSessionId: data.sessionId,
+        sessionFile: data.sessionFile ?? null,
+        ...(data.thinkingLevel
+          ? { thinkingLevel: data.thinkingLevel as ThinkingLevel }
+          : {}),
+        ...(data.availableThinkingLevels
+          ? {
+              availableThinkingLevels:
+                data.availableThinkingLevels as ThinkingLevel[],
+            }
+          : {}),
+        ...(typeof data.supportsThinking === "boolean"
+          ? { supportsThinking: data.supportsThinking }
+          : {}),
+      });
+
+      // 草稿升级:把当前 draft runner 重命名到 sessionFile,留一个空 draft 给下次 +New chat
+      if (ownerKey === DRAFT_KEY && data.sessionFile) {
+        const newKey: RunnerKey = data.sessionFile;
+        const upgraded = runnersRef.current.get(DRAFT_KEY);
+        if (upgraded) {
+          runnersRef.current.set(newKey, upgraded);
+          runnersRef.current.delete(DRAFT_KEY);
+          // 同时把 SSE 也搬到新 key(如果已经存在)
+          const es = esMapRef.current.get(DRAFT_KEY);
+          if (es) {
+            esMapRef.current.set(newKey, es);
+            esMapRef.current.delete(DRAFT_KEY);
+          }
+          // 切活跃指针 + sidebar 选中
+          activeKeyRef.current = newKey;
+          setActiveKey(newKey);
+          // 根据 sessionFile 反查 session.id —— 此时 sessions 列表可能还没刷新到这条
+          // 兜底:从 path 解 UUID(文件名 _<uuid>.jsonl 形态)
+          const idFromPath = extractSessionIdFromPath(data.sessionFile);
+          if (idFromPath) setSelectedId(idFromPath);
+          // 重新建一个空 draft
+          runnersRef.current.set(DRAFT_KEY, emptyRunner());
+        }
+      }
+
+      attachSseFor(activeKeyRef.current, data.id);
+      void refreshStats(data.id, activeKeyRef.current);
+      void refreshToolsCount(data.id, activeKeyRef.current);
     }
     const userText = input;
     const images = pendingImages;
@@ -1528,10 +1600,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     providerId,
     modelId,
     thinkingLevel,
-    attachSse,
+    attachSseFor,
     agentAction,
     refreshStats,
     refreshToolsCount,
+    updateRunner,
   ]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
