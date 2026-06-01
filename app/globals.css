@@ -161,7 +161,72 @@ body.pet-window {
   overflow: hidden;
 }
 
+/* 通用脉动（attention 红点 / bubble 状态点用） */
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.6; transform: scale(0.85); }
+}
+
+/* idle 呼吸：sprite 整体微微透明度+缩放变化，4s 一个周期，温和 */
+@keyframes pet-breathe {
+  0%, 100% { opacity: 1;    transform: scale(1); }
+  50%      { opacity: 0.88; transform: scale(0.97); }
+}
+
+/* thinking 光晕脉动：indigo，1.2s 周期 */
+@keyframes pet-glow-thinking {
+  0%, 100% {
+    box-shadow:
+      0 0 0   rgba(99,102,241,0),
+      0 0 16px rgba(99,102,241,0.35);
+  }
+  50% {
+    box-shadow:
+      0 0 0   rgba(99,102,241,0),
+      0 0 28px rgba(99,102,241,0.65);
+  }
+}
+
+/* running 光晕扫动：purple 进度环，2s 周期 */
+@keyframes pet-glow-running {
+  0% {
+    box-shadow:
+      0 0 16px rgba(168,85,247,0.45),
+      inset 0 -2px 0 rgba(168,85,247,0.6);
+  }
+  50% {
+    box-shadow:
+      0 0 24px rgba(168,85,247,0.65),
+      inset 0 -2px 0 rgba(168,85,247,1);
+  }
+  100% {
+    box-shadow:
+      0 0 16px rgba(168,85,247,0.45),
+      inset 0 -2px 0 rgba(168,85,247,0.6);
+  }
+}
+
+/* done 弹性放大：单次播放，结束后回归静态 */
+@keyframes pet-pop {
+  0%   { transform: scale(1);    box-shadow: 0 0 0    rgba(16,185,129,0);   }
+  30%  { transform: scale(1.12); box-shadow: 0 0 28px rgba(16,185,129,0.7); }
+  100% { transform: scale(1);    box-shadow: 0 0 0    rgba(16,185,129,0);   }
+}
+
+/* error 警示：红色慢呼吸 */
+@keyframes pet-glow-error {
+  0%, 100% { box-shadow: 0 0 16px rgba(220,38,38,0.5); }
+  50%      { box-shadow: 0 0 28px rgba(220,38,38,0.85); }
+}
+
+/* attention 红点徽章 —— 强脉动吸引注意 */
+@keyframes pet-badge-pulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(239,68,68,0.7);
+  }
+  70% {
+    transform: scale(1.15);
+    box-shadow: 0 0 0 6px rgba(239,68,68,0);
+  }
 }

@@ -118,35 +118,7 @@ export default function PetApp() {
         }}
         title="Diga Agent"
       >
-        <div style={{ position: "relative" }}>
-          <PetSprite animState={animState} size={80} />
-
-          {/* 状态指示点 */}
-          {animState !== "idle" && (
-            <div
-              style={{
-                position: "absolute",
-                top: 4,
-                right: 4,
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                background:
-                  animState === "thinking" ? "#60a5fa" :
-                  animState === "running"   ? "#f59e0b" :
-                  animState === "attention" ? "#f87171" :
-                  "#7ee787",
-                boxShadow: `0 0 6px ${
-                  animState === "thinking" ? "#60a5fa" :
-                  animState === "running"   ? "#f59e0b" :
-                  animState === "attention" ? "#f87171" :
-                  "#7ee787"
-                }`,
-                animation: animState === "attention" ? "pulse 1s infinite" : "none",
-              }}
-            />
-          )}
-        </div>
+        <PetSprite animState={animState} size={80} />
       </div>
     </div>
   );
