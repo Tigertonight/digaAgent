@@ -10,6 +10,16 @@
  * 在 Web 模式（普通浏览器）下 getElectronApi() 返回 null，调用方应 fallback。
  */
 
+/** 宠物窗口能感知到的 SSE 连接状态 */
+export type PetSseStatus = "idle" | "active" | "lost";
+
+/** 宠物窗口能感知到的"临时事件"，用于驱动临时气泡 */
+export interface PetRetryInfo {
+  attempt: number;
+  maxAttempts: number;
+  errorMessage?: string;
+}
+
 export interface PetSessionInfo {
   id: string;
   agentId: string | null;
@@ -19,8 +29,22 @@ export interface PetSessionInfo {
     kind: "waiting_model" | "thinking" | "running_tools";
     tools?: { id: string; name: string }[];
   } | null;
+  /** 最后一条 assistant 消息文本，已截断到 200 字符 */
   lastMessage: string;
+  /** 第一个进行中的 tool 名称（running_tools 阶段才有） */
   currentTool: string | null;
+  /** 进行中的 tool 的"目标"摘要（比如文件名 / 命令前缀），用于气泡副文案 */
+  currentToolTarget: string | null;
+  /** 自动重试中（auto_retry_start ~ auto_retry_end 之间） */
+  retry: PetRetryInfo | null;
+  /** 上下文压缩中（手动 compact 或 auto_compaction 之间） */
+  compacting: boolean;
+  /** agent 级错误（致命错误，需要主动喊用户） */
+  error: string | null;
+  /** SSE 连接状态 */
+  sseStatus: PetSseStatus;
+  /** 该 session 的 streaming 开始时间戳（ms），用于气泡显示"已耗时 Xs" */
+  streamingStartedAt: number | null;
 }
 
 export interface PetState {
