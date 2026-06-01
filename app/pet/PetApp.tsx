@@ -14,6 +14,7 @@ export default function PetApp() {
     allSessions,
     setLocalFocusId,
     focusMain,
+    bubbleText,
   } = usePetState();
 
   const { onMouseDown } = usePetDrag();
@@ -22,7 +23,6 @@ export default function PetApp() {
   const [cardOpen, setCardOpen] = useState(false);
   const spriteRef = useRef<HTMLDivElement>(null);
 
-  const focusedId = displaySession?.id ?? null;
   const hasUI = hovered || cardOpen;
 
   // 根据是否有 UI 交互动态控制鼠标穿透
@@ -63,13 +63,7 @@ export default function PetApp() {
             pointerEvents: "auto",
           }}
         >
-          <PetBubble
-            animState={animState}
-            session={displaySession}
-            allSessions={allSessions}
-            focusedId={focusedId}
-            onSwitchSession={(id) => setLocalFocusId(id)}
-          />
+          <PetBubble animState={animState} bubbleText={bubbleText} />
         </div>
       )}
 
