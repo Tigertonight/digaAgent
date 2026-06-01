@@ -24,7 +24,6 @@ import { useAudio } from "@/lib/use-audio";
 import { useDragDrop } from "@/lib/use-drag-drop";
 import { previewStore } from "@/lib/preview-store";
 import {
-  applyEvent,
   createInitialState,
   ctxToMessages,
   type ReducerState,
@@ -36,6 +35,7 @@ import {
 } from "@/lib/session-runner";
 import { useRunners } from "./hooks/useRunners";
 import { useSseManager } from "./hooks/useSseManager";
+import { useAgentEvents } from "./hooks/useAgentEvents";
 import Markdown from "./components/Markdown";
 import ToolRender from "./components/ToolRender";
 import FileBrowser from "./components/FileBrowser";
@@ -1650,129 +1650,16 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     updateRunner,
   ]);
 
-  /**
-   * 处理一条 SSE 事件并把状态写到对应 runner(P1-6)。
-   *
-   * ownerKey 是事件归属的 runner key —— 不一定是当前活跃的:
-   * 切到 B 时 A 的 SSE 仍在跑,A 的事件会带 ownerKey=A 的写法路由到 runnersRef.get(A);
-   * updateRunner 内部判断 key === activeKey 才同步 setActiveSnapshot,
-   * 所以 A 的事件不会污染 B 的渲染。
-   *
-   * playDoneSound / refreshSessions 这类全局副作用,无论 owner 是谁都触发。
-   */
-  function handleAgentEvent(
-    ev: { type: string; [k: string]: unknown },
-    aidForEvents: string,
-    ownerKey: RunnerKey
-  ) {
-    switch (ev.type) {
-      case "agent_start":
-        updateRunner(ownerKey, {
-          streaming: true,
-          agentPhase: { kind: "waiting_model" },
-        });
-        return;
-      case "agent_end":
-        updateRunner(ownerKey, {
-          streaming: false,
-          agentPhase: null,
-          retryInfo: null,
-        });
-        playDoneSound();
-        refreshSessions();
-        if (aidForEvents) {
-          void refreshForkList(aidForEvents, ownerKey);
-          void refreshStats(aidForEvents, ownerKey);
-        }
-        return;
-      case "compaction_start":
-      case "auto_compaction_start":
-        updateRunner(ownerKey, { compacting: true, compactError: null });
-        return;
-      case "compaction_end":
-      case "auto_compaction_end": {
-        const err = (ev as { error?: string; errorMessage?: string }).error
-          ?? (ev as { errorMessage?: string }).errorMessage;
-        updateRunner(ownerKey, {
-          compacting: false,
-          ...(err ? { compactError: err } : {}),
-        });
-        if (aidForEvents) void refreshStats(aidForEvents, ownerKey);
-        return;
-      }
-      case "auto_retry_start": {
-        const e = ev as {
-          attempt?: number;
-          maxAttempts?: number;
-          errorMessage?: string;
-        };
-        if (e.attempt && e.maxAttempts) {
-          updateRunner(ownerKey, {
-            retryInfo: {
-              attempt: e.attempt,
-              maxAttempts: e.maxAttempts,
-              errorMessage: e.errorMessage,
-            },
-          });
-        }
-        return;
-      }
-      case "auto_retry_end":
-        updateRunner(ownerKey, { retryInfo: null });
-        return;
-      case "thinking_level_changed": {
-        const lv = (ev as { level?: ThinkingLevel }).level;
-        if (lv) updateRunner(ownerKey, { thinkingLevel: lv });
-        return;
-      }
-      // reducer-driven 事件
-      case "message_start":
-      case "message_update":
-      case "message_end":
-      case "tool_execution_start":
-      case "tool_execution_update":
-      case "tool_execution_end":
-        updateRunner(ownerKey, (s) => {
-          const nextChat = applyEvent(s.chatState, ev);
-          // phase 派生:跟 pi-web 对齐
-          let nextPhase = s.agentPhase;
-          if (ev.type === "message_update") {
-            const sub = (ev as { assistantMessageEvent?: { type?: string } })
-              .assistantMessageEvent;
-            if (sub?.type === "thinking_delta") {
-              if (nextPhase?.kind !== "running_tools")
-                nextPhase = { kind: "thinking" };
-            } else if (sub?.type === "text_delta") {
-              if (nextPhase?.kind !== "running_tools") nextPhase = null;
-            }
-          } else if (ev.type === "message_end") {
-            nextPhase = { kind: "waiting_model" };
-          } else if (ev.type === "tool_execution_start") {
-            const id = (ev as { toolCallId?: string }).toolCallId;
-            const name = (ev as { toolName?: string }).toolName;
-            if (id && name) {
-              const tools =
-                nextPhase?.kind === "running_tools" ? [...nextPhase.tools] : [];
-              if (!tools.some((t) => t.id === id)) tools.push({ id, name });
-              nextPhase = { kind: "running_tools", tools };
-            }
-          } else if (ev.type === "tool_execution_end") {
-            const id = (ev as { toolCallId?: string }).toolCallId;
-            if (id && nextPhase?.kind === "running_tools") {
-              const tools = nextPhase.tools.filter((t) => t.id !== id);
-              nextPhase =
-                tools.length === 0
-                  ? { kind: "waiting_model" }
-                  : { kind: "running_tools", tools };
-            }
-          }
-          return { chatState: nextChat, agentPhase: nextPhase };
-        });
-        return;
-      default:
-        return;
-    }
-  }
+  // ===== SSE agent 事件分发器（RFC-1 阶段 A3，已抽到 useAgentEvents） =====
+  // 上游：useSseManager.onEvent → handleAgentEventRef.current（见 hook 区） → 本 handleAgentEvent
+  // 下游：updateRunner（写 runner）+ 4 个全局副作用回调
+  const { handleAgentEvent } = useAgentEvents({
+    updateRunner,
+    playDoneSound,
+    refreshSessions,
+    refreshForkList,
+    refreshStats,
+  });
 
   // 发送
   const send = useCallback(async () => {
