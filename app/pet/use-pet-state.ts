@@ -328,3 +328,5 @@ export function usePetState() {
     bubbleText,
   };
 }
+
+// 已暴露 petState 给 PetApp 使用（右键菜单需要 focusedSessionId 来标 radio）
