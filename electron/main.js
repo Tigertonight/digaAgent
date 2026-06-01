@@ -286,6 +286,44 @@ function registerIpc() {
     }
     return { ok: true, base: newBase };
   });
+
+  // ===== 宠物挂件 IPC =====
+
+  // 主窗口渲染进程推来的状态 → 转发给宠物窗口
+  ipcMain.on("pet:state-from-main", (_event, state) => {
+    if (petWin && !petWin.isDestroyed()) {
+      petWin.webContents.send("pet:state", state);
+    }
+  });
+
+  // 宠物窗口请求聚焦主窗口，并可选切换 session
+  ipcMain.on("pet:focus-main", (_event, sessionId) => {
+    const mainWin = BrowserWindow.getAllWindows().find(
+      (w) => w !== petWin && (settingsWin ? w !== settingsWin : true) && !w.isDestroyed()
+    );
+    if (mainWin) {
+      if (mainWin.isMinimized()) mainWin.restore();
+      mainWin.show();
+      mainWin.focus();
+      if (sessionId) {
+        mainWin.webContents.send("pet:switch-session", sessionId);
+      }
+    }
+  });
+
+  // 控制宠物窗口显示/隐藏
+  ipcMain.on("pet:set-visible", (_event, visible) => {
+    if (!petWin || petWin.isDestroyed()) return;
+    if (visible) petWin.show();
+    else petWin.hide();
+  });
+
+  // 宠物拖拽：移动宠物窗口位置
+  ipcMain.on("pet:move", (_event, { x, y }) => {
+    if (petWin && !petWin.isDestroyed()) {
+      petWin.setPosition(Math.round(x), Math.round(y));
+    }
+  });
 }
 
 async function createWindow() {
@@ -369,6 +407,43 @@ async function openSettingsWindow() {
   const base = apiBase || DEV_URL;
   await settingsWin.loadURL(`${base}/settings`);
   return settingsWin;
+}
+
+let petWin = null;
+
+async function createPetWindow(baseUrl) {
+  if (petWin && !petWin.isDestroyed()) return petWin;
+
+  const { screen } = require("electron");
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+
+  petWin = new BrowserWindow({
+    width: 120,
+    height: 160,
+    x: width - 140,
+    y: height - 200,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    resizable: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    webPreferences: {
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+      preload: path.join(__dirname, "preload.js"),
+      spellcheck: false,
+      backgroundThrottling: false,
+    },
+  });
+
+  petWin.setIgnoreMouseEvents(false);
+  petWin.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  petWin.on("closed", () => { petWin = null; });
+
+  await petWin.loadURL(`${baseUrl}/pet`);
+  return petWin;
 }
 
 function buildAppMenu() {
@@ -467,6 +542,14 @@ app.whenReady().then(async () => {
   } catch (e) {
     console.error("[electron] failed to start:", e);
     app.quit();
+  }
+
+  // 启动宠物窗口
+  const petBase = apiBase || DEV_URL;
+  try {
+    await createPetWindow(petBase);
+  } catch (e) {
+    console.warn("[electron] pet window failed to start:", e.message);
   }
 
   app.on("activate", () => {
