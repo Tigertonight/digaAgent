@@ -85,6 +85,13 @@ contextBridge.exposeInMainWorld("miniPi", {
     /** 宠物窗口拖拽：把新坐标发给主进程移动 BrowserWindow */
     move: (pos) => ipcRenderer.send("pet:move", pos),
 
+    /**
+     * 查询宠物窗口当前所在显示器的工作区（排除任务栏/Dock）。
+     * 返回 { x, y, width, height } 或 null（窗口不存在时）。
+     * 拖拽吸附计算时用，知道 sprite 中心点距哪条边最近。
+     */
+    getWorkArea: () => ipcRenderer.invoke("pet:get-work-area"),
+
     /** 动态控制鼠标穿透（true=穿透空白区，false=完全不穿透） */
     setIgnoreMouse: (ignore) => ipcRenderer.send("pet:set-ignore-mouse", ignore),
 
