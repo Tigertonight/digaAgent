@@ -1109,49 +1109,18 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
   // 每个 session 的 streaming 起始时间戳（streaming false→true 时记录）
   const streamingStartedAtRef = useRef<Map<string, number>>(new Map());
-  // 每个 session 的"已读"快照：值 = 用户最后一次"看到的" lastMessage 内容
-  // 已读条件：主窗口聚焦 + activeKey === sessionKey（用户正在看这个会话）
-  const readMessageRef = useRef<Map<string, string>>(new Map());
   // 节流：100ms 内只发最后一次
   const petPushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const petLastPushedAtRef = useRef<number>(0);
-  // 暴露 doPush 给外部（focus / activeKey 变化时主动触发一次推送）
+  // 暴露 doPush 给外部（lastSeenMap / selectedId 变化时主动触发一次推送）
   const petDoPushRef = useRef<(() => void) | null>(null);
-
-  // 把当前 active session 的 lastMessage 标为已读，并主动推一次 PetState
-  const markActiveSessionRead = useCallback(() => {
-    const key = activeKeyRef.current;
-    const runner = runnersRef.current.get(key);
-    if (!runner?.agentId) return;
-    const lastMsg = runner.chatState.messages
-      .filter((m) => m.role === "assistant")
-      .slice(-1)[0];
-    const lastText =
-      lastMsg?.parts
-        ?.filter((p) => p.kind === "text")
-        .slice(-1)[0]
-        ?.text?.slice(0, 200) ?? "";
-    readMessageRef.current.set(key, lastText);
-    // 立刻推一次让宠物侧消除 attention
+  // 把 lastSeenMap 镜像到 ref，doPush 能在 effect 闭包外读到最新值
+  const lastSeenMapRef = useRef<Record<string, string>>(lastSeenMap);
+  useEffect(() => {
+    lastSeenMapRef.current = lastSeenMap;
+    // lastSeenMap 变化 → 立刻推一次让宠物侧消除 attention
     petDoPushRef.current?.();
-  }, []);
-
-  // 主窗口聚焦时标已读
-  useEffect(() => {
-    if (typeof document !== "undefined" && document.hasFocus()) {
-      markActiveSessionRead();
-    }
-    const onFocus = () => markActiveSessionRead();
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [markActiveSessionRead]);
-
-  // 切换 active session 时也标已读（聚焦状态下）
-  useEffect(() => {
-    if (typeof document !== "undefined" && document.hasFocus()) {
-      markActiveSessionRead();
-    }
-  }, [selectedId, markActiveSessionRead]);
+  }, [lastSeenMap]);
 
   useEffect(() => {
     const api = getElectronApi();
@@ -1206,10 +1175,19 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         // agent 级错误：以 compactError 为代表（v1 仅有这一个 runner 级错误源）
         const error = runner.compactError;
 
-        // 已读判定：用户最后一次"看到的" lastMessage 与当前 lastMessage 一致即已读
-        // 空 lastMessage 视为已读（没东西可看）
-        const readSnapshot = readMessageRef.current.get(key);
-        const read = lastText === "" || readSnapshot === lastText;
+        // 已读判定：与主窗口左侧会话列表完全一致
+        //   isUnread = !active && !isRunning && (!seenAt || seenAt < s.modified)
+        // → read = active || isRunning || (seenAt && seenAt >= s.modified) || !sess
+        // 没有 sess（找不到 SessionInfoLite）→ 没有 modified 可比，视为已读
+        let read = true;
+        if (sess) {
+          const isActive = selectedId === sess.id;
+          const isRunning = !!sess.isRunning;
+          const seenAt = lastSeenMapRef.current[sess.id];
+          const isUnread =
+            !isActive && !isRunning && (!seenAt || seenAt < sess.modified);
+          read = !isUnread;
+        }
 
         petSessions.push({
           id: sess?.id ?? key,
