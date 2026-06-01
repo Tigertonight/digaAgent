@@ -63,6 +63,17 @@ export interface UseRunnersReturn {
    *  - 目标 runner 不存在时兜底建空 runner（防止渲染崩）
    */
   switchTo: (newKey: RunnerKey) => void;
+  /**
+   * 新增 / 覆盖一个 runner 到容器（**唯一允许的"添加 runner"入口**）。
+   *  - 已存在则覆盖（lastTouched 会被刷新）
+   *  - 操作完成后自动触发 LRU 检查 —— 这是它和裸 `runnersRef.current.set` 的关键区别
+   *  - 不切换 activeKey；如需同时切，调用方在 setRunner 之后自行 switchTo
+   *  - 若该 key 恰好是当前 activeKey，会同步 setActiveSnapshot 触发渲染
+   *
+   * 设计理由：runner 数量的增长只可能发生在 setRunner，所以把 LRU 触发绑在这里最自然，
+   *           调用方不需要记着"add 之后调 evictIfNeeded"。
+   */
+  setRunner: (key: RunnerKey, runner: RunnerState) => void;
 }
 
 export function useRunners(opts: UseRunnersOptions = {}): UseRunnersReturn {
@@ -172,6 +183,21 @@ export function useRunners(opts: UseRunnersOptions = {}): UseRunnersReturn {
     lruEvictRef.current = lruEvict;
   }, [lruEvict]);
 
+  // ===== setRunner（唯一的"添加 runner"入口，自带 LRU 触发） =====
+  // 注意：直接调 lruEvict（同一 hook 内定义，无前向引用问题），不走 lruEvictRef，
+  //       避免首次 render 时 ref 还没赋值导致漏淘汰。
+  const setRunner = useCallback<UseRunnersReturn["setRunner"]>(
+    (key, runner) => {
+      const touched: RunnerState = { ...runner, lastTouched: Date.now() };
+      runnersRef.current.set(key, touched);
+      if (key === activeKeyRef.current) {
+        setActiveSnapshot(touched);
+      }
+      lruEvict();
+    },
+    [lruEvict]
+  );
+
   return {
     runnersRef,
     activeKey,
@@ -180,5 +206,6 @@ export function useRunners(opts: UseRunnersOptions = {}): UseRunnersReturn {
     updateRunner,
     updateActive,
     switchTo,
+    setRunner,
   };
 }

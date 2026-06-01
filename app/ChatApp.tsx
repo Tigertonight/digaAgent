@@ -271,6 +271,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     updateRunner,
     updateActive,
     switchTo,
+    setRunner,
   } = useRunners({
     onEvict: (key) => closeSseForRef.current?.(key),
   });
@@ -1348,7 +1349,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     // 冷启动:建空 runner,先切过去显示空(很快),再异步填 context
     const fresh = emptyRunner();
     fresh.sessionFile = sel.path;
-    runnersRef.current.set(key, fresh);
+    setRunner(key, fresh);
     switchTo(key);
 
     void fetch(`/api/sessions/${selectedId}/context`)
@@ -1621,13 +1622,13 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     }
     // 兜底:draft 槽如果被异常清掉了,重建一个
     if (!runnersRef.current.has(DRAFT_KEY)) {
-      runnersRef.current.set(DRAFT_KEY, emptyRunner());
+      setRunner(DRAFT_KEY, emptyRunner());
     }
     setSelectedId(null);
     switchTo(DRAFT_KEY);
     // draft 已经有上一次留下的 agent? 关掉它再起新的 —— +New chat 语义就是"重置"
     closeSseFor(DRAFT_KEY);
-    runnersRef.current.set(DRAFT_KEY, emptyRunner());
+    setRunner(DRAFT_KEY, emptyRunner());
     // 重新 switchTo 让 useRunners 把新的 empty snapshot 同步给 React state
     switchTo(DRAFT_KEY);
 
@@ -1678,6 +1679,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     refreshStats,
     refreshToolsCount,
     switchTo,
+    setRunner,
     closeSseFor,
     attachSseFor,
     updateRunner,
@@ -1818,6 +1820,10 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       if (runnersRef.current.has(newKey)) return; // 已迁过
       const upgraded = runnersRef.current.get(DRAFT_KEY);
       if (!upgraded) return;
+      // 注意顺序：先 set newKey + delete draft，再 switchTo（切到新 key 后再重建 draft，
+      // 否则 setRunner(newKey) 内部 LRU 触发时会把新建的 newKey 当作非活跃候选淘汰）。
+      // 这里没用 setRunner(newKey, upgraded) 是因为紧接着会重建 draft；
+      // 把 LRU 触发延后到最后一步的 setRunner(DRAFT_KEY, ...)，确保 map 终态再淘汰。
       runnersRef.current.set(newKey, upgraded);
       runnersRef.current.delete(DRAFT_KEY);
       // SSE onmessage 闭包捕获了旧 key(DRAFT_KEY),必须 close + reattach 让后续事件写到新 key。
@@ -1827,11 +1833,12 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         try { oldEs.close(); } catch {}
         esMapRef.current.delete(DRAFT_KEY);
       }
-      // 草稿升级：从 DRAFT_KEY 切到 newKey；switchTo 会同步 setActiveKey + setActiveSnapshot + LRU
+      // 草稿升级：从 DRAFT_KEY 切到 newKey；switchTo 会同步 setActiveKey + setActiveSnapshot
       switchTo(newKey);
       const idFromPath = extractSessionIdFromPath(sessionFilePath);
       if (idFromPath) setSelectedId(idFromPath);
-      runnersRef.current.set(DRAFT_KEY, emptyRunner());
+      // 重建 draft —— 用 setRunner 让 LRU 在 map 终态（含新 newKey + 新 draft）下检查
+      setRunner(DRAFT_KEY, emptyRunner());
       const aid = upgraded.agentId;
       if (aid) attachSseFor(newKey, aid);
     };
@@ -1937,6 +1944,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     refreshStats,
     refreshToolsCount,
     updateRunner,
+    setRunner,
   ]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -2297,12 +2305,12 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         }
         const newAid = ad.id as string;
         const newKey: RunnerKey = ad.sessionFile ?? fd.path;
-        // 3. 为 fork 出来的 session 建一个全新 runner,放进 Map
+        // 3. 为 fork 出来的 session 建一个全新 runner,放进 Map（setRunner 会触发 LRU 检查）
         const forkRunner = emptyRunner();
         forkRunner.agentId = newAid;
         forkRunner.agentSessionId = ad.sessionId;
         forkRunner.sessionFile = ad.sessionFile ?? fd.path;
-        runnersRef.current.set(newKey, forkRunner);
+        setRunner(newKey, forkRunner);
         // 4. 切到新 runner(父 runner 仍保留在 Map 里,SSE 也不动)
         switchTo(newKey);
         attachSseFor(newKey, newAid);
@@ -2349,6 +2357,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       cwd,
       thinkingLevel,
       switchTo,
+      setRunner,
       attachSseFor,
       updateRunner,
       agentAction,
