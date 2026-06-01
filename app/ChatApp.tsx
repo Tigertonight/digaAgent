@@ -229,8 +229,15 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   );
   /**
    * 已查看的 session id → 上次查看时该 session 的 modified ISO。
-   * 若 sessions[i].modified > lastSeenMap[sessions[i].id],视为有新内容(未读)。
-   * 当前选中的 session 永远算已读。localStorage 持久化。
+   * 若 sessions[i].modified > lastSeenMap[sessions[i].id]，视为有新内容（未读）。
+   *
+   * v2 语义（宠物 attention 修复）：
+   *   "已读"严格表示"用户的眼睛真的看到了最新内容"，不再因为某个 session
+   *   恰好是 active 就自动算已读。两个触发时机：
+   *     1) 用户主动切换 session → 切到的瞬间标已读
+   *     2) 主窗口被用户真正聚焦（focus + visible）→ 把 active session 标已读
+   *   sessions 列表更新（如流式结束 refreshSessions）不再自动改 lastSeenMap，
+   *   这样宠物侧才能正确表达 attention。localStorage 持久化。
    */
   const [lastSeenMap, setLastSeenMap] = useState<Record<string, string>>({});
   useEffect(() => {
@@ -242,20 +249,69 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       }
     } catch {}
   }, []);
-  // 选中或 sessions 列表更新 → 把当前选中那条的 modified 写进 lastSeenMap
+
+  /** 把指定 session 在当前 modified 上标记为已读（幂等） */
+  const markSessionSeen = useCallback(
+    (sessionId: string, sessionsSnapshot: SessionInfoLite[]) => {
+      const cur = sessionsSnapshot.find((s) => s.id === sessionId);
+      if (!cur) return;
+      setLastSeenMap((prev) => {
+        if (prev[sessionId] === cur.modified) return prev;
+        const next = { ...prev, [sessionId]: cur.modified };
+        try {
+          localStorage.setItem("sessionLastSeen", JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+    },
+    []
+  );
+
+  // 改 2：用户切换 session 时（selectedId 单独变化），标当前 modified 已读。
+  // 关键：依赖里只有 selectedId，sessions 变化不触发。
+  // 用 ref 取最新 sessions 而不进依赖，避免 refreshSessions 后被错误触发。
+  const sessionsRef = useRef<SessionInfoLite[]>(sessions);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
   useEffect(() => {
     if (!selectedId) return;
-    const cur = sessions.find((s) => s.id === selectedId);
-    if (!cur) return;
-    setLastSeenMap((prev) => {
-      if (prev[selectedId] === cur.modified) return prev;
-      const next = { ...prev, [selectedId]: cur.modified };
-      try {
-        localStorage.setItem("sessionLastSeen", JSON.stringify(next));
-      } catch {}
-      return next;
-    });
-  }, [selectedId, sessions]);
+    markSessionSeen(selectedId, sessionsRef.current);
+  }, [selectedId, markSessionSeen]);
+
+  // 改 3：主窗口真正被用户看到时（focus + visible），把 active session 标已读。
+  // 包含：窗口 focus 事件、visibilitychange 转为 visible、selectedId 变更后若已聚焦也补一次。
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const tryMark = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible")
+        return;
+      if (typeof document !== "undefined" && !document.hasFocus()) return;
+      const sid = selectedId;
+      if (!sid) return;
+      markSessionSeen(sid, sessionsRef.current);
+    };
+    // 初次挂载/依赖变化时尝试一次（覆盖"主窗口本来就在前台"的场景）
+    tryMark();
+    window.addEventListener("focus", tryMark);
+    document.addEventListener("visibilitychange", tryMark);
+    return () => {
+      window.removeEventListener("focus", tryMark);
+      document.removeEventListener("visibilitychange", tryMark);
+    };
+  }, [selectedId, markSessionSeen]);
+
+  // 改 3 续：sessions 列表更新后（如流式结束 modified 变化），若主窗口此刻
+  // 仍被用户聚焦看着 active session，应立刻消除 unread（让宠物不闪 attention）。
+  // 注意这里依赖 sessions——但只在"窗口被聚焦"的前提下才写，所以宠物失焦场景
+  // 完全不会被这里覆盖。
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+    if (document.visibilityState !== "visible") return;
+    if (!document.hasFocus()) return;
+    if (!selectedId) return;
+    markSessionSeen(selectedId, sessions);
+  }, [sessions, selectedId, markSessionSeen]);
   // chatState / forkable* 等 per-runner 字段已挪到 RunnerState。
   // messages / visibleMessageCount / messageRefs 依赖 chatState/forkableUserMessages,
   // 已下移到 activeSnapshot 解构之后(否则用前先声明会报错)。
@@ -1177,17 +1233,19 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         // agent 级错误：以 compactError 为代表（v1 仅有这一个 runner 级错误源）
         const error = runner.compactError;
 
-        // 已读判定：与主窗口左侧会话列表完全一致
-        //   isUnread = !active && !isRunning && (!seenAt || seenAt < s.modified)
-        // → read = active || isRunning || (seenAt && seenAt >= s.modified) || !sess
+        // 已读判定（v2 宠物 attention 修复）：
+        //   isUnread = !isRunning && (!seenAt || seenAt < s.modified)
+        //   read     = !isUnread
+        // 不再因为 active 就自动算已读——active 也可能"用户根本没看"
+        // （宠物窗口前置、主窗口被遮挡）。已读由 markSessionSeen 在用户
+        // 切换 / 主窗口聚焦时主动写入，宠物 attention 才有意义。
         // 没有 sess（找不到 SessionInfoLite）→ 没有 modified 可比，视为已读
         let read = true;
         if (sess) {
-          const isActive = selectedId === sess.id;
           const isRunning = !!sess.isRunning;
           const seenAt = lastSeenMapRef.current[sess.id];
           const isUnread =
-            !isActive && !isRunning && (!seenAt || seenAt < sess.modified);
+            !isRunning && (!seenAt || seenAt < sess.modified);
           read = !isUnread;
         }
 
@@ -1214,15 +1272,16 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       // 兜底：当前 selectedId 对应的 session 若没被 runner 路径加入
       // （比如刚切到一个历史 session、agentId 还没建立），也要 push 一个
       // 最小化条目，保证宠物侧 displaySession.find(focusedSessionId) 能命中。
-      // 否则会 fallback 到 sessions[0]，显示与主窗口完全无关的另一个 session。
+      // 否则宠物侧会显示空 placeholder（"等待启动"）即使主窗口已有内容。
       if (selectedId && !pushedSessionIds.has(selectedId)) {
         const sess = sessions.find((s) => s.id === selectedId);
         if (sess) {
+          // 与 runner 路径同一套已读公式（v2：不再硬编码 active=已读）
           const seenAt = lastSeenMapRef.current[sess.id];
-          // active session 默认视为已读（与主窗口列表逻辑一致）
-          const read =
-            true; /* isActive=true → isUnread=false → read=true */
-          void seenAt; // 显式标记暂未使用，避免未来 lint
+          const isRunning = !!sess.isRunning;
+          const isUnread =
+            !isRunning && (!seenAt || seenAt < sess.modified);
+          const read = !isUnread;
           petSessions.push({
             id: sess.id,
             agentId: null,
@@ -2540,10 +2599,13 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
               const isRenaming = renamingFor === s.id;
               const menuOpen = menuFor === s.id;
               const isPendingDelete = pendingDeleteId === s.id;
-              // 状态点:运行中(转圈) > 未读(蓝点) > 无
+              // 状态点：运行中（转圈） > 未读（蓝点） > 无
+              // v2：未读判定不再因 active 自动忽略——active 也可能"用户没看到"
+              // （主窗口失焦/被遮挡）。markSessionSeen 在用户真聚焦时已写
+              // lastSeenMap，所以聚焦着的 active session 这里自然不会 unread。
               const isRunning = !!s.isRunning;
               const seenAt = lastSeenMap[s.id];
-              const isUnread = !active && !isRunning && (!seenAt || seenAt < s.modified);
+              const isUnread = !isRunning && (!seenAt || seenAt < s.modified);
               if (isPendingDelete) {
                 return (
                   <div
