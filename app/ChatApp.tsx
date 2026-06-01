@@ -19,6 +19,7 @@ import {
   formatBytes,
 } from "@/lib/image-utils";
 import { getElectronApi, type AppInfo } from "@/lib/electron-bridge";
+import type { PetState, PetSessionInfo } from "@/lib/electron-bridge";
 import { useAudio } from "@/lib/use-audio";
 import { useDragDrop } from "@/lib/use-drag-drop";
 import { previewStore } from "@/lib/preview-store";
@@ -1031,6 +1032,62 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     const id = setTimeout(() => setCompactError(null), 3000);
     return () => clearTimeout(id);
   }, [compactError, setCompactError]);
+
+  // ===== 宠物状态推送 =====
+  // 每次 activeSnapshot / sessions 列表变化时，把所有有 agentId 的 runner 状态推给宠物窗口
+  useEffect(() => {
+    const api = getElectronApi();
+    if (!api?.pet?.sendState) return;
+
+    const petSessions: PetSessionInfo[] = [];
+    for (const [key, runner] of runnersRef.current) {
+      if (!runner.agentId) continue; // 跳过空 draft
+      // 找到对应的 session 显示名
+      const sess = sessions.find((s) => s.path === key);
+      const lastMsg = runner.chatState.messages
+        .filter((m) => m.role === "assistant")
+        .slice(-1)[0];
+      const lastText =
+        lastMsg?.parts
+          ?.filter((p) => p.kind === "text")
+          .slice(-1)[0]
+          ?.text?.slice(0, 80) ?? "";
+      const currentTool =
+        runner.agentPhase?.kind === "running_tools"
+          ? runner.agentPhase.tools?.[0]?.name ?? null
+          : null;
+
+      petSessions.push({
+        id: sess?.id ?? key,
+        agentId: runner.agentId,
+        name: sess?.name ?? sess?.firstMessage?.slice(0, 20) ?? "新会话",
+        streaming: runner.streaming,
+        agentPhase: runner.agentPhase,
+        lastMessage: lastText,
+        currentTool,
+      });
+    }
+
+    const petState: PetState = {
+      sessions: petSessions,
+      focusedSessionId: selectedId,
+      petVisible: true,
+      petAlwaysShow: true,
+    };
+
+    api.pet.sendState(petState);
+  }, [activeSnapshot, sessions, selectedId]); // activeSnapshot 变化涵盖了 runner 的流式更新
+
+  // 宠物窗口发来的 "切到指定 session" 请求
+  useEffect(() => {
+    const api = getElectronApi();
+    if (!api?.pet?.onSwitchSession) return;
+    const unsub = api.pet.onSwitchSession((sessionId) => {
+      const target = sessions.find((s) => s.id === sessionId);
+      if (target) setSelectedId(sessionId);
+    });
+    return unsub;
+  }, [sessions]);
 
   /**
    * 把 forkableUserMessages 按顺序回填到 chatState.messages 里的 user message 上。
