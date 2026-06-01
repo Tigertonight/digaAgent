@@ -331,6 +331,100 @@ function registerIpc() {
       petWin.setIgnoreMouseEvents(ignore, { forward: true });
     }
   });
+
+  /**
+   * 右键菜单（P1）
+   * 用 native Menu.popup 而非 DOM 实现：
+   *  - 320×400 的宠物窗 + transparent，DOM 菜单超出会被裁剪
+   *  - native 菜单可弹到屏幕任意位置 + 系统级一致体验 + 失焦自动关
+   *
+   * payload schema（renderer 传入）：
+   *   {
+   *     hasSession: boolean,           // 当前是否有 displaySession
+   *     streaming: boolean,            // 当前 session 是否在流式
+   *     sessions: [{id, name, focused}],// 全部 agent session 列表，用于"切换会话"子菜单
+   *   }
+   */
+  ipcMain.on("pet:show-context-menu", (event, payload = {}) => {
+    if (!petWin || petWin.isDestroyed()) return;
+    const hasSession = !!payload.hasSession;
+    const streaming = !!payload.streaming;
+    const sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
+
+    const template = [
+      {
+        label: "打开主窗口",
+        accelerator: "CmdOrCtrl+1",
+        click: () => {
+          // 复用 pet:focus-main 行为：找到主窗 + show/focus
+          const mainWin = BrowserWindow.getAllWindows().find(
+            (w) =>
+              w !== petWin &&
+              (settingsWin ? w !== settingsWin : true) &&
+              !w.isDestroyed()
+          );
+          if (mainWin) {
+            if (mainWin.isMinimized()) mainWin.restore();
+            mainWin.show();
+            mainWin.focus();
+          }
+        },
+      },
+      // 切换会话子菜单：>1 个 session 才显示
+      ...(sessions.length > 1
+        ? [
+            {
+              label: "切换会话",
+              submenu: sessions.map((s) => ({
+                label: s.name || "(未命名)",
+                type: "radio",
+                checked: !!s.focused,
+                click: () => {
+                  if (!petWin || petWin.isDestroyed()) return;
+                  // 直接告诉 renderer 切换 localFocusId
+                  petWin.webContents.send("pet:switch-local-session", s.id);
+                },
+              })),
+            },
+          ]
+        : []),
+      {
+        label: streaming ? "暂停当前任务" : "暂停当前任务（无运行中）",
+        enabled: streaming,
+        click: () => {
+          if (!petWin || petWin.isDestroyed()) return;
+          petWin.webContents.send("pet:request-abort");
+        },
+      },
+      { type: "separator" },
+      {
+        label: "设置…",
+        accelerator: process.platform === "darwin" ? "Cmd+," : "Ctrl+,",
+        click: () => void openSettingsWindow(),
+      },
+      {
+        label: "隐藏宠物",
+        click: () => {
+          if (petWin && !petWin.isDestroyed()) petWin.hide();
+          // v1 没暴露"再次显示"入口，但主窗口设置里可控
+          // 主窗启动时会自动 createPetWindow，下次重启可见
+        },
+      },
+      { type: "separator" },
+      {
+        label: "退出 Diga Agent",
+        accelerator: process.platform === "darwin" ? "Cmd+Q" : "Ctrl+Q",
+        click: () => app.quit(),
+      },
+    ];
+
+    // 不引用 hasSession 也合法：暂停项已用 streaming 控制；保留预留位
+    void hasSession;
+
+    const menu = Menu.buildFromTemplate(template);
+    // 不传 x/y → Electron 自动用当前鼠标位置弹出，正是用户右键的位置
+    menu.popup({ window: petWin });
+  });
 }
 
 async function createWindow() {

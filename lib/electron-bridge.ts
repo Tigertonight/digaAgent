@@ -119,6 +119,19 @@ export interface ElectronApi {
     setIgnoreMouse(ignore: boolean): void;
     /** 宠物窗口订阅"自身失焦"事件（点击其他窗口/桌面/App），返回取消函数 */
     onWindowBlur(cb: () => void): () => void;
+    /**
+     * 宠物窗口请求弹出 native 右键菜单
+     * sessions: 全部 agent session（用于"切换会话"子菜单）
+     */
+    showContextMenu(payload: {
+      hasSession: boolean;
+      streaming: boolean;
+      sessions: { id: string; name: string; focused: boolean }[];
+    }): void;
+    /** 订阅"切换本地 focus session"（来自菜单），返回取消函数 */
+    onSwitchLocalSession(cb: (sessionId: string) => void): () => void;
+    /** 订阅"请求中止当前任务"（来自菜单），返回取消函数 */
+    onRequestAbort(cb: () => void): () => void;
   };
 }
 

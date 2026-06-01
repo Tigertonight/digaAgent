@@ -16,6 +16,7 @@ export default function PetApp() {
     setLocalFocusId,
     focusMain,
     bubbleText,
+    petState,
   } = usePetState();
 
   const { onMouseDown, dragging, wasJustDragged } = usePetDrag();
@@ -107,6 +108,48 @@ export default function PetApp() {
     };
   }, []);
 
+  // 订阅来自右键菜单的"切换 session"指令
+  useEffect(() => {
+    const unsub = window.miniPi?.pet?.onSwitchLocalSession?.((id) => {
+      setLocalFocusId(id);
+    });
+    return unsub;
+  }, [setLocalFocusId]);
+
+  // 订阅来自右键菜单的"请求中止"指令 → 调 abort API
+  useEffect(() => {
+    const unsub = window.miniPi?.pet?.onRequestAbort?.(() => {
+      const aid = displaySession?.agentId;
+      if (!aid) return;
+      void fetch(`/api/agent/${aid}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "abort" }),
+      }).catch((e) => console.warn("[pet] abort failed", e));
+    });
+    return unsub;
+  }, [displaySession?.agentId]);
+
+  // 触发 native 右键菜单
+  // payload 含全部 agent session 名 + 当前 focused id，供"切换会话"子菜单展示
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const focusedId = localFocusId ?? petState?.focusedSessionId ?? null;
+    const sessions = allSessions
+      .filter((s) => s.agentId)
+      .map((s) => ({
+        id: s.id,
+        name: s.name,
+        focused: s.id === focusedId,
+      }));
+    window.miniPi?.pet?.showContextMenu?.({
+      hasSession: !!displaySession,
+      streaming: !!displaySession?.streaming,
+      sessions,
+    });
+  };
+
   return (
     // 整个窗口大小 320×400，透明，宠物 sprite 在右下角
     <div
@@ -163,12 +206,13 @@ export default function PetApp() {
         </div>
       )}
 
-      {/* 宠物主体：固定在右下角，可拖拽 + hover + 点击 */}
+      {/* 宠物主体：固定在右下角，可拖拽 + hover + 点击 + 右键 */}
       <div
         ref={spriteRef}
         onMouseDown={onMouseDown}
         onMouseEnter={() => setSpriteHover(true)}
         onMouseLeave={() => setSpriteHover(false)}
+        onContextMenu={handleContextMenu}
         onClick={() => {
           // 刚拖完一次的 click 应忽略（避免松手即弹卡片）
           if (wasJustDragged()) return;

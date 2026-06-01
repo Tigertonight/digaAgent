@@ -101,5 +101,27 @@ contextBridge.exposeInMainWorld("miniPi", {
       ipcRenderer.on("pet:window-blur", handler);
       return () => ipcRenderer.removeListener("pet:window-blur", handler);
     },
+
+    /**
+     * 宠物窗口请求弹出 native 右键菜单。
+     * payload schema 见 main.js pet:show-context-menu handler 注释。
+     */
+    showContextMenu: (payload) =>
+      ipcRenderer.send("pet:show-context-menu", payload ?? {}),
+
+    /** 宠物窗口订阅"切换本地 focus session"（来自菜单），返回取消函数 */
+    onSwitchLocalSession: (cb) => {
+      const handler = (_event, sessionId) => cb(sessionId);
+      ipcRenderer.on("pet:switch-local-session", handler);
+      return () =>
+        ipcRenderer.removeListener("pet:switch-local-session", handler);
+    },
+
+    /** 宠物窗口订阅"请求中止当前任务"（来自菜单），返回取消函数 */
+    onRequestAbort: (cb) => {
+      const handler = () => cb();
+      ipcRenderer.on("pet:request-abort", handler);
+      return () => ipcRenderer.removeListener("pet:request-abort", handler);
+    },
   },
 });
