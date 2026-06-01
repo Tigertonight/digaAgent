@@ -3207,9 +3207,18 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                 const currentRefIdx = isVisible ? refIdx++ : -1;
                 const isLastAssistant =
                   m.role === "assistant" && i === lastAssistantIdx;
-                // key 稳定：优先 entryId（user message 有），否则 timestamp，否则 index
-                // 用稳定 key 让 React diff 不会把第 N 条的 state 错误地复用到第 N+1 条
-                const stableKey = m.entryId ?? (m.timestamp != null ? `t${m.timestamp}` : `i${i}`);
+                // key 稳定且唯一：
+                //   1) 优先 entryId（user message 从后端拿到的稳定 id）
+                //   2) 否则用 role:timestamp:index 三元组
+                //      —— 同一 SSE 流里 user/assistant 可能毫秒级共享 timestamp，
+                //         单纯 `t${timestamp}` 会出现 key 重复（React 警告）
+                //      —— role + index 用于在同 timestamp 时 disambiguate
+                //   3) 兜底 i${index}（不应到达，timestamp 一般都有）
+                const stableKey =
+                  m.entryId ??
+                  (m.timestamp != null
+                    ? `${m.role}:${m.timestamp}:${i}`
+                    : `i${i}`);
                 const view = (
                   <MessageView
                     msg={m}
