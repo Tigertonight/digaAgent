@@ -94,5 +94,12 @@ contextBridge.exposeInMainWorld("miniPi", {
       ipcRenderer.on("pet:switch-session", handler);
       return () => ipcRenderer.removeListener("pet:switch-session", handler);
     },
+
+    /** 宠物窗口订阅"自身失焦"事件（用于关闭卡片等浮层） */
+    onWindowBlur: (cb) => {
+      const handler = () => cb();
+      ipcRenderer.on("pet:window-blur", handler);
+      return () => ipcRenderer.removeListener("pet:window-blur", handler);
+    },
   },
 });
