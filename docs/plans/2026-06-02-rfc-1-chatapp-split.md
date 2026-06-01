@@ -400,3 +400,45 @@ ChatApp.tsx 顶层组合
 ```
 
 依赖方向严格单向：UI ← hooks ← lib（agent-registry / session-runner / chat-reducer）。
+
+---
+
+## 附录 C：阶段 A 执行小结（2026-06-01 完成）
+
+### 实际产出
+
+| 任务 | commit | 新文件行数 | ChatApp 变化 |
+|---|---|---|---|
+| A1 useRunners | `da7ec14` + 修复 `ec94001` | 211 行 | 4674 → 4574（-100） |
+| A2 useSseManager | `e8a966a` | 167 行 | 4574 → 4545（-29，含死代码顺手清理） |
+| A3 useAgentEvents | `52d7a6f` | 236 行 | 4545 → 4432（-113） |
+| **A 阶段累计** | 4 commits | **614 行（3 hooks）** | **4674 → 4432（-242）** |
+
+### 与 RFC 预测对比
+
+| 维度 | 预测 | 实际 | 差异原因 |
+|---|---|---|---|
+| ChatApp 行数降幅 | ~3800（-870） | 4432（-242） | RFC 预测高估了「纯抽离」的减行效果——抽离 hook 时，hook 调用 + ref 转发 + 参数注入本身占行；真正大减行要靠 B 阶段拆 useChatStream（send/abort/steer/followUp 集中在 ChatApp 内） |
+| handleAgentEvent 分发器长度 | 30 行 | hook 内 switch 仍 ~100 行 | 选择了「A3-中」方案：抽 hook 但不做纯函数化 + 单测（节省 2 天，留给阶段 B/C） |
+| 单测覆盖 | event handler 各 1 happy path | 0 | 同上，纯函数化推迟 |
+
+### 关键设计决策
+
+1. **循环依赖通过两根 ref 转发**：useSseManager 必须先于 useRunners / useAgentEvents 调用（onEvict 直传 closeSseFor），但其 onStatusChange / onEvent 又依赖后两者。解法：`updateRunnerRef` + `handleAgentEventRef`，在 useEffect 同步真实函数。这是 React hooks 调用顺序约束下的标准模式，不是 hack。
+
+2. **useRunners 封装 setRunner API**：A1 初版漏淘汰 LRU（场景 5 e2e 红），根因是 ChatApp 内仍有 `runnersRef.current.set` 直接写入绕过 LRU 检查。修复方案不是把 LRU 推给调用方，而是封装 `setRunner` 入口，强制所有写入走同一道闸门。
+
+3. **A3 选「中」不选「重」**：原 RFC A3 包含纯函数化 + 单测，实际只做 hook 抽离 + `derivePhaseFromReducerEvent` 拆出。原因：当下瓶颈是 ChatApp 太长无法 hold 全貌，不是事件处理逻辑没单测。单测可在阶段 C 末尾统一补，避免在拆分中途引入第三种概念（hook + 纯函数 + 单测）。
+
+### 未达成项（转给后续阶段）
+
+- **`runnersRef.current` 直接读写仍 13 处**（业务逻辑：LRU 检查 / DRAFT 升级 / runner 遍历）—— **归属 B2 useChatStream（send 路径 DRAFT 升级）+ B1 useSessions（LRU 触发）**
+- **event handler 纯函数化 + 单测** —— 归属 **阶段 C 末尾**
+- **lint 存量 78 problems（3 errors）** —— 与 A 阶段无关，单独 commit 清理
+
+### A 阶段验收
+
+- `tsc --noEmit` ✓
+- `npm run build` ✓（13.4s）
+- `npx playwright test` ✓（6/6, 11.3s）—— 覆盖核心 + 并发 + LRU + 草稿
+- 手动验收清单（Fork / 宠物 / compact / 断线重连）：**留待 Electron 内手动走查**
