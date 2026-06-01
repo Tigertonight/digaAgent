@@ -71,6 +71,9 @@ html,
 body {
   background: var(--bg);
   color: var(--text);
+  /* electron/web app:viewport 永不滚动,溢出由内层各自负责 */
+  height: 100%;
+  overflow: hidden;
   /* upstream 默认 sans，仅 brand/特定区域用 mono（用 .font-mono 启用） */
   font-family:
     -apple-system, system-ui, "Segoe UI", Roboto, "PingFang SC",
@@ -88,6 +91,34 @@ body {
   font-family:
     var(--font-noto-mono), "JetBrains Mono", "Fira Code", Consolas,
     ui-monospace, "PingFang SC", "Microsoft YaHei", monospace !important;
+}
+
+/* Thinking 块内的 markdown:prose 默认会撑大字号/给段落很厚 margin,
+ * 这里强制 12px + 紧凑行距 + 继承父颜色(已经被设成 dim) */
+.thinking-md .prose,
+.thinking-md .prose * {
+  color: inherit !important;
+  font-size: 12px !important;
+}
+.thinking-md .prose p,
+.thinking-md .prose ul,
+.thinking-md .prose ol,
+.thinking-md .prose pre {
+  margin-top: 0.4em !important;
+  margin-bottom: 0.4em !important;
+  line-height: 1.55 !important;
+}
+.thinking-md .prose h1,
+.thinking-md .prose h2,
+.thinking-md .prose h3,
+.thinking-md .prose h4 {
+  font-size: 12px !important;
+  margin-top: 0.6em !important;
+  margin-bottom: 0.3em !important;
+}
+.thinking-md .prose strong {
+  color: inherit !important;
+  font-weight: 600;
 }
 
 /* upstream layout 元类 */

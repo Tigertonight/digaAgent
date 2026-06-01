@@ -292,7 +292,9 @@ async function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
-    minWidth: 800,
+    // 实测算法:sidebar 260 + main 360(min) + splitter 4 + files 200(min) ≈ 824
+    // 给个边距,880 保证组件不重叠
+    minWidth: 880,
     minHeight: 600,
     title: "Diga Agent",
     webPreferences: {

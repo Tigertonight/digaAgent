@@ -367,19 +367,17 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
   // 右侧 panel 宽度（仅 files/tools 用 inline 形态需要，skills 是 modal）
   const [rightPanelWidth, setRightPanelWidth] = useState(480);
-  /** FileBrowser 内部折叠状态:用于让外层容器跟着收缩,避免留白 */
+  /** FileBrowser 内部折叠状态:不再影响外层宽度,仅 56px 极窄态特殊处理
+   *  (FileBrowser 内部用 flex:1 自适应,外层一直用 rightPanelWidth) */
   const [filesLayout, setFilesLayout] = useState<{
     treeCollapsed: boolean;
     viewerHidden: boolean;
   }>({ treeCollapsed: false, viewerHidden: false });
-  /** 实际渲染宽度:viewer 隐藏时只剩 tree(或两侧都收起时只剩窄条) */
-  const filesContainerWidth = filesLayout.viewerHidden
-    ? filesLayout.treeCollapsed
-      ? 56 // 两个窄条
-      : 268 // tree 240 + border 1 + viewer 边栏 28
-    : rightPanelWidth;
-  /** 收起时 splitter 也没意义,顺手隐藏 */
-  const filesSplitterEnabled = !filesLayout.viewerHidden;
+  /** 两侧都收起时容器收成 56px 窄条,其它情况都用 rightPanelWidth */
+  const filesContainerWidth =
+    filesLayout.viewerHidden && filesLayout.treeCollapsed
+      ? 56
+      : rightPanelWidth;
   useEffect(() => {
     try {
       const stored = localStorage.getItem("rightPanelWidth");
@@ -427,6 +425,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const [showModelsConfig, setShowModelsConfig] = useState(false);
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
   const [showCwdPicker, setShowCwdPicker] = useState(false);
+  const [showFilePicker, setShowFilePicker] = useState(false);
   const [showBranches, setShowBranches] = useState(false);
   const [systemPromptText, setSystemPromptText] = useState<string | null>(
     null
@@ -2225,7 +2224,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // panel 颜色用 CSS 变量驱动；class 里只放结构相关
   return (
     <div
-      className="flex h-screen"
+      className="flex h-screen overflow-hidden min-w-0"
       style={{
         background: "var(--bg)",
         color: "var(--text)",
@@ -2531,7 +2530,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                 return `${cur}${sep}@${absPath} `;
               });
             }}
-            onOpenChooser={() => setShowCwdPicker(true)}
+            onOpenFilePicker={() => setShowFilePicker(true)}
           />
         </div>
         {/* sidebar 底：Models / Skills 双标签 */}
@@ -2569,6 +2568,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       {/* 右：对话 */}
       <main
         className="flex flex-1 flex-col min-w-0 relative"
+        style={{ minWidth: 360 }}
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -2654,17 +2654,21 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           </div>
         )}
         <header
-          className="border-b flex items-center text-xs relative"
+          className="border-b grid items-center text-xs"
           style={{
             height: 36,
             borderColor: "var(--border)",
             color: "var(--text-muted)",
             paddingLeft: 8,
             paddingRight: 8,
+            // 三列:左/中/右,各占自己的 grid track,绝不互相挤压。
+            // 右列 minmax(0,auto) 让 token meter 长起来时不撑爆中列。
+            gridTemplateColumns: "auto 1fr auto",
+            columnGap: 8,
           }}
         >
           {/* 左：sidebar toggle + theme toggle */}
-          <span className="flex items-center gap-1 shrink-0">
+          <span className="flex items-center gap-1 shrink-0 min-w-0">
             <IconButton
               onClick={() => setSidebarOpen((v) => !v)}
               title={sidebarOpen ? "收起侧栏" : "展开侧栏"}
@@ -2686,7 +2690,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           </span>
 
           {/* 中：居中 Branches / System tabs */}
-          <span className="absolute left-1/2 -translate-x-1/2 flex items-stretch h-full">
+          <span className="flex items-stretch h-full justify-center min-w-0">
             <button
               type="button"
               disabled={!agentId}
@@ -2724,7 +2728,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           </span>
 
           {/* 右：token meter + 辅助操作 + panel toggle */}
-          <span className="flex items-center gap-2 shrink-0 ml-auto">
+          <span className="flex items-center gap-2 justify-end min-w-0">
             {stats && stats.total > 0 && <HudMeter stats={stats} />}
             {sseStatus !== "idle" && (
               <span
@@ -2806,13 +2810,17 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                     lineHeight: 1.4,
                   }}
                 >
-                  <BrandLogo size={56} />
+                  <div style={{ flexShrink: 0 }}>
+                    <BrandLogo size={56} />
+                  </div>
                   <span
                     style={{
                       fontSize: 22,
                       color: "var(--text)",
                       fontWeight: 700,
                       letterSpacing: "-0.01em",
+                      whiteSpace: "nowrap",
+                      flexShrink: 0,
                     }}
                   >
                     Diga Agent
@@ -2821,6 +2829,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                     style={{
                       fontSize: 14,
                       minWidth: 0,
+                      flex: 1,
                       overflow: "hidden",
                       whiteSpace: "nowrap",
                       textOverflow: "ellipsis",
@@ -3327,31 +3336,30 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
       {showFiles && (
         <>
-          {filesSplitterEnabled && (
-            <div
-              onMouseDown={onSplitterMouseDown}
-              title="拖动调整宽度"
-              style={{
-                width: 4,
-                cursor: "ew-resize",
-                background: "var(--border-soft)",
-                flexShrink: 0,
-                transition: "background 0.12s",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "var(--accent)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "var(--border-soft)";
-              }}
-            />
-          )}
+          <div
+            onMouseDown={onSplitterMouseDown}
+            title="拖动调整宽度"
+            style={{
+              width: 4,
+              cursor: "ew-resize",
+              background: "var(--border-soft)",
+              flexShrink: 0,
+              transition: "background 0.12s",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "var(--accent)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "var(--border-soft)";
+            }}
+          />
           <div
             style={{
-              width: filesContainerWidth,
-              flexShrink: 0,
+              // 用 flex-basis 表达"想要的宽度",允许 shrink:窗口窄时压到 minWidth
+              flex: `0 1 ${filesContainerWidth}px`,
+              minWidth: filesLayout.viewerHidden && filesLayout.treeCollapsed ? 56 : 200,
               maxWidth: "80vw",
-              transition: "width 0.16s ease",
+              transition: "flex-basis 0.16s ease",
             }}
           >
             <FileBrowser
@@ -3395,6 +3403,42 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                 setCwd(picked);
                 setShowCwdPicker(false);
               }}
+              mode="picker"
+            />
+          </div>
+        </div>
+      )}
+      {showFilePicker && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ background: "rgba(0,0,0,0.4)" }}
+          onClick={() => setShowFilePicker(false)}
+        >
+          <div
+            className="rounded-md overflow-hidden flex flex-col"
+            style={{
+              width: 520,
+              maxWidth: "90vw",
+              height: 520,
+              maxHeight: "85vh",
+              background: "var(--bg)",
+              border: "1px solid var(--border)",
+              boxShadow: "0 10px 40px rgba(0,0,0,0.25)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <FileBrowser
+              initialPath={cwd || "/"}
+              onClose={() => setShowFilePicker(false)}
+              onPickPath={(absPath) => {
+                setInput((cur) => {
+                  const sep =
+                    cur.length === 0 || cur.endsWith(" ") ? "" : " ";
+                  return `${cur}${sep}@${absPath} `;
+                });
+                setShowFilePicker(false);
+              }}
+              mode="picker"
             />
           </div>
         </div>
@@ -4268,10 +4312,10 @@ function ThinkingBlock({
         )}
       </summary>
       <div
-        className="px-3 pb-2 whitespace-pre-wrap"
-        style={{ color: "var(--text-muted)" }}
+        className="px-3 pb-2 thinking-md"
+        style={{ color: "var(--text-dim)", fontSize: 12 }}
       >
-        {text}
+        <Markdown text={text} size="small" />
       </div>
     </details>
   );
