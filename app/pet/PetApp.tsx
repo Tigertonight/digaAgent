@@ -78,6 +78,24 @@ export default function PetApp() {
     };
   }, []);
 
+  // 宠物窗口失焦（用户点击其他窗口/桌面/App）→ 关卡片 + 关气泡
+  // 双保险：BrowserWindow blur（来自 main 进程）+ window.blur（renderer 原生）
+  // window.blur 在 setIgnoreMouse=false 期间可触发（窗口处于 key 状态时点击外部）
+  useEffect(() => {
+    const closeFloaters = () => {
+      setCardOpen(false);
+      setSpriteHover(false);
+      setBubbleHover(false);
+      setBubbleVisible(false);
+    };
+    const unsub = window.miniPi?.pet?.onWindowBlur?.(closeFloaters);
+    window.addEventListener("blur", closeFloaters);
+    return () => {
+      unsub?.();
+      window.removeEventListener("blur", closeFloaters);
+    };
+  }, []);
+
   return (
     // 整个窗口大小 320×400，透明，宠物 sprite 在右下角
     <div
@@ -143,13 +161,16 @@ export default function PetApp() {
         onClick={() => {
           // 刚拖完一次的 click 应忽略（避免松手即弹卡片）
           if (wasJustDragged()) return;
-          if (!cardOpen) {
-            setCardOpen(true);
-            // 卡片打开后立即清空 hover 状态 + 让气泡关闭
-            setSpriteHover(false);
-            setBubbleHover(false);
-            setBubbleVisible(false);
+          // 卡片已开 → 再次点击 sprite 关掉卡片（toggle）
+          if (cardOpen) {
+            setCardOpen(false);
+            return;
           }
+          setCardOpen(true);
+          // 卡片打开后立即清空 hover 状态 + 让气泡关闭
+          setSpriteHover(false);
+          setBubbleHover(false);
+          setBubbleVisible(false);
         }}
         style={{
           position: "absolute",

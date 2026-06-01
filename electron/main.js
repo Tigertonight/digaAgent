@@ -450,6 +450,13 @@ async function createPetWindow(baseUrl) {
   petWin.setIgnoreMouseEvents(true, { forward: true });
   petWin.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   petWin.on("closed", () => { petWin = null; });
+  // 失焦时通知 renderer 关闭可关闭的浮层（如卡片）
+  // 触发场景：用户点击其他窗口 / 点击桌面 / 切到别的 App
+  petWin.on("blur", () => {
+    if (petWin && !petWin.isDestroyed()) {
+      petWin.webContents.send("pet:window-blur");
+    }
+  });
 
   await petWin.loadURL(`${baseUrl}/pet`);
   return petWin;

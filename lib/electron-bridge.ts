@@ -117,6 +117,8 @@ export interface ElectronApi {
     onSwitchSession(cb: (sessionId: string) => void): () => void;
     /** 动态控制鼠标穿透（true=穿透，false=不穿透） */
     setIgnoreMouse(ignore: boolean): void;
+    /** 宠物窗口订阅"自身失焦"事件（点击其他窗口/桌面/App），返回取消函数 */
+    onWindowBlur(cb: () => void): () => void;
   };
 }
 
