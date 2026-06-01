@@ -17,7 +17,8 @@ export default function PetLayout({
         overflow: "visible",
         background: "transparent",
         userSelect: "none",
-        WebkitAppRegion: "no-drag" as React.CSSProperties["WebkitAppRegion"],
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ...(({ WebkitAppRegion: "no-drag" } as any) as React.CSSProperties),
       }}
     >
       {children}
