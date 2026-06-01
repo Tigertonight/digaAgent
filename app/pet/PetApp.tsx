@@ -31,6 +31,12 @@ export default function PetApp() {
   const [cardOpen, setCardOpen] = useState(false);
   const spriteRef = useRef<HTMLDivElement>(null);
 
+  // 单击 / 双击区分：原生 dblclick 会先触发两次 click，导致"开卡片 → 跳主窗"夹叙。
+  // 用计数 + 200ms 延迟：第一次 click 起定时器，200ms 内第二次 click 视为双击。
+  // 200ms 是 macOS 默认的 NSEvent 双击阈值上限，体感正常。
+  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const SINGLE_CLICK_DELAY = 200;
+
   // 任一区域 hover → 立即取消关闭计时 + 显示气泡
   useEffect(() => {
     const anyHover = spriteHover || bubbleHover;
@@ -75,6 +81,11 @@ export default function PetApp() {
     window.miniPi?.pet?.setIgnoreMouse?.(true);
     return () => {
       window.miniPi?.pet?.setIgnoreMouse?.(false);
+      // 卸载时清理单击延迟定时器
+      if (clickTimerRef.current) {
+        clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -161,16 +172,29 @@ export default function PetApp() {
         onClick={() => {
           // 刚拖完一次的 click 应忽略（避免松手即弹卡片）
           if (wasJustDragged()) return;
-          // 卡片已开 → 再次点击 sprite 关掉卡片（toggle）
-          if (cardOpen) {
+          // 已有 pending 单击 → 当作双击处理
+          if (clickTimerRef.current) {
+            clearTimeout(clickTimerRef.current);
+            clickTimerRef.current = null;
+            // 双击：跳回主窗口，顺便关闭可能开着的卡片
             setCardOpen(false);
+            focusMain(displaySession?.id);
             return;
           }
-          setCardOpen(true);
-          // 卡片打开后立即清空 hover 状态 + 让气泡关闭
-          setSpriteHover(false);
-          setBubbleHover(false);
-          setBubbleVisible(false);
+          // 起单击定时器，200ms 内若再次 click 视为双击
+          clickTimerRef.current = setTimeout(() => {
+            clickTimerRef.current = null;
+            // 卡片已开 → 再次点击 sprite 关掉卡片（toggle）
+            if (cardOpen) {
+              setCardOpen(false);
+              return;
+            }
+            setCardOpen(true);
+            // 卡片打开后立即清空 hover 状态 + 让气泡关闭
+            setSpriteHover(false);
+            setBubbleHover(false);
+            setBubbleVisible(false);
+          }, SINGLE_CLICK_DELAY);
         }}
         style={{
           position: "absolute",
