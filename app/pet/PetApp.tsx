@@ -3,9 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import { usePetState } from "./use-pet-state";
 import { usePetDrag } from "./use-pet-drag";
+import { usePetToasts } from "./use-pet-toasts";
 import PetSprite from "./PetSprite";
 import PetBubble from "./PetBubble";
 import PetCard from "./PetCard";
+import PetToastStack from "./PetToastStack";
 
 export default function PetApp() {
   const {
@@ -20,6 +22,9 @@ export default function PetApp() {
   } = usePetState();
 
   const { onMouseDown, dragging, wasJustDragged } = usePetDrag();
+
+  // 临时事件 toast 队列（基于 petState 边沿变化派生）
+  const toasts = usePetToasts(petState);
 
   // hover 状态拆分：sprite 上 / 气泡上 / 关闭延迟计时器
   // 任意一个 hover=true 时气泡显示；都 false 时延迟 300ms 关闭
@@ -163,6 +168,10 @@ export default function PetApp() {
         pointerEvents: "none", // 默认不捕获事件，由子元素按需启用
       }}
     >
+      {/* 事件 toast 堆叠 —— 在常态气泡上方，被动通告，不可交互
+          拖拽时隐藏避免抖动；卡片打开时仍显示（错误信息不该被覆盖） */}
+      {!dragging && <PetToastStack toasts={toasts} />}
+
       {/* hover 气泡 —— 在 sprite 上方，sprite 右侧对齐（拖拽时隐藏）
           鼠标在气泡上时也保持显示（粘性气泡） */}
       {showBubble && (
