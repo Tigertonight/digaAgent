@@ -343,6 +343,30 @@ function registerIpc() {
     }
   });
 
+  /**
+   * 返回宠物窗口当前所在显示器的工作区（排除任务栏/Dock）。
+   * 用于渲染层边缘吸附计算 —— renderer 用 window.screenX/Y 知道自己位置，
+   * 但拿不到屏幕边界，必须由主进程提供。
+   *
+   * 多显示器：以宠物窗口当前位置所在的 display 为准（不是 primary），
+   * 这样跨屏拖拽时吸附边界正确。
+   */
+  ipcMain.handle("pet:get-work-area", () => {
+    if (!petWin || petWin.isDestroyed()) return null;
+    const { screen } = require("electron");
+    const [winX, winY] = petWin.getPosition();
+    const [winW, winH] = petWin.getSize();
+    // 以窗口中心点所在显示器为基准
+    const centerX = winX + winW / 2;
+    const centerY = winY + winH / 2;
+    const display = screen.getDisplayNearestPoint({
+      x: Math.round(centerX),
+      y: Math.round(centerY),
+    });
+    const wa = display.workArea; // { x, y, width, height }
+    return { x: wa.x, y: wa.y, width: wa.width, height: wa.height };
+  });
+
   // 动态控制鼠标穿透：有 UI 交互时关闭穿透，空白区域继续穿透
   ipcMain.on("pet:set-ignore-mouse", (_event, ignore) => {
     if (petWin && !petWin.isDestroyed()) {

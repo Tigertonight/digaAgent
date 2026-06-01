@@ -113,6 +113,16 @@ export interface ElectronApi {
     setPetVisible(visible: boolean): void;
     /** 宠物窗口拖拽：通知主进程移动窗口 */
     move(pos: { x: number; y: number }): void;
+    /**
+     * 查询宠物窗口当前所在显示器的工作区（排除任务栏/Dock）。
+     * 用于拖拽吸附计算；窗口不存在返回 null。
+     */
+    getWorkArea(): Promise<{
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    } | null>;
     /** 宠物窗口订阅"切换 session"请求（来自宠物点击跳回主窗口），返回取消函数 */
     onSwitchSession(cb: (sessionId: string) => void): () => void;
     /** 动态控制鼠标穿透（true=穿透，false=不穿透） */
