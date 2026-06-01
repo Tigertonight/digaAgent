@@ -203,6 +203,34 @@ export default function PetCard({
         </button>
       </div>
 
+      {/* ===== offline 专用 banner：醒目提示 + 一键重连 ===== */}
+      {isOffline && (
+        <button
+          onClick={onReconnect}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            width: "100%",
+            background: "rgba(220,38,38,0.15)",
+            border: "1px solid rgba(220,38,38,0.4)",
+            borderRadius: 8,
+            padding: "6px 10px",
+            marginBottom: 10,
+            color: "#fca5a5",
+            fontSize: 11,
+            cursor: "pointer",
+            textAlign: "left",
+            transition: "background 150ms",
+          }}
+          title="点击重新建立 SSE 连接"
+        >
+          <span style={{ fontSize: 13, lineHeight: 1 }}>⚠</span>
+          <span style={{ flex: 1, fontWeight: 600 }}>连接已断开</span>
+          <span style={{ fontSize: 10, color: "#fda4af" }}>点击重连</span>
+        </button>
+      )}
+
       {/* ===== 状态行（主文案 + 副文案） ===== */}
       <div style={{ marginBottom: 10 }}>
         <div

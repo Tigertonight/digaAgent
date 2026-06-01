@@ -65,12 +65,15 @@ export function derivePetAnimState(
  * 从 PetSessionInfo + animState + now 派生气泡文案（设计 §4.1）。
  *
  * - now 是外部传入的"当前墙钟时间 ms"，用于计算 streaming 耗时，每秒刷新一次
+ * - lostElapsedMs：当前 session 处于 lost 态已持续的毫秒数，由 usePetState
+ *   用 ref 在 sseStatus 边沿维护并传入；非 lost 时传 null
  * - 异常文案（error / offline / retry / compacting）优先级高，直接覆盖
  */
 export function derivePetBubbleText(
   session: PetSessionInfo | null,
   animState: PetAnimState,
-  now: number
+  now: number,
+  lostElapsedMs: number | null = null
 ): PetBubbleText {
   // 无 session
   if (!session) {
@@ -88,9 +91,14 @@ export function derivePetBubbleText(
 
   // L4/L3: SSE 离线
   if (session.sseStatus === "lost") {
+    // 有 lostElapsedMs 时显示"距上次正常 Xs"，否则保留"点击重连"兜底
+    const secondary =
+      lostElapsedMs != null && lostElapsedMs >= 1000
+        ? `距上次正常 ${formatDuration(lostElapsedMs)} · 点击重连`
+        : "点击重连";
     return {
       primary: "连接已断开",
-      secondary: "点击重连",
+      secondary,
       priority: "high",
     };
   }
@@ -172,13 +180,25 @@ export function derivePetBubbleText(
       // 已在前面 session.error 分支处理
       return { primary: "出错了", secondary: null, priority: "high" };
     case "offline":
-      // 已在前面 sseStatus 分支处理
+      // 已在前面 sseStatus 分支处理（带 lostElapsed）
       return {
         primary: "连接已断开",
         secondary: "点击重连",
         priority: "high",
       };
   }
+}
+
+/** 把毫秒数格式化为 "Xs" / "X分Ys" / "Xh Ym"（用于"距上次正常"） */
+function formatDuration(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  if (m < 60) return rs > 0 ? `${m}分${rs}s` : `${m}分`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm > 0 ? `${h}h${rm}分` : `${h}h`;
 }
 
 /** "正在 X" 文案（设计 §4.1） */
@@ -222,8 +242,12 @@ export function usePetState() {
   const prevStreamingRef = useRef<boolean>(false);
   // 用于宠物本地切换展示哪个 session（不推回主窗口）
   const [localFocusId, setLocalFocusId] = useState<string | null>(null);
-  // 每秒 tick，用于刷新"已耗时 Xs"文案
+  // 每秒 tick，用于刷新"已耗时 Xs" / "距上次正常 Xs" 文案
   const [now, setNow] = useState<number>(() => Date.now());
+  // 记录每个 session 进入 lost 态的时间戳；恢复（非 lost）即清除。
+  // 用 ref 避免不必要的 re-render（恢复时不需要 trigger 渲染，因为 sseStatus
+  // 变化本身已经会导致 petState 更新进而 re-render）。
+  const lostAtMapRef = useRef<Map<string, number>>(new Map());
 
   // 订阅 IPC 推送
   useEffect(() => {
@@ -236,10 +260,36 @@ export function usePetState() {
     return unsub;
   }, []);
 
-  // 每秒刷新 now（仅当有 streaming 时启动，避免空跑）
+  // 维护 lostAtMapRef：sessions 中任何 session 进入/离开 lost 都同步更新。
+  // 同时清理 sessions 中已不存在的 session 的残留记录，避免内存泄漏。
   useEffect(() => {
-    const hasStreaming = petState?.sessions.some((s) => s.streaming) ?? false;
-    if (!hasStreaming) return;
+    if (!petState) {
+      lostAtMapRef.current.clear();
+      return;
+    }
+    const map = lostAtMapRef.current;
+    const aliveIds = new Set<string>();
+    for (const s of petState.sessions) {
+      aliveIds.add(s.id);
+      if (s.sseStatus === "lost") {
+        if (!map.has(s.id)) map.set(s.id, Date.now());
+      } else {
+        if (map.has(s.id)) map.delete(s.id);
+      }
+    }
+    // 清理已下线的 session
+    for (const id of Array.from(map.keys())) {
+      if (!aliveIds.has(id)) map.delete(id);
+    }
+  }, [petState]);
+
+  // 每秒刷新 now（仅当有 streaming 或 lost 时启动，避免空跑）
+  useEffect(() => {
+    const needTick =
+      petState?.sessions.some(
+        (s) => s.streaming || s.sseStatus === "lost"
+      ) ?? false;
+    if (!needTick) return;
     const id = setInterval(() => setNow(Date.now()), ELAPSED_TICK_MS);
     return () => clearInterval(id);
   }, [petState]);
@@ -302,11 +352,20 @@ export function usePetState() {
     return petState.sessions.find((s) => s.id === targetId) ?? null;
   })();
 
+  /** 当前展示 session 处于 lost 态时的已断线时长（ms），否则 null */
+  const lostElapsedMs: number | null = (() => {
+    if (!displaySession || displaySession.sseStatus !== "lost") return null;
+    const lostAt = lostAtMapRef.current.get(displaySession.id);
+    if (lostAt == null) return null;
+    return Math.max(0, now - lostAt);
+  })();
+
   /** 派生气泡文案（每次 render 重算，依赖 now 实现每秒刷新） */
   const bubbleText: PetBubbleText = derivePetBubbleText(
     displaySession,
     animState,
-    now
+    now,
+    lostElapsedMs
   );
 
   /** 聚焦主窗口并切到对应 session */

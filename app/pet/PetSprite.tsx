@@ -109,7 +109,10 @@ export default function PetSprite({ animState, size = 80 }: Props) {
         height: size,
         borderRadius: "50%",
         animation: wrapperAnim,
-        transition: "filter 200ms ease, transform 200ms ease",
+        // offline 时整体降到 0.55 透明度，强化"未连接"的视觉削弱
+        opacity: animState === "offline" ? 0.55 : 1,
+        transition:
+          "filter 200ms ease, transform 200ms ease, opacity 250ms ease",
       }}
     >
       <img
