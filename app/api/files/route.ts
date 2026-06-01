@@ -39,13 +39,101 @@ function err(msg: string, status = 400) {
   return NextResponse.json({ error: msg }, { status });
 }
 
+/** 递归搜索时跳过的目录名(成本太高 / 信噪比太低) */
+const SEARCH_BLACKLIST = new Set([
+  ".git",
+  ".hg",
+  ".svn",
+  "node_modules",
+  ".next",
+  "dist",
+  "build",
+  "out",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".cache",
+  ".turbo",
+  ".idea",
+  ".vscode",
+  "target",
+  ".DS_Store",
+]);
+
+interface SearchHit {
+  path: string;
+  name: string;
+  isDir: boolean;
+}
+
+/** BFS 递归搜:文件名 substring 匹配,大小写不敏感
+ *  - maxResults: 截断保护,默认 200
+ *  - maxDepth:   层级保护,默认 6
+ *  - 跳过软链(避免循环)和 SEARCH_BLACKLIST 目录 */
+async function recursiveSearch(
+  rootAbs: string,
+  query: string,
+  maxResults = 200,
+  maxDepth = 6
+): Promise<{ hits: SearchHit[]; truncated: boolean }> {
+  const q = query.toLowerCase();
+  const hits: SearchHit[] = [];
+  const queue: Array<{ dir: string; depth: number }> = [
+    { dir: rootAbs, depth: 0 },
+  ];
+  while (queue.length > 0) {
+    if (hits.length >= maxResults) {
+      return { hits, truncated: true };
+    }
+    const { dir, depth } = queue.shift()!;
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      if (SEARCH_BLACKLIST.has(e.name)) continue;
+      if (e.name.startsWith(".") && e.name.length > 1) {
+        // 跳所有 dotfile,降噪;用户真要 .gitignore 之类自己浏览
+        continue;
+      }
+      const child = path.join(dir, e.name);
+      if (e.name.toLowerCase().includes(q)) {
+        hits.push({ path: child, name: e.name, isDir: e.isDirectory() });
+        if (hits.length >= maxResults) {
+          return { hits, truncated: true };
+        }
+      }
+      if (e.isDirectory() && !e.isSymbolicLink() && depth < maxDepth) {
+        queue.push({ dir: child, depth: depth + 1 });
+      }
+    }
+  }
+  return { hits, truncated: false };
+}
+
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const p = url.searchParams.get("path");
   const raw = url.searchParams.get("raw") === "1";
+  const q = url.searchParams.get("q");
   if (!p) return err("path required");
   try {
     const abs = assertAllowed(p);
+    // q 模式:把 path 当作搜索 root,递归扫文件名匹配
+    if (q && q.length >= 2) {
+      const st = await fs.stat(abs);
+      if (!st.isDirectory()) return err("search root must be a directory", 400);
+      const { hits, truncated } = await recursiveSearch(abs, q);
+      return NextResponse.json({
+        kind: "search",
+        path: abs,
+        query: q,
+        truncated,
+        entries: hits,
+      });
+    }
     const st = await fs.stat(abs);
     // raw 模式:直接二进制返回(用于 <img src> / <video src> 等),只允许文件
     if (raw) {

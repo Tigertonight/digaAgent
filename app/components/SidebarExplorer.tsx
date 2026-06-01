@@ -11,7 +11,7 @@ import {
   ChevronDown,
   ChevronRight,
   Folder,
-  FolderOpen,
+  Paperclip,
 } from "lucide-react";
 
 interface Entry {
@@ -30,7 +30,8 @@ interface DirResponse {
 interface Props {
   root: string;
   onPickPath: (absPath: string) => void;
-  onOpenChooser?: () => void;
+  /** 选附件入口:打开搜索式 file picker,把所选路径塞进对话输入框 */
+  onOpenFilePicker?: () => void;
   /** 父组件可在外部触发刷新（如 cwd 改变时） */
   refreshKey?: number;
 }
@@ -50,7 +51,7 @@ async function fetchDir(path: string): Promise<Entry[]> {
 export default function SidebarExplorer({
   root,
   onPickPath,
-  onOpenChooser,
+  onOpenFilePicker,
   refreshKey,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
@@ -111,14 +112,14 @@ export default function SidebarExplorer({
           >
             ↻
           </button>
-          {onOpenChooser && (
+          {onOpenFilePicker && (
             <button
               type="button"
-              onClick={onOpenChooser}
-              title="选择工作目录"
+              onClick={onOpenFilePicker}
+              title="选附件(搜索文件加入对话)"
               className="opacity-60 hover:opacity-100 inline-flex items-center"
             >
-              <FolderOpen size={12} />
+              <Paperclip size={12} />
             </button>
           )}
         </div>

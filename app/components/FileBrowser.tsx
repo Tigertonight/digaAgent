@@ -31,6 +31,10 @@ interface Props {
     treeCollapsed: boolean;
     viewerHidden: boolean;
   }) => void;
+  /** 渲染模式:
+   *  - "full"   (默认) 主界面右侧:tree + viewer 双栏,带预览/编辑
+   *  - "picker"        弹窗:仅 tree,顶部加搜索框,无预览面板  */
+  mode?: "full" | "picker";
 }
 
 interface DirEntry {
@@ -132,6 +136,7 @@ function DirNode({
   onSelectFile,
   onPickPath,
   onEnterDir,
+  filter,
 }: {
   path: string;
   level: number;
@@ -140,6 +145,8 @@ function DirNode({
   onPickPath?: (absPath: string) => void;
   /** 双击文件夹时调用：把该路径设为新 root */
   onEnterDir?: (absPath: string) => void;
+  /** 仅根层应用:按名字 substring 过滤(大小写不敏感)。空字符串 = 不过滤 */
+  filter?: string;
 }) {
   const [open, setOpen] = useState(level === 0); // 根默认展开
   const [entries, setEntries] = useState<DirEntry[] | null>(null);
@@ -248,7 +255,13 @@ function DirNode({
             </div>
           )}
           {entries &&
-            entries.map((e) => {
+            entries
+              .filter((e) => {
+                // filter 仅在根层(level===0)生效:用户在 picker 模式顶部输入的关键词
+                if (!filter || level !== 0) return true;
+                return e.name.toLowerCase().includes(filter.toLowerCase());
+              })
+              .map((e) => {
               const child = joinPath(path, e.name);
               if (e.isDir) {
                 return (
@@ -260,6 +273,7 @@ function DirNode({
                     onSelectFile={onSelectFile}
                     onPickPath={onPickPath}
                     onEnterDir={onEnterDir}
+                    filter={filter}
                   />
                 );
               }
@@ -312,6 +326,81 @@ function DirNode({
               (empty)
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** ============ picker 模式下的递归搜索结果列表 ============ */
+function SearchResultList({
+  hits,
+  truncated,
+  loading,
+  query,
+  onPick,
+  onEnterDir,
+}: {
+  hits: { path: string; name: string; isDir: boolean }[];
+  truncated: boolean;
+  loading: boolean;
+  query: string;
+  onPick: (absPath: string) => void;
+  onEnterDir: (absPath: string) => void;
+}) {
+  if (loading && hits.length === 0) {
+    return (
+      <div
+        className="px-2 py-1 text-[11px]"
+        style={{ color: "var(--fg-faint)" }}
+      >
+        searching…
+      </div>
+    );
+  }
+  if (hits.length === 0) {
+    return (
+      <div
+        className="px-2 py-1 text-[11px]"
+        style={{ color: "var(--fg-faint)" }}
+      >
+        无匹配 “{query}”
+      </div>
+    );
+  }
+  return (
+    <div>
+      {hits.map((h) => (
+        <button
+          key={h.path}
+          type="button"
+          onClick={() => (h.isDir ? onEnterDir(h.path) : onPick(h.path))}
+          className="w-full text-left flex flex-col gap-0 px-2 py-1 text-xs hover:bg-[color:var(--bg-hover)]"
+          style={{ color: "var(--fg)" }}
+          title={h.path}
+        >
+          <span className="flex items-center gap-1 truncate">
+            {h.isDir ? (
+              <Folder size={11} style={{ color: "var(--fg-muted)" }} />
+            ) : (
+              <File size={11} style={{ color: "var(--fg-muted)" }} />
+            )}
+            <span className="truncate">{h.name}</span>
+          </span>
+          <span
+            className="truncate text-[10px]"
+            style={{ color: "var(--fg-faint)", paddingLeft: 14 }}
+          >
+            {h.path}
+          </span>
+        </button>
+      ))}
+      {truncated && (
+        <div
+          className="px-2 py-1 text-[10px]"
+          style={{ color: "var(--fg-faint)" }}
+        >
+          只显示前 200 条,精确关键词以缩小范围
         </div>
       )}
     </div>
@@ -872,9 +961,40 @@ export default function FileBrowser({
   onPickPath,
   onPickDir,
   onLayoutChange,
+  mode = "full",
 }: Props) {
+  const isPicker = mode === "picker";
   const [root, setRoot] = useState(initialPath);
   const [pathDraft, setPathDraft] = useState(initialPath);
+  /** picker 模式下顶部搜索框,< 2 字符按当前层 substring 过滤,>= 2 字符走递归搜索 */
+  const [filter, setFilter] = useState("");
+  /** 递归搜索结果(picker 模式专用)。null = 还没搜或不在搜索态;[] = 搜了无结果 */
+  const [searchHits, setSearchHits] = useState<
+    | { hits: { path: string; name: string; isDir: boolean }[]; truncated: boolean }
+    | null
+  >(null);
+  const [searching, setSearching] = useState(false);
+  /** picker 模式:最近用过的 root 路径(用于跨项目跳转) */
+  const [recentRoots, setRecentRoots] = useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = localStorage.getItem("fileBrowser.recentRoots");
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr.filter((x) => typeof x === "string") : [];
+    } catch {
+      return [];
+    }
+  });
+  const pushRecentRoot = useCallback((p: string) => {
+    setRecentRoots((cur) => {
+      const next = [p, ...cur.filter((x) => x !== p)].slice(0, 8);
+      try {
+        localStorage.setItem("fileBrowser.recentRoots", JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  }, []);
 
   /** 已打开的预览 tabs（按打开顺序）。可能是文件绝对路径,或虚拟 path(html:// / url:// / image://) */
   const [tabs, setTabs] = useState<string[]>([]);
@@ -987,8 +1107,58 @@ export default function FileBrowser({
       setTabs([]);
       setActiveTab(null);
       setTabTitles({});
+      setFilter("");
     }
   }, [initialPath]);
+
+  // picker 模式:首次挂载时把当前 cwd 进 recents,作为"回家"快捷入口
+  useEffect(() => {
+    if (isPicker && initialPath) pushRecentRoot(initialPath);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // root 切换 → 清空搜索 filter,避免上一层的关键词把新层卡空
+  useEffect(() => {
+    setFilter("");
+    setSearchHits(null);
+  }, [root]);
+
+  // 递归搜索:filter >= 2 字符触发,300ms debounce,< 2 退出搜索态
+  useEffect(() => {
+    if (!isPicker) return;
+    if (filter.length < 2) {
+      setSearchHits(null);
+      setSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        const resp = await fetch(
+          `/api/files?path=${encodeURIComponent(root)}&q=${encodeURIComponent(filter)}`
+        );
+        const data = await resp.json();
+        if (cancelled) return;
+        if ("error" in data) {
+          setSearchHits({ hits: [], truncated: false });
+        } else {
+          setSearchHits({
+            hits: data.entries ?? [],
+            truncated: !!data.truncated,
+          });
+        }
+      } catch {
+        if (!cancelled) setSearchHits({ hits: [], truncated: false });
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [filter, root, isPicker]);
 
   const goUp = useCallback(() => {
     const up = dirname(root);
@@ -997,8 +1167,11 @@ export default function FileBrowser({
   }, [root]);
 
   const applyDraft = useCallback(() => {
-    if (pathDraft && pathDraft !== root) setRoot(pathDraft);
-  }, [pathDraft, root]);
+    if (pathDraft && pathDraft !== root) {
+      setRoot(pathDraft);
+      if (isPicker) pushRecentRoot(pathDraft);
+    }
+  }, [pathDraft, root, isPicker, pushRecentRoot]);
 
   const openFile = useCallback((p: string) => {
     setTabs((cur) => (cur.includes(p) ? cur : [...cur, p]));
@@ -1029,14 +1202,14 @@ export default function FileBrowser({
 
   return (
     <aside
-      className="border-l flex min-w-0 h-full min-h-0"
+      className="border-l flex w-full min-w-0 h-full min-h-0"
       style={{
         borderColor: "var(--border-soft)",
         background: "var(--bg-app)",
       }}
     >
       {/* 左：tree */}
-      {treeCollapsed ? (
+      {!isPicker && treeCollapsed ? (
         <div
           className="flex flex-col items-center py-1.5 gap-2"
           style={{
@@ -1069,25 +1242,38 @@ export default function FileBrowser({
       ) : (
       <div
         className="flex flex-col min-h-0"
-        style={{
-          width: treeWidth,
-          flexShrink: 0,
-          borderRight: "1px solid var(--border-soft)",
-        }}
+        style={
+          isPicker
+            ? { flex: 1, minWidth: 0 }
+            : viewerHidden
+              ? {
+                  // viewer 隐藏时,tree 撑满剩余空间(不再固定 treeWidth)
+                  flex: 1,
+                  minWidth: 0,
+                  borderRight: "1px solid var(--border-soft)",
+                }
+              : {
+                  width: treeWidth,
+                  flexShrink: 0,
+                  borderRight: "1px solid var(--border-soft)",
+                }
+        }
       >
         <div
           className="px-2 py-1.5 border-b flex items-center gap-1 text-xs"
           style={{ borderColor: "var(--border-soft)" }}
         >
-          <button
-            type="button"
-            onClick={() => setTreeCollapsed(true)}
-            className="px-1 py-0.5 rounded hover:bg-[color:var(--bg-hover)]"
-            style={{ color: "var(--fg-muted)" }}
-            title="折叠文件列表"
-          >
-            «
-          </button>
+          {!isPicker && (
+            <button
+              type="button"
+              onClick={() => setTreeCollapsed(true)}
+              className="px-1 py-0.5 rounded hover:bg-[color:var(--bg-hover)]"
+              style={{ color: "var(--fg-muted)" }}
+              title="折叠文件列表"
+            >
+              «
+            </button>
+          )}
           <span className="font-semibold flex-1">Files</span>
           <button
             type="button"
@@ -1148,25 +1334,90 @@ export default function FileBrowser({
             spellCheck={false}
           />
         </div>
+        {isPicker && recentRoots.length > 0 && (
+          <div
+            className="px-2 py-1 border-b flex flex-wrap gap-1"
+            style={{ borderColor: "var(--border-soft)" }}
+            title="最近用过的目录"
+          >
+            {recentRoots.map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => {
+                  setRoot(p);
+                  setPathDraft(p);
+                  pushRecentRoot(p);
+                }}
+                className="px-1.5 py-0.5 text-[10px] rounded border hover:bg-[color:var(--bg-hover)] truncate max-w-[180px]"
+                style={{
+                  borderColor: "var(--border)",
+                  color: p === root ? "var(--fg)" : "var(--fg-muted)",
+                  background:
+                    p === root ? "var(--bg-panel-2)" : "transparent",
+                }}
+                title={p}
+              >
+                {basename(p) || p}
+              </button>
+            ))}
+          </div>
+        )}
+        {isPicker && (
+          <div
+            className="px-2 py-1 border-b"
+            style={{ borderColor: "var(--border-soft)" }}
+          >
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="搜索文件名(≥2 字符递归)…"
+              className="w-full text-[11px] px-1 py-0.5 rounded border outline-none"
+              style={{
+                background: "var(--bg-panel)",
+                borderColor: "var(--border)",
+                color: "var(--fg)",
+              }}
+              spellCheck={false}
+            />
+          </div>
+        )}
         <div className="flex-1 min-h-0 overflow-auto py-1">
-          <DirNode
-            key={`${root}#${bumpKey}`}
-            path={root}
-            level={0}
-            selectedFile={activeTab}
-            onSelectFile={openFile}
-            onPickPath={onPickPath}
-            onEnterDir={(p) => {
-              setRoot(p);
-              setPathDraft(p);
-            }}
-          />
+          {isPicker && searchHits ? (
+            <SearchResultList
+              hits={searchHits.hits}
+              truncated={searchHits.truncated}
+              loading={searching}
+              query={filter}
+              onPick={(p) => onPickPath?.(p)}
+              onEnterDir={(p) => {
+                setRoot(p);
+                setPathDraft(p);
+                if (isPicker) pushRecentRoot(p);
+              }}
+            />
+          ) : (
+            <DirNode
+              key={`${root}#${bumpKey}`}
+              path={root}
+              level={0}
+              selectedFile={activeTab}
+              onSelectFile={isPicker ? (p) => onPickPath?.(p) : openFile}
+              onPickPath={onPickPath}
+              onEnterDir={(p) => {
+                setRoot(p);
+                setPathDraft(p);
+                if (isPicker) pushRecentRoot(p);
+              }}
+              filter={isPicker ? filter : undefined}
+            />
+          )}
         </div>
       </div>
       )}
 
       {/* tree/viewer 之间的 splitter — 仅当两侧都展示时才渲染 */}
-      {!treeCollapsed && !viewerHidden && (
+      {!isPicker && !treeCollapsed && !viewerHidden && (
         <div
           onMouseDown={onTreeSplitterDown}
           title="拖动调整列宽"
@@ -1187,7 +1438,7 @@ export default function FileBrowser({
       )}
 
       {/* 右：tabs + viewer(可被整体隐藏) */}
-      {!viewerHidden && (
+      {!isPicker && !viewerHidden && (
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
         {tabs.length > 0 ? (
           <>
@@ -1316,7 +1567,7 @@ export default function FileBrowser({
       )}
 
       {/* viewer 隐藏时,在边缘提供一个重新打开预览入口 */}
-      {viewerHidden && (
+      {!isPicker && viewerHidden && (
         <div
           className="flex flex-col items-center py-1.5 gap-2"
           style={{
