@@ -18,12 +18,14 @@ export default function PetApp() {
     bubbleText,
   } = usePetState();
 
-  const { onMouseDown } = usePetDrag();
+  const { onMouseDown, dragging, wasJustDragged } = usePetDrag();
 
   const [hovered, setHovered] = useState(false);
   const [cardOpen, setCardOpen] = useState(false);
   const spriteRef = useRef<HTMLDivElement>(null);
 
+  // 拖拽中抑制气泡（dragging=true 时不显示 hover 气泡）
+  const showBubble = hovered && !cardOpen && !dragging;
   const hasUI = hovered || cardOpen;
 
   // 根据是否有 UI 交互动态控制鼠标穿透
@@ -54,8 +56,8 @@ export default function PetApp() {
         pointerEvents: "none", // 默认不捕获事件，由子元素按需启用
       }}
     >
-      {/* hover 气泡 —— 在 sprite 上方，sprite 右侧对齐 */}
-      {hovered && !cardOpen && (
+      {/* hover 气泡 —— 在 sprite 上方，sprite 右侧对齐（拖拽时隐藏） */}
+      {showBubble && (
         <div
           style={{
             position: "absolute",
@@ -104,6 +106,8 @@ export default function PetApp() {
           if (!cardOpen) setHovered(false);
         }}
         onClick={() => {
+          // 刚拖完一次的 click 应忽略（避免松手即弹卡片）
+          if (wasJustDragged()) return;
           if (!cardOpen) {
             setCardOpen(true);
             setHovered(false);
@@ -115,7 +119,7 @@ export default function PetApp() {
           bottom: 0,
           width: 100,
           height: 120,
-          cursor: "grab",
+          cursor: dragging ? "grabbing" : "grab",
           userSelect: "none",
           display: "flex",
           alignItems: "center",

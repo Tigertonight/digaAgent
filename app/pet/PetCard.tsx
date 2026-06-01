@@ -8,7 +8,7 @@ const STATE_COLOR: Record<PetAnimState, string> = {
   idle: "#6b7280",
   thinking: "#6366f1",
   running: "#a855f7",
-  attention: "#ef4444",
+  attention: "#6366f1",
   done: "#10b981",
   error: "#dc2626",
   offline: "#9ca3af",
@@ -225,9 +225,10 @@ export default function PetCard({
         )}
       </div>
 
-      {/* ===== 最后一条 assistant 消息 ===== */}
+      {/* ===== 最后一条 assistant 消息（可滚动，最多 ~7 行） ===== */}
       {session?.lastMessage && (
         <div
+          className="pet-card-scroll"
           style={{
             background: "rgba(255,255,255,0.04)",
             borderRadius: 8,
@@ -236,11 +237,11 @@ export default function PetCard({
             fontSize: 11,
             color: "#d1d5db",
             lineHeight: 1.5,
-            maxHeight: 66,
-            overflow: "hidden",
-            display: "-webkit-box",
-            WebkitLineClamp: 3,
-            WebkitBoxOrient: "vertical",
+            maxHeight: 140,
+            overflowY: "auto",
+            overflowX: "hidden",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
           }}
         >
           {session.lastMessage}
