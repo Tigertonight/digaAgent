@@ -123,5 +123,21 @@ contextBridge.exposeInMainWorld("miniPi", {
       ipcRenderer.on("pet:request-abort", handler);
       return () => ipcRenderer.removeListener("pet:request-abort", handler);
     },
+
+    /**
+     * 宠物窗口请求重连指定 session 的 SSE（pet → main → main-window）。
+     */
+    requestReconnect: (sessionId) =>
+      ipcRenderer.send("pet:reconnect-session", sessionId ?? null),
+
+    /**
+     * 主窗口订阅"宠物请求重连 session"事件，返回取消函数。
+     */
+    onReconnectSession: (cb) => {
+      const handler = (_event, sessionId) => cb(sessionId);
+      ipcRenderer.on("pet:reconnect-session", handler);
+      return () =>
+        ipcRenderer.removeListener("pet:reconnect-session", handler);
+    },
   },
 });

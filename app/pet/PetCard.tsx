@@ -37,6 +37,8 @@ interface Props {
   onFocusMain: () => void;
   /** 本地切换显示哪个 session（不推回主窗口） */
   onSwitchLocalSession: (id: string) => void;
+  /** 请求重连当前 session 的 SSE（lost 态可用） */
+  onReconnect: () => void;
 }
 
 export default function PetCard({
@@ -48,6 +50,7 @@ export default function PetCard({
   onClose,
   onFocusMain,
   onSwitchLocalSession,
+  onReconnect,
 }: Props) {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -317,29 +320,52 @@ export default function PetCard({
       </div>
 
       {/* ===== 主操作行 ===== */}
+      {/* lost 态下："暂停"换成"重连"按钮（暂停在 lost 时本就 disabled，
+          换成更有意义的操作避免 dead button） */}
       <div style={{ display: "flex", gap: 6 }}>
-        <button
-          onClick={() => void handleAbort()}
-          disabled={!canAbort}
-          title={canAbort ? "中止当前任务" : "无运行中任务"}
-          style={{
-            flex: 1,
-            background: canAbort
-              ? "rgba(248,113,113,0.12)"
-              : "rgba(255,255,255,0.04)",
-            border: canAbort
-              ? "1px solid rgba(248,113,113,0.3)"
-              : "1px solid rgba(255,255,255,0.06)",
-            borderRadius: 8,
-            padding: "6px 0",
-            color: canAbort ? "#f87171" : "#4b5563",
-            fontSize: 11,
-            cursor: canAbort ? "pointer" : "default",
-            transition: "all 150ms",
-          }}
-        >
-          {aborting ? "中止中…" : "⏸ 暂停"}
-        </button>
+        {isOffline ? (
+          <button
+            onClick={onReconnect}
+            title="重新建立 SSE 连接"
+            style={{
+              flex: 1,
+              background: "rgba(99,102,241,0.18)",
+              border: "1px solid rgba(99,102,241,0.4)",
+              borderRadius: 8,
+              padding: "6px 0",
+              color: "#a5b4fc",
+              fontSize: 11,
+              cursor: "pointer",
+              fontWeight: 600,
+              transition: "all 150ms",
+            }}
+          >
+            ⟳ 重连
+          </button>
+        ) : (
+          <button
+            onClick={() => void handleAbort()}
+            disabled={!canAbort}
+            title={canAbort ? "中止当前任务" : "无运行中任务"}
+            style={{
+              flex: 1,
+              background: canAbort
+                ? "rgba(248,113,113,0.12)"
+                : "rgba(255,255,255,0.04)",
+              border: canAbort
+                ? "1px solid rgba(248,113,113,0.3)"
+                : "1px solid rgba(255,255,255,0.06)",
+              borderRadius: 8,
+              padding: "6px 0",
+              color: canAbort ? "#f87171" : "#4b5563",
+              fontSize: 11,
+              cursor: canAbort ? "pointer" : "default",
+              transition: "all 150ms",
+            }}
+          >
+            {aborting ? "中止中…" : "⏸ 暂停"}
+          </button>
+        )}
         <button
           onClick={onFocusMain}
           style={{

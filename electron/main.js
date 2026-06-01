@@ -311,6 +311,24 @@ function registerIpc() {
     }
   });
 
+  /**
+   * 宠物窗口请求重连指定 session 的 SSE。
+   * 宠物侧没有 EventSource，必须经主进程转发给主窗口由它发起重连。
+   * 主窗口订阅 pet:reconnect-session，找到对应 runner key 后调 attachSseFor()。
+   */
+  ipcMain.on("pet:reconnect-session", (_event, sessionId) => {
+    if (!sessionId) return;
+    const mainWin = BrowserWindow.getAllWindows().find(
+      (w) =>
+        w !== petWin &&
+        (settingsWin ? w !== settingsWin : true) &&
+        !w.isDestroyed()
+    );
+    if (mainWin) {
+      mainWin.webContents.send("pet:reconnect-session", sessionId);
+    }
+  });
+
   // 控制宠物窗口显示/隐藏
   ipcMain.on("pet:set-visible", (_event, visible) => {
     if (!petWin || petWin.isDestroyed()) return;
