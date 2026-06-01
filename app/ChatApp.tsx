@@ -1343,6 +1343,34 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     return unsub;
   }, [sessions]);
 
+  // 宠物窗口发来的 "重连指定 session SSE" 请求（lost 态点击重连）
+  // 通过 sessionId 找 SessionInfoLite.path 作 RunnerKey，再从 runnersRef 取 agentId
+  // attachSseFor 内部会先 close 旧 ES（如有）再 new 一个，无需手动清理
+  useEffect(() => {
+    const api = getElectronApi();
+    if (!api?.pet?.onReconnectSession) return;
+    const unsub = api.pet.onReconnectSession((sessionId) => {
+      const sess = sessions.find((s) => s.id === sessionId);
+      if (!sess) {
+        console.warn("[pet] reconnect requested for unknown session", sessionId);
+        return;
+      }
+      const key: RunnerKey = sess.path;
+      const runner = runnersRef.current.get(key);
+      const aid = runner?.agentId;
+      if (!aid) {
+        console.warn(
+          "[pet] reconnect requested but no agentId for session",
+          sessionId
+        );
+        return;
+      }
+      console.log("[pet] reconnecting SSE for", sessionId, "agentId=", aid);
+      attachSseFor(key, aid);
+    });
+    return unsub;
+  }, [sessions, attachSseFor]);
+
   /**
    * 把 forkableUserMessages 按顺序回填到 chatState.messages 里的 user message 上。
    * 假设：SDK 返回的列表顺序 == 前端展示的 user message 顺序。

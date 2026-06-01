@@ -211,6 +211,11 @@ export default function PetApp() {
               setCardOpen(false);
             }}
             onSwitchLocalSession={(id) => setLocalFocusId(id)}
+            onReconnect={() => {
+              if (displaySession?.id) {
+                window.miniPi?.pet?.requestReconnect?.(displaySession.id);
+              }
+            }}
           />
         </div>
       )}
@@ -237,6 +242,13 @@ export default function PetApp() {
           // 起单击定时器，200ms 内若再次 click 视为双击
           clickTimerRef.current = setTimeout(() => {
             clickTimerRef.current = null;
+            // lost 态：单击 = 重连（不开卡片）
+            // 重连后端会推 sseStatus=active 让状态自然刷新；
+            // 双击仍照常跳主窗（在上面的双击分支）
+            if (animState === "offline" && displaySession?.id) {
+              window.miniPi?.pet?.requestReconnect?.(displaySession.id);
+              return;
+            }
             // 卡片已开 → 再次点击 sprite 关掉卡片（toggle）
             if (cardOpen) {
               setCardOpen(false);

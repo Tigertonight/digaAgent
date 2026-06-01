@@ -132,6 +132,13 @@ export interface ElectronApi {
     onSwitchLocalSession(cb: (sessionId: string) => void): () => void;
     /** 订阅"请求中止当前任务"（来自菜单），返回取消函数 */
     onRequestAbort(cb: () => void): () => void;
+    /**
+     * 宠物窗口请求重连指定 session 的 SSE。
+     * 转发给主窗口由它发起 attachSseFor。
+     */
+    requestReconnect(sessionId: string | null): void;
+    /** 主窗口订阅"宠物请求重连 session"事件，返回取消函数 */
+    onReconnectSession(cb: (sessionId: string) => void): () => void;
   };
 }
 
