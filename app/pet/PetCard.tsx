@@ -59,35 +59,21 @@ export default function PetCard({ session, onClose, onFocusMain }: Props) {
   }, [session, input, onClose]);
 
   return (
-    // 点击卡片外部关闭
     <div
       style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 9998,
+        position: "relative",
+        width: 280,
+        background: "rgba(18,18,18,0.98)",
+        border: "1px solid rgba(255,255,255,0.15)",
+        borderRadius: 14,
+        padding: 14,
+        backdropFilter: "blur(16px)",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
+        fontSize: 12,
+        color: "#e0e0e0",
       }}
-      onClick={onClose}
     >
-      <div
-        style={{
-          position: "absolute",
-          bottom: "calc(100% + 8px)",
-          left: "50%",
-          transform: "translateX(-50%)",
-          width: 280,
-          background: "rgba(18,18,18,0.98)",
-          border: "1px solid rgba(255,255,255,0.15)",
-          borderRadius: 14,
-          padding: 14,
-          backdropFilter: "blur(16px)",
-          boxShadow: "0 8px 32px rgba(0,0,0,0.6)",
-          fontSize: 12,
-          color: "#e0e0e0",
-          zIndex: 9999,
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* 头部：session 名 + 关闭 */}
+      {/* 头部：session 名 + 关闭 */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
           <span style={{ fontWeight: 600, fontSize: 13, color: "#fff", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {session?.name || "Diga Agent"}
@@ -213,7 +199,6 @@ export default function PetCard({ session, onClose, onFocusMain }: Props) {
             </button>
           )}
         </div>
-      </div>
     </div>
   );
 }

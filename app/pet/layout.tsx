@@ -10,18 +10,20 @@ export default function PetLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div
-      style={{
-        width: "120px",
-        height: "160px",
-        overflow: "visible",
-        background: "transparent",
-        userSelect: "none",
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ...(({ WebkitAppRegion: "no-drag" } as any) as React.CSSProperties),
-      }}
-    >
-      {children}
-    </div>
+    <html style={{ background: "transparent" }}>
+      <body
+        style={{
+          margin: 0,
+          padding: 0,
+          background: "transparent",
+          overflow: "hidden",
+          userSelect: "none",
+          width: "320px",
+          height: "400px",
+        }}
+      >
+        {children}
+      </body>
+    </html>
   );
 }

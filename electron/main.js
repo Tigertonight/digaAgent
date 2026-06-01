@@ -324,6 +324,13 @@ function registerIpc() {
       petWin.setPosition(Math.round(x), Math.round(y));
     }
   });
+
+  // 动态控制鼠标穿透：有 UI 交互时关闭穿透，空白区域继续穿透
+  ipcMain.on("pet:set-ignore-mouse", (_event, ignore) => {
+    if (petWin && !petWin.isDestroyed()) {
+      petWin.setIgnoreMouseEvents(ignore, { forward: true });
+    }
+  });
 }
 
 async function createWindow() {
@@ -417,11 +424,12 @@ async function createPetWindow(baseUrl) {
   const { screen } = require("electron");
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
+  // 窗口足够大以容纳气泡/卡片弹出，宠物 sprite 固定在右下角
   petWin = new BrowserWindow({
-    width: 120,
-    height: 160,
-    x: width - 140,
-    y: height - 200,
+    width: 320,
+    height: 400,
+    x: width - 340,
+    y: height - 420,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -438,7 +446,8 @@ async function createPetWindow(baseUrl) {
     },
   });
 
-  petWin.setIgnoreMouseEvents(false);
+  // 默认透明区域穿透（forward=true），有内容时渲染进程通知关闭穿透
+  petWin.setIgnoreMouseEvents(true, { forward: true });
   petWin.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   petWin.on("closed", () => { petWin = null; });
 
