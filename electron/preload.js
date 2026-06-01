@@ -62,4 +62,34 @@ contextBridge.exposeInMainWorld("miniPi", {
     getProviderEnvMap: () =>
       ipcRenderer.invoke("settings:getProviderEnvMap"),
   },
+
+  pet: {
+    /** 主窗口渲染进程推送状态给宠物窗口（经 ipcMain 转发） */
+    sendState: (state) => ipcRenderer.send("pet:state-from-main", state),
+
+    /** 宠物窗口订阅推送；返回取消函数 */
+    onState: (cb) => {
+      const handler = (_event, state) => cb(state);
+      ipcRenderer.on("pet:state", handler);
+      return () => ipcRenderer.removeListener("pet:state", handler);
+    },
+
+    /** 宠物窗口请求主窗口获得焦点（可带 sessionId） */
+    focusMain: (sessionId) =>
+      ipcRenderer.send("pet:focus-main", sessionId ?? null),
+
+    /** 主窗口控制宠物显隐 */
+    setPetVisible: (visible) =>
+      ipcRenderer.send("pet:set-visible", visible),
+
+    /** 宠物窗口拖拽：把新坐标发给主进程移动 BrowserWindow */
+    move: (pos) => ipcRenderer.send("pet:move", pos),
+
+    /** 主窗口订阅"来自宠物的切 session 请求"（由 ipcMain 转发） */
+    onSwitchSession: (cb) => {
+      const handler = (_event, sessionId) => cb(sessionId);
+      ipcRenderer.on("pet:switch-session", handler);
+      return () => ipcRenderer.removeListener("pet:switch-session", handler);
+    },
+  },
 });
