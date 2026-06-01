@@ -35,6 +35,7 @@ import {
   type RunnerKey,
 } from "@/lib/session-runner";
 import { useRunners } from "./hooks/useRunners";
+import { useSseManager } from "./hooks/useSseManager";
 import Markdown from "./components/Markdown";
 import ToolRender from "./components/ToolRender";
 import FileBrowser from "./components/FileBrowser";
@@ -250,18 +251,41 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     } catch {}
   }, []);
 
-  // ===== 兼容期单实例 SSE ref（active runner 也写一份这里兜底） =====
-  const esRef = useRef<EventSource | null>(null);
+  // ===== 多会话核心容器与 SSE 连接池（RFC-1 阶段 A1 + A2） =====
+  // - runnersRef（useRunners）：所有会话工作面的"权威存储"
+  // - esMapRef（useSseManager）：每个 runner 的 SSE 连接；切换会话时不关，后台流式继续
+  // - LRU 淘汰 runner 时，useRunners 通过 onEvict 直接调到 useSseManager.closeSseFor
+  //
+  // hook 调用顺序：useSseManager 先 → useRunners 后（onEvict 直传 closeSseFor）
+  // 但 useSseManager.onStatusChange 又需要 updateRunner（来自 useRunners）—— 循环依赖。
+  // 解法：updateRunner 走 ref 转发；handleAgentEvent 是函数声明（hoisted）+ 也走 ref，
+  //       让 useSseManager 内部回调闭包不直接依赖未定义的标识符。
+  const updateRunnerRef = useRef<
+    ((key: RunnerKey, patch: import("@/lib/session-runner").RunnerPatch) => void) | null
+  >(null);
+  const handleAgentEventRef = useRef<
+    | ((
+        event: { type: string; [k: string]: unknown },
+        agentId: string,
+        key: RunnerKey
+      ) => void)
+    | null
+  >(null);
 
-  // ===== 多会话 runner 容器(RFC-1 阶段 A1，已抽到 useRunners) =====
-  // - runnersRef 是所有会话工作面的"权威存储"（hook 内部唯一持有 / 外部只读）
-  // - esMapRef 是每个 runner 的 SSE 连接；切换会话时不关 SSE，让后台流式继续
-  //   （esMapRef 仍留在 ChatApp 内，后续 A2 阶段会抽到 useSseManager）
-  // - LRU 淘汰时通过 onEvict 回调通知本组件关 SSE（解耦 useRunners 与 SSE 池）
-  const esMapRef = useRef<Map<RunnerKey, EventSource>>(new Map());
-
-  // closeSseFor 在下方才定义；用 ref 转发避免前向引用
-  const closeSseForRef = useRef<((key: RunnerKey) => void) | null>(null);
+  const { esMapRef, attachSseFor, closeSseFor } = useSseManager({
+    onEvent: (event, agentId, key) => {
+      // useSseManager 的 onEvent event 类型是 unknown（hook 不知道业务结构）；
+      // 这里 cast 到 handleAgentEvent 期望的形状。SSE envelope 一定有 type 字段。
+      handleAgentEventRef.current?.(
+        event as { type: string; [k: string]: unknown },
+        agentId,
+        key
+      );
+    },
+    onStatusChange: (key, patch) => {
+      updateRunnerRef.current?.(key, patch);
+    },
+  });
 
   const {
     runnersRef,
@@ -273,8 +297,16 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     switchTo,
     setRunner,
   } = useRunners({
-    onEvict: (key) => closeSseForRef.current?.(key),
+    onEvict: closeSseFor,
   });
+
+  // 把 updateRunner 绑到 ref，供 useSseManager 的 onStatusChange 回调使用
+  useEffect(() => {
+    updateRunnerRef.current = updateRunner;
+    return () => {
+      updateRunnerRef.current = null;
+    };
+  }, [updateRunner]);
 
   // E2E 诊断钩子:仅在 window.__E2E__=true 时挂载,把 runner 状态暴露给测试断言。
   // 不影响 prod 行为,默认 noop。
@@ -821,11 +853,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         const sel = sessions.find((s) => s.id === id);
         if (sel) {
           const key: RunnerKey = sel.path;
-          const es = esMapRef.current.get(key);
-          if (es) {
-            es.close();
-            esMapRef.current.delete(key);
-          }
+          closeSseFor(key);
           const wasActive = activeKeyRef.current === key;
           runnersRef.current.delete(key);
           // 删的是当前活跃的 → 切回 draft（switchTo 在 draft 不存在时兜底建空 runner）
@@ -845,7 +873,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         setPendingDeleteId(null);
       }
     },
-    [refreshSessions, selectedId, sessions, switchTo, runnersRef, activeKeyRef]
+    [refreshSessions, selectedId, sessions, switchTo, runnersRef, activeKeyRef, closeSseFor]
   );
 
   /** 触发 inline 删除确认（替代原生 confirm） */
@@ -1504,79 +1532,16 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     []
   );
 
-  /**
-   * 关掉指定 runner 的 SSE(P1-5)。LRU 淘汰、组件卸载、显式重置 都走这里。
-   * 不改任何 runner 状态;仅释放 EventSource。
-   */
-  const closeSseFor = useCallback((key: RunnerKey) => {
-    const es = esMapRef.current.get(key);
-    if (es) {
-      es.close();
-      esMapRef.current.delete(key);
-    }
-    // 兼容期:把单实例 esRef 也清掉,避免残留
-    if (esRef.current && !esMapRef.current.size) {
-      esRef.current = null;
-    }
-  }, []);
-
-  // 让 useRunners 的 onEvict 回调能在 LRU 时通过 ref 调到 closeSseFor
+  // 把 handleAgentEvent 绑到 ref，供 useSseManager 的 onEvent 回调使用。
+  // handleAgentEvent 是函数声明（hoisted），每次 render 重建；通过 ref 转发避免
+  // useSseManager 内部回调闭包捕获旧引用。
   useEffect(() => {
-    closeSseForRef.current = closeSseFor;
+    handleAgentEventRef.current = handleAgentEvent;
     return () => {
-      closeSseForRef.current = null;
+      handleAgentEventRef.current = null;
     };
-  }, [closeSseFor]);
-
-  /**
-   * 为指定 runner 打开 SSE(P1-5)。每个 runner 一个独立 EventSource,
-   * 路由到 handleAgentEvent(ev, agentId) —— P1-6 里会再加 ownerKey。
-   * 当前(P1-5):活跃 runner 的事件继续走 setX wrapper(写入 active runner);
-   * 非活跃 runner 还无法被切到(P1-7/8 才有),所以路由到 active 等价于路由到自身。
-   */
-  const attachSseFor = useCallback(
-    (key: RunnerKey, aid: string) => {
-      // 已存在则先关掉,避免泄漏
-      const prev = esMapRef.current.get(key);
-      if (prev) prev.close();
-      const es = new EventSource(`/api/agent/${aid}/events`);
-      esMapRef.current.set(key, es);
-      // 兼容旧逻辑:active runner 的 SSE 也写一份到 esRef 兜底
-      if (key === activeKeyRef.current) esRef.current = es;
-      es.onopen = () => updateRunner(key, { sseStatus: "active" });
-      es.onmessage = (ev) => {
-        try {
-          const event = JSON.parse(ev.data);
-          // 后端 SSE envelope 带 id: <seq>,浏览器把它写到 ev.lastEventId
-          const seq = ev.lastEventId ? Number(ev.lastEventId) : NaN;
-          if (Number.isFinite(seq)) {
-            updateRunner(key, { lastSeq: seq });
-          }
-          handleAgentEvent(event, aid, key);
-        } catch (e) {
-          console.error("bad sse data", e, ev.data);
-        }
-      };
-      es.onerror = (e) => {
-        console.warn("sse error", e);
-        updateRunner(key, { sseStatus: "lost" });
-      };
-    },
-    // handleAgentEvent 是函数声明,每次 render 重建;依赖刷新由 ref 控制
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [updateRunner]
-  );
-
-  /**
-   * 兼容 shim:旧的 attachSse(aid) 调用点全部转发到 attachSseFor(activeKey, aid)。
-   * P1-7/8 完成后再批量替换调用点为 attachSseFor。
-   */
-  const attachSse = useCallback(
-    (aid: string) => {
-      attachSseFor(activeKeyRef.current, aid);
-    },
-    [attachSseFor]
-  );
+    // handleAgentEvent 是函数声明，每次 render 都是新引用，需每次同步到 ref
+  });
 
   // 宠物窗口发来的 "重连指定 session SSE" 请求（lost 态点击重连）。
   // 必须放在 attachSseFor 声明之后，避免 TDZ（const useCallback 在初始化前不可用）。
@@ -1828,11 +1793,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       runnersRef.current.delete(DRAFT_KEY);
       // SSE onmessage 闭包捕获了旧 key(DRAFT_KEY),必须 close + reattach 让后续事件写到新 key。
       // 重连有几条 token 损耗,但 +New chat 的 eager SSE 通常还没真正推数据,代价可控。
-      const oldEs = esMapRef.current.get(DRAFT_KEY);
-      if (oldEs) {
-        try { oldEs.close(); } catch {}
-        esMapRef.current.delete(DRAFT_KEY);
-      }
+      closeSseFor(DRAFT_KEY);
       // 草稿升级：从 DRAFT_KEY 切到 newKey；switchTo 会同步 setActiveKey + setActiveSnapshot
       switchTo(newKey);
       const idFromPath = extractSessionIdFromPath(sessionFilePath);
@@ -1940,6 +1901,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     thinkingLevel,
     currentSessionFile,
     attachSseFor,
+    closeSseFor,
     agentAction,
     refreshStats,
     refreshToolsCount,
