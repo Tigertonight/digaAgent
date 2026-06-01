@@ -3,9 +3,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PetState, PetSessionInfo } from "@/lib/electron-bridge";
 
-/** 宠物动画状态，由 PetSessionInfo 派生 */
+/**
+ * 宠物动画状态，由 PetSessionInfo 派生
+ *
+ * - idle: 会话从未开始（无 lastMessage 或无 agent）—— 灰，"等待启动"
+ * - complete: 会话有历史回复且已读 —— 绿，"已完成"（区别于 idle 的"从未"）
+ * - done: 流式刚结束的 2s 过渡态 —— 绿，"已完成 共耗时 Xs"，之后自然过渡到 complete
+ * - thinking / running: 流式中 —— 紫/靛
+ * - attention: 有 lastMessage 但用户没看到（未读） —— 蓝
+ * - error / offline: 异常 —— 红/灰
+ */
 export type PetAnimState =
   | "idle"
+  | "complete"
   | "thinking"
   | "running"
   | "attention"
@@ -34,11 +44,13 @@ export function derivePetAnimState(
   if (session.sseStatus === "lost") return "offline";
 
   if (!session.streaming) {
-    // agent 存在但不在流式 → 曾对话过则等待输入，否则空闲
-    // read=true 表示用户已在主窗口看过这条 lastMessage，跳过 attention
+    // agent 存在但不在流式：
+    //   无 lastMessage → idle（从未对话过）
+    //   有 lastMessage 且未读 → attention（需要吸引用户注意）
+    //   有 lastMessage 且已读 → complete（已完成，等待新输入）
     if (!session.lastMessage) return "idle";
-    if (session.read) return "idle";
-    return "attention";
+    if (!session.read) return "attention";
+    return "complete";
   }
 
   const phase = session.agentPhase;
@@ -101,11 +113,15 @@ export function derivePetBubbleText(
     };
   }
 
-  // 5 主状态
+  // 主状态
   switch (animState) {
     case "idle": {
-      const primary = session.lastMessage ? "准备就绪" : "等待启动";
-      return { primary, secondary: session.name, priority: "normal" };
+      // 无 lastMessage = 真的从未对话过
+      return { primary: "等待启动", secondary: session.name, priority: "normal" };
+    }
+    case "complete": {
+      // 有 lastMessage 且已读 = 历史上完成过、用户已看过
+      return { primary: "已完成", secondary: session.name, priority: "normal" };
     }
     case "thinking": {
       const kind = session.agentPhase?.kind;

@@ -5,11 +5,12 @@ import type { PetAnimState, PetBubbleText } from "./use-pet-state";
 
 /** state → 主色（光点/边框） */
 const STATE_COLOR: Record<PetAnimState, string> = {
-  idle: "#6b7280", // gray-500
+  idle: "#6b7280", // gray-500 —— 从未开始
+  complete: "#10b981", // emerald-500 —— 已完成（已读历史回复）
   thinking: "#6366f1", // indigo-500
   running: "#a855f7", // purple-500
   attention: "#6366f1", // indigo-500（与 thinking 同色，靠"红/蓝点"形态区分）
-  done: "#10b981", // emerald-500
+  done: "#10b981", // emerald-500 —— 流式刚结束 2s 过渡
   error: "#dc2626", // red-600
   offline: "#9ca3af", // gray-400
 };

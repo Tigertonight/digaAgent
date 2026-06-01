@@ -23,6 +23,9 @@ export default function PetSprite({ animState, size = 80 }: Props) {
     switch (animState) {
       case "idle":
         return "pet-breathe 4s ease-in-out infinite";
+      case "complete":
+        // 已完成、已读：与 idle 相同的轻呼吸（视觉差异只在气泡绿点）
+        return "pet-breathe 4s ease-in-out infinite";
       case "thinking":
         return "pet-glow-thinking 1.2s ease-in-out infinite";
       case "running":

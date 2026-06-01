@@ -3,9 +3,11 @@
 import { useCallback, useEffect, useState } from "react";
 import type { PetSessionInfo } from "@/lib/electron-bridge";
 import type { PetAnimState, PetBubbleText } from "./use-pet-state";
+import { derivePetAnimState } from "./use-pet-state";
 
 const STATE_COLOR: Record<PetAnimState, string> = {
   idle: "#6b7280",
+  complete: "#10b981",
   thinking: "#6366f1",
   running: "#a855f7",
   attention: "#6366f1",
@@ -16,6 +18,7 @@ const STATE_COLOR: Record<PetAnimState, string> = {
 
 const STATE_LABEL: Record<PetAnimState, string> = {
   idle: "空闲",
+  complete: "已完成",
   thinking: "思考中",
   running: "运行中",
   attention: "待回复",
@@ -396,28 +399,10 @@ export default function PetCard({
               }}
             >
               {otherSessions.map((s) => {
-                const sColor = s.error
-                  ? STATE_COLOR.error
-                  : s.sseStatus === "lost"
-                    ? STATE_COLOR.offline
-                    : s.streaming
-                      ? s.agentPhase?.kind === "running_tools"
-                        ? STATE_COLOR.running
-                        : STATE_COLOR.thinking
-                      : s.lastMessage
-                        ? STATE_COLOR.attention
-                        : STATE_COLOR.idle;
-                const sStatus = s.error
-                  ? "出错"
-                  : s.sseStatus === "lost"
-                    ? "离线"
-                    : s.streaming
-                      ? s.agentPhase?.kind === "running_tools"
-                        ? "运行中"
-                        : "思考中"
-                      : s.lastMessage
-                        ? "有新回复"
-                        : "—";
+                // 复用主状态机派生，保持与主视图同语义（避免散落 if/else）
+                const sState = derivePetAnimState(s);
+                const sColor = STATE_COLOR[sState];
+                const sStatus = STATE_LABEL[sState];
                 const isFocused = s.id === localFocusId;
                 return (
                   <button
