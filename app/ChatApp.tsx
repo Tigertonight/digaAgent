@@ -33,8 +33,8 @@ import {
   emptyRunner,
   DRAFT_KEY,
   type RunnerKey,
-  type RunnerState,
 } from "@/lib/session-runner";
+import { useRunners } from "./hooks/useRunners";
 import Markdown from "./components/Markdown";
 import ToolRender from "./components/ToolRender";
 import FileBrowser from "./components/FileBrowser";
@@ -249,6 +249,47 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       }
     } catch {}
   }, []);
+
+  // ===== 兼容期单实例 SSE ref（active runner 也写一份这里兜底） =====
+  const esRef = useRef<EventSource | null>(null);
+
+  // ===== 多会话 runner 容器(RFC-1 阶段 A1，已抽到 useRunners) =====
+  // - runnersRef 是所有会话工作面的"权威存储"（hook 内部唯一持有 / 外部只读）
+  // - esMapRef 是每个 runner 的 SSE 连接；切换会话时不关 SSE，让后台流式继续
+  //   （esMapRef 仍留在 ChatApp 内，后续 A2 阶段会抽到 useSseManager）
+  // - LRU 淘汰时通过 onEvict 回调通知本组件关 SSE（解耦 useRunners 与 SSE 池）
+  const esMapRef = useRef<Map<RunnerKey, EventSource>>(new Map());
+
+  // closeSseFor 在下方才定义；用 ref 转发避免前向引用
+  const closeSseForRef = useRef<((key: RunnerKey) => void) | null>(null);
+
+  const {
+    runnersRef,
+    activeKey,
+    activeSnapshot,
+    activeKeyRef,
+    updateRunner,
+    updateActive,
+    switchTo,
+  } = useRunners({
+    onEvict: (key) => closeSseForRef.current?.(key),
+  });
+
+  // E2E 诊断钩子:仅在 window.__E2E__=true 时挂载,把 runner 状态暴露给测试断言。
+  // 不影响 prod 行为,默认 noop。
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const w = window as unknown as { __E2E__?: boolean; __chatAppDiag?: unknown };
+    if (!w.__E2E__) return;
+    w.__chatAppDiag = {
+      runners: runnersRef,
+      esMap: esMapRef,
+      activeKey: () => activeKeyRef.current,
+      runnerCount: () => runnersRef.current.size,
+      runnerKeys: () => [...runnersRef.current.keys()],
+      sseKeys: () => [...esMapRef.current.keys()],
+    };
+  }, [runnersRef, activeKeyRef]);
 
   /** 把指定 session 在当前 modified 上标记为已读（幂等） */
   const markSessionSeen = useCallback(
@@ -784,16 +825,12 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             es.close();
             esMapRef.current.delete(key);
           }
+          const wasActive = activeKeyRef.current === key;
           runnersRef.current.delete(key);
-          // 删的是当前活跃的 → 切回 draft
-          if (activeKeyRef.current === key) {
+          // 删的是当前活跃的 → 切回 draft（switchTo 在 draft 不存在时兜底建空 runner）
+          if (wasActive) {
             setSelectedId(null);
-            if (!runnersRef.current.has(DRAFT_KEY)) {
-              runnersRef.current.set(DRAFT_KEY, emptyRunner());
-            }
-            activeKeyRef.current = DRAFT_KEY;
-            setActiveKey(DRAFT_KEY);
-            setActiveSnapshot(runnersRef.current.get(DRAFT_KEY)!);
+            switchTo(DRAFT_KEY);
           }
         } else if (selectedId === id) {
           // 兜底:列表没找到但 selectedId 匹配,清掉显示
@@ -807,7 +844,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         setPendingDeleteId(null);
       }
     },
-    [refreshSessions, selectedId, sessions]
+    [refreshSessions, selectedId, sessions, switchTo, runnersRef, activeKeyRef]
   );
 
   /** 触发 inline 删除确认（替代原生 confirm） */
@@ -836,151 +873,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     () => providers.filter((p) => p.hasAuth),
     [providers]
   );
-
-  const esRef = useRef<EventSource | null>(null);
-
-  // ===== 多会话 runner 容器(P1) =====
-  // runnersRef 是所有会话工作面的"权威存储":未在视野中的 runner(SSE 仍连)在这里继续累积事件。
-  // esMapRef 是每个 runner 的 SSE 连接;切换会话时不关 SSE,让后台流式继续。
-  // [activeKey, setActiveKey] 触发渲染:UI 从 activeSnapshot 读当前活跃 runner 的不可变快照。
-  // 当前(P1-2)只是建容器,不接管现有 useState;后续 step 才把 useState 替换为 snapshot 解构。
-  const runnersRef = useRef<Map<RunnerKey, RunnerState>>(
-    new Map([[DRAFT_KEY, emptyRunner()]])
-  );
-  const esMapRef = useRef<Map<RunnerKey, EventSource>>(new Map());
-  const [activeKey, setActiveKey] = useState<RunnerKey>(DRAFT_KEY);
-  const [activeSnapshot, setActiveSnapshot] = useState<RunnerState>(() =>
-    emptyRunner()
-  );
-
-  // === Runner helper（P1-3）===
-  // 为了避免 stale closure,所有 helper 都从 ref 读最新 active key/snapshot:
-  // setState 异步,但 ref 同步 mutate,callbacks 里读 activeKeyRef.current 永远是最新值。
-  const activeKeyRef = useRef<RunnerKey>(DRAFT_KEY);
-  useEffect(() => {
-    activeKeyRef.current = activeKey;
-  }, [activeKey]);
-
-  // E2E 诊断钩子:仅在 window.__E2E__=true 时挂载,把 runner 状态暴露给测试断言。
-  // 不影响 prod 行为,默认 noop。
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const w = window as unknown as { __E2E__?: boolean; __chatAppDiag?: unknown };
-    if (!w.__E2E__) return;
-    w.__chatAppDiag = {
-      runners: runnersRef,
-      esMap: esMapRef,
-      activeKey: () => activeKeyRef.current,
-      runnerCount: () => runnersRef.current.size,
-      runnerKeys: () => [...runnersRef.current.keys()],
-      sseKeys: () => [...esMapRef.current.keys()],
-    };
-  }, []);
-
-  /** 把 patch 写入指定 runner;若该 runner 是当前活跃的,同步 setActiveSnapshot 触发渲染。 */
-  const updateRunner = useCallback(
-    (
-      key: RunnerKey,
-      patch:
-        | Partial<RunnerState>
-        | ((prev: RunnerState) => Partial<RunnerState>)
-    ) => {
-      const cur = runnersRef.current.get(key);
-      if (!cur) return; // 已被 LRU 淘汰或还没 lazy 加载,丢弃
-      const delta = typeof patch === "function" ? patch(cur) : patch;
-      const next: RunnerState = {
-        ...cur,
-        ...delta,
-        lastTouched: Date.now(),
-      };
-      runnersRef.current.set(key, next);
-      if (key === activeKeyRef.current) {
-        setActiveSnapshot(next);
-      }
-    },
-    []
-  );
-
-  /** 写当前活跃 runner —— 等价于 updateRunner(activeKey, patch),但永远走 active 路径。 */
-  const updateActive = useCallback(
-    (
-      patch:
-        | Partial<RunnerState>
-        | ((prev: RunnerState) => Partial<RunnerState>)
-    ) => {
-      updateRunner(activeKeyRef.current, patch);
-    },
-    [updateRunner]
-  );
-
-  /**
-   * 切换活跃 runner。
-   *  - 不关任何 SSE(让后台流式继续)
-   *  - 目标 runner 必须已经存在于 Map(草稿/已切换过的);冷启动选历史会话由调用方
-   *    先 runnersRef.current.set(key, runnerWithCtx) 再 switchTo(key)。
-   */
-  // lruEvict 的前向引用容器(switchTo 在 lruEvict 之前定义,需要通过 ref 调用)
-  const lruEvictRef = useRef<(() => void) | null>(null);
-
-  const switchTo = useCallback((newKey: RunnerKey) => {
-    const target = runnersRef.current.get(newKey);
-    if (!target) {
-      // 目标不存在 —— 调用方该先 lazy create runner 再 switchTo。
-      // 这里兜底建一个空 runner,避免渲染崩。
-      const fresh = emptyRunner();
-      runnersRef.current.set(newKey, fresh);
-      activeKeyRef.current = newKey;
-      setActiveKey(newKey);
-      setActiveSnapshot(fresh);
-      lruEvictRef.current?.();
-      return;
-    }
-    // 更新 lastTouched 进 LRU 表
-    const touched: RunnerState = { ...target, lastTouched: Date.now() };
-    runnersRef.current.set(newKey, touched);
-    activeKeyRef.current = newKey;
-    setActiveKey(newKey);
-    setActiveSnapshot(touched);
-    lruEvictRef.current?.();
-  }, []);
-
-  /**
-   * LRU 淘汰: runners > MAX 时,挑出"最久未触达"的非活跃/非流式/非压缩 runner 踢掉。
-   *
-   * 踢的语义:
-   *   - 关该 runner 的 SSE(esMapRef.delete + es.close())
-   *   - runnersRef.delete(key)
-   *   - 不调 abort(后端 agent 继续跑;用户切回该 session 时会冷启动重连或新建)
-   *   - draft runner 永不淘汰(全局只有一个)
-   */
-  const MAX_RUNNERS = 8;
-  const lruEvict = useCallback(() => {
-    const map = runnersRef.current;
-    if (map.size <= MAX_RUNNERS) return;
-    const candidates: { key: RunnerKey; touched: number }[] = [];
-    for (const [key, r] of map) {
-      if (key === DRAFT_KEY) continue;
-      if (key === activeKeyRef.current) continue;
-      if (r.streaming) continue;
-      if (r.compacting) continue;
-      candidates.push({ key, touched: r.lastTouched });
-    }
-    candidates.sort((a, b) => a.touched - b.touched);
-    const need = map.size - MAX_RUNNERS;
-    for (let i = 0; i < Math.min(need, candidates.length); i++) {
-      const key = candidates[i].key;
-      const es = esMapRef.current.get(key);
-      if (es) {
-        try { es.close(); } catch {}
-        esMapRef.current.delete(key);
-      }
-      map.delete(key);
-    }
-  }, []);
-
-  useEffect(() => {
-    lruEvictRef.current = lruEvict;
-  }, [lruEvict]);
 
   // ===== 当前活跃 runner 的解构(P1-4)=====
   // 所有下游 callbacks/render 通过这些同名变量读取,行为与原 useState 完全一致。
@@ -1627,6 +1519,14 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     }
   }, []);
 
+  // 让 useRunners 的 onEvict 回调能在 LRU 时通过 ref 调到 closeSseFor
+  useEffect(() => {
+    closeSseForRef.current = closeSseFor;
+    return () => {
+      closeSseForRef.current = null;
+    };
+  }, [closeSseFor]);
+
   /**
    * 为指定 runner 打开 SSE(P1-5)。每个 runner 一个独立 EventSource,
    * 路由到 handleAgentEvent(ev, agentId) —— P1-6 里会再加 ownerKey。
@@ -1728,7 +1628,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     // draft 已经有上一次留下的 agent? 关掉它再起新的 —— +New chat 语义就是"重置"
     closeSseFor(DRAFT_KEY);
     runnersRef.current.set(DRAFT_KEY, emptyRunner());
-    setActiveSnapshot(runnersRef.current.get(DRAFT_KEY)!);
+    // 重新 switchTo 让 useRunners 把新的 empty snapshot 同步给 React state
+    switchTo(DRAFT_KEY);
 
     try {
       const r = await fetch("/api/agent/new", {
@@ -1926,14 +1827,13 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         try { oldEs.close(); } catch {}
         esMapRef.current.delete(DRAFT_KEY);
       }
-      activeKeyRef.current = newKey;
-      setActiveKey(newKey);
+      // 草稿升级：从 DRAFT_KEY 切到 newKey；switchTo 会同步 setActiveKey + setActiveSnapshot + LRU
+      switchTo(newKey);
       const idFromPath = extractSessionIdFromPath(sessionFilePath);
       if (idFromPath) setSelectedId(idFromPath);
       runnersRef.current.set(DRAFT_KEY, emptyRunner());
       const aid = upgraded.agentId;
       if (aid) attachSseFor(newKey, aid);
-      lruEvictRef.current?.();
     };
 
     let aid = agentId;
