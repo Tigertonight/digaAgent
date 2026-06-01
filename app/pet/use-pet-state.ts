@@ -376,6 +376,14 @@ export function usePetState() {
     [displaySession]
   );
 
+  /**
+   * 直接注入 petState（用于非 Electron 环境下的 mock 调试）。
+   * 在 Electron 中由 IPC 推送，不应调用此方法。
+   */
+  const injectMockState = useCallback((state: PetState | null) => {
+    setPetState(state);
+  }, []);
+
   return {
     petState,
     animState,
@@ -385,6 +393,7 @@ export function usePetState() {
     setLocalFocusId,
     focusMain,
     bubbleText,
+    injectMockState,
   };
 }
 
