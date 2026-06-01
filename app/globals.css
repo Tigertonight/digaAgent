@@ -231,6 +231,18 @@ body.pet-window {
   }
 }
 
+/* toast 入场动画：从右侧滑入 + 淡入 */
+@keyframes pet-toast-in {
+  from {
+    transform: translateX(12px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
 /* 宠物窗口内滚动条：细 + 半透明，避免破坏视觉 */
 .pet-card-scroll::-webkit-scrollbar,
 .pet-bubble-scroll::-webkit-scrollbar {
