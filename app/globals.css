@@ -219,14 +219,33 @@ body.pet-window {
   50%      { box-shadow: 0 0 28px rgba(220,38,38,0.85); }
 }
 
-/* attention 红点徽章 —— 强脉动吸引注意 */
+/* attention 蓝点徽章 —— 脉动提示但不刺激 */
 @keyframes pet-badge-pulse {
   0%, 100% {
     transform: scale(1);
-    box-shadow: 0 0 0 0 rgba(239,68,68,0.7);
+    box-shadow: 0 0 0 0 rgba(99,102,241,0.7);
   }
   70% {
     transform: scale(1.15);
-    box-shadow: 0 0 0 6px rgba(239,68,68,0);
+    box-shadow: 0 0 0 6px rgba(99,102,241,0);
   }
+}
+
+/* 宠物窗口内滚动条：细 + 半透明，避免破坏视觉 */
+.pet-card-scroll::-webkit-scrollbar,
+.pet-bubble-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.pet-card-scroll::-webkit-scrollbar-track,
+.pet-bubble-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.pet-card-scroll::-webkit-scrollbar-thumb,
+.pet-bubble-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.18);
+  border-radius: 3px;
+}
+.pet-card-scroll::-webkit-scrollbar-thumb:hover,
+.pet-bubble-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.3);
 }

@@ -45,6 +45,12 @@ export interface PetSessionInfo {
   sseStatus: PetSseStatus;
   /** 该 session 的 streaming 开始时间戳（ms），用于气泡显示"已耗时 Xs" */
   streamingStartedAt: number | null;
+  /**
+   * 用户是否已看过最新一条 lastMessage。
+   * 派生规则：主窗口聚焦 + selectedId === session.id 时为 true。
+   * 宠物侧用它决定是否显示 attention 红/蓝点。
+   */
+  read: boolean;
 }
 
 export interface PetState {

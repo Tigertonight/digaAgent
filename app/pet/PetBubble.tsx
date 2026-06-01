@@ -8,7 +8,7 @@ const STATE_COLOR: Record<PetAnimState, string> = {
   idle: "#6b7280", // gray-500
   thinking: "#6366f1", // indigo-500
   running: "#a855f7", // purple-500
-  attention: "#ef4444", // red-500
+  attention: "#6366f1", // indigo-500（与 thinking 同色，靠"红/蓝点"形态区分）
   done: "#10b981", // emerald-500
   error: "#dc2626", // red-600
   offline: "#9ca3af", // gray-400
@@ -77,19 +77,20 @@ export default function PetBubble({ animState, bubbleText }: Props) {
         </span>
       </div>
 
-      {/* 副文案行（可选） */}
+      {/* 副文案行（可选，过长可滚动） */}
       {bubbleText.secondary && (
         <div
+          className="pet-bubble-scroll"
           style={{
             marginTop: 4,
             paddingLeft: 14, // 与色点对齐
             color: "#9ca3af", // gray-400
             fontSize: 11,
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
-            wordBreak: "break-all",
+            maxHeight: 80,
+            overflowY: "auto",
+            overflowX: "hidden",
+            wordBreak: "break-word",
+            whiteSpace: "pre-wrap",
           }}
         >
           {bubbleText.secondary}

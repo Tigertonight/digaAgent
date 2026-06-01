@@ -47,7 +47,7 @@ export default function PetSprite({ animState, size = 80 }: Props) {
     return "none";
   })();
 
-  // 徽章：attention=红点脉动 / offline=灰色叉
+  // 徽章：attention=蓝点脉动（提示性而非警告性）/ offline=灰色叉
   const badge = (() => {
     if (animState === "attention") {
       return (
@@ -60,7 +60,7 @@ export default function PetSprite({ animState, size = 80 }: Props) {
             width: 10,
             height: 10,
             borderRadius: "50%",
-            background: "#ef4444",
+            background: "#6366f1",
             border: "2px solid rgba(17,24,39,0.6)",
             animation: "pet-badge-pulse 1.4s ease-out infinite",
           }}

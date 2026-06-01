@@ -35,7 +35,10 @@ export function derivePetAnimState(
 
   if (!session.streaming) {
     // agent 存在但不在流式 → 曾对话过则等待输入，否则空闲
-    return session.lastMessage ? "attention" : "idle";
+    // read=true 表示用户已在主窗口看过这条 lastMessage，跳过 attention
+    if (!session.lastMessage) return "idle";
+    if (session.read) return "idle";
+    return "attention";
   }
 
   const phase = session.agentPhase;
