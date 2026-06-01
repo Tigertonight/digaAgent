@@ -1131,6 +1131,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       petPushTimerRef.current = null;
 
       const petSessions: PetSessionInfo[] = [];
+      const pushedSessionIds = new Set<string>();
+
       for (const [key, runner] of runnersRef.current) {
         if (!runner.agentId) continue; // 跳过空 draft
 
@@ -1189,8 +1191,10 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           read = !isUnread;
         }
 
+        const sessionId = sess?.id ?? key;
+        pushedSessionIds.add(sessionId);
         petSessions.push({
-          id: sess?.id ?? key,
+          id: sessionId,
           agentId: runner.agentId,
           name: sess?.name ?? sess?.firstMessage?.slice(0, 20) ?? "新会话",
           streaming: runner.streaming,
@@ -1205,6 +1209,37 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           streamingStartedAt,
           read,
         });
+      }
+
+      // 兜底：当前 selectedId 对应的 session 若没被 runner 路径加入
+      // （比如刚切到一个历史 session、agentId 还没建立），也要 push 一个
+      // 最小化条目，保证宠物侧 displaySession.find(focusedSessionId) 能命中。
+      // 否则会 fallback 到 sessions[0]，显示与主窗口完全无关的另一个 session。
+      if (selectedId && !pushedSessionIds.has(selectedId)) {
+        const sess = sessions.find((s) => s.id === selectedId);
+        if (sess) {
+          const seenAt = lastSeenMapRef.current[sess.id];
+          // active session 默认视为已读（与主窗口列表逻辑一致）
+          const read =
+            true; /* isActive=true → isUnread=false → read=true */
+          void seenAt; // 显式标记暂未使用，避免未来 lint
+          petSessions.push({
+            id: sess.id,
+            agentId: null,
+            name: sess.name ?? sess.firstMessage?.slice(0, 20) ?? "新会话",
+            streaming: false,
+            agentPhase: null,
+            lastMessage: "",
+            currentTool: null,
+            currentToolTarget: null,
+            retry: null,
+            compacting: false,
+            error: null,
+            sseStatus: "idle",
+            streamingStartedAt: null,
+            read,
+          });
+        }
       }
 
       const petState: PetState = {

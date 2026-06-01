@@ -232,12 +232,12 @@ export function usePetState() {
   useEffect(() => {
     if (!petState) return;
 
+    // 严格按 focused id 查找；找不到就返回 null，由 derivePetBubbleText
+    // 显示"等待启动"占位。绝不 fallback 到 sessions[0]，避免显示
+    // 与主窗口 active session 完全无关的会话（v1 设计修复）。
+    const targetId = localFocusId ?? petState.focusedSessionId;
     const focused =
-      petState.sessions.find(
-        (s) => s.id === (localFocusId ?? petState.focusedSessionId)
-      ) ??
-      petState.sessions[0] ??
-      null;
+      petState.sessions.find((s) => s.id === targetId) ?? null;
 
     const wasStreaming = prevStreamingRef.current;
     const isStreaming = focused?.streaming ?? false;
@@ -279,13 +279,12 @@ export function usePetState() {
     []
   );
 
-  /** 当前宠物展示的 session */
-  const displaySession: PetSessionInfo | null =
-    petState?.sessions.find(
-      (s) => s.id === (localFocusId ?? petState.focusedSessionId)
-    ) ??
-    petState?.sessions[0] ??
-    null;
+  /** 当前宠物展示的 session（严格按 focused id 查找，找不到返回 null） */
+  const displaySession: PetSessionInfo | null = (() => {
+    if (!petState) return null;
+    const targetId = localFocusId ?? petState.focusedSessionId;
+    return petState.sessions.find((s) => s.id === targetId) ?? null;
+  })();
 
   /** 派生气泡文案（每次 render 重算，依赖 now 实现每秒刷新） */
   const bubbleText: PetBubbleText = derivePetBubbleText(
