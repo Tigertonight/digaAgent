@@ -36,6 +36,7 @@ import {
 import { useRunners } from "./hooks/useRunners";
 import { useSseManager } from "./hooks/useSseManager";
 import { useAgentEvents } from "./hooks/useAgentEvents";
+import { useSessions } from "./hooks/useSessions";
 import Markdown from "./components/Markdown";
 import ToolRender from "./components/ToolRender";
 import FileBrowser from "./components/FileBrowser";
@@ -224,32 +225,9 @@ type AgentPhase =
   | null;
 
 export default function ChatApp({ initialSessions, defaultCwd }: Props) {
-  const [sessions, setSessions] = useState<SessionInfoLite[]>(initialSessions);
-  const [selectedId, setSelectedId] = useState<string | null>(
-    initialSessions[0]?.id ?? null
-  );
-  /**
-   * 已查看的 session id → 上次查看时该 session 的 modified ISO。
-   * 若 sessions[i].modified > lastSeenMap[sessions[i].id]，视为有新内容（未读）。
-   *
-   * v2 语义（宠物 attention 修复）：
-   *   "已读"严格表示"用户的眼睛真的看到了最新内容"，不再因为某个 session
-   *   恰好是 active 就自动算已读。两个触发时机：
-   *     1) 用户主动切换 session → 切到的瞬间标已读
-   *     2) 主窗口被用户真正聚焦（focus + visible）→ 把 active session 标已读
-   *   sessions 列表更新（如流式结束 refreshSessions）不再自动改 lastSeenMap，
-   *   这样宠物侧才能正确表达 attention。localStorage 持久化。
-   */
-  const [lastSeenMap, setLastSeenMap] = useState<Record<string, string>>({});
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem("sessionLastSeen");
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === "object") setLastSeenMap(parsed);
-      }
-    } catch {}
-  }, []);
+  // setError 需要在 useSessions（B1）之前声明，作为 onError 回调注入。
+  // 顶层 error 用于 UI banner 展示；useState setter 身份稳定，可安全提前。
+  const [error, setError] = useState<string | null>(null);
 
   // ===== 多会话核心容器与 SSE 连接池（RFC-1 阶段 A1 + A2） =====
   // - runnersRef（useRunners）：所有会话工作面的"权威存储"
@@ -324,94 +302,31 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     };
   }, [runnersRef, activeKeyRef]);
 
-  /** 把指定 session 在当前 modified 上标记为已读（幂等） */
-  const markSessionSeen = useCallback(
-    (sessionId: string, sessionsSnapshot: SessionInfoLite[]) => {
-      const cur = sessionsSnapshot.find((s) => s.id === sessionId);
-      if (!cur) return;
-      setLastSeenMap((prev) => {
-        if (prev[sessionId] === cur.modified) return prev;
-        const next = { ...prev, [sessionId]: cur.modified };
-        try {
-          localStorage.setItem("sessionLastSeen", JSON.stringify(next));
-        } catch {}
-        return next;
-      });
-    },
-    []
-  );
+  // ===== Session 列表 + 已读追踪 + CRUD（RFC-1 阶段 B1） =====
+  // 持有 sessions / selectedId / lastSeenMap（localStorage 持久化，lazy init 修复刷新已读丢失）；
+  // 提供 groupedSessions / refreshSessions / submitRename / executeDeleteSession 等。
+  const {
+    sessions,
+    selectedId,
+    setSelectedId,
+    lastSeenMap,
+    groupedSessions,
+    refreshSessions,
+    submitRename: submitRenameImpl,
+    executeDeleteSession: executeDeleteSessionImpl,
+    lastSeenMapRef,
+  } = useSessions({
+    initialSessions,
+    closeSseFor,
+    runnersRef,
+    activeKeyRef,
+    switchTo,
+    onError: setError,
+  });
 
-  // 改 2：用户切换 session 时（selectedId 单独变化），标当前 modified 已读。
-  // 关键：依赖里只有 selectedId，sessions 变化不触发。
-  // 用 ref 取最新 sessions 而不进依赖，避免 refreshSessions 后被错误触发。
-  const sessionsRef = useRef<SessionInfoLite[]>(sessions);
-  useEffect(() => {
-    sessionsRef.current = sessions;
-  }, [sessions]);
-  useEffect(() => {
-    if (!selectedId) return;
-    markSessionSeen(selectedId, sessionsRef.current);
-  }, [selectedId, markSessionSeen]);
-
-  // 改 3：主窗口真正被用户看到时（focus + visible），把 active session 标已读。
-  // 包含：窗口 focus 事件、visibilitychange 转为 visible、selectedId 变更后若已聚焦也补一次。
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const tryMark = () => {
-      if (typeof document !== "undefined" && document.visibilityState !== "visible")
-        return;
-      if (typeof document !== "undefined" && !document.hasFocus()) return;
-      const sid = selectedId;
-      if (!sid) return;
-      markSessionSeen(sid, sessionsRef.current);
-    };
-    // 初次挂载/依赖变化时尝试一次（覆盖"主窗口本来就在前台"的场景）
-    tryMark();
-    window.addEventListener("focus", tryMark);
-    document.addEventListener("visibilitychange", tryMark);
-    return () => {
-      window.removeEventListener("focus", tryMark);
-      document.removeEventListener("visibilitychange", tryMark);
-    };
-  }, [selectedId, markSessionSeen]);
-
-  // 改 3 续：sessions 列表更新后（如流式结束 modified 变化），若主窗口此刻
-  // 仍被用户聚焦看着 active session，应立刻消除 unread（让宠物不闪 attention）。
-  // 注意这里依赖 sessions——但只在"窗口被聚焦"的前提下才写，所以宠物失焦场景
-  // 完全不会被这里覆盖。
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof document === "undefined") return;
-    if (document.visibilityState !== "visible") return;
-    if (!document.hasFocus()) return;
-    if (!selectedId) return;
-    markSessionSeen(selectedId, sessions);
-  }, [sessions, selectedId, markSessionSeen]);
   // chatState / forkable* 等 per-runner 字段已挪到 RunnerState。
   // messages / visibleMessageCount / messageRefs 依赖 chatState/forkableUserMessages,
   // 已下移到 activeSnapshot 解构之后(否则用前先声明会报错)。
-
-  /**
-   * 把扁平 sessions 按 parentSessionPath 分组：
-   *   - parents: 没有 parentSessionPath（或 parent 不在列表里）的 session，保持原顺序
-   *   - childrenByParent: parent.path -> child[]（按 modified 倒序排）
-   * 渲染时 parent 之后立即渲染它的 children（缩进），其余 children 也作为 parent 显示在末尾兜底。
-   */
-  const groupedSessions = useMemo(() => {
-    const byPath = new Map<string, SessionInfoLite>();
-    for (const s of sessions) byPath.set(s.path, s);
-    const childrenByParent = new Map<string, SessionInfoLite[]>();
-    const parents: SessionInfoLite[] = [];
-    for (const s of sessions) {
-      if (s.parentSessionPath && byPath.has(s.parentSessionPath)) {
-        const arr = childrenByParent.get(s.parentSessionPath) ?? [];
-        arr.push(s);
-        childrenByParent.set(s.parentSessionPath, arr);
-      } else {
-        parents.push(s);
-      }
-    }
-    return { parents, childrenByParent };
-  }, [sessions]);
 
   // agentId / agentSessionId / input / pending* / streaming / phase / compacting /
   // compactError / retryInfo / stats / toolsCount 已挪到 RunnerState(见下方解构区)。
@@ -424,7 +339,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   /** 触发字符在 input 中的绝对索引（含 @ 或 /） */
   const acTriggerPosRef = useRef<number>(-1);
   const { soundEnabled, onSoundToggle, playDoneSound } = useAudio();
-  const [error, setError] = useState<string | null>(null);
   const [cwd, setCwd] = useState(defaultCwd);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -780,100 +694,31 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     return () => document.removeEventListener("mousedown", onClick);
   }, [menuFor]);
 
-  // 刷新左侧 session 列表
-  const refreshSessions = useCallback(() => {
-    void fetch("/api/sessions")
-      .then((r) => r.json())
-      .then((d: { sessions?: SessionInfoLite[] }) =>
-        setSessions(d.sessions ?? [])
-      )
-      .catch(() => {});
-  }, []);
-
-  /**
-   * 轻量轮询 session 列表 —— 用来追踪"别的 agent"在后台的进展。
-   * 自己的 agent_end 事件已经会主动 refreshSessions（见 reducer 监听）,
-   * 所以这里只负责兜底跨 session 同步,15s 间隔足够;tab 不可见时跳过。
-   */
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const tick = () => {
-      if (document.visibilityState !== "visible") return;
-      refreshSessions();
-    };
-    const id = setInterval(tick, 15000);
-    // 标签页从隐藏切回可见时立即拉一次（避免要等到下一个 15s 周期）
-    const onVis = () => {
-      if (document.visibilityState === "visible") refreshSessions();
-    };
-    document.addEventListener("visibilitychange", onVis);
-    return () => {
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", onVis);
-    };
-  }, [refreshSessions]);
-
-  // session 菜单操作
+  // session 菜单操作：业务由 useSessions 承担，本层 wrapper 仅负责善后 UI 状态
+  // （renamingFor / menuFor / pendingDeleteId 是 sidebar 交互的临时态，
+  // 不属于 session 本身的生命周期，所以留在 ChatApp 内）。
   const submitRename = useCallback(
     async (id: string, name: string) => {
-      const trimmed = name.trim();
-      if (!trimmed) {
-        setRenamingFor(null);
-        return;
-      }
       try {
-        const r = await fetch(`/api/sessions/${id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: trimmed }),
-        });
-        const data = (await r.json()) as { error?: string };
-        if (data.error) setError(data.error);
-        else refreshSessions();
-      } catch (e) {
-        setError(String(e));
+        await submitRenameImpl(id, name);
       } finally {
         setRenamingFor(null);
         setMenuFor(null);
       }
     },
-    [refreshSessions]
+    [submitRenameImpl]
   );
 
   const executeDeleteSession = useCallback(
     async (id: string) => {
       try {
-        const r = await fetch(`/api/sessions/${id}`, { method: "DELETE" });
-        const data = (await r.json()) as { error?: string };
-        if (data.error) {
-          setError(data.error);
-          return;
-        }
-        // 把对应 runner 从 Map 里删掉(如果有),关其 SSE
-        const sel = sessions.find((s) => s.id === id);
-        if (sel) {
-          const key: RunnerKey = sel.path;
-          closeSseFor(key);
-          const wasActive = activeKeyRef.current === key;
-          runnersRef.current.delete(key);
-          // 删的是当前活跃的 → 切回 draft（switchTo 在 draft 不存在时兜底建空 runner）
-          if (wasActive) {
-            setSelectedId(null);
-            switchTo(DRAFT_KEY);
-          }
-        } else if (selectedId === id) {
-          // 兜底:列表没找到但 selectedId 匹配,清掉显示
-          setSelectedId(null);
-        }
-        refreshSessions();
-      } catch (e) {
-        setError(String(e));
+        await executeDeleteSessionImpl(id);
       } finally {
         setMenuFor(null);
         setPendingDeleteId(null);
       }
     },
-    [refreshSessions, selectedId, sessions, switchTo, runnersRef, activeKeyRef, closeSseFor]
+    [executeDeleteSessionImpl]
   );
 
   /** 触发 inline 删除确认（替代原生 confirm） */
@@ -1091,11 +936,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const petLastPushedAtRef = useRef<number>(0);
   // 暴露 doPush 给外部（lastSeenMap / selectedId 变化时主动触发一次推送）
   const petDoPushRef = useRef<(() => void) | null>(null);
-  // 把 lastSeenMap 镜像到 ref，doPush 能在 effect 闭包外读到最新值
-  const lastSeenMapRef = useRef<Record<string, string>>(lastSeenMap);
+  // lastSeenMap 变化时触发宠物侧推送（消除 attention）。
+  // ref 镜像由 useSessions 维护，这里只负责副作用触发。
   useEffect(() => {
-    lastSeenMapRef.current = lastSeenMap;
-    // lastSeenMap 变化 → 立刻推一次让宠物侧消除 attention
     petDoPushRef.current?.();
   }, [lastSeenMap]);
 
