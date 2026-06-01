@@ -12,6 +12,7 @@ export default function PetApp() {
     animState,
     displaySession,
     allSessions,
+    localFocusId,
     setLocalFocusId,
     focusMain,
     bubbleText,
@@ -79,11 +80,16 @@ export default function PetApp() {
         >
           <PetCard
             session={displaySession}
+            animState={animState}
+            bubbleText={bubbleText}
+            allSessions={allSessions}
+            localFocusId={localFocusId}
             onClose={() => setCardOpen(false)}
             onFocusMain={() => {
               focusMain(displaySession?.id);
               setCardOpen(false);
             }}
+            onSwitchLocalSession={(id) => setLocalFocusId(id)}
           />
         </div>
       )}
