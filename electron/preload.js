@@ -85,6 +85,9 @@ contextBridge.exposeInMainWorld("miniPi", {
     /** 宠物窗口拖拽：把新坐标发给主进程移动 BrowserWindow */
     move: (pos) => ipcRenderer.send("pet:move", pos),
 
+    /** 动态控制鼠标穿透（true=穿透空白区，false=完全不穿透） */
+    setIgnoreMouse: (ignore) => ipcRenderer.send("pet:set-ignore-mouse", ignore),
+
     /** 主窗口订阅"来自宠物的切 session 请求"（由 ipcMain 转发） */
     onSwitchSession: (cb) => {
       const handler = (_event, sessionId) => cb(sessionId);

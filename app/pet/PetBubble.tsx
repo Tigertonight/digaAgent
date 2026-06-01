@@ -32,10 +32,7 @@ export default function PetBubble({
   return (
     <div
       style={{
-        position: "absolute",
-        bottom: "calc(100% + 8px)",
-        left: "50%",
-        transform: "translateX(-50%)",
+        position: "relative",
         width: 220,
         background: "rgba(20,20,20,0.95)",
         border: "1px solid rgba(255,255,255,0.12)",
@@ -45,8 +42,6 @@ export default function PetBubble({
         boxShadow: "0 4px 24px rgba(0,0,0,0.5)",
         fontSize: 11,
         color: "#e0e0e0",
-        zIndex: 9999,
-        pointerEvents: "auto",
       }}
     >
       {/* 当前状态标签 */}

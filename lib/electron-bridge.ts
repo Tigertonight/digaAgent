@@ -84,6 +84,8 @@ export interface ElectronApi {
     move(pos: { x: number; y: number }): void;
     /** 宠物窗口订阅"切换 session"请求（来自宠物点击跳回主窗口），返回取消函数 */
     onSwitchSession(cb: (sessionId: string) => void): () => void;
+    /** 动态控制鼠标穿透（true=穿透，false=不穿透） */
+    setIgnoreMouse(ignore: boolean): void;
   };
 }
 
