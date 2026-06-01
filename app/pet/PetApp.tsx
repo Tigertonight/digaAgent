@@ -8,6 +8,20 @@ import PetSprite from "./PetSprite";
 import PetBubble from "./PetBubble";
 import PetCard from "./PetCard";
 import PetToastStack from "./PetToastStack";
+import PetMockPanel from "./PetMockPanel";
+
+/**
+ * SSR 安全地判断"是否需要 mock 模式"（即非 Electron 环境）。
+ * 服务端渲染默认 false 避免 hydration mismatch，mount 后才反映真实环境。
+ * 这样 Electron 中永远 false，浏览器 dev 中 mount 后变 true。
+ */
+function useNeedMock(): boolean {
+  const [need, setNeed] = useState(false);
+  useEffect(() => {
+    setNeed(typeof window !== "undefined" && !window.miniPi);
+  }, []);
+  return need;
+}
 
 export default function PetApp() {
   const {
@@ -19,9 +33,13 @@ export default function PetApp() {
     focusMain,
     bubbleText,
     petState,
+    injectMockState,
   } = usePetState();
 
   const { onMouseDown, dragging, wasJustDragged } = usePetDrag();
+
+  // 非 Electron 环境（如 `next dev` 浏览器直接访问 /pet）：渲染 mock 面板
+  const needMock = useNeedMock();
 
   // 临时事件 toast 队列（基于 petState 边沿变化派生）
   const toasts = usePetToasts(petState);
@@ -168,6 +186,9 @@ export default function PetApp() {
         pointerEvents: "none", // 默认不捕获事件，由子元素按需启用
       }}
     >
+      {/* 非 Electron 环境的开发面板（mock state 注入），不影响 Electron */}
+      {needMock && <PetMockPanel onInject={injectMockState} />}
+
       {/* 事件 toast 堆叠 —— 在常态气泡上方，被动通告，不可交互
           拖拽时隐藏避免抖动；卡片打开时仍显示（错误信息不该被覆盖） */}
       {!dragging && <PetToastStack toasts={toasts} />}
