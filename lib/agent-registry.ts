@@ -19,20 +19,11 @@ import {
   DefaultPackageManager,
   DefaultResourceLoader,
   getAgentDir,
-  type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
-
-/**
- * Phase B1：inline 注入 no-op CollabExtension（架构改造打底，zero behavior change）。
- * Phase B2 起会替换为真正的 CollabExtension（lib/collab/extension.ts），
- * 在 tool_call 事件上挂规则匹配 + 审批阻塞逻辑。
- */
-const noOpCollabExtension: ExtensionFactory = (pi) => {
-  // 故意空：保留闭包形参，B2 会真正注册 pi.on("tool_call", ...)
-  void pi;
-};
+import { createCollabExtension } from "./collab/extension";
+import { DEFAULT_RULES } from "./collab/rules";
 
 interface AgentRecord {
   id: string;
@@ -147,13 +138,31 @@ export async function createAgent(opts: CreateOptions): Promise<{
   // 这里提前到 createAgentSession 之前不影响 B1 行为（id 仍然唯一）。
   const id = randomUUID();
 
-  // 构造 ResourceLoader 并注入 CollabExtension Factory（B1 是 no-op，B2 替换）。
-  // 显式构造的好处：未来加规则、记忆、Settings 都有挂载点，不需要再改 createAgentSession 调用。
+  // 构造 ResourceLoader 并注入真 CollabExtension（Phase B2）。
+  // - getRules: 内置 1 条 dangerous-bash-destructive；未来 Settings 可注入用户规则
+  // - getAgentId: 闭包到当前 id，approval id 用 `${agentId}:${toolCallId}` 复合 key
+  // - onApprovalNeeded: B2 是 stub —— 默认 auto-allow，但 console.log 一条 would-have-asked，
+  //   方便手动验证 matcher 真的触发了；B3 会替换成挂前端 pendingApprovals 的真实现。
+  const collabExtension = createCollabExtension({
+    getRules: () => DEFAULT_RULES,
+    getAgentId: () => id,
+    onApprovalNeeded: async (req) => {
+      console.log(
+        "[collab][B2-stub] would-have-asked:",
+        req.toolName,
+        JSON.stringify(req.input).slice(0, 200),
+        "(rule:",
+        req.ruleId + ")"
+      );
+      return { decision: "allow" };
+    },
+  });
+
   const resourceLoader = new DefaultResourceLoader({
     cwd: opts.cwd,
     agentDir: getAgentDir(),
     settingsManager: getSettingsManager(opts.cwd),
-    extensionFactories: [noOpCollabExtension],
+    extensionFactories: [collabExtension],
   });
 
   const { session } = await createAgentSession({
