@@ -37,6 +37,7 @@ import { usePetPusher } from "./hooks/usePetPusher";
 import { useBudget } from "./hooks/useBudget";
 import { useBudgetEnforcer, type BudgetTrigger } from "./hooks/useBudgetEnforcer";
 import { useForkable } from "./hooks/useForkable";
+import { useApprovals } from "./hooks/useApprovals";
 import { useAutocomplete } from "./hooks/useAutocomplete";
 import { useMessageRefs } from "./ChatMinimap";
 import { EmptyState } from "./components/EmptyState";
@@ -702,6 +703,13 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     spent: budgetSpent,
     setSessionOverride,
   } = useBudget({ activeSnapshot, agentId });
+
+  // RFC-2 Phase B3：工具审批 user actions（Allow / Deny POST）
+  // approve/deny 直接走 fetch，server 端 resolve 后 SSE 推 approval_resolved 自然更新气泡。
+  const { approve: approveCall, deny: denyCall } = useApprovals({
+    agentId,
+    onError: setError,
+  });
 
   // 宠物窗口发来的 "切到指定 session" 请求
   useEffect(() => {
@@ -1387,6 +1395,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             onChangeForkText={setForkText}
             onSubmitFork={submitFork}
             onForkToNewSession={forkToNewSession}
+            onApproveCall={approveCall}
+            onDenyCall={denyCall}
           />
         )}
 

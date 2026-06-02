@@ -75,6 +75,33 @@ export type MessagePart =
       isError?: boolean;
       /** 进行中 / 完成 / 出错 */
       status: "running" | "done" | "error";
+    }
+  | {
+      /**
+       * 工具审批气泡（RFC-2 Phase B3）。
+       *
+       * 时序：先于同 toolCallId 的 tool part 出现——审批通过后 SDK 才真执行 tool，
+       * tool_execution_start 才到达，那时再 push 一个 kind:"tool" part。
+       * 因此一次危险命令在最终 parts 里是 [approval(resolved), tool(running→done)] 两段。
+       */
+      kind: "approval";
+      /** ApprovalRequest.id —— `${agentId}:${toolCallId}` */
+      id: string;
+      /** 与未来 tool part 关联用 */
+      toolCallId: string;
+      toolName: string;
+      /** input 快照（展示给用户判断要不要 allow） */
+      input: Record<string, unknown>;
+      /** 触发规则的 id（用户判断"为什么被拦截"） */
+      ruleId?: string;
+      /** "pending" 等用户；"allowed" / "denied" 已结算（可能 user 也可能 timeout） */
+      status: "pending" | "allowed" | "denied";
+      /** 由谁结算的（"user"/"timeout"），仅 status !== pending 时有意义 */
+      resolvedBy?: "user" | "timeout" | "default";
+      /** deny 时的人话原因（如果有） */
+      denyReason?: string;
+      /** 创建时间（ms epoch），UI 计倒计时用 */
+      createdAt: number;
     };
 
 /** SDK ImageContent 形态 —— 给 /api/agent/[id] 发图用 */
