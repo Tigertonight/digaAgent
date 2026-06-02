@@ -222,6 +222,16 @@ export function useAgentEvents(
           }));
           return;
 
+        // ===== RFC-2 Phase B3：审批气泡（collab 自定义事件） =====
+        // 与 reducer 事件同走 applyEvent；不影响 agentPhase（保留当前 phase）。
+        // 用户感知：危险命令前，chat 流出现一个 approval part；点完后 status 变更。
+        case "approval_request":
+        case "approval_resolved":
+          updateRunner(ownerKey, (s) => ({
+            chatState: applyEvent(s.chatState, ev),
+          }));
+          return;
+
         default:
           return;
       }

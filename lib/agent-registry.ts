@@ -24,6 +24,25 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 import { createCollabExtension } from "./collab/extension";
 import { DEFAULT_RULES } from "./collab/rules";
+import { registerPendingApproval } from "./collab/server-store";
+import type {
+  ApprovalRequestEvent,
+  ApprovalResolvedEvent,
+} from "./collab/types";
+
+/**
+ * Ring buffer 里允许的事件类型。
+ *
+ * 除了 SDK 的 AgentSessionEvent，还包含 collab 自己的两个事件——它们走相同的 SSE 通道
+ * 被推到前端，前端 useAgentEvents 按 type 字段分发。
+ *
+ * 注：把 union 包给 events 字段使用，对 SSE encode 路径透明（JSON.stringify 即可），
+ * 对 SDK subscribe 路径也不影响（subscribe handler 仍然只塞 AgentSessionEvent）。
+ */
+export type RingBufferEvent =
+  | AgentSessionEvent
+  | ApprovalRequestEvent
+  | ApprovalResolvedEvent;
 
 interface AgentRecord {
   id: string;
@@ -34,7 +53,7 @@ interface AgentRecord {
    * - 读:遍历 [head - count, head),根据 seq 过滤
    * - count = min(nextSeq, MAX),buffer 满之前 count == nextSeq
    */
-  events: Array<{ seq: number; event: AgentSessionEvent } | undefined>;
+  events: Array<{ seq: number; event: RingBufferEvent } | undefined>;
   nextSeq: number;
   /** notify all SSE listeners */
   listeners: Set<() => void>;
@@ -103,6 +122,26 @@ export function getPackageManager(cwd?: string): DefaultPackageManager {
   return pm;
 }
 
+/**
+ * 把一条「非 SDK 来源」的事件塞进 ring buffer 并通知 SSE listeners。
+ *
+ * 用途：collab 自定义事件（approval_request / approval_resolved）走相同 SSE 通道
+ * 推到前端，前端按 type 字段分发。
+ *
+ * 设计要点：
+ *   - 与 session.subscribe 内的写入路径**完全对称**（同步 seq++、同 ring buffer 写法、
+ *     同 listeners 通知）；这样 SSE 路由按 seq 顺序读出后 since 重连语义保持一致
+ *   - 不更新 isStreaming flag（approval 事件不算 agent_start/end）
+ */
+export function pushExternalEvent(
+  rec: AgentRecord,
+  event: ApprovalRequestEvent | ApprovalResolvedEvent
+): void {
+  const seq = rec.nextSeq++;
+  rec.events[seq % MAX_EVENTS_PER_AGENT] = { seq, event };
+  for (const l of rec.listeners) l();
+}
+
 export interface CreateOptions {
   provider: string;
   modelId: string;
@@ -138,23 +177,52 @@ export async function createAgent(opts: CreateOptions): Promise<{
   // 这里提前到 createAgentSession 之前不影响 B1 行为（id 仍然唯一）。
   const id = randomUUID();
 
-  // 构造 ResourceLoader 并注入真 CollabExtension（Phase B2）。
+  // record 在 createAgentSession 之后才能建（要拿 session 实例）。
+  // 但 CollabExtension 的 onApprovalNeeded 闭包需要访问 record 来 push 自定义事件——
+  // 用 mutable holder 解决前向引用：handler 触发时 holder.current 一定已被赋值
+  // （tool_call 发生时 createAgentSession 已完成，record 已建好）。
+  const recordHolder: { current: AgentRecord | null } = { current: null };
+
+  // 构造 ResourceLoader 并注入真 CollabExtension（Phase B3 接真通道）。
   // - getRules: 内置 1 条 dangerous-bash-destructive；未来 Settings 可注入用户规则
   // - getAgentId: 闭包到当前 id，approval id 用 `${agentId}:${toolCallId}` 复合 key
-  // - onApprovalNeeded: B2 是 stub —— 默认 auto-allow，但 console.log 一条 would-have-asked，
-  //   方便手动验证 matcher 真的触发了；B3 会替换成挂前端 pendingApprovals 的真实现。
+  // - onApprovalNeeded:
+  //     1. push approval_request 进 ring buffer → SSE 通知前端弹气泡
+  //     2. registerPendingApproval await 用户决策（或 5min 超时按 defaultDecision）
+  //     3. push approval_resolved 进 ring buffer → SSE 通知前端更新气泡状态
+  //     4. return 给 CollabExtension，由它决定 allow/block tool
   const collabExtension = createCollabExtension({
     getRules: () => DEFAULT_RULES,
     getAgentId: () => id,
     onApprovalNeeded: async (req) => {
-      console.log(
-        "[collab][B2-stub] would-have-asked:",
-        req.toolName,
-        JSON.stringify(req.input).slice(0, 200),
-        "(rule:",
-        req.ruleId + ")"
-      );
-      return { decision: "allow" };
+      const rec = recordHolder.current;
+      // 安全网：理论上 rec 一定有；若没有则降级 auto-allow（避免卡死 agent）。
+      if (!rec) {
+        console.error(
+          "[collab] onApprovalNeeded called but record not ready; defaulting allow",
+          req.id
+        );
+        return { decision: "allow" };
+      }
+      pushExternalEvent(rec, { type: "approval_request", request: req });
+      const resp = await registerPendingApproval(req);
+      // resolvedBy：本函数 await 时无法区分是 user 主动还是 timeout 触发了 resolver。
+      // 由 server-store 内 setTimeout 触发的 resolve 不带 denyReason → 我们近似认为
+      // 没 denyReason 且 decision === defaultDecision 时是超时；其余视为 user。
+      // （Phase C 可在 ApprovalResponse 加 source 字段消除歧义，B3 先够用。）
+      const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
+        resp.denyReason === undefined && resp.decision === req.defaultDecision
+          ? "timeout"
+          : "user";
+      pushExternalEvent(rec, {
+        type: "approval_resolved",
+        id: req.id,
+        toolCallId: req.toolCallId,
+        decision: resp.decision,
+        resolvedBy,
+        denyReason: resp.denyReason,
+      });
+      return resp;
     },
   });
 
@@ -183,6 +251,8 @@ export async function createAgent(opts: CreateOptions): Promise<{
     unsubscribe: () => {},
     isStreaming: false,
   };
+  // 让 CollabExtension 的闭包能 push 自定义事件（approval_request/resolved）
+  recordHolder.current = record;
 
   // 把 AgentSession 的事件流接到 ring buffer + 通知 listeners
   record.unsubscribe = session.subscribe((event) => {
@@ -233,13 +303,13 @@ export function disposeAgent(id: string) {
 export function getEventsSince(
   agentId: string,
   sinceSeq: number
-): Array<{ seq: number; event: AgentSessionEvent }> {
+): Array<{ seq: number; event: RingBufferEvent }> {
   const rec = reg.agents.get(agentId);
   if (!rec) return [];
   // ring buffer 物理顺序≠seq 顺序（环到头会从下标 0 重新覆盖）。
   // 遍历整个 buffer，跳过 undefined 与 seq<=since 的项；最后按 seq 升序排。
   // 一次回放最多 MAX_EVENTS_PER_AGENT 条，sort 成本可接受。
-  const out: Array<{ seq: number; event: AgentSessionEvent }> = [];
+  const out: Array<{ seq: number; event: RingBufferEvent }> = [];
   for (const e of rec.events) {
     if (e && e.seq > sinceSeq) out.push(e);
   }

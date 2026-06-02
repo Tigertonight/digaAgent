@@ -37,6 +37,10 @@ interface MessagesScrollAreaProps {
   onChangeForkText: (v: string) => void;
   onSubmitFork: (entryId: string) => Promise<void>;
   onForkToNewSession: (entryId: string) => Promise<void>;
+  /** RFC-2 Phase B3：approval part 点 Allow */
+  onApproveCall?: (toolCallId: string) => void;
+  /** RFC-2 Phase B3：approval part 点 Deny */
+  onDenyCall?: (toolCallId: string) => void;
 }
 
 export function MessagesScrollArea({
@@ -62,6 +66,8 @@ export function MessagesScrollArea({
   onChangeForkText,
   onSubmitFork,
   onForkToNewSession,
+  onApproveCall,
+  onDenyCall,
 }: MessagesScrollAreaProps) {
   return (
     <div className="relative flex flex-1 overflow-hidden">
@@ -138,6 +144,8 @@ export function MessagesScrollArea({
                   }
                   isStreaming={isLastAssistant && streaming}
                   cwd={cwd}
+                  onApproveCall={onApproveCall}
+                  onDenyCall={onDenyCall}
                 />
               );
               if (!isVisible) return <div key={stableKey}>{view}</div>;

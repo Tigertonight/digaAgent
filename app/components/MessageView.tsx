@@ -25,6 +25,7 @@ import { formatMessageTime, formatTokens } from "@/lib/format";
 import { previewStore } from "@/lib/preview-store";
 import Markdown from "./Markdown";
 import ToolRender from "./ToolRender";
+import { ApprovalBubble } from "./ApprovalBubble";
 
 export interface MessageViewProps {
   msg: ChatMessage;
@@ -50,6 +51,10 @@ export interface MessageViewProps {
   isStreaming?: boolean;
   /** 当前会话 cwd：传给 Markdown 用于解析消息里出现的相对图片路径 */
   cwd?: string;
+  /** RFC-2 Phase B3：approval part 点 Allow 时回调 */
+  onApproveCall?: (toolCallId: string) => void;
+  /** RFC-2 Phase B3：approval part 点 Deny 时回调 */
+  onDenyCall?: (toolCallId: string) => void;
 }
 
 export const MessageView = memo(function MessageView({
@@ -69,6 +74,8 @@ export const MessageView = memo(function MessageView({
   streamingPhase,
   isStreaming,
   cwd,
+  onApproveCall,
+  onDenyCall,
 }: MessageViewProps) {
   // user：右侧气泡（支持 text + image parts 混合）
   if (msg.role === "user") {
@@ -297,6 +304,16 @@ export const MessageView = memo(function MessageView({
           }
           if (p.kind === "tool") {
             return <ToolRender key={i} tool={p} />;
+          }
+          if (p.kind === "approval") {
+            return (
+              <ApprovalBubble
+                key={i}
+                part={p}
+                onApprove={onApproveCall}
+                onDeny={onDenyCall}
+              />
+            );
           }
           if (p.kind === "image") {
             const src = `data:${p.mimeType};base64,${p.data}`;

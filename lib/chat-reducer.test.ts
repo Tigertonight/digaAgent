@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { createInitialState, ctxToMessages } from "./chat-reducer";
-import type { ChatMessage } from "./types";
+import { applyEvent, createInitialState, ctxToMessages } from "./chat-reducer";
+import type { ChatMessage, MessagePart } from "./types";
 
 describe("createInitialState", () => {
   it("默认返回空 messages 和 activeAssistantIndex=-1", () => {
@@ -241,5 +241,124 @@ describe("ctxToMessages", () => {
     ]);
     expect(out[0].parts).toHaveLength(1);
     expect((out[0].parts![0] as { toolCallId: string }).toolCallId).toBe("ok");
+  });
+});
+
+describe("applyEvent — approval_request / approval_resolved (RFC-2 Phase B3)", () => {
+  /** 帮助函数：先起一个 active assistant，再喂 approval_request。 */
+  function setupActiveAssistantWithApproval() {
+    let s = createInitialState();
+    s = applyEvent(s, { type: "message_start", message: { role: "assistant" } });
+    s = applyEvent(s, {
+      type: "approval_request",
+      request: {
+        id: "agent-1:tool-call-A",
+        toolCallId: "tool-call-A",
+        toolName: "bash",
+        input: { command: "rm -rf /tmp/xx" },
+        ruleId: "dangerous-bash-destructive",
+        createdAt: 1234,
+      },
+    });
+    return s;
+  }
+
+  it("approval_request 在 active assistant 末尾 push approval part(status=pending)", () => {
+    const s = setupActiveAssistantWithApproval();
+    const msg = s.messages[s.activeAssistantIndex];
+    const parts = msg.parts as MessagePart[];
+    expect(parts).toHaveLength(1);
+    const p = parts[0];
+    expect(p.kind).toBe("approval");
+    if (p.kind !== "approval") throw new Error("type narrow");
+    expect(p.id).toBe("agent-1:tool-call-A");
+    expect(p.toolCallId).toBe("tool-call-A");
+    expect(p.toolName).toBe("bash");
+    expect(p.status).toBe("pending");
+    expect(p.ruleId).toBe("dangerous-bash-destructive");
+    expect(p.input).toEqual({ command: "rm -rf /tmp/xx" });
+    expect(p.createdAt).toBe(1234);
+  });
+
+  it("approval_resolved decision=allow → status=allowed + resolvedBy 记录", () => {
+    let s = setupActiveAssistantWithApproval();
+    s = applyEvent(s, {
+      type: "approval_resolved",
+      id: "agent-1:tool-call-A",
+      decision: "allow",
+      resolvedBy: "user",
+    });
+    const msg = s.messages[s.activeAssistantIndex];
+    const p = (msg.parts as MessagePart[])[0];
+    if (p.kind !== "approval") throw new Error("type narrow");
+    expect(p.status).toBe("allowed");
+    expect(p.resolvedBy).toBe("user");
+    expect(p.denyReason).toBeUndefined();
+  });
+
+  it("approval_resolved decision=deny + denyReason → status=denied + denyReason 透传", () => {
+    let s = setupActiveAssistantWithApproval();
+    s = applyEvent(s, {
+      type: "approval_resolved",
+      id: "agent-1:tool-call-A",
+      decision: "deny",
+      resolvedBy: "user",
+      denyReason: "太危险了",
+    });
+    const p = (s.messages[s.activeAssistantIndex].parts as MessagePart[])[0];
+    if (p.kind !== "approval") throw new Error("type narrow");
+    expect(p.status).toBe("denied");
+    expect(p.denyReason).toBe("太危险了");
+  });
+
+  it("approval_resolved 找不到对应 id → state 不变（noop，不抛错）", () => {
+    const before = setupActiveAssistantWithApproval();
+    const after = applyEvent(before, {
+      type: "approval_resolved",
+      id: "non-existent-id",
+      decision: "allow",
+      resolvedBy: "user",
+    });
+    // approval part 仍是 pending
+    const p = (after.messages[after.activeAssistantIndex].parts as MessagePart[])[0];
+    if (p.kind !== "approval") throw new Error("type narrow");
+    expect(p.status).toBe("pending");
+  });
+
+  it("同 id 重复 approval_request → 不重复 push（保持 1 个 approval part）", () => {
+    let s = setupActiveAssistantWithApproval();
+    s = applyEvent(s, {
+      type: "approval_request",
+      request: {
+        id: "agent-1:tool-call-A",
+        toolCallId: "tool-call-A",
+        toolName: "bash",
+        input: { command: "rm -rf /tmp/xx" },
+        createdAt: 9999,
+      },
+    });
+    const parts = s.messages[s.activeAssistantIndex].parts as MessagePart[];
+    expect(parts).toHaveLength(1);
+    // 仍是原 createdAt（去重以现有 part 为准）
+    const p = parts[0];
+    if (p.kind !== "approval") throw new Error("type narrow");
+    expect(p.createdAt).toBe(1234);
+  });
+
+  it("approval_resolved 在 message_end 之后到达（active 已 closed）→ 仍能找到旧 assistant 的 approval part", () => {
+    let s = setupActiveAssistantWithApproval();
+    s = applyEvent(s, { type: "message_end", message: { role: "assistant" } });
+    expect(s.activeAssistantIndex).toBe(-1);
+    s = applyEvent(s, {
+      type: "approval_resolved",
+      id: "agent-1:tool-call-A",
+      decision: "allow",
+      resolvedBy: "user",
+    });
+    // active 已经 -1，但 reducer 应该在 messages 里倒序找到那条 assistant 并更新
+    const m = s.messages[s.messages.length - 1];
+    const p = (m.parts as MessagePart[])[0];
+    if (p.kind !== "approval") throw new Error("type narrow");
+    expect(p.status).toBe("allowed");
   });
 });

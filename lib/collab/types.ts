@@ -12,6 +12,33 @@
 export type ApprovalDecision = "allow" | "deny";
 
 /**
+ * 自定义 SSE 事件——通过 agent ring buffer 推到前端。
+ * 不在 SDK 的 AgentSessionEvent union 里，前端 useAgentEvents 单独识别 type。
+ *
+ * 时序：
+ *   1. tool_call handler 命中 ask 规则 → registerPendingApproval
+ *   2. server 在 ring buffer push `approval_request` → SSE → 前端弹气泡
+ *   3. 用户点 Allow/Deny → POST /api/agent/[id]/approval → resolve handler 的 promise
+ *   4. server 在 ring buffer push `approval_resolved` → SSE → 前端更新气泡状态
+ *   5. handler return → SDK 真执行 tool（或 block） → tool_execution_start 跟上来
+ */
+export interface ApprovalRequestEvent {
+  type: "approval_request";
+  request: ApprovalRequest;
+}
+
+export interface ApprovalResolvedEvent {
+  type: "approval_resolved";
+  /** ApprovalRequest.id（即 `${agentId}:${toolCallId}`） */
+  id: string;
+  toolCallId: string;
+  decision: ApprovalDecision;
+  /** "user" = 显式点了；"timeout" = 5min 没人理；"default" = 未来扩展（如 remember） */
+  resolvedBy: "user" | "timeout" | "default";
+  denyReason?: string;
+}
+
+/**
  * 一次待审批的工具调用请求。
  * id 取 `${agentId}:${toolCallId}` 复合 key 满足多 session 并发（RFC §5 R5）。
  */

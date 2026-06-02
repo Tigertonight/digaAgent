@@ -41,6 +41,20 @@ interface AnyEvent {
   partialResult?: unknown;
   result?: unknown;
   isError?: boolean;
+  // approval_request (RFC-2 Phase B3 自定义事件)
+  request?: {
+    id: string;
+    toolCallId: string;
+    toolName: string;
+    input: Record<string, unknown>;
+    ruleId?: string;
+    createdAt: number;
+  };
+  // approval_resolved (RFC-2 Phase B3 自定义事件)
+  id?: string;
+  decision?: "allow" | "deny";
+  resolvedBy?: "user" | "timeout" | "default";
+  denyReason?: string;
 }
 
 export interface ReducerState {
@@ -105,6 +119,14 @@ function findToolPartIndex(parts: MessagePart[], toolCallId: string): number {
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i];
     if (p.kind === "tool" && p.toolCallId === toolCallId) return i;
+  }
+  return -1;
+}
+
+function findApprovalPartIndex(parts: MessagePart[], id: string): number {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i];
+    if (p.kind === "approval" && p.id === id) return i;
   }
   return -1;
 }
@@ -242,6 +264,59 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         }
         return { ...msg, parts };
       });
+      return state;
+    }
+
+    // ===== RFC-2 Phase B3：审批气泡 =====
+    // 时序：approval_request 一定先于 tool_execution_start（审批通过后 SDK 才执行 tool）。
+    // 所以这里 push approval part 时，active assistant 已经在了（agent_start 后 message_start 已建）。
+    // 但保险起见：找不到 active assistant 时 ensureAssistant 兜底新建空壳。
+    case "approval_request": {
+      const r = ev.request;
+      if (!r) return state;
+      replaceActive((msg) => {
+        const parts = (msg.parts ?? []).slice();
+        // 防御：同 id 重复 push（不应发生）→ 跳过
+        if (findApprovalPartIndex(parts, r.id) >= 0) return msg;
+        sealLastThinkingIfOpen(parts);
+        parts.push({
+          kind: "approval",
+          id: r.id,
+          toolCallId: r.toolCallId,
+          toolName: r.toolName,
+          input: r.input,
+          ruleId: r.ruleId,
+          status: "pending",
+          createdAt: r.createdAt,
+        });
+        return { ...msg, parts };
+      });
+      return state;
+    }
+
+    case "approval_resolved": {
+      const id = ev.id;
+      if (!id || !ev.decision) return state;
+      // 不用 ensureAssistant：approval part 必然挂在某个已存在的 assistant message 上；
+      // 而且 resolved 时可能 active 已经 closed（message_end 跑过了），找不到不 push 新 active。
+      // 遍历倒序找最近一条带该 approval id 的 assistant message。
+      for (let mi = state.messages.length - 1; mi >= 0; mi--) {
+        const m = state.messages[mi];
+        if (m.role !== "assistant" || !m.parts) continue;
+        const pi = findApprovalPartIndex(m.parts, id);
+        if (pi < 0) continue;
+        const parts = m.parts.slice();
+        const cur = parts[pi];
+        if (cur.kind !== "approval") break; // 类型守卫，不会发生
+        parts[pi] = {
+          ...cur,
+          status: ev.decision === "allow" ? "allowed" : "denied",
+          resolvedBy: ev.resolvedBy,
+          denyReason: ev.denyReason,
+        };
+        state.messages[mi] = { ...m, parts };
+        break;
+      }
       return state;
     }
 
