@@ -51,6 +51,7 @@ import { DropOverlay } from "./components/DropOverlay";
 import { Sidebar } from "./components/Sidebar";
 import { TopHeader } from "./components/TopHeader";
 import { MessagesScrollArea } from "./components/MessagesScrollArea";
+import { RightPanelContainer } from "./components/RightPanelContainer";
 
 interface Props {
   initialSessions: SessionInfoLite[];
@@ -1388,49 +1389,22 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         />
       </main>
 
-      {showFiles && (
-        <>
-          <div
-            onMouseDown={onSplitterMouseDown}
-            title="拖动调整宽度"
-            style={{
-              width: 4,
-              cursor: "ew-resize",
-              background: "var(--border-soft)",
-              flexShrink: 0,
-              transition: "background 0.12s",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "var(--accent)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "var(--border-soft)";
-            }}
-          />
-          <div
-            style={{
-              // 用 flex-basis 表达"想要的宽度",允许 shrink:窗口窄时压到 minWidth
-              flex: `0 1 ${filesContainerWidth}px`,
-              minWidth: filesLayout.viewerHidden && filesLayout.treeCollapsed ? 56 : 200,
-              maxWidth: "80vw",
-              transition: "flex-basis 0.16s ease",
-            }}
-          >
-            <FileBrowser
-              initialPath={cwd || "/"}
-              onClose={toggleFiles}
-              onPickPath={(absPath) => {
-                // 把路径加到输入框末尾（用 @ 前缀，pi-coding-agent 约定的引用语法）
-                setInput((cur) => {
-                  const sep = cur.length === 0 || cur.endsWith(" ") ? "" : " ";
-                  return `${cur}${sep}@${absPath} `;
-                });
-              }}
-              onLayoutChange={setFilesLayout}
-            />
-          </div>
-        </>
-      )}
+      <RightPanelContainer
+        show={showFiles}
+        cwd={cwd}
+        filesContainerWidth={filesContainerWidth}
+        filesLayout={filesLayout}
+        onSplitterMouseDown={onSplitterMouseDown}
+        onClose={toggleFiles}
+        onPickPath={(absPath) => {
+          // 把路径加到输入框末尾（用 @ 前缀，pi-coding-agent 约定的引用语法）
+          setInput((cur) => {
+            const sep = cur.length === 0 || cur.endsWith(" ") ? "" : " ";
+            return `${cur}${sep}@${absPath} `;
+          });
+        }}
+        onLayoutChange={setFilesLayout}
+      />
       {showCwdPicker && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center"
