@@ -18,6 +18,7 @@
  */
 
 import type { Dispatch, ReactNode, SetStateAction } from "react";
+import { useSyncExternalStore } from "react";
 import { Plus, GitBranch, Settings, Brain, Pin, Search, X } from "lucide-react";
 import type { SessionInfoLite } from "@/lib/types";
 import { formatRelativeTime, shortCwd } from "@/lib/format";
@@ -85,6 +86,21 @@ export interface SidebarProps {
   searchView?: ReactNode | null;
 }
 
+// useSyncExternalStore 配套 helpers：仅用于"是否已 hydrate"的标记。
+// 客户端永远返回 true（store 无变化所以无需重订阅），服务端返回 false。
+// React 会在 client commit 后比对快照差异并自动 re-render，达到与
+// `useEffect(()=>setMounted(true))` 等价但不触发 cascading-renders 警告。
+const noopUnsubscribe = () => {};
+function subscribeHydrated(): () => void {
+  return noopUnsubscribe;
+}
+function getHydratedClient(): boolean {
+  return true;
+}
+function getHydratedServer(): boolean {
+  return false;
+}
+
 export function Sidebar(props: SidebarProps) {
   const {
     sidebarOpen,
@@ -118,6 +134,19 @@ export function Sidebar(props: SidebarProps) {
     onSearchQueryChange,
     searchView,
   } = props;
+
+  // SSR 时 lastSeenMap 还没从 localStorage 注水（持久态在 store 里），
+  // 直接用会导致服务端误判"全部未读"渲染红点，hydrate 后又消失，触发
+  // hydration mismatch。用 useSyncExternalStore 实现 hydrated gate：
+  // getServerSnapshot 返回 false（SSR + 首次 hydrate 都是 false），
+  // getSnapshot 返回 true（commit 后 React 自动 schedule re-render），
+  // 第二帧才开始计算未读。这是 React 19 官方推荐的 SSR-safe 写法，
+  // 不触发 React Compiler 的 cascading-renders 警告。
+  const hydrated = useSyncExternalStore(
+    subscribeHydrated,
+    getHydratedClient,
+    getHydratedServer,
+  );
 
   const searchEnabled = onSearchQueryChange != null;
 
@@ -235,7 +264,10 @@ export function Sidebar(props: SidebarProps) {
             // lastSeenMap，所以聚焦着的 active session 这里自然不会 unread。
             const isRunning = !!s.isRunning;
             const seenAt = lastSeenMap[s.id];
-            const isUnread = !isRunning && (!seenAt || seenAt < s.modified);
+            // hydrated gate：SSR/首次 hydrate 时强制 false，避免 lastSeenMap
+            // 在客户端注水前误判全部未读。
+            const isUnread =
+              hydrated && !isRunning && (!seenAt || seenAt < s.modified);
             if (isPendingDelete) {
               return (
                 <div
