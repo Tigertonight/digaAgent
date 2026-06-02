@@ -39,6 +39,7 @@ import { useChatStream } from "./hooks/useChatStream";
 import { useComposerAttachments } from "./hooks/useComposerAttachments";
 import { usePetPusher } from "./hooks/usePetPusher";
 import { useForkable } from "./hooks/useForkable";
+import { useAutocomplete } from "./hooks/useAutocomplete";
 import Markdown from "./components/Markdown";
 import ToolRender from "./components/ToolRender";
 import FileBrowser from "./components/FileBrowser";
@@ -55,10 +56,7 @@ import { Typewriter, TYPEWRITER_PHRASES } from "./components/Typewriter";
 import { PillSelect } from "./components/PillSelect";
 import { ProviderIcon } from "./components/ProviderIcon";
 import { BrandLogo } from "./components/BrandLogo";
-import {
-  InputAutocomplete,
-  type AutocompleteItem,
-} from "./components/InputAutocomplete";
+import { InputAutocomplete } from "./components/InputAutocomplete";
 import {
   Sun,
   Moon,
@@ -96,52 +94,7 @@ interface Props {
 
 type Theme = "dark" | "light";
 
-/**
- * 内置 slash 命令清单。
- * action 在 ChatApp 内绑定真实回调。
- */
-const SLASH_COMMANDS = [
-  { name: "clear", hint: "新开 session" },
-  { name: "compact", hint: "压缩当前 session 上下文" },
-  { name: "branches", hint: "查看分支" },
-  { name: "system", hint: "查看 system prompt" },
-  { name: "models", hint: "Models 配置" },
-  { name: "auth", hint: "凭证管理" },
-  { name: "help", hint: "查看支持的命令" },
-] as const;
-
-type SlashName = (typeof SLASH_COMMANDS)[number]["name"];
-
-/**
- * 检测光标处的触发 token：返回 { mode, query, triggerPos }。
- * 触发条件：紧邻光标向左找到 `@` 或 `/`，且其左侧是行首/空白/换行。
- * `/` 仅在文本最前面（光标 ≤ 第一个非空白后）才算 slash 命令。
- */
-function detectAutocompleteToken(
-  text: string,
-  caret: number
-): { mode: "@" | "/"; query: string; triggerPos: number } | null {
-  if (caret <= 0) return null;
-  // 向左扫描直到遇到空白/换行/@//
-  let i = caret - 1;
-  while (i >= 0) {
-    const ch = text[i];
-    if (ch === "@" || ch === "/") break;
-    if (/\s/.test(ch)) return null;
-    i--;
-  }
-  if (i < 0) return null;
-  const trigger = text[i];
-  // 左侧必须是行首或空白；slash 命令只在整段输入开头才触发
-  const leftOk = i === 0 || /\s/.test(text[i - 1]);
-  if (!leftOk) return null;
-  if (trigger === "/") {
-    // 只允许全文以 /xxx 开头（前面只能有空白）
-    if (text.slice(0, i).trim() !== "") return null;
-    return { mode: "/", query: text.slice(i + 1, caret), triggerPos: i };
-  }
-  return { mode: "@", query: text.slice(i + 1, caret), triggerPos: i };
-}
+// SLASH_COMMANDS / SlashName / detectAutocompleteToken 已搬到 hooks/useAutocomplete.ts（RFC-1 阶段 C2）。
 
 /** 流式 phase：用于在最后一条 assistant 顶上显示 "Thinking…/Waiting/Running tool…" */
 type AgentPhase =
@@ -262,13 +215,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // agentId / agentSessionId / input / pending* / streaming / phase / compacting /
   // compactError / retryInfo / stats / toolsCount 已挪到 RunnerState(见下方解构区)。
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
-  // ===== 输入框 @ / 自动补全(全局,不分会话) =====
-  const [acMode, setAcMode] = useState<"@" | "/" | null>(null);
-  const [acQuery, setAcQuery] = useState("");
-  const [acItems, setAcItems] = useState<AutocompleteItem[]>([]);
-  const [acIndex, setAcIndex] = useState(0);
-  /** 触发字符在 input 中的绝对索引（含 @ 或 /） */
-  const acTriggerPosRef = useRef<number>(-1);
+  // 输入框 @ / 自动补全已挪到 hooks/useAutocomplete.ts（RFC-1 阶段 C2）。
   const { soundEnabled, onSoundToggle, playDoneSound } = useAudio();
   const [cwd, setCwd] = useState(defaultCwd);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -1203,32 +1150,41 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     setPinSpacer,
   });
 
+  const headerLabel = useMemo(() => {
+    if (agentSessionId) return `agent · ${agentSessionId.slice(0, 8)}`;
+    if (selectedId) return `session · ${selectedId.slice(0, 8)}`;
+    return "no session";
+  }, [agentSessionId, selectedId]);
+
+  // ===== Autocomplete + Slash 命令（RFC-1 阶段 C2，已抽到 useAutocomplete） =====
+  // 抽离内容：4 个 AC state + 3 个 handler + runSlashCommand(7 case) + onKeyDown 拦截块。
+  // startNewSession / onCompact / 4 个 modal setter 通过参数注入；hook 对 UI state 零反向依赖。
+  const {
+    acMode,
+    acItems,
+    acIndex,
+    setAcIndex,
+    refreshAutocomplete,
+    closeAutocomplete,
+    applyAutocomplete,
+    tryHandleAutocompleteKey,
+  } = useAutocomplete({
+    input,
+    cwd,
+    inputRef,
+    setInput,
+    agentId,
+    startNewSession,
+    onCompact,
+    setShowBranches,
+    setShowSystemPrompt,
+    setShowModelsConfig,
+    setShowAuth,
+  });
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // 自动补全弹层打开时拦截上下/Enter/Tab/Esc
-    if (acMode && acItems.length > 0) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setAcIndex((i) => (i + 1) % acItems.length);
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setAcIndex((i) => (i - 1 + acItems.length) % acItems.length);
-        return;
-      }
-      if (e.key === "Enter" || e.key === "Tab") {
-        if (!e.nativeEvent.isComposing) {
-          e.preventDefault();
-          applyAutocomplete(acItems[acIndex]);
-          return;
-        }
-      }
-      if (e.key === "Escape") {
-        e.preventDefault();
-        closeAutocomplete();
-        return;
-      }
-    }
+    // 自动补全弹层打开时拦截上下/Enter/Tab/Esc（消费则直接 return）
+    if (tryHandleAutocompleteKey(e)) return;
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       // streaming 时 Enter 默认走 follow_up（排队），shift+Enter 才换行
@@ -1236,151 +1192,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       else void send();
     }
   };
-
-  const headerLabel = useMemo(() => {
-    if (agentSessionId) return `agent · ${agentSessionId.slice(0, 8)}`;
-    if (selectedId) return `session · ${selectedId.slice(0, 8)}`;
-    return "no session";
-  }, [agentSessionId, selectedId]);
-
-  // ===== Slash 命令执行 =====
-  const runSlashCommand = useCallback(
-    (name: SlashName) => {
-      switch (name) {
-        case "clear":
-          void startNewSession();
-          break;
-        case "compact":
-          void onCompact();
-          break;
-        case "branches":
-          if (agentId) setShowBranches(true);
-          break;
-        case "system":
-          setShowSystemPrompt(true);
-          break;
-        case "models":
-          setShowModelsConfig(true);
-          break;
-        case "auth":
-          setShowAuth(true);
-          break;
-        case "help":
-          setInput(
-            "支持命令：\n" +
-              SLASH_COMMANDS.map((c) => `  /${c.name} — ${c.hint}`).join("\n")
-          );
-          return;
-      }
-      setInput("");
-    },
-    [agentId, onCompact, startNewSession]
-  );
-
-  /** 关闭 autocomplete 状态 */
-  const closeAutocomplete = useCallback(() => {
-    setAcMode(null);
-    setAcItems([]);
-    setAcIndex(0);
-    acTriggerPosRef.current = -1;
-  }, []);
-
-  /** 输入或光标位置变化时刷新 autocomplete */
-  const refreshAutocomplete = useCallback(
-    async (text: string, caret: number) => {
-      const tok = detectAutocompleteToken(text, caret);
-      if (!tok) {
-        closeAutocomplete();
-        return;
-      }
-      acTriggerPosRef.current = tok.triggerPos;
-      setAcMode(tok.mode);
-      setAcQuery(tok.query);
-      setAcIndex(0);
-      if (tok.mode === "/") {
-        const q = tok.query.toLowerCase();
-        const items: AutocompleteItem[] = SLASH_COMMANDS.filter((c) =>
-          c.name.startsWith(q)
-        ).map((c) => ({
-          label: `/${c.name}`,
-          hint: c.hint,
-          value: `/${c.name}`,
-        }));
-        setAcItems(items);
-        return;
-      }
-      // @ 文件：从 cwd 读目录
-      try {
-        const r = await fetch(
-          `/api/files?path=${encodeURIComponent(cwd)}`
-        );
-        const d = await r.json();
-        if (!Array.isArray(d.entries)) {
-          setAcItems([]);
-          return;
-        }
-        const q = tok.query.toLowerCase();
-        const filtered = (
-          d.entries as Array<{ name: string; isDir: boolean; path: string }>
-        )
-          .filter(
-            (e) =>
-              !e.name.startsWith(".") && e.name.toLowerCase().includes(q)
-          )
-          .sort((a, b) => {
-            if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-            return a.name.localeCompare(b.name);
-          })
-          .slice(0, 20)
-          .map<AutocompleteItem>((e) => ({
-            label: e.name + (e.isDir ? "/" : ""),
-            hint: e.isDir ? "dir" : "file",
-            value: `@${e.path}`,
-          }));
-        setAcItems(filtered);
-      } catch {
-        setAcItems([]);
-      }
-    },
-    [cwd, closeAutocomplete]
-  );
-
-  /** 选中一个补全项：替换 input 中的触发 token */
-  const applyAutocomplete = useCallback(
-    (item: AutocompleteItem) => {
-      const ta = inputRef.current;
-      const triggerPos = acTriggerPosRef.current;
-      if (triggerPos < 0) {
-        closeAutocomplete();
-        return;
-      }
-      const caret = ta?.selectionStart ?? input.length;
-      // value 已经包含触发字符（@xx 或 /xx），后接一个空格便于继续输入
-      const before = input.slice(0, triggerPos);
-      const after = input.slice(caret);
-      const insert = item.value + " ";
-      const next = before + insert + after;
-      setInput(next);
-      const newCaret = before.length + insert.length;
-      // 让 cursor 落到插入末尾
-      requestAnimationFrame(() => {
-        const t = inputRef.current;
-        if (t) {
-          t.focus();
-          t.setSelectionRange(newCaret, newCaret);
-        }
-      });
-      closeAutocomplete();
-      // 如果是 slash 命令，立即执行
-      if (acMode === "/" && item.value.startsWith("/")) {
-        const name = item.value.slice(1) as SlashName;
-        if (SLASH_COMMANDS.some((c) => c.name === name)) {
-          runSlashCommand(name);
-        }
-      }
-    },
-    [acMode, input, closeAutocomplete, runSlashCommand]
-  );
 
   const onChangeModel = useCallback(
     async (provider: string, mid: string) => {
