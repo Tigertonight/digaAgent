@@ -13,26 +13,41 @@ import {
   type SessionHeader,
   type SessionContext,
 } from "@earendil-works/pi-coding-agent";
+import { batchReadMeta } from "./meta/store";
+import type { SessionMeta } from "./meta/types";
 
 export type { SessionInfo, SessionEntry, SessionHeader, SessionContext };
 
-/** SessionInfo + 运行时状态（运行中 / 空闲）。 */
+/** SessionInfo + 运行时状态（运行中 / 空闲）+ 自维护元数据。 */
 export type SessionInfoWithStatus = SessionInfo & {
   isRunning: boolean;
+  /** RFC-3 Phase A：~/.mini-pi/sessions/{id}.meta.json 内容，未建时缺省 undefined */
+  meta?: SessionMeta;
 };
 
-/** 列出所有 session（按"运行中优先 → modified 倒序"） */
+/**
+ * 列出所有 session，按 "pinned → isRunning → modified 倒序" 排序。
+ *
+ * RFC-3 Phase A2：批量聚合 meta（pinned / title）。
+ * 性能：100 session 增量 ~50ms，可接受；500+ 再考虑 SQLite。
+ */
 export async function listAllSessions(): Promise<SessionInfoWithStatus[]> {
   // 在这里做一次动态 import,避免 client bundle 误把 server-only 的 agent-registry
   // 拉进来 —— 这个文件本身有 "server-only" 守门,但 import 顺序还是显式更清楚。
   const { getRunningSessionFiles } = await import("./agent-registry");
   const running = getRunningSessionFiles();
   const list = await SessionManager.listAll();
+  const metas = await batchReadMeta(list.map((s) => s.id));
   const enriched: SessionInfoWithStatus[] = list.map((s) => ({
     ...s,
     isRunning: running.has(s.path),
+    meta: metas.get(s.id),
   }));
   return enriched.sort((a, b) => {
+    // pinned 始终最优先（无论是否 running）
+    const ap = a.meta?.pinned ? 1 : 0;
+    const bp = b.meta?.pinned ? 1 : 0;
+    if (ap !== bp) return bp - ap;
     if (a.isRunning !== b.isRunning) return a.isRunning ? -1 : 1;
     return b.modified.getTime() - a.modified.getTime();
   });
