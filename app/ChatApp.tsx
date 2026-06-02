@@ -37,6 +37,7 @@ import { useRunners } from "./hooks/useRunners";
 import { useSseManager } from "./hooks/useSseManager";
 import { useAgentEvents } from "./hooks/useAgentEvents";
 import { useSessions } from "./hooks/useSessions";
+import { useChatStream } from "./hooks/useChatStream";
 import Markdown from "./components/Markdown";
 import ToolRender from "./components/ToolRender";
 import FileBrowser from "./components/FileBrowser";
@@ -1357,24 +1358,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     [updateRunner]
   );
 
-  // 通用 agent action POST
-  const agentAction = useCallback(
-    async (aid: string, payload: Record<string, unknown>) => {
-      const r = await fetch(`/api/agent/${aid}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await r.json();
-      if (data.error) {
-        setError(data.error);
-        throw new Error(data.error);
-      }
-      return data;
-    },
-    []
-  );
-
   // 把 handleAgentEvent 绑到 ref，供 useSseManager 的 onEvent 回调使用。
   // handleAgentEvent 是函数声明（hoisted），每次 render 重建；通过 ref 转发避免
   // useSseManager 内部回调闭包捕获旧引用。
@@ -1504,140 +1487,49 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     refreshStats,
   });
 
-  // 发送
-  const send = useCallback(async () => {
-    if (!input.trim() && pendingImages.length === 0 && pendingFiles.length === 0) return;
-    // 草稿升级:把 DRAFT_KEY runner 重命名到 sessionFile,留一个空 draft 给下次 +New chat。
-    // 在 send() 两条分支(冷启 + startNewSession 已 eager create)都需要触发。
-    const upgradeDraftIfNeeded = (sessionFilePath: string | null) => {
-      if (activeKeyRef.current !== DRAFT_KEY || !sessionFilePath) return;
-      const newKey: RunnerKey = sessionFilePath;
-      if (runnersRef.current.has(newKey)) return; // 已迁过
-      const upgraded = runnersRef.current.get(DRAFT_KEY);
-      if (!upgraded) return;
-      // 注意顺序：先 set newKey + delete draft，再 switchTo（切到新 key 后再重建 draft，
-      // 否则 setRunner(newKey) 内部 LRU 触发时会把新建的 newKey 当作非活跃候选淘汰）。
-      // 这里没用 setRunner(newKey, upgraded) 是因为紧接着会重建 draft；
-      // 把 LRU 触发延后到最后一步的 setRunner(DRAFT_KEY, ...)，确保 map 终态再淘汰。
-      runnersRef.current.set(newKey, upgraded);
-      runnersRef.current.delete(DRAFT_KEY);
-      // SSE onmessage 闭包捕获了旧 key(DRAFT_KEY),必须 close + reattach 让后续事件写到新 key。
-      // 重连有几条 token 损耗,但 +New chat 的 eager SSE 通常还没真正推数据,代价可控。
-      closeSseFor(DRAFT_KEY);
-      // 草稿升级：从 DRAFT_KEY 切到 newKey；switchTo 会同步 setActiveKey + setActiveSnapshot
-      switchTo(newKey);
-      const idFromPath = extractSessionIdFromPath(sessionFilePath);
-      if (idFromPath) setSelectedId(idFromPath);
-      // 重建 draft —— 用 setRunner 让 LRU 在 map 终态（含新 newKey + 新 draft）下检查
-      setRunner(DRAFT_KEY, emptyRunner());
-      const aid = upgraded.agentId;
-      if (aid) attachSseFor(newKey, aid);
-    };
-
-    let aid = agentId;
-    if (!aid) {
-      if (!providerId || !modelId) {
-        setError("请先选择 provider 和 model");
-        return;
-      }
-      const r = await fetch("/api/agent/new", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          provider: providerId,
-          modelId,
-          cwd,
-          thinkingLevel,
-          sessionPath: selectedId
-            ? sessions.find((s) => s.id === selectedId)?.path
-            : undefined,
-        }),
-      });
-      const data = await r.json();
-      if (data.error) {
-        setError(data.error);
-        return;
-      }
-      aid = data.id;
-      // 当前活跃 runner 接收 agent 信息(可能是 draft,也可能是 session.path)
-      const ownerKey = activeKeyRef.current;
-      updateRunner(ownerKey, {
-        agentId: data.id,
-        agentSessionId: data.sessionId,
-        sessionFile: data.sessionFile ?? null,
-        ...(data.thinkingLevel
-          ? { thinkingLevel: data.thinkingLevel as ThinkingLevel }
-          : {}),
-        ...(data.availableThinkingLevels
-          ? {
-              availableThinkingLevels:
-                data.availableThinkingLevels as ThinkingLevel[],
-            }
-          : {}),
-        ...(typeof data.supportsThinking === "boolean"
-          ? { supportsThinking: data.supportsThinking }
-          : {}),
-      });
-
-      upgradeDraftIfNeeded(data.sessionFile ?? null);
-
-      attachSseFor(activeKeyRef.current, data.id);
-      void refreshStats(data.id, activeKeyRef.current);
-      void refreshToolsCount(data.id, activeKeyRef.current);
-    } else {
-      // Fast path:agent 已被 startNewSession eager create。这里也要做 draft → sessionFile 升级,
-      // 否则 +New chat 之后所有 session 都积压在 DRAFT_KEY 上,LRU/多 session 全失效。
-      upgradeDraftIfNeeded(currentSessionFile);
-    }
-    const userText = input;
-    const images = pendingImages;
-    const attachments = pendingFiles;
-    // 拼最终 prompt:把所有 @path 顶在前面,后端按引用语法读文件/列文件夹
-    const refLine = attachments.map((a) => `@${a.path}`).join(" ");
-    const finalText = refLine
-      ? userText
-        ? `${refLine}\n${userText}`
-        : refLine
-      : userText;
-    setInput("");
-    setPendingImages([]);
-    setPendingFiles([]);
-    setError(null);
-    // 锚定:期望"现有 user 数 + 1"那条新消息一出现就滚到屏顶
-    // 同时启用底部 60vh 占位,确保最后一条 user 能被滚到屏顶;锚定完成后会自动移除。
-    const currentUserCount = messages.filter((m) => m.role === "user").length;
-    pendingPinUserCountRef.current = currentUserCount + 1;
-    setPinSpacer(true);
-    try {
-      await agentAction(aid!, {
-        type: "prompt",
-        text: finalText || "(image)",
-        images: images.length > 0 ? images : undefined,
-      });
-    } catch {
-      /* error 已被 agentAction 设置 */
-    }
-  }, [
+  // ===== Turn 控制中枢（RFC-1 阶段 B2-a，已抽到 useChatStream） =====
+  // agentAction（通用 POST 通道）+ send / onAbort / onCompact / onAbortCompaction
+  // / onSteer / onFollowUp / onChangeThinking
+  // 留下：startNewSession / runSlashCommand / onChangeModel（仍在本文件，复用 agentAction）
+  const {
+    agentAction,
+    send,
+    onAbort,
+    onCompact,
+    onAbortCompaction,
+    onSteer,
+    onFollowUp,
+    onChangeThinking,
+  } = useChatStream({
     agentId,
     input,
-    messages,
     pendingImages,
     pendingFiles,
-    cwd,
-    selectedId,
-    sessions,
+    currentSessionFile,
     providerId,
     modelId,
+    cwd,
     thinkingLevel,
-    currentSessionFile,
-    attachSseFor,
-    closeSseFor,
-    agentAction,
-    refreshStats,
-    refreshToolsCount,
+    selectedId,
+    sessions,
+    messages,
+    runnersRef,
+    activeKeyRef,
     updateRunner,
     setRunner,
-  ]);
+    switchTo,
+    attachSseFor,
+    closeSseFor,
+    setInput,
+    setPendingImages,
+    setPendingFiles,
+    setError,
+    setSelectedId,
+    refreshStats,
+    refreshToolsCount,
+    pendingPinUserCountRef,
+    setPinSpacer,
+  });
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // 自动补全弹层打开时拦截上下/Enter/Tab/Esc
@@ -1678,34 +1570,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     if (selectedId) return `session · ${selectedId.slice(0, 8)}`;
     return "no session";
   }, [agentSessionId, selectedId]);
-
-  // ===== action handlers =====
-  const onAbort = useCallback(async () => {
-    if (!agentId) return;
-    try {
-      await agentAction(agentId, { type: "abort" });
-    } catch {}
-  }, [agentId, agentAction]);
-
-  const onCompact = useCallback(async () => {
-    if (!agentId) return;
-    const ownerKey = activeKeyRef.current;
-    try {
-      updateRunner(ownerKey, { compactError: null });
-      await agentAction(agentId, { type: "compact" });
-    } catch (e) {
-      updateRunner(ownerKey, {
-        compactError: e instanceof Error ? e.message : "compact failed",
-      });
-    }
-  }, [agentId, agentAction, updateRunner]);
-
-  const onAbortCompaction = useCallback(async () => {
-    if (!agentId) return;
-    try {
-      await agentAction(agentId, { type: "abort_compaction" });
-    } catch {}
-  }, [agentId, agentAction]);
 
   // ===== Slash 命令执行 =====
   const runSlashCommand = useCallback(
@@ -1844,57 +1708,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       }
     },
     [acMode, input, closeAutocomplete, runSlashCommand]
-  );
-
-  /** Steer：streaming 时把输入框内容塞进当前 turn 的 system 引导 */
-  const onSteer = useCallback(async () => {
-    if (!agentId) return;
-    const text = input.trim();
-    if (!text && pendingImages.length === 0 && pendingFiles.length === 0) return;
-    const refLine = pendingFiles.map((a) => `@${a.path}`).join(" ");
-    const finalText = refLine ? (text ? `${refLine}\n${text}` : refLine) : text;
-    try {
-      await agentAction(agentId, {
-        type: "steer",
-        text: finalText,
-        ...(pendingImages.length ? { images: pendingImages } : {}),
-      });
-      setInput("");
-      setPendingImages([]);
-      setPendingFiles([]);
-    } catch {}
-  }, [agentId, agentAction, input, pendingImages, pendingFiles]);
-
-  /** Follow-up：streaming 时把输入框内容排队到当前 turn 结束后追发 */
-  const onFollowUp = useCallback(async () => {
-    if (!agentId) return;
-    const text = input.trim();
-    if (!text && pendingImages.length === 0 && pendingFiles.length === 0) return;
-    const refLine = pendingFiles.map((a) => `@${a.path}`).join(" ");
-    const finalText = refLine ? (text ? `${refLine}\n${text}` : refLine) : text;
-    try {
-      await agentAction(agentId, {
-        type: "follow_up",
-        text: finalText,
-        ...(pendingImages.length ? { images: pendingImages } : {}),
-      });
-      setInput("");
-      setPendingImages([]);
-      setPendingFiles([]);
-    } catch {}
-  }, [agentId, agentAction, input, pendingImages, pendingFiles]);
-
-  const onChangeThinking = useCallback(
-    async (lv: ThinkingLevel) => {
-      const ownerKey = activeKeyRef.current;
-      updateRunner(ownerKey, { thinkingLevel: lv });
-      if (agentId) {
-        try {
-          await agentAction(agentId, { type: "set_thinking_level", level: lv });
-        } catch {}
-      }
-    },
-    [agentId, agentAction, updateRunner]
   );
 
   const onChangeModel = useCallback(
