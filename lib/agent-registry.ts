@@ -17,10 +17,22 @@ import {
   AuthStorage,
   SettingsManager,
   DefaultPackageManager,
+  DefaultResourceLoader,
   getAgentDir,
+  type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
+
+/**
+ * Phase B1：inline 注入 no-op CollabExtension（架构改造打底，zero behavior change）。
+ * Phase B2 起会替换为真正的 CollabExtension（lib/collab/extension.ts），
+ * 在 tool_call 事件上挂规则匹配 + 审批阻塞逻辑。
+ */
+const noOpCollabExtension: ExtensionFactory = (pi) => {
+  // 故意空：保留闭包形参，B2 会真正注册 pi.on("tool_call", ...)
+  void pi;
+};
 
 interface AgentRecord {
   id: string;
@@ -131,6 +143,19 @@ export async function createAgent(opts: CreateOptions): Promise<{
     sessionManager = SessionManager.create(opts.cwd);
   }
 
+  // 提前生成 agentId —— B2 的 CollabExtension 需要 id 闭包来标记审批归属。
+  // 这里提前到 createAgentSession 之前不影响 B1 行为（id 仍然唯一）。
+  const id = randomUUID();
+
+  // 构造 ResourceLoader 并注入 CollabExtension Factory（B1 是 no-op，B2 替换）。
+  // 显式构造的好处：未来加规则、记忆、Settings 都有挂载点，不需要再改 createAgentSession 调用。
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: opts.cwd,
+    agentDir: getAgentDir(),
+    settingsManager: getSettingsManager(opts.cwd),
+    extensionFactories: [noOpCollabExtension],
+  });
+
   const { session } = await createAgentSession({
     cwd: opts.cwd,
     model,
@@ -138,9 +163,8 @@ export async function createAgent(opts: CreateOptions): Promise<{
     sessionManager,
     authStorage: getAuth(),
     modelRegistry: mr,
+    resourceLoader,
   });
-
-  const id = randomUUID();
   const record: AgentRecord = {
     id,
     session,
