@@ -27,11 +27,17 @@ import type { MessagePart } from "@/lib/types";
 
 type ApprovalPart = Extract<MessagePart, { kind: "approval" }>;
 
+/** Allow 时可选的 remember 行为（B4）。 */
+export interface ApproveCallOpts {
+  remember?: "this-session";
+  ruleId?: string;
+}
+
 export interface ApprovalBubbleProps {
   part: ApprovalPart;
-  /** 用户点 Allow；外层 hook 负责 POST + 乐观更新 */
-  onApprove?: (toolCallId: string) => void;
-  /** 用户点 Deny；外层 hook 负责 POST + 乐观更新；denyReason 暂留 undefined（Phase C 加输入框） */
+  /** 用户点 Allow；外层 hook 负责 POST。opts.remember 传 "this-session" 表示本会话不再问。 */
+  onApprove?: (toolCallId: string, opts?: ApproveCallOpts) => void;
+  /** 用户点 Deny；外层 hook 负责 POST；denyReason 暂留 undefined（Phase C 加输入框） */
   onDeny?: (toolCallId: string) => void;
 }
 
@@ -83,6 +89,12 @@ export const ApprovalBubble = memo(function ApprovalBubble({
 }: ApprovalBubbleProps) {
   const countdown = useCountdown(part.createdAt, APPROVAL_TIMEOUT_MS);
   const preview = previewInput(part.toolName, part.input);
+  /**
+   * B4：「本会话不再问」勾选框。
+   * 只在有 ruleId 时显示——没有 ruleId 时 server 端 addSessionRemember 无 key 可写。
+   * 仅影响 Allow 路径；Deny 不提供 remember（避免危险的"自动 deny"语义，留 Phase C）。
+   */
+  const [rememberThisSession, setRememberThisSession] = useState(false);
 
   if (part.status === "allowed") {
     return (
@@ -178,26 +190,51 @@ export const ApprovalBubble = memo(function ApprovalBubble({
       >
         {preview}
       </pre>
-      <div className="flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={() => onDeny?.(part.toolCallId)}
-          className="px-2.5 py-1 rounded text-xs border hover:opacity-80"
-          style={{
-            borderColor: "var(--border)",
-            color: "var(--fg)",
-          }}
-        >
-          Deny
-        </button>
-        <button
-          type="button"
-          onClick={() => onApprove?.(part.toolCallId)}
-          className="px-2.5 py-1 rounded text-xs text-white hover:opacity-90"
-          style={{ background: "var(--accent)" }}
-        >
-          Allow
-        </button>
+      <div className="flex items-center justify-between gap-2">
+        {part.ruleId ? (
+          <label
+            className="flex items-center gap-1.5 text-[11px] select-none cursor-pointer"
+            style={{ color: "var(--text-muted)" }}
+            title="勾选后本会话内同类操作不再询问；新建/重启会话后失效"
+          >
+            <input
+              type="checkbox"
+              checked={rememberThisSession}
+              onChange={(e) => setRememberThisSession(e.target.checked)}
+            />
+            <span>本会话不再问</span>
+          </label>
+        ) : (
+          <span />
+        )}
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => onDeny?.(part.toolCallId)}
+            className="px-2.5 py-1 rounded text-xs border hover:opacity-80"
+            style={{
+              borderColor: "var(--border)",
+              color: "var(--fg)",
+            }}
+          >
+            Deny
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              onApprove?.(
+                part.toolCallId,
+                rememberThisSession && part.ruleId
+                  ? { remember: "this-session", ruleId: part.ruleId }
+                  : undefined
+              )
+            }
+            className="px-2.5 py-1 rounded text-xs text-white hover:opacity-90"
+            style={{ background: "var(--accent)" }}
+          >
+            Allow
+          </button>
+        </div>
       </div>
     </div>
   );

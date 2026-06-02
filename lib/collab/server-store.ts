@@ -33,13 +33,27 @@ interface PendingApproval {
 interface CollabStore {
   /** key: ApprovalRequest.id */
   pending: Map<string, PendingApproval>;
+  /**
+   * 「本 session 不再问」记忆（B4）。
+   * key: agentId；value: 该 session 内被记忆 allow 的 ruleId 集合。
+   *
+   * 用法：CollabExtension 命中 ask 规则时先查 hasRemember；命中 → 直接 return allow，
+   * 不再触发 onApprovalNeeded（即不弹气泡）。这样比"前端 auto-resolve"更彻底——
+   * server 端真正不弹，省一次 round-trip。
+   *
+   * 生命周期：随 AgentSession 同寿命；disposeAgent 时由 agent-registry 调
+   * clearRememberFor 主动清理（避免悬挂）。
+   */
+  sessionRemember: Map<string, Set<string>>;
 }
 
 const g = globalThis as unknown as { __miniPiCollab?: CollabStore };
 if (!g.__miniPiCollab) {
-  g.__miniPiCollab = { pending: new Map() };
+  g.__miniPiCollab = { pending: new Map(), sessionRemember: new Map() };
 }
 const store = g.__miniPiCollab!;
+// 老进程升级兼容：旧 store 没 sessionRemember 字段时补上
+if (!store.sessionRemember) store.sessionRemember = new Map();
 
 /**
  * 登记一次待审批请求，返回 promise——CollabExtension 的 onApprovalNeeded 会 await 它。
@@ -103,12 +117,42 @@ export function listPendingApprovals(): ApprovalRequest[] {
   return Array.from(store.pending.values()).map((p) => p.request);
 }
 
+/* ===================== Session Remember (B4) ===================== */
+
+/**
+ * 标记某 session 内某 ruleId 允许"不再问"。
+ * 下次同 session 内命中同 ruleId 时 CollabExtension 应直接放行。
+ *
+ * 由 POST /api/agent/[id]/approval 路由在收到 `remember: "this-session"`
+ * + `decision: "allow"` 时调用。deny 路径不入此 set——deny 的"记忆"语义比较危险
+ * （会变成"自动 deny"），Phase B 不实装；如需，Phase C 单独设计 deny-remember。
+ */
+export function addSessionRemember(agentId: string, ruleId: string): void {
+  let set = store.sessionRemember.get(agentId);
+  if (!set) {
+    set = new Set();
+    store.sessionRemember.set(agentId, set);
+  }
+  set.add(ruleId);
+}
+
+/** 查询某 session 是否已记忆某 ruleId。 */
+export function hasSessionRemember(agentId: string, ruleId: string): boolean {
+  return store.sessionRemember.get(agentId)?.has(ruleId) ?? false;
+}
+
+/** 清空某 session 的所有记忆（disposeAgent 时调）。 */
+export function clearSessionRemember(agentId: string): void {
+  store.sessionRemember.delete(agentId);
+}
+
 /** 测试用：清空 store（生产 / dev runtime 不要调）。 */
 export function __resetCollabStoreForTest(): void {
   for (const p of store.pending.values()) {
     clearTimeout(p.timer);
   }
   store.pending.clear();
+  store.sessionRemember.clear();
 }
 
 export const APPROVAL_TIMEOUT_MS_EXPORT = APPROVAL_TIMEOUT_MS;

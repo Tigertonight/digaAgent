@@ -38,6 +38,7 @@ import { useBudget } from "./hooks/useBudget";
 import { useBudgetEnforcer, type BudgetTrigger } from "./hooks/useBudgetEnforcer";
 import { useForkable } from "./hooks/useForkable";
 import { useApprovals } from "./hooks/useApprovals";
+import { loadCollabSettings } from "@/lib/collab/settings";
 import { useAutocomplete } from "./hooks/useAutocomplete";
 import { useMessageRefs } from "./ChatMinimap";
 import { EmptyState } from "./components/EmptyState";
@@ -1074,12 +1075,28 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // ===== SSE agent 事件分发器（RFC-1 阶段 A3，已抽到 useAgentEvents） =====
   // 上游：useSseManager.onEvent → handleAgentEventRef.current（见 hook 区） → 本 handleAgentEvent
   // 下游：updateRunner（写 runner）+ 4 个全局副作用回调
+  //
+  // RFC-2 Phase B4：注入 isCollabEnabled + autoApprove —— 当用户关掉总开关时，
+  // 前端绕过气泡 UI 自动 POST allow。loadCollabSettings 每次 approval_request
+  // 都重读 localStorage，让用户改了 Settings 立即生效（不依赖 React state）。
   const { handleAgentEvent } = useAgentEvents({
     updateRunner,
     playDoneSound,
     refreshSessions,
     refreshForkList: (aid, key) => refreshForkListRef.current?.(aid, key),
     refreshStats,
+    isCollabEnabled: () => loadCollabSettings().enabled,
+    autoApprove: (aid, toolCallId) => {
+      // 注意：autoApprove 用的是 SSE 携带的 aid（可能 ≠ activeKey），
+      // 直接 fetch 而非用 approveCall（后者绑定 activeKey）。
+      void fetch(`/api/agent/${aid}/approval`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ toolCallId, decision: "allow" }),
+      }).catch((e) =>
+        setError(`auto-approval failed: ${String(e)}`)
+      );
+    },
   });
 
   // ===== Turn 控制中枢（RFC-1 阶段 B2-a，已抽到 useChatStream） =====
