@@ -36,22 +36,15 @@ import { useComposerAttachments } from "./hooks/useComposerAttachments";
 import { usePetPusher } from "./hooks/usePetPusher";
 import { useForkable } from "./hooks/useForkable";
 import { useAutocomplete } from "./hooks/useAutocomplete";
-import FileBrowser from "./components/FileBrowser";
-import ImageLightbox from "./components/ImageLightbox";
-import BranchesPopover from "./components/BranchesPopover";
-import SkillsPanel from "./components/SkillsPanel";
-import ToolsPanel from "./components/ToolsPanel";
-import AuthPanel from "./components/AuthPanel";
-import ModelsConfigPanel from "./components/ModelsConfigPanel";
 import { useMessageRefs } from "./ChatMinimap";
 import { EmptyState } from "./components/EmptyState";
-import { SystemPromptModal } from "./components/SystemPromptModal";
 import { Composer } from "./components/Composer";
 import { DropOverlay } from "./components/DropOverlay";
 import { Sidebar } from "./components/Sidebar";
 import { TopHeader } from "./components/TopHeader";
 import { MessagesScrollArea } from "./components/MessagesScrollArea";
 import { RightPanelContainer } from "./components/RightPanelContainer";
+import { ChatModals } from "./components/ChatModals";
 
 interface Props {
   initialSessions: SessionInfoLite[];
@@ -1405,119 +1398,47 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         }}
         onLayoutChange={setFilesLayout}
       />
-      {showCwdPicker && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ background: "rgba(0,0,0,0.4)" }}
-          onClick={() => setShowCwdPicker(false)}
-        >
-          <div
-            className="rounded-md overflow-hidden flex flex-col"
-            style={{
-              width: 520,
-              maxWidth: "90vw",
-              height: 520,
-              maxHeight: "85vh",
-              background: "var(--bg)",
-              border: "1px solid var(--border)",
-              boxShadow: "0 10px 40px rgba(0,0,0,0.25)",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <FileBrowser
-              initialPath={cwd || "/"}
-              onClose={() => setShowCwdPicker(false)}
-              onPickDir={(picked) => {
-                setCwd(picked);
-                setShowCwdPicker(false);
-              }}
-              mode="picker"
-            />
-          </div>
-        </div>
-      )}
-      {showFilePicker && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ background: "rgba(0,0,0,0.4)" }}
-          onClick={() => setShowFilePicker(false)}
-        >
-          <div
-            className="rounded-md overflow-hidden flex flex-col"
-            style={{
-              width: 520,
-              maxWidth: "90vw",
-              height: 520,
-              maxHeight: "85vh",
-              background: "var(--bg)",
-              border: "1px solid var(--border)",
-              boxShadow: "0 10px 40px rgba(0,0,0,0.25)",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <FileBrowser
-              initialPath={cwd || "/"}
-              onClose={() => setShowFilePicker(false)}
-              onPickPath={(absPath) => {
-                setInput((cur) => {
-                  const sep =
-                    cur.length === 0 || cur.endsWith(" ") ? "" : " ";
-                  return `${cur}${sep}@${absPath} `;
-                });
-                setShowFilePicker(false);
-              }}
-              mode="picker"
-            />
-          </div>
-        </div>
-      )}
-      {showSkills && <SkillsPanel cwd={cwd} onClose={toggleSkills} />}
-      {showTools && agentId && (
-        <div
-          className="fixed inset-0 z-50 flex justify-end"
-          style={{ background: "rgba(0,0,0,0.4)" }}
-          onClick={toggleTools}
-        >
-          <div
-            className="h-full w-[480px] max-w-[90vw] shadow-xl"
-            style={{ background: "var(--bg-panel)" }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <ToolsPanel agentId={agentId} onClose={toggleTools} />
-          </div>
-        </div>
-      )}
-      {showAuth && (
-        <AuthPanel
-          onClose={() => setShowAuth(false)}
-          onChanged={() => reloadProviders(false)}
-        />
-      )}
-      {showModelsConfig && (
-        <ModelsConfigPanel
-          onClose={() => setShowModelsConfig(false)}
-          onChanged={() => reloadProviders(false)}
-        />
-      )}
-      {showSystemPrompt && (
-        <SystemPromptModal
-          text={systemPromptText}
-          onClose={() => {
-            setShowSystemPrompt(false);
-            setSystemPromptText(null);
-          }}
-        />
-      )}
-      {showBranches && agentId && (
-        <BranchesPopover
-          agentId={agentId}
-          onClose={() => setShowBranches(false)}
-          onNavigated={() => {
-            void reloadFromCurrentSession();
-          }}
-        />
-      )}
-      <ImageLightbox />
+      <ChatModals
+        cwd={cwd}
+        agentId={agentId}
+        showCwdPicker={showCwdPicker}
+        onCloseCwdPicker={() => setShowCwdPicker(false)}
+        onPickCwd={(picked) => {
+          setCwd(picked);
+          setShowCwdPicker(false);
+        }}
+        showFilePicker={showFilePicker}
+        onCloseFilePicker={() => setShowFilePicker(false)}
+        onPickFile={(absPath) => {
+          setInput((cur) => {
+            const sep =
+              cur.length === 0 || cur.endsWith(" ") ? "" : " ";
+            return `${cur}${sep}@${absPath} `;
+          });
+          setShowFilePicker(false);
+        }}
+        showSkills={showSkills}
+        onCloseSkills={toggleSkills}
+        showTools={showTools}
+        onCloseTools={toggleTools}
+        showAuth={showAuth}
+        onCloseAuth={() => setShowAuth(false)}
+        onAuthChanged={() => reloadProviders(false)}
+        showModelsConfig={showModelsConfig}
+        onCloseModelsConfig={() => setShowModelsConfig(false)}
+        onModelsConfigChanged={() => reloadProviders(false)}
+        showSystemPrompt={showSystemPrompt}
+        systemPromptText={systemPromptText}
+        onCloseSystemPrompt={() => {
+          setShowSystemPrompt(false);
+          setSystemPromptText(null);
+        }}
+        showBranches={showBranches}
+        onCloseBranches={() => setShowBranches(false)}
+        onBranchesNavigated={() => {
+          void reloadFromCurrentSession();
+        }}
+      />
     </div>
   );
 }
