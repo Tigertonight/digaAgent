@@ -17,8 +17,8 @@
  *   - renderRow 保留为内部闭包（依赖太多 props，提取意义不大）
  */
 
-import type { Dispatch, SetStateAction } from "react";
-import { Plus, GitBranch, Settings, Brain, Pin } from "lucide-react";
+import type { Dispatch, ReactNode, SetStateAction } from "react";
+import { Plus, GitBranch, Settings, Brain, Pin, Search, X } from "lucide-react";
 import type { SessionInfoLite } from "@/lib/types";
 import { formatRelativeTime, shortCwd } from "@/lib/format";
 import { BrandLogo } from "./BrandLogo";
@@ -72,6 +72,17 @@ export interface SidebarProps {
   setShowModelsConfig: Dispatch<SetStateAction<boolean>>;
   showSkills: boolean;
   toggleSkills: () => void;
+
+  // ===== RFC-3 Phase B / F2：搜索（可选，未传则不渲染搜索框） =====
+  /** 搜索框当前值 */
+  searchQuery?: string;
+  /** 改变搜索框值 */
+  onSearchQueryChange?: (q: string) => void;
+  /**
+   * 搜索结果视图。非 null 时替代 sessions 列表渲染。
+   * 由父组件根据 useSearch().isActive 决定传 null 还是 <SidebarSearch />。
+   */
+  searchView?: ReactNode | null;
 }
 
 export function Sidebar(props: SidebarProps) {
@@ -103,7 +114,12 @@ export function Sidebar(props: SidebarProps) {
     setShowModelsConfig,
     showSkills,
     toggleSkills,
+    searchQuery,
+    onSearchQueryChange,
+    searchView,
   } = props;
+
+  const searchEnabled = onSearchQueryChange != null;
 
   return (
     <aside
@@ -150,7 +166,57 @@ export function Sidebar(props: SidebarProps) {
       >
         {shortCwd(cwd) || "~"}
       </button>
-      {/* sessions 列表 */}
+      {/* 搜索框（RFC-3 Phase B / F2） */}
+      {searchEnabled && (
+        <div
+          className="px-2 py-1.5 border-b relative"
+          style={{ borderColor: "var(--border)" }}
+        >
+          <Search
+            size={12}
+            className="absolute pointer-events-none"
+            style={{
+              top: "50%",
+              left: 14,
+              transform: "translateY(-50%)",
+              color: "var(--fg-faint)",
+            }}
+          />
+          <input
+            type="text"
+            value={searchQuery ?? ""}
+            onChange={(e) => onSearchQueryChange?.(e.target.value)}
+            placeholder="搜索全部 session…"
+            className="w-full pl-7 pr-7 py-1 rounded text-[12px] border"
+            style={{
+              background: "var(--bg-app)",
+              borderColor: "var(--border)",
+              color: "var(--text)",
+            }}
+          />
+          {(searchQuery ?? "").length > 0 && (
+            <button
+              type="button"
+              onClick={() => onSearchQueryChange?.("")}
+              className="absolute"
+              style={{
+                top: "50%",
+                right: 12,
+                transform: "translateY(-50%)",
+                color: "var(--fg-faint)",
+              }}
+              title="清除搜索"
+              aria-label="清除搜索"
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+      )}
+      {/* 搜索结果视图（非 null 时替代 sessions 列表） */}
+      {searchView ?? null}
+      {/* sessions 列表（仅当搜索视图为 null 时渲染） */}
+      {!searchView && (
       <div className="flex-1 overflow-y-auto">
         {sessions.length === 0 && (
           <div className="p-4 text-xs" style={{ color: "var(--fg-faint)" }}>
@@ -415,6 +481,7 @@ export function Sidebar(props: SidebarProps) {
           return out;
         })()}
       </div>
+      )}
       {/* EXPLORER 文件树 */}
       <div
         className="border-t overflow-y-auto shrink-0"

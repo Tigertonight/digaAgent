@@ -39,6 +39,7 @@ import { useBudgetEnforcer, type BudgetTrigger } from "./hooks/useBudgetEnforcer
 import { useForkable } from "./hooks/useForkable";
 import { useApprovals } from "./hooks/useApprovals";
 import { useSessionMeta } from "./hooks/useSessionMeta";
+import { useSearch } from "./hooks/useSearch";
 import { loadCollabSettings } from "@/lib/collab/settings";
 import { useAutocomplete } from "./hooks/useAutocomplete";
 import { useMessageRefs } from "./ChatMinimap";
@@ -46,6 +47,7 @@ import { EmptyState } from "./components/EmptyState";
 import { Composer } from "./components/Composer";
 import { DropOverlay } from "./components/DropOverlay";
 import { Sidebar } from "./components/Sidebar";
+import { SidebarSearch } from "./components/SidebarSearch";
 import { TopHeader } from "./components/TopHeader";
 import { MessagesScrollArea } from "./components/MessagesScrollArea";
 import { RightPanelContainer } from "./components/RightPanelContainer";
@@ -488,6 +490,20 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       }
     },
     [patchSessionMeta, refreshSessions]
+  );
+
+  // RFC-3 Phase B / F2：Sidebar 全文检索。
+  // useSearch 自带 query / status / results state；isActive 决定 SidebarSearch 是否替换普通 sessions 列表。
+  const searchHook = useSearch();
+  const sessionLookup = useMemo(
+    () =>
+      new Map(
+        sessions.map((s) => [
+          s.id,
+          { cwd: s.cwd, title: s.meta?.title ?? s.name ?? null },
+        ])
+      ),
+    [sessions]
   );
 
   const currentProvider = useMemo(
@@ -1347,6 +1363,26 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         setShowModelsConfig={setShowModelsConfig}
         showSkills={showSkills}
         toggleSkills={toggleSkills}
+        searchQuery={searchHook.query}
+        onSearchQueryChange={searchHook.setQuery}
+        searchView={
+          searchHook.isActive ? (
+            <SidebarSearch
+              query={searchHook.query}
+              status={searchHook.status}
+              results={searchHook.results}
+              totalDocs={searchHook.totalDocs}
+              durationMs={searchHook.durationMs}
+              error={searchHook.error}
+              onSelect={(id) => {
+                searchHook.clear();
+                setSelectedId(id);
+              }}
+              selectedId={selectedId}
+              sessionLookup={sessionLookup}
+            />
+          ) : null
+        }
       />
 
       {/* 右：对话 */}
