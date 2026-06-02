@@ -18,7 +18,7 @@
  */
 
 import type { Dispatch, SetStateAction } from "react";
-import { Plus, GitBranch, Settings, Brain } from "lucide-react";
+import { Plus, GitBranch, Settings, Brain, Pin } from "lucide-react";
 import type { SessionInfoLite } from "@/lib/types";
 import { formatRelativeTime, shortCwd } from "@/lib/format";
 import { BrandLogo } from "./BrandLogo";
@@ -58,6 +58,11 @@ export interface SidebarProps {
   executeDeleteSession: (id: string) => Promise<void> | void;
   requestDeleteSession: (id: string) => void;
   handleExportSession: (id: string) => void;
+  /**
+   * RFC-3 A4：切换 session 置顶。实现：调 PATCH /api/sessions/[id]/meta，
+   * 成功后由调用方负责 refreshSessions 拉回最新列表（meta 已通过 A2 聚合在列表里）。
+   */
+  toggleSessionPin: (id: string, nextPinned: boolean) => Promise<void> | void;
 
   // ===== explorer =====
   setInput: (v: string | ((cur: string) => string)) => void;
@@ -92,6 +97,7 @@ export function Sidebar(props: SidebarProps) {
     executeDeleteSession,
     requestDeleteSession,
     handleExportSession,
+    toggleSessionPin,
     setInput,
     setShowFilePicker,
     setShowModelsConfig,
@@ -287,8 +293,21 @@ export function Sidebar(props: SidebarProps) {
                         }}
                       />
                     ) : (
-                      <div className="text-sm truncate">
-                        {s.name || s.firstMessage || "(empty)"}
+                      <div className="text-sm truncate flex items-center gap-1">
+                        {s.meta?.pinned && (
+                          <Pin
+                            size={11}
+                            className="shrink-0"
+                            style={{ color: "var(--text-muted)" }}
+                            aria-label="已置顶"
+                          />
+                        )}
+                        <span className="truncate">
+                          {s.meta?.title ||
+                            s.name ||
+                            s.firstMessage ||
+                            "(empty)"}
+                        </span>
                       </div>
                     )}
                     <div
@@ -333,6 +352,18 @@ export function Sidebar(props: SidebarProps) {
                       color: "var(--fg)",
                     }}
                   >
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setMenuFor(null);
+                        void toggleSessionPin(s.id, !s.meta?.pinned);
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:opacity-80"
+                      style={{ color: "var(--fg)" }}
+                    >
+                      {s.meta?.pinned ? "📌 取消置顶" : "📌 置顶"}
+                    </button>
                     <button
                       type="button"
                       onClick={(e) => {

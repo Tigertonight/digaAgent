@@ -38,6 +38,7 @@ import { useBudget } from "./hooks/useBudget";
 import { useBudgetEnforcer, type BudgetTrigger } from "./hooks/useBudgetEnforcer";
 import { useForkable } from "./hooks/useForkable";
 import { useApprovals } from "./hooks/useApprovals";
+import { useSessionMeta } from "./hooks/useSessionMeta";
 import { loadCollabSettings } from "@/lib/collab/settings";
 import { useAutocomplete } from "./hooks/useAutocomplete";
 import { useMessageRefs } from "./ChatMinimap";
@@ -475,6 +476,19 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     document.body.removeChild(a);
     setMenuFor(null);
   }, []);
+
+  // RFC-3 A4：session 置顶/取消置顶。
+  // 实现：PATCH meta → refresh 列表（meta 在 A2 已聚合到列表 response）。
+  const { patch: patchSessionMeta } = useSessionMeta({ onError: setError });
+  const toggleSessionPin = useCallback(
+    async (id: string, nextPinned: boolean) => {
+      const res = await patchSessionMeta(id, { pinned: nextPinned });
+      if (res) {
+        await refreshSessions();
+      }
+    },
+    [patchSessionMeta, refreshSessions]
+  );
 
   const currentProvider = useMemo(
     () => providers.find((p) => p.provider === providerId),
@@ -1327,6 +1341,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         executeDeleteSession={executeDeleteSession}
         requestDeleteSession={requestDeleteSession}
         handleExportSession={handleExportSession}
+        toggleSessionPin={toggleSessionPin}
         setInput={setInput}
         setShowFilePicker={setShowFilePicker}
         setShowModelsConfig={setShowModelsConfig}
