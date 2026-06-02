@@ -13,7 +13,6 @@ import type {
 } from "@/lib/types";
 import { THINKING_LEVEL_LABELS } from "@/lib/types";
 import {
-  fileToImageContent,
   extractImagesFromClipboard,
   approxBase64Bytes,
   formatBytes,
@@ -38,6 +37,7 @@ import { useSseManager } from "./hooks/useSseManager";
 import { useAgentEvents } from "./hooks/useAgentEvents";
 import { useSessions } from "./hooks/useSessions";
 import { useChatStream } from "./hooks/useChatStream";
+import { useComposerAttachments } from "./hooks/useComposerAttachments";
 import Markdown from "./components/Markdown";
 import ToolRender from "./components/ToolRender";
 import FileBrowser from "./components/FileBrowser";
@@ -343,92 +343,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const [cwd, setCwd] = useState(defaultCwd);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  /** 把一组 File 转 ImageContentLite 并 append 到 pendingImages */
-  const addImageFiles = useCallback(async (files: File[] | FileList) => {
-    const arr = Array.from(files).filter((f) => f.type.startsWith("image/"));
-    if (arr.length === 0) return;
-    try {
-      const converted = await Promise.all(arr.map((f) => fileToImageContent(f)));
-      setPendingImages((prev) => [...prev, ...converted]);
-    } catch (e) {
-      setError(String(e));
-    }
-  }, []);
-
-  const removePendingImage = useCallback((idx: number) => {
-    setPendingImages((prev) => prev.filter((_, i) => i !== idx));
-  }, []);
-
-  /**
-   * 拖入分流:
-   *   - 图片(image/*) → 转 base64 进 pendingImages 内联预览
-   *   - 其它(zip/pdf/csv/md/txt/word/folder) → 通过 Electron webUtils 拿绝对路径,
-   *     以"附件 chip"塞进 pendingFiles,发送时自动拼成 @path 注入 prompt 头
-   *
-   * Web 模式没有 webUtils → 文件路径不可得,提示用户改用文件浏览器。
-   */
-  const onDropFiles = useCallback(
-    (files: File[]) => {
-      const images = files.filter((f) => f.type.startsWith("image/"));
-      const others = files.filter((f) => !f.type.startsWith("image/"));
-
-      if (images.length) void addImageFiles(images);
-
-      if (others.length === 0) return;
-
-      const api = getElectronApi();
-      if (!api?.getPathForFile) {
-        setError(
-          "拖拽非图片文件需要在桌面端使用（浏览器无法获取绝对路径）。请用左下文件浏览器选择文件。"
-        );
-        return;
-      }
-      const newAttachments: PendingAttachment[] = [];
-      for (const f of others) {
-        const p = api.getPathForFile(f);
-        if (!p) continue;
-        // File API 给文件夹时 type === "" 且 size === 0,作为粗略识别
-        const isFolder = f.type === "" && f.size === 0 && !/\.[a-z0-9]{1,8}$/i.test(f.name);
-        newAttachments.push({
-          path: p,
-          name: f.name || p.split("/").pop() || p,
-          size: isFolder ? null : f.size,
-          kind: isFolder ? "folder" : kindFromName(f.name),
-        });
-      }
-      if (newAttachments.length === 0) {
-        setError("无法获取拖入文件的路径。");
-        return;
-      }
-      setPendingFiles((prev) => {
-        const seen = new Set(prev.map((a) => a.path));
-        return [...prev, ...newAttachments.filter((a) => !seen.has(a.path))];
-      });
-    },
-    [addImageFiles]
-  );
-
-  const removePendingFile = useCallback((path: string) => {
-    setPendingFiles((prev) => prev.filter((a) => a.path !== path));
-  }, []);
-  const {
-    isDragOver,
-    handleDragEnter,
-    handleDragOver,
-    handleDragLeave,
-    handleDrop,
-  } = useDragDrop(onDropFiles);
-
-  const onPasteTextarea = useCallback(
-    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      const imgs = extractImagesFromClipboard(e);
-      if (imgs.length > 0) {
-        e.preventDefault();
-        void addImageFiles(imgs);
-      }
-    },
-    [addImageFiles]
-  );
+  // 图片/文件附件相关 hook 调用挪到 setter wrappers 之后（依赖 setPendingImages/setPendingFiles）
 
   // provider/model 选择
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
@@ -911,6 +826,38 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     (v: Updater<"idle" | "active" | "lost">) =>
       updateActive((s) => ({ sseStatus: resolve(s.sseStatus, v) })),
     [updateActive]
+  );
+
+  // ===== Composer 附件子模块（RFC-1 阶段 B2-b，已抽到 useComposerAttachments） =====
+  // 图片/文件拖入、粘贴、移除：依赖 setPendingImages/setPendingFiles，必须在 setter wrappers 之后
+  const {
+    addImageFiles,
+    removePendingImage,
+    onDropFiles,
+    removePendingFile,
+  } = useComposerAttachments({
+    setPendingImages,
+    setPendingFiles,
+    setError,
+  });
+
+  const {
+    isDragOver,
+    handleDragEnter,
+    handleDragOver,
+    handleDragLeave,
+    handleDrop,
+  } = useDragDrop(onDropFiles);
+
+  const onPasteTextarea = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const imgs = extractImagesFromClipboard(e);
+      if (imgs.length > 0) {
+        e.preventDefault();
+        void addImageFiles(imgs);
+      }
+    },
+    [addImageFiles]
   );
 
   // compactError 3 秒自动消失（原本贴在 useState 旁,现在挪到 wrapper 之后）
@@ -3680,17 +3627,6 @@ interface PendingAttachment {
   /** 字节数;文件夹/未知时为 null */
   size: number | null;
   kind: PendingAttachmentKind;
-}
-
-/** 按扩展名粗分类,只用来选附件 chip 的 icon/底色 */
-function kindFromName(name: string): Exclude<PendingAttachmentKind, "folder"> {
-  const lower = name.toLowerCase();
-  if (/\.(zip|tar|gz|tgz|bz2|7z|rar|xz)$/.test(lower)) return "archive";
-  if (/\.pdf$/.test(lower)) return "pdf";
-  if (/\.(csv|tsv|xlsx?|ods|numbers)$/.test(lower)) return "table";
-  if (/\.(md|markdown|txt|rtf|docx?|pages|odt)$/.test(lower)) return "doc";
-  if (/\.(js|jsx|ts|tsx|py|go|rs|java|c|cc|cpp|cs|rb|php|swift|kt|sh|bash|zsh|json|toml|yaml|yml|xml|html?|css|scss|sql)$/.test(lower)) return "code";
-  return "other";
 }
 
 /** 拖入附件 chip：图标 + 文件名 + 大小 + ✕ 移除 */
