@@ -20,6 +20,24 @@ npx mini-pi-web doctor
 
 Default URL: <http://localhost:30142>
 
+## What's New (2026-06-02)
+
+`pet` branch landed 4 major capabilities on top of the original web UI:
+
+- **Desktop pet** (Electron): floating sprite with state animation, hover bubble,
+  right-click menu, drag-to-edge snap, click-through transparent window
+- **Multi-session knowledge layer** (RFC-3): per-session metadata persistence
+  (pin / lastSeen / manual title), full-text search across all sessions, and
+  project-level memory via SDK's built-in `AGENTS.md` / `CLAUDE.md` loader
+- **Agent collaboration v0** (RFC-2): session-level budget guard (cost / turns /
+  duration) with auto-abort modal, and inline tool approval bubbles (allow /
+  deny / "don't ask again this session") with timeout fallback
+- **Internal refactor** (RFC-1 + RFC-1.5): ChatApp.tsx split from 4673 → ~1445
+  lines across 9 hooks + 11 view components; vitest infra with 152 tests
+
+See [docs/plans/2026-06-02-rfc-index.md](./docs/plans/2026-06-02-rfc-index.md)
+for the full architecture roadmap.
+
 ## Features
 
 | Area | Status |
@@ -34,19 +52,34 @@ Default URL: <http://localhost:30142>
 | Session list, context inspector, export | ✅ |
 | File picker bound to `MINI_PI_WEB_ROOT` | ✅ |
 | Electron desktop build (`npm run electron:build`) | ✅ |
+| **Desktop pet widget** (transparent, hover bubble, drag, right-click) | ✅ |
+| **Session metadata**: pin / manual title / unread sync across reload | ✅ |
+| **Full-text session search** (in-memory inverted index over all sessions) | ✅ |
+| **Project memory** via `AGENTS.md` (auto-loaded by SDK from cwd ancestors) | ✅ |
+| **Session-level budget** (cost / turns / duration limits with auto-abort) | ✅ |
+| **Tool approval bubbles** (inline allow / deny / don't-ask with timeout) | ✅ |
 
 ## Configuration
 
-mini-pi-web reads from `~/.pi/`:
+mini-pi-web reads from `~/.pi/` (shared with `pi` CLI) and `~/.mini-pi-web/`
+(mini-pi-web-only):
 
 | File | Purpose |
 |---|---|
 | `~/.pi/auth.json` | API keys and OAuth credentials (per provider) |
 | `~/.pi/models.json` | Custom providers and per-model overrides |
 | `~/.pi/agent/skills/` | Installed agent skills |
+| `~/.mini-pi-web/meta/<sessionId>.json` | Per-session metadata (title, pinned, lastSeenAt) |
+| `~/.mini-pi-web/settings.json` | Global Budget defaults, approval rules, UI prefs |
 
-The same files are used by the upstream `pi` CLI and `pi-web`, so they are
-interchangeable.
+The `~/.pi/` files are interchangeable with the upstream `pi` CLI and `pi-web`.
+
+### Project-level memory
+
+mini-pi-web inherits the SDK's `AGENTS.md` / `CLAUDE.md` auto-loader. Drop a
+file named `AGENTS.md` anywhere from your project root up to filesystem root,
+and it will be injected into the agent's system prompt automatically (no UI
+needed). See [docs/guides/project-memory.md](./docs/guides/project-memory.md).
 
 ### Environment variables
 
