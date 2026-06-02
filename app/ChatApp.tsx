@@ -38,6 +38,7 @@ import { useSessions } from "./hooks/useSessions";
 import { useChatStream } from "./hooks/useChatStream";
 import { useComposerAttachments } from "./hooks/useComposerAttachments";
 import { usePetPusher } from "./hooks/usePetPusher";
+import { useForkable } from "./hooks/useForkable";
 import Markdown from "./components/Markdown";
 import ToolRender from "./components/ToolRender";
 import FileBrowser from "./components/FileBrowser";
@@ -173,6 +174,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         key: RunnerKey
       ) => void)
     | null
+  >(null);
+  // refreshForkList 来自 useForkable（声明在 useAgentEvents 之后）；
+  // 同 handleAgentEvent / updateRunner，用 ref 转发避免时序倒置。
+  const refreshForkListRef = useRef<
+    ((agentId: string, ownerKey: RunnerKey) => void) | null
   >(null);
 
   const { esMapRef, attachSseFor, closeSseFor } = useSseManager({
@@ -380,22 +386,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     null
   );
   // sseStatus 已挪到 RunnerState(每个会话独立的 SSE 状态)。
-  /** 折叠 fork 按钮（pi-web 风格 Collapse/Expand forks） */
-  const [forksCollapsed, setForksCollapsed] = useState(false);
-  useEffect(() => {
-    try {
-      setForksCollapsed(localStorage.getItem("pi-forks-collapsed") === "1");
-    } catch {}
-  }, []);
-  const toggleForks = useCallback(() => {
-    setForksCollapsed((v) => {
-      const nv = !v;
-      try {
-        localStorage.setItem("pi-forks-collapsed", nv ? "1" : "0");
-      } catch {}
-      return nv;
-    });
-  }, []);
+  // forksCollapsed / toggleForks 已挪到 useForkable hook（C1）
   /** 当前打开 ⋯ 菜单的 session id；renaming 时存 inline edit 状态 */
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [renamingFor, setRenamingFor] = useState<string | null>(null);
@@ -644,11 +635,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       updateActive((s) => ({ forkText: resolve(s.forkText, v) })),
     [updateActive]
   );
-  const setForkBusy = useCallback(
-    (v: Updater<boolean>) =>
-      updateActive((s) => ({ forkBusy: resolve(s.forkBusy, v) })),
-    [updateActive]
-  );
+  // setForkBusy 已下沉到 useForkable hook（C1：fork 流程内 updateRunner 直接写）
   const setAgentId = useCallback(
     (v: Updater<string | null>) =>
       updateActive((s) => ({ agentId: resolve(s.agentId, v) })),
@@ -975,27 +962,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     }
   }, [agentSessionId, selectedId, agentId]);
 
-  // 拉当前 agent 的 forkable user messages
-  // refreshForkList / refreshStats / refreshToolsCount 写到指定 runner;
-  // ownerKey 缺省 = 当前活跃 runner —— 兼容老调用点。
-  const refreshForkList = useCallback(
-    async (aid: string, ownerKey?: RunnerKey) => {
-      try {
-        const r = await fetch(
-          `/api/agent/${aid}?action=user_messages_for_forking`
-        );
-        const data = await r.json();
-        if (Array.isArray(data.messages)) {
-          updateRunner(ownerKey ?? activeKeyRef.current, {
-            forkableUserMessages: data.messages as ForkableUserMessage[],
-          });
-        }
-      } catch (e) {
-        console.warn("refreshForkList failed", e);
-      }
-    },
-    [updateRunner]
-  );
+  // refreshForkList 已挪到 useForkable hook（C1）
+  // refreshStats / refreshToolsCount 写到指定 runner；ownerKey 缺省 = 当前活跃 runner。
 
   // 拉 token/cost/context window HUD
   const refreshStats = useCallback(
@@ -1187,7 +1155,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     updateRunner,
     playDoneSound,
     refreshSessions,
-    refreshForkList,
+    refreshForkList: (aid, key) => refreshForkListRef.current?.(aid, key),
     refreshStats,
   });
 
@@ -1446,238 +1414,48 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     [agentId, agentAction, updateRunner]
   );
 
-  // ===== Fork handlers =====
-  const startFork = useCallback((index: number, currentText: string) => {
-    setForkingIndex(index);
-    setForkText(currentText);
-  }, []);
+  // ===== Fork 模块（RFC-1 阶段 C1，已抽到 useForkable hook） =====
+  const {
+    forksCollapsed,
+    toggleForks,
+    refreshForkList,
+    startFork,
+    cancelFork,
+    submitFork,
+    forkToNewSession,
+  } = useForkable({
+    agentId,
+    agentSessionId,
+    selectedId,
+    forkText,
+    providerId,
+    modelId,
+    cwd,
+    thinkingLevel,
+    sessions,
+    activeKeyRef,
+    setRunner,
+    updateRunner,
+    setForkableUserMessages,
+    setForkingIndex,
+    setForkText,
+    attachSseFor,
+    switchTo,
+    setSelectedId,
+    refreshSessions,
+    setError,
+    refreshStats,
+    refreshToolsCount,
+    agentAction,
+  });
 
-  const cancelFork = useCallback(() => {
-    setForkingIndex(null);
-    setForkText("");
-  }, []);
-
-  /**
-   * 从某条 user message 起 fork 出一个**新 session 文件**：
-   *   1. POST /api/sessions/{srcId}/fork  -> 拿到新 session 的 id/path/cwd
-   *   2. POST /api/agent/new  with sessionPath=新文件 -> 新 agent
-   *   3. navigate_tree(targetEntryId)  -> 把 leaf 截断到 fork 点
-   *   4. 切到新 session 的 UI（左侧高亮、右侧重载 context）
-   *   5. 刷新 sessions 列表（新 session 应作为 child 显示在 parent 下）
-   */
-  const forkToNewSession = useCallback(
-    async (entryId: string) => {
-      if (!selectedId && !agentSessionId) {
-        setError("当前没有可 fork 的 session");
-        return;
-      }
-      if (!providerId || !modelId) {
-        setError("请先选择 provider 和 model");
-        return;
-      }
-      const srcId = agentSessionId ?? selectedId!;
-      setError(null);
-      try {
-        // 1. 创建新 session 文件
-        const fr = await fetch(`/api/sessions/${srcId}/fork`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ targetEntryId: entryId }),
-        });
-        const fd = (await fr.json()) as {
-          ok?: boolean;
-          id?: string;
-          path?: string;
-          cwd?: string;
-          error?: string;
-        };
-        if (fd.error || !fd.id || !fd.path) {
-          setError(fd.error || "fork failed");
-          return;
-        }
-        // 2. 创建新 agent,绑定新 session 文件(不动父 runner)
-        const ar = await fetch("/api/agent/new", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            provider: providerId,
-            modelId,
-            cwd: fd.cwd || cwd,
-            thinkingLevel,
-            sessionPath: fd.path,
-          }),
-        });
-        const ad = await ar.json();
-        if (ad.error) {
-          setError(ad.error);
-          return;
-        }
-        const newAid = ad.id as string;
-        const newKey: RunnerKey = ad.sessionFile ?? fd.path;
-        // 3. 为 fork 出来的 session 建一个全新 runner,放进 Map（setRunner 会触发 LRU 检查）
-        const forkRunner = emptyRunner();
-        forkRunner.agentId = newAid;
-        forkRunner.agentSessionId = ad.sessionId;
-        forkRunner.sessionFile = ad.sessionFile ?? fd.path;
-        setRunner(newKey, forkRunner);
-        // 4. 切到新 runner(父 runner 仍保留在 Map 里,SSE 也不动)
-        switchTo(newKey);
-        attachSseFor(newKey, newAid);
-        // 5. 把 leaf 截到 fork 点
-        await agentAction(newAid, {
-          type: "navigate_tree",
-          targetId: entryId,
-          summarize: false,
-        });
-        // 6. 重新拉 context 渲染到新 runner
-        try {
-          const ctx = await fetch(`/api/sessions/${ad.sessionId}/context`).then(
-            (r) => r.json()
-          );
-          if (!ctx.error) {
-            updateRunner(newKey, {
-              chatState: createInitialState(ctxToMessages(ctx.messages ?? [])),
-              ...(Array.isArray(ctx.forkableUserMessages)
-                ? {
-                    forkableUserMessages:
-                      ctx.forkableUserMessages as ForkableUserMessage[],
-                  }
-                : {}),
-            });
-          }
-        } catch {
-          /* ignore */
-        }
-        await refreshForkList(newAid, newKey);
-        void refreshStats(newAid, newKey);
-        void refreshToolsCount(newAid, newKey);
-        // 7. 列表更新 + 选中新 session
-        setSelectedId(ad.sessionId);
-        refreshSessions();
-      } catch (e) {
-        setError(String(e));
-      }
-    },
-    [
-      selectedId,
-      agentSessionId,
-      providerId,
-      modelId,
-      cwd,
-      thinkingLevel,
-      switchTo,
-      setRunner,
-      attachSseFor,
-      updateRunner,
-      agentAction,
-      refreshForkList,
-      refreshSessions,
-      refreshStats,
-      refreshToolsCount,
-    ]
-  );
-
-  const submitFork = useCallback(
-    async (entryId: string) => {
-      const text = forkText.trim();
-      if (!text) {
-        setError("fork 文本不能为空");
-        return;
-      }
-      const ownerKey = activeKeyRef.current;
-      // 没 agent 就基于当前 session 现起一个(用户可能直接打开历史 session 就 hover Edit)
-      let aid = agentId;
-      if (!aid) {
-        if (!providerId || !modelId) {
-          setError("请先选择 provider 和 model");
-          return;
-        }
-        const sel = selectedId
-          ? sessions.find((s) => s.id === selectedId)
-          : undefined;
-        if (!sel) {
-          setError("无法定位当前 session");
-          return;
-        }
-        const r = await fetch("/api/agent/new", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            provider: providerId,
-            modelId,
-            cwd: sel.cwd || cwd,
-            thinkingLevel,
-            sessionPath: sel.path,
-          }),
-        });
-        const data = await r.json();
-        if (data.error) {
-          setError(data.error);
-          return;
-        }
-        aid = data.id as string;
-        updateRunner(ownerKey, {
-          agentId: aid,
-          agentSessionId: data.sessionId,
-          sessionFile: data.sessionFile ?? null,
-        });
-        attachSseFor(ownerKey, aid);
-      }
-      updateRunner(ownerKey, { forkBusy: true });
-      setError(null);
-      try {
-        // 1. 切到该 entry(不 summarize,直接截断)
-        await agentAction(aid, {
-          type: "navigate_tree",
-          targetId: entryId,
-          summarize: false,
-        });
-        // 2. 重新拉 session context(reducer 从头来)
-        if (selectedId || agentSessionId) {
-          // session 文件可能没立刻 flush;优先用 sessionId
-          const sid = agentSessionId ?? selectedId;
-          try {
-            const ctx = await fetch(`/api/sessions/${sid}/context`).then((r) =>
-              r.json()
-            );
-            if (!ctx.error) {
-              updateRunner(ownerKey, {
-                chatState: createInitialState(
-                  ctxToMessages(ctx.messages ?? [])
-                ),
-              });
-            }
-          } catch {
-            /* 忽略:发完 prompt 后 SSE 也会重建 messages */
-          }
-        }
-        // 3. 用新文本发 prompt
-        await agentAction(aid, { type: "prompt", text });
-        // 4. 关编辑器、刷 fork 列表
-        updateRunner(ownerKey, { forkingIndex: null, forkText: "" });
-        await refreshForkList(aid, ownerKey);
-      } catch (e) {
-        setError(String(e));
-      } finally {
-        updateRunner(ownerKey, { forkBusy: false });
-      }
-    },
-    [
-      agentId,
-      agentSessionId,
-      selectedId,
-      sessions,
-      providerId,
-      modelId,
-      cwd,
-      thinkingLevel,
-      forkText,
-      attachSseFor,
-      updateRunner,
-      agentAction,
-      refreshForkList,
-    ]
-  );
+  // refreshForkList ref 同步：useAgentEvents 通过 refreshForkListRef.current 调用本 hook 的方法。
+  useEffect(() => {
+    refreshForkListRef.current = refreshForkList;
+    return () => {
+      refreshForkListRef.current = null;
+    };
+  }, [refreshForkList]);
 
   // panel 颜色用 CSS 变量驱动；class 里只放结构相关
   return (
