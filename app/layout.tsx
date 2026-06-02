@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Noto_Sans_Mono } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 
 const notoMono = Noto_Sans_Mono({
@@ -43,8 +44,9 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <head>
-        <script
-
+        <Script
+          id="theme-bootstrap"
+          strategy="beforeInteractive"
           dangerouslySetInnerHTML={{ __html: themeBootstrap }}
         />
       </head>
