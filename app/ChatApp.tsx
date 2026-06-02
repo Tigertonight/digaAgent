@@ -43,26 +43,14 @@ import SkillsPanel from "./components/SkillsPanel";
 import ToolsPanel from "./components/ToolsPanel";
 import AuthPanel from "./components/AuthPanel";
 import ModelsConfigPanel from "./components/ModelsConfigPanel";
-import { IconButton, iconSizeMap } from "./components/IconButton";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
 import { EmptyState } from "./components/EmptyState";
 import { MessageView } from "./components/MessageView";
-import { HudMeter } from "./components/HudMeter";
 import { SystemPromptModal } from "./components/SystemPromptModal";
 import { Composer } from "./components/Composer";
 import { DropOverlay } from "./components/DropOverlay";
 import { Sidebar } from "./components/Sidebar";
-import {
-  Sun,
-  Moon,
-  FolderOpen,
-  Wrench,
-  KeyRound,
-  PanelLeft,
-  PanelRight,
-  GitBranch,
-  FileText,
-} from "lucide-react";
+import { TopHeader } from "./components/TopHeader";
 
 interface Props {
   initialSessions: SessionInfoLite[];
@@ -1287,138 +1275,43 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         onDrop={handleDrop}
       >
         <DropOverlay isDragOver={isDragOver} />
-        <header
-          className="border-b grid items-center text-xs"
-          style={{
-            height: 36,
-            borderColor: "var(--border)",
-            color: "var(--text-muted)",
-            paddingLeft: 8,
-            paddingRight: 8,
-            // 三列:左/中/右,各占自己的 grid track,绝不互相挤压。
-            // 右列 minmax(0,auto) 让 token meter 长起来时不撑爆中列。
-            gridTemplateColumns: "auto 1fr auto",
-            columnGap: 8,
+        <TopHeader
+          sidebarOpen={sidebarOpen}
+          theme={theme}
+          agentId={agentId}
+          stats={stats}
+          sseStatus={sseStatus}
+          electronApi={electronApi}
+          currentSessionFile={currentSessionFile}
+          showTools={showTools}
+          showFiles={showFiles}
+          onToggleSidebar={() => setSidebarOpen((v) => !v)}
+          onToggleTheme={toggleTheme}
+          onOpenBranches={() => setShowBranches(true)}
+          onOpenSystemPrompt={async () => {
+            if (!agentId) return;
+            setShowSystemPrompt(true);
+            try {
+              const r = await fetch(
+                `/api/agent/${agentId}?action=system_prompt`
+              );
+              const d = (await r.json()) as { systemPrompt?: string };
+              setSystemPromptText(d.systemPrompt ?? "");
+            } catch (e) {
+              setSystemPromptText(`error: ${String(e)}`);
+            }
           }}
-        >
-          {/* 左：sidebar toggle + theme toggle */}
-          <span className="flex items-center gap-1 shrink-0 min-w-0">
-            <IconButton
-              onClick={() => setSidebarOpen((v) => !v)}
-              title={sidebarOpen ? "收起侧栏" : "展开侧栏"}
-              aria-label="侧栏开关"
-              icon={<PanelLeft size={iconSizeMap.sm} />}
-            />
-            <IconButton
-              onClick={toggleTheme}
-              title={theme === "dark" ? "切到浅色" : "切到深色"}
-              aria-label="主题切换"
-              icon={
-                theme === "dark" ? (
-                  <Sun size={iconSizeMap.sm} />
-                ) : (
-                  <Moon size={iconSizeMap.sm} />
-                )
-              }
-            />
-          </span>
-
-          {/* 中：居中 Branches / System tabs */}
-          <span className="flex items-stretch h-full justify-center min-w-0">
-            <button
-              type="button"
-              disabled={!agentId}
-              onClick={() => agentId && setShowBranches(true)}
-              className="inline-flex items-center gap-1.5 h-full px-3 text-[12px] hover:bg-[color:var(--bg-hover)] disabled:opacity-50"
-              style={{ color: "var(--text)" }}
-              title={agentId ? "查看 / 切换分支" : "需先发送一条消息"}
-            >
-              <GitBranch size={13} />
-              Branches
-            </button>
-            <button
-              type="button"
-              disabled={!agentId}
-              onClick={async () => {
-                if (!agentId) return;
-                setShowSystemPrompt(true);
-                try {
-                  const r = await fetch(
-                    `/api/agent/${agentId}?action=system_prompt`
-                  );
-                  const d = (await r.json()) as { systemPrompt?: string };
-                  setSystemPromptText(d.systemPrompt ?? "");
-                } catch (e) {
-                  setSystemPromptText(`error: ${String(e)}`);
-                }
-              }}
-              className="inline-flex items-center gap-1.5 h-full px-3 text-[12px] hover:bg-[color:var(--bg-hover)] disabled:opacity-50"
-              style={{ color: "var(--text)" }}
-              title={agentId ? "查看 system prompt" : "需先发送一条消息"}
-            >
-              <FileText size={13} />
-              System
-            </button>
-          </span>
-
-          {/* 右：token meter + 辅助操作 + panel toggle */}
-          <span className="flex items-center gap-2 justify-end min-w-0">
-            {stats && stats.total > 0 && <HudMeter stats={stats} />}
-            {sseStatus !== "idle" && (
-              <span
-                className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
-                style={{
-                  background:
-                    sseStatus === "active" ? "#22c55e" : "#ef4444",
-                }}
-                title={
-                  sseStatus === "active"
-                    ? "Live sync active"
-                    : "Connection lost"
-                }
-              />
-            )}
-            {electronApi && currentSessionFile && (
-              <IconButton
-                onClick={() =>
-                  void electronApi
-                    .revealInFinder(currentSessionFile)
-                    .catch((e) => setError(String(e)))
-                }
-                title={`在 Finder 中显示: ${currentSessionFile}`}
-                aria-label="在 Finder 中显示"
-                icon={<FolderOpen size={iconSizeMap.sm} />}
-              />
-            )}
-            <IconButton
-              onClick={() => setShowAuth(true)}
-              title="管理 Provider 凭证"
-              aria-label="管理凭证"
-              icon={<KeyRound size={iconSizeMap.sm} />}
-            />
-            <IconButton
-              onClick={toggleTools}
-              disabled={!agentId}
-              title={
-                !agentId
-                  ? "需先发送一条消息以建立 session"
-                  : showTools
-                    ? "关闭 Tools 面板"
-                    : "打开 Tools 面板"
-              }
-              aria-label="Tools 面板"
-              active={showTools}
-              icon={<Wrench size={iconSizeMap.sm} />}
-            />
-            <IconButton
-              onClick={toggleFiles}
-              title={showFiles ? "关闭右侧面板" : "打开文件浏览器"}
-              aria-label="右侧面板"
-              active={showFiles}
-              icon={<PanelRight size={iconSizeMap.sm} />}
-            />
-          </span>
-        </header>
+          onRevealInFinder={() => {
+            if (electronApi && currentSessionFile) {
+              void electronApi
+                .revealInFinder(currentSessionFile)
+                .catch((e) => setError(String(e)));
+            }
+          }}
+          onOpenAuth={() => setShowAuth(true)}
+          onToggleTools={toggleTools}
+          onToggleFiles={toggleFiles}
+        />
 
         {messages.length === 0 && !error ? (
           <EmptyState />
