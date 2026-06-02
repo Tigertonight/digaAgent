@@ -43,14 +43,14 @@ import SkillsPanel from "./components/SkillsPanel";
 import ToolsPanel from "./components/ToolsPanel";
 import AuthPanel from "./components/AuthPanel";
 import ModelsConfigPanel from "./components/ModelsConfigPanel";
-import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
+import { useMessageRefs } from "./ChatMinimap";
 import { EmptyState } from "./components/EmptyState";
-import { MessageView } from "./components/MessageView";
 import { SystemPromptModal } from "./components/SystemPromptModal";
 import { Composer } from "./components/Composer";
 import { DropOverlay } from "./components/DropOverlay";
 import { Sidebar } from "./components/Sidebar";
 import { TopHeader } from "./components/TopHeader";
+import { MessagesScrollArea } from "./components/MessagesScrollArea";
 
 interface Props {
   initialSessions: SessionInfoLite[];
@@ -1316,109 +1316,30 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         {messages.length === 0 && !error ? (
           <EmptyState />
         ) : (
-        <div className="relative flex flex-1 overflow-hidden">
-        <div
-          ref={messagesScrollRef}
-          onScroll={handleMessagesScroll}
-          className="flex-1 overflow-y-auto"
-        >
-          <div className="mx-auto w-full max-w-[820px] px-4 py-6 space-y-6">
-            {error && (
-              <div className="p-3 rounded bg-red-900/40 border border-red-700 text-sm text-red-200">
-                {error}
-              </div>
-            )}
-            {(() => {
-              const lastAssistantIdx = (() => {
-                for (let k = messages.length - 1; k >= 0; k--) {
-                  if (messages[k].role === "assistant") return k;
-                }
-                return -1;
-              })();
-              const modelLabel = currentProvider?.models.find(
-                (mm) => mm.id === modelId
-              )?.name;
-              let refIdx = 0;
-              return messages.map((m, i) => {
-                const isVisible =
-                  m.role === "user" || m.role === "assistant";
-                const currentRefIdx = isVisible ? refIdx++ : -1;
-                const isLastAssistant =
-                  m.role === "assistant" && i === lastAssistantIdx;
-                // key 稳定且唯一：
-                //   1) 优先 entryId（user message 从后端拿到的稳定 id）
-                //   2) 否则用 role:timestamp:index 三元组
-                //      —— 同一 SSE 流里 user/assistant 可能毫秒级共享 timestamp，
-                //         单纯 `t${timestamp}` 会出现 key 重复（React 警告）
-                //      —— role + index 用于在同 timestamp 时 disambiguate
-                //   3) 兜底 i${index}（不应到达，timestamp 一般都有）
-                const stableKey =
-                  m.entryId ??
-                  (m.timestamp != null
-                    ? `${m.role}:${m.timestamp}:${i}`
-                    : `i${i}`);
-                const view = (
-                  <MessageView
-                    msg={m}
-                    index={i}
-                    canFork={
-                      m.role === "user" &&
-                      !!m.entryId &&
-                      !streaming &&
-                      !forksCollapsed
-                    }
-                    isForking={forkingIndex === i}
-                    forkText={forkText}
-                    forkBusy={forkBusy}
-                    onStartFork={startFork}
-                    onCancelFork={cancelFork}
-                    onChangeForkText={setForkText}
-                    onSubmitFork={submitFork}
-                    onForkToNewSession={forkToNewSession}
-                    modelLabel={modelLabel}
-                    meta={
-                      isLastAssistant && stats && stats.total > 0
-                        ? {
-                            input: stats.input,
-                            output: stats.output,
-                            cost: stats.cost,
-                          }
-                        : undefined
-                    }
-                    streamingPhase={
-                      isLastAssistant && streaming ? agentPhase : undefined
-                    }
-                    isStreaming={isLastAssistant && streaming}
-                    cwd={cwd}
-                  />
-                );
-                if (!isVisible) return <div key={stableKey}>{view}</div>;
-                return (
-                  <div
-                    key={stableKey}
-                    ref={(el) => {
-                      messageRefs.current[currentRefIdx] = el;
-                    }}
-                  >
-                    {view}
-                  </div>
-                );
-              });
-            })()}
-            {/* 仅在"刚发送 → 锚定那条 user 到屏顶"的窗口期塞 60vh 占位;
-                锚定完成或用户主动滚动后即移除,避免向下滚到无内容空白区。 */}
-            {pinSpacer && <div aria-hidden style={{ minHeight: "60vh" }} />}
-            {/* 列表底部留一点 padding,让最后一条气泡和输入框之间不贴边 */}
-            <div aria-hidden style={{ height: 24 }} />
-            <div ref={messagesEndRef} />
-          </div>
-        </div>
-        <ChatMinimap
-          messages={messages}
-          scrollContainer={messagesScrollRef}
-          messageRefs={messageRefs}
-        />
-        </div>
+          <MessagesScrollArea
+            messages={messages}
+            error={error}
+            currentProvider={currentProvider}
+            modelId={modelId}
+            stats={stats}
+            agentPhase={agentPhase}
+            cwd={cwd}
+            streaming={streaming}
+            pinSpacer={pinSpacer}
+            forksCollapsed={forksCollapsed}
+            forkingIndex={forkingIndex}
+            forkText={forkText}
+            forkBusy={forkBusy}
+            messagesScrollRef={messagesScrollRef}
+            messagesEndRef={messagesEndRef}
+            messageRefs={messageRefs}
+            onScroll={handleMessagesScroll}
+            onStartFork={startFork}
+            onCancelFork={cancelFork}
+            onChangeForkText={setForkText}
+            onSubmitFork={submitFork}
+            onForkToNewSession={forkToNewSession}
+          />
         )}
 
         <Composer
