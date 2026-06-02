@@ -22,7 +22,7 @@ mini-pi-web 当前每个 session 是一座**孤岛**：用户只能按"最近修
 | F1 | **Session 元数据 + 持久化** | sidebar 不再是"日期堆"，可看摘要、状态、标签 | ✅ 立刻可做 |
 | F2 | **全文检索** | 5 秒内找到「上周让 agent 改 redux 的那个对话」 | ✅ 立刻可做 |
 | F3 | **自动摘要 + 智能标题** | 每个 session 一句话说明白干了什么 | ✅ 立刻可做（依赖 LLM 调用） |
-| F4 | **项目级记忆**（`.mini-pi/`） | 跨 session 复用经验：常用 prompt、教训、决策 | ✅ 立刻可做（纯文件存储） |
+| F4 | **项目级记忆**（`AGENTS.md`） | 跨 session 复用经验：常用 prompt、教训、决策 | ✅ v0 复用 SDK 内建机制（详见 [指南](../guides/project-memory.md)） |
 
 **关键认知**：这四件事**单独看都很普通**，但**叠加起来构成了产品护城河**。没有它们，多 session 只是"多个聊天窗口"；有了它们，**每次 agent 跑都是一次知识沉淀**，下次能用、能搜、能传给同事。
 
@@ -33,7 +33,7 @@ mini-pi-web 当前每个 session 是一座**孤岛**：用户只能按"最近修
 **推荐执行顺序**：
 1. **Phase A**（与 RFC-1 阶段 A 并行）：F1 元数据 + 持久化 — 2 人天
 2. **Phase B**（在 RFC-1 完成后）：F2 全文检索 + F3 自动摘要 — 5 人天
-3. **Phase C**（B 上线 2 周后）：F4 项目级记忆 — 5 人天
+3. **Phase C**（B 上线 2 周后）：F4 项目级记忆 — **v0 实际 0 工程**（复用 SDK 既有 `AGENTS.md` 加载机制，仅写文档；详见 [Phase C 回顾](./2026-06-02-rfc-3-phase-c-retrospective.md)）
 
 **为什么这个 RFC 排在 RFC-1/2 之后**：RFC-1 是基础，RFC-2 解决"敢不敢用"，RFC-3 解决"用多了之后体验崩不崩"。三者递进，RFC-3 是**让产品能从 5 session 扩展到 500 session 的关键**。
 
@@ -378,6 +378,22 @@ async function generateSummary(sessionId: string): Promise<{
 
 #### 3.2.4 F4：项目级记忆 `.mini-pi/`
 
+> ⚠️ **v0 实施方案变更（2026-06-02 Phase C 设计阶段确认）**
+>
+> 调研 SDK `@earendil-works/pi-coding-agent` 发现，它**已经内建**了完整的项目级记忆机制：`DefaultResourceLoader` 在创建 session 时会自动扫描 `<agentDir>/AGENTS.md` 和 cwd 一路向上每一级目录的 `AGENTS.md` / `CLAUDE.md`，并通过 `appendSystemPrompt` 注入。mini-pi-web 的 `lib/agent-registry.ts:236-241` 已经在用 `DefaultResourceLoader` 且未禁用，等价于**该机制已经在生产生效**，只是用户不知道。
+>
+> 因此 v0 决策：
+> - ✅ **不写代码**，复用 SDK 既有约定（`AGENTS.md` 是 Claude Code / Cursor / Aider 的事实标准）
+> - ✅ **写用户指南**：`docs/guides/project-memory.md`
+> - 🚫 暂不实现 `.mini-pi/agents.md`、`.mini-pi/prompts/`、`.mini-pi/settings.json`、"加入 memory" 抽取等
+> - 下方原设计保留作为**未来可能扩展**的参考
+>
+> 推荐先读 → [项目级记忆指南](../guides/project-memory.md)
+
+---
+
+**【以下为 v0 之前的设计稿，未实施，留作 v1+ 参考】**
+
 **目录结构**：
 
 ```
@@ -492,33 +508,44 @@ const isUnread = sess.modified.getTime() > seenAt;
 
 **上线策略**：F2 默认开（无成本）；F3 默认开但**预算 $0.5/天上限**，超了暂停。
 
-### Phase C：F4 项目级记忆（5 人天）
+### Phase C：F4 项目级记忆（v0 实际 0 人天）
 
 **前置**：Phase A/B 完成（必需）。
 
+> ⚠️ **2026-06-02 方案变更**：调研发现 SDK `@earendil-works/pi-coding-agent` 的 `DefaultResourceLoader` 已经内建项目级 `AGENTS.md` 加载机制，且 mini-pi-web 已默认启用。Phase C v0 不需要写代码，**只产出用户指南**。下方原 C1–C8 任务列表全部转入「未来可能扩展」状态。
+>
+> v0 实际产出（commit）：
+> - `docs/guides/project-memory.md`：完整用户指南（怎么写、加载顺序、常见模板、故障排查）
+> - 本 RFC 第 3.2.4 节加方案变更 banner
+> - `docs/plans/2026-06-02-rfc-3-phase-c-retrospective.md`：Phase C 回顾
+
+**【以下为 v0 之前的设计稿，未实施，留作 v1+ 参考】**
+
 | 任务 | 工时 | 验收 |
 |------|-----|------|
-| C1 | `lib/project-memory/store.ts`：读写 `<cwd>/.mini-pi/`（含安全：写之前必须确认 cwd 在用户允许列表） | 0.7d | 单元测试覆盖 + 在 readonly 目录优雅降级 |
-| C2 | `memory.md` 接入：创建 agent 时拼到 `appendSystemPrompt` | 0.4d | 改 memory.md 后新建 session 能看到生效 |
-| C3 | Prompt 模板：读 `.mini-pi/prompts/*.md` + parse front matter + 变量解析 | 0.8d | 解析 `{{var}}` 模板正常 |
-| C4 | `PromptPicker` 组件（输入框上方下拉） + 模板变量小表单 | 0.8d | 选模板 → 填表单 → fill 输入框 |
-| C5 | 设置页：项目级 settings 编辑 UI（与全局 settings 合并显示） | 0.6d | 改完保存到对应文件，全局 vs 项目优先级生效 |
-| C6 | "加入 memory" 快捷动作（chat message 右键 → 抽到 memory.md） | 0.5d | 抽出后 memory.md 出现该段 |
-| C7 | README + 设置页文档解释 `.mini-pi/` 目录约定 + .gitignore 推荐 | 0.4d | 文档可读 |
-| C8 | E2E：在新项目里走一遍（建目录 → 写 memory → 用 prompt → agent 自然带上） | 0.8d | 整链路 happy path 跑通 |
+| ~~C1~~ | ~~`lib/project-memory/store.ts`：读写 `<cwd>/.mini-pi/`（含安全：写之前必须确认 cwd 在用户允许列表）~~ | ~~0.7d~~ | ~~单元测试覆盖 + 在 readonly 目录优雅降级~~ |
+| ~~C2~~ | ~~`memory.md` 接入：创建 agent 时拼到 `appendSystemPrompt`~~ | ~~0.4d~~ | ~~改 memory.md 后新建 session 能看到生效~~ |
+| ~~C3~~ | ~~Prompt 模板：读 `.mini-pi/prompts/*.md` + parse front matter + 变量解析~~ | ~~0.8d~~ | ~~解析 `{{var}}` 模板正常~~ |
+| ~~C4~~ | ~~`PromptPicker` 组件（输入框上方下拉） + 模板变量小表单~~ | ~~0.8d~~ | ~~选模板 → 填表单 → fill 输入框~~ |
+| ~~C5~~ | ~~设置页：项目级 settings 编辑 UI（与全局 settings 合并显示）~~ | ~~0.6d~~ | ~~改完保存到对应文件，全局 vs 项目优先级生效~~ |
+| ~~C6~~ | ~~"加入 memory" 快捷动作（chat message 右键 → 抽到 memory.md）~~ | ~~0.5d~~ | ~~抽出后 memory.md 出现该段~~ |
+| ~~C7~~ | ~~README + 设置页文档解释 `.mini-pi/` 目录约定 + .gitignore 推荐~~ | ~~0.4d~~ | ~~文档可读~~ |
+| ~~C8~~ | ~~E2E：在新项目里走一遍（建目录 → 写 memory → 用 prompt → agent 自然带上）~~ | ~~0.8d~~ | ~~整链路 happy path 跑通~~ |
 
-**上线策略**：默认 opt-in（不主动创建 `.mini-pi/`），用户首次在设置点"为此项目启用 mini-pi memory"才创建。
+**v0 上线策略**：`AGENTS.md` 在项目根存在即生效，无 opt-in 开关。用户教育通过 [项目级记忆指南](../guides/project-memory.md) 完成。
 
 ### 时间合计
 
-| Phase | 工时 | 必须先做 |
-|-------|-----|---------|
-| A | 2.0d | — |
-| B | 5.0d | A |
-| C | 5.0d | A + B |
-| **总计** | **12.0d** | — |
+| Phase | 工时（原计划） | 工时（v0 实际） | 必须先做 |
+|-------|---------------|----------------|---------|
+| A | 2.0d | 2.0d | — |
+| B | 5.0d | 2.5d（F3 推迟到 v1） | A |
+| C | 5.0d | **0d（仅文档）** | A + B |
+| **总计** | 12.0d | **4.5d + 文档** | — |
 
-按 1 人全职推进，约 **3 周** 完成。
+v0 实际显著低于原估，主要因为：
+- F3 自动摘要被推迟到 v1（需要 LLM 调用成本观察期）
+- F4 项目级记忆复用 SDK 既有 `AGENTS.md` 机制，零工程
 
 ---
 
