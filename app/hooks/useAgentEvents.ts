@@ -139,6 +139,8 @@ export function useAgentEvents(
           updateRunner(ownerKey, {
             streaming: true,
             agentPhase: { kind: "waiting_model" },
+            // RFC-2 Phase A：记录本轮起始时间，用于 Budget duration 维度
+            runStartedAt: Date.now(),
           });
           return;
 
@@ -147,6 +149,7 @@ export function useAgentEvents(
             streaming: false,
             agentPhase: null,
             retryInfo: null,
+            runStartedAt: null,
           });
           playDoneSound();
           refreshSessions();

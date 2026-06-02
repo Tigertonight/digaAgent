@@ -34,6 +34,7 @@ import { useSessions } from "./hooks/useSessions";
 import { useChatStream } from "./hooks/useChatStream";
 import { useComposerAttachments } from "./hooks/useComposerAttachments";
 import { usePetPusher } from "./hooks/usePetPusher";
+import { useBudget } from "./hooks/useBudget";
 import { useForkable } from "./hooks/useForkable";
 import { useAutocomplete } from "./hooks/useAutocomplete";
 import { useMessageRefs } from "./ChatMinimap";
@@ -687,6 +688,15 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     activeSnapshot,
   });
 
+  // RFC-2 Phase A：会话级 Budget MVP
+  // 输入 activeSnapshot + agentId，输出当前预算/消耗/状态（duration 维度内部按 1s tick 刷新）
+  const {
+    budget,
+    hasOverride: budgetHasOverride,
+    status: budgetStatus,
+    spent: budgetSpent,
+  } = useBudget({ activeSnapshot, agentId });
+
   // 宠物窗口发来的 "切到指定 session" 请求
   useEffect(() => {
     const api = getElectronApi();
@@ -1279,6 +1289,10 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           currentSessionFile={currentSessionFile}
           showTools={showTools}
           showFiles={showFiles}
+          budget={budget}
+          budgetSpent={budgetSpent}
+          budgetStatus={budgetStatus}
+          budgetHasOverride={budgetHasOverride}
           onToggleSidebar={() => setSidebarOpen((v) => !v)}
           onToggleTheme={toggleTheme}
           onOpenBranches={() => setShowBranches(true)}
