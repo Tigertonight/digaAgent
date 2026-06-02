@@ -98,6 +98,11 @@ export interface RunnerState {
   compacting: boolean;
   compactError: string | null;
   retryInfo: RetryInfo | null;
+  /**
+   * 本轮 run 的开始时间戳（ms）；agent_start 时打、agent_end 时清。
+   * 用于 Budget 计算 duration 维度（RFC-2 Phase A）。
+   */
+  runStartedAt: number | null;
 
   // HUD
   stats: StatsSnapshot | null;
@@ -143,6 +148,7 @@ export function emptyRunner(): RunnerState {
     compacting: false,
     compactError: null,
     retryInfo: null,
+    runStartedAt: null,
 
     stats: null,
     toolsCount: null,

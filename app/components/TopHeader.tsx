@@ -13,8 +13,14 @@ import {
 } from "lucide-react";
 import { IconButton, iconSizeMap } from "./IconButton";
 import { HudMeter } from "./HudMeter";
+import { BudgetIndicator } from "./BudgetIndicator";
 import type { SseStatus, StatsSnapshot } from "@/lib/session-runner";
 import type { ElectronApi } from "@/lib/electron-bridge";
+import type {
+  BudgetSpent,
+  BudgetStatus,
+  SessionBudget,
+} from "@/lib/budget/types";
 
 interface TopHeaderProps {
   sidebarOpen: boolean;
@@ -26,6 +32,11 @@ interface TopHeaderProps {
   currentSessionFile: string | null;
   showTools: boolean;
   showFiles: boolean;
+  /** RFC-2 Phase A：Budget 当前生效配置 + 实时状态（来自 useBudget） */
+  budget: SessionBudget;
+  budgetSpent: BudgetSpent;
+  budgetStatus: BudgetStatus;
+  budgetHasOverride: boolean;
   onToggleSidebar: () => void;
   onToggleTheme: () => void;
   onOpenBranches: () => void;
@@ -46,6 +57,10 @@ export function TopHeader({
   currentSessionFile,
   showTools,
   showFiles,
+  budget,
+  budgetSpent,
+  budgetStatus,
+  budgetHasOverride,
   onToggleSidebar,
   onToggleTheme,
   onOpenBranches,
@@ -121,6 +136,12 @@ export function TopHeader({
       {/* 右：token meter + 辅助操作 + panel toggle */}
       <span className="flex items-center gap-2 justify-end min-w-0">
         {stats && stats.total > 0 && <HudMeter stats={stats} />}
+        <BudgetIndicator
+          budget={budget}
+          spent={budgetSpent}
+          status={budgetStatus}
+          hasOverride={budgetHasOverride}
+        />
         {sseStatus !== "idle" && (
           <span
             className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
