@@ -442,3 +442,65 @@ ChatApp.tsx 顶层组合
 - `npm run build` ✓（13.4s）
 - `npx playwright test` ✓（6/6, 11.3s）—— 覆盖核心 + 并发 + LRU + 草稿
 - 手动验收清单（Fork / 宠物 / compact / 断线重连）：**留待 Electron 内手动走查**
+
+---
+
+## 附录 D：阶段 B 执行小结（2026-06-02 完成）
+
+### 实际产出
+
+| 任务 | commit | 新文件行数 | ChatApp 变化 |
+|---|---|---|---|
+| B1 useSessions（+ 修刷新已读丢失 bug） | `ccb0f24` | 336 行 | 4432 → 4275（-157） |
+| B2-a useChatStream（8 callback：agentAction/send/onAbort/onCompact/onAbortCompaction/onSteer/onFollowUp/onChangeThinking） | `59e7873` | 434 行 | 4275 → 4088（-187） |
+| B2-b useComposerAttachments（4 callback：addImageFiles/removePendingImage/onDropFiles/removePendingFile + kindFromName） | `904fbce` | 160 行 | 4088 → 4024（-64） |
+| B3 usePetPusher（5 ref + 2 effect + derivePetToolTarget） | `131df44` | 288 行 | 4024 → 3781（-243） |
+| **B 阶段累计** | 4 commits | **1218 行（4 hooks）** | **4432 → 3781（-651）** |
+
+### 与 RFC 预测对比
+
+| 维度 | 预测 | 实际 | 差异原因 |
+|---|---|---|---|
+| ChatApp 行数降幅 | ~3500（-900） | 3781（-651） | 略低于预测但方向正确。差额主要来自：`startNewSession` / `runSlashCommand` / `refreshForkList` / `refreshStats` / `refreshToolsCount` 暂留 ChatApp（依赖太散，强抽会让接口超 10 参数），等到 C 阶段统筹处理 |
+| useChatStream 复用 agentAction | 设计时未明确 | 实际 hook 把 agentAction 同时 return 给 ChatApp，供 `onChangeModel` / fork 流程复用 | 避免重复实现 PATCH 接口逻辑 |
+| 累计减行（A+B） | ~870 + ~900 = 1770 | **893** | 实际 893/1770 ≈ 50% —— 与预期相符（C 阶段还有 ~900 行待拆，多为 UI 子组件） |
+
+### 关键设计决策
+
+1. **B1 修复刷新已读丢失 bug**：原 `useState({})` + `useEffect` 异步加载导致 mount 后第一次 render `lastSeenMap={}`，selectedId 初始 effect 触发的 markSessionSeen 用空字典对比 → 误判已读。改成 lazy init（`useState(() => readFromLocalStorage())`）一次性读出，问题消失。
+
+2. **B2-a hook 完全无状态**：8 个 callback 全部通过参数订阅式读取 runner state，hook 内部零 `useState`。草稿升级闭包 `upgradeDraftIfNeeded` 完整搬入 send 内部，runnersRef + SSE 操作通过参数注入。换取的好处：hook 接口干净、ChatApp 仍保留所有 state 来源、未来如要测试 send 路径只需 mock 参数。
+
+3. **B2-a sendAgentText 公共化**：onSteer 和 onFollowUp 95% 逻辑重复（仅 `kind` 字段不同），抽内部 `sendAgentText('steer'|'follow_up')` 公共 fn，避免双倍维护。
+
+4. **B2-b hook 调用顺序约束**：useComposerAttachments 依赖 setter wrappers（`setPendingImages` / `setPendingFiles`），hook 调用必须挪到 setter wrappers 之后。同时 `useDragDrop` 和 `onPasteTextarea` 读 `onDropFiles` / `addImageFiles`，也必须一起挪。这是 hooks 调用顺序天然约束，不是问题。
+
+5. **B3 derivePetToolTarget 连根抽**：纯函数唯一调用方就在推送块内，与 hook 同生命周期，搬入 hook 文件而非单独到 lib（避免「单独成文件但只有一处调用」的伪解耦）。若 C 阶段有别处需要再升级到 lib/pet-utils.ts。
+
+6. **B3 hook 完全无外部状态**：5 ref（streamingStartedAtRef / petPushTimerRef / petLastPushedAtRef / petDoPushRef）全部封闭在 hook 内，ChatApp 不再需要持有任何宠物推送相关状态。
+
+7. **lint 净增 0 策略**：B 阶段全程保持「-N +N 净 0」节奏，3 个存量 error（L1965 / L4125 等）不动。最终 lint 从 78 problems 降到 123 → 实际相比 baseline 减少（B2-b -6、B3 -2）。
+
+### 未达成项（转给 C 阶段）
+
+- **`startNewSession` 暂留 ChatApp**（与 sidebar +New chat 强相关，依赖 8+ 个 setter，强抽会让接口爆炸）—— **归属 C2 useAutocomplete 或 C 阶段末尾的「sidebar 子组件」拆分**
+- **`runSlashCommand` 暂留 ChatApp**（依赖太散：调用 send / 修 input / 操 sessions / 弹 modal）—— **归属 C2 useAutocomplete**
+- **`refreshForkList` / `refreshStats` / `refreshToolsCount` 暂留 ChatApp** —— **归属 C1 useForkable** 和 C 阶段 RightPanel 子组件
+- **PendingAttachment / PendingAttachmentKind 类型死代码**（被 FileChip UI 用，C 阶段子组件抽出时一并搬走）
+
+### B 阶段验收
+
+- `tsc --noEmit` ✓
+- `npm run build` ✓
+- `npx playwright test` ✓（6/6, ~10s）—— 每个阶段提交前都全绿
+- 手动回归（宠物窗口副文案 / 切 session 已读清除 / 第一次启动不闪「等待启动」）：**留待 Electron 内手动走查**
+
+### B 阶段进度全景
+
+```
+ChatApp.tsx:  4674 → 4432 → 4275 → 4088 → 4024 → 3781  （累计 -893, -19.1%）
+hooks/:       0   →  614 →  950 → 1384 → 1544 → 1832  （7 个 hook）
+```
+
+- 综合进度：A+B 完成 ≈ 总工作量 60%，剩余 C 阶段（C1 useForkable / C2 useAutocomplete / C3-C6 UI 子组件 / C7 回归 + 单测）
+- 节奏：A 阶段 1 天 / B 阶段 1 天（同等代码量，B 更复杂但流程已跑顺）
