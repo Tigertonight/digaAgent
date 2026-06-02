@@ -35,6 +35,7 @@ import { useChatStream } from "./hooks/useChatStream";
 import { useComposerAttachments } from "./hooks/useComposerAttachments";
 import { usePetPusher } from "./hooks/usePetPusher";
 import { useBudget } from "./hooks/useBudget";
+import { useBudgetEnforcer, type BudgetTrigger } from "./hooks/useBudgetEnforcer";
 import { useForkable } from "./hooks/useForkable";
 import { useAutocomplete } from "./hooks/useAutocomplete";
 import { useMessageRefs } from "./ChatMinimap";
@@ -46,6 +47,7 @@ import { TopHeader } from "./components/TopHeader";
 import { MessagesScrollArea } from "./components/MessagesScrollArea";
 import { RightPanelContainer } from "./components/RightPanelContainer";
 import { ChatModals } from "./components/ChatModals";
+import { BudgetExceededModal } from "./components/BudgetExceededModal";
 
 interface Props {
   initialSessions: SessionInfoLite[];
@@ -282,6 +284,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const [showCwdPicker, setShowCwdPicker] = useState(false);
   const [showFilePicker, setShowFilePicker] = useState(false);
   const [showBranches, setShowBranches] = useState(false);
+  /** RFC-2 Phase A3：Budget 命中后由 useBudgetEnforcer 设置；非 null 时弹 BudgetExceededModal */
+  const [budgetPausedTrigger, setBudgetPausedTrigger] =
+    useState<BudgetTrigger | null>(null);
   const [systemPromptText, setSystemPromptText] = useState<string | null>(
     null
   );
@@ -695,6 +700,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     hasOverride: budgetHasOverride,
     status: budgetStatus,
     spent: budgetSpent,
+    setSessionOverride,
   } = useBudget({ activeSnapshot, agentId });
 
   // 宠物窗口发来的 "切到指定 session" 请求
@@ -1112,6 +1118,40 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     setPinSpacer,
   });
 
+  // RFC-2 Phase A3：Budget 触发后执行 abort/pause
+  useBudgetEnforcer({
+    agentId,
+    streaming,
+    runStartedAt: activeSnapshot.runStartedAt,
+    status: budgetStatus,
+    budget,
+    onAbort,
+    onPause: setBudgetPausedTrigger,
+  });
+
+  // "提高上限并继续"：把当前 budget 各启用维度 × 2 写入 session override
+  const handleRaiseAndContinue = useCallback(
+    (trigger: BudgetTrigger) => {
+      if (!agentId) {
+        setBudgetPausedTrigger(null);
+        return;
+      }
+      const b = trigger.budget;
+      setSessionOverride({
+        maxCostUsd: b.maxCostUsd && b.maxCostUsd > 0 ? b.maxCostUsd * 2 : b.maxCostUsd,
+        maxTurns: b.maxTurns && b.maxTurns > 0 ? b.maxTurns * 2 : b.maxTurns,
+        maxDurationSec:
+          b.maxDurationSec && b.maxDurationSec > 0
+            ? b.maxDurationSec * 2
+            : b.maxDurationSec,
+        action: b.action,
+      });
+      setBudgetPausedTrigger(null);
+      // Phase A 暂不自动续发；用户需手动在 Composer 里继续追问
+    },
+    [agentId, setSessionOverride]
+  );
+
   const headerLabel = useMemo(() => {
     if (agentSessionId) return `agent · ${agentSessionId.slice(0, 8)}`;
     if (selectedId) return `session · ${selectedId.slice(0, 8)}`;
@@ -1452,6 +1492,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         onBranchesNavigated={() => {
           void reloadFromCurrentSession();
         }}
+      />
+      <BudgetExceededModal
+        trigger={budgetPausedTrigger}
+        onClose={() => setBudgetPausedTrigger(null)}
+        onRaiseAndContinue={handleRaiseAndContinue}
       />
     </div>
   );
