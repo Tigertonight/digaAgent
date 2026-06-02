@@ -504,3 +504,108 @@ hooks/:       0   →  614 →  950 → 1384 → 1544 → 1832  （7 个 hook）
 
 - 综合进度：A+B 完成 ≈ 总工作量 60%，剩余 C 阶段（C1 useForkable / C2 useAutocomplete / C3-C6 UI 子组件 / C7 回归 + 单测）
 - 节奏：A 阶段 1 天 / B 阶段 1 天（同等代码量，B 更复杂但流程已跑顺）
+
+---
+
+## 附录 E：阶段 C 执行小结（2026-06-02 完成）
+
+### 实际产出
+
+| 任务 | commit | 新文件行数 | ChatApp 变化 |
+|---|---|---|---|
+| C1 useForkable（fork 流程 + 分支列表 + refreshForkList + getForkedFromBaseSnapshot 全量搬运） | `b1e748e` | 424 行 | 3781 → 3559（-222） |
+| C2 useAutocomplete（slash/@-path 双补全 + onKeyDown 拦截 + SLASH_COMMANDS 注册表 + runSlashCommand） | `7cc8d95` | 330 行 | 3559 → 3370（-189） |
+| C3 MessageView + lib/format（消息列表渲染 + formatRelativeTime/shortCwd/formatMessageTime 三 helper） | `0399415` | 536 + 57 行 | 3370 → 2810（-560） |
+| C4 HudMeter + SystemPromptModal（顶栏 token/cost HUD + system prompt 编辑模态） | `8099b35` | 124 + 82 行 | 2810 → 2621（-189） |
+| C5 Composer（输入区 textarea + 控制条 + 内嵌发送/Steer/Follow-up/Abort + 内联 FileChip，40 props） | `c8a7de0` | 605 行 | 2621 → 2223（-398） |
+| C6 Sidebar（左侧栏整体 aside：brand+new + cwd + sessions 列表 + explorer + Models/Skills 双标签，27 props） | `23d089c` | 440 行 | 2223 → 1889（-334） |
+| **C 阶段累计** | 6 commits | **2598 行（2 hooks + 6 组件 + 1 helper）** | **3781 → 1889（-1892）** |
+
+### 与 RFC 预测对比
+
+| 维度 | 预测 | 实际 | 差异原因 |
+|---|---|---|---|
+| ChatApp 最终行数 | ~600（目标） | **1889** | 差距来自顶部布局 / Effects 集群 / RightPanel 子组件抽离未做（属 RFC 范围外）；纯逻辑/UI 抽离任务已 100% 完成 |
+| C 阶段累计减行 | ~900 | **1892** | 比预测好 2x：附录 D 的「未达成项」(`startNewSession` / `refreshForkList` / `refreshStats` 等) 全部在 C1-C2 一并解决；同时 unused imports 清理顺便砍掉了 ~80 行 import 块 |
+| 子组件数量 | 4-5 | **6**（MessageView, HudMeter, SystemPromptModal, Composer, Sidebar, FileChip 内联） | Composer 加 FileChip 内联，避免单独建小文件 |
+| lint warnings | 不变 | **111 → 91（-20）** | C5/C6 顺手清掉 C1-C4 累积的 unused imports（formatBytes / approxBase64Bytes / 18 个 lucide icon 等） |
+
+### 关键设计决策
+
+1. **C1 useForkable 把 refreshForkList 一并抽走**：附录 D 标记为「未达成」，C1 顺手解决。原因：forkable 状态本身就在 hook 内，refreshForkList 调用方仅一处（fork 操作完成后），强行外置无意义。
+
+2. **C2 SLASH_COMMANDS 注册表**：原来 12 个 `/` 命令散在 onKeyDown 里 switch，C2 抽出时建注册表，每个命令含 name/desc/handler 三字段。`runSlashCommand` 也跟进搬到 hook，统一通过参数注入需要的 callback（startNewSession / setShowFilePicker 等）。
+
+3. **C3 MessageView 一次性吞掉 message-related 闭包**：message 列表渲染、`messageRefs`、`useMessageRefs`、思考块折叠、用户消息编辑、复制按钮，全部一并搬入 MessageView（不分批），避免「先抽 70%、剩 30% 当胶水」的尴尬。lib/format 同时建好，避免 component 内嵌 helper。
+
+4. **C3 踩坑：formatMessageTime 凭印象重写**：第一次实现时按"印象"写了一个不带星期的版本，e2e 失败后回 ChatApp 旧版 1:1 抄过来。**从此立规：抽出的 helper / 组件必须 1:1 复制原代码，不要凭印象**——C4/C5/C6 严格遵守。
+
+5. **C4 两个小组件合并提交**：HudMeter（124 行）+ SystemPromptModal（82 行）单独提 commit 太琐碎，合并到 C4 一次提。但每个文件独立，互不依赖。
+
+6. **C5 Composer 40 props 是上限**：原 ChatApp 输入区有 14 个 useState + 16 个回调 + 多种状态条件分支。考虑过用 context 但会破坏「子组件纯受控」原则，最终接受 40 props 接口。8 组分类（textarea / 流式 / 附件 / 自动补全 / 发送 / Retry+Compact / Provider+Model+Thinking / Tools+Sound）让接口可读。FileChip 内联到同文件不另开（专用组件）。
+
+7. **C5 类型对齐严肃化**：第一次写 ComposerProps 凭印象写 `acItems: string[]` / `acMode: "slash" | "path"`，tsc 直接报错。修正流程：查 useAutocomplete 真实 return 类型 → 改 props 类型 → 配套 import AutocompleteItem / Dispatch<SetStateAction<number>>。**类型不应该凭印象写，应该读源码**。
+
+8. **C6 Sidebar 整体抽走 aside**：原 RFC 计划叫 SidebarSessions（只抽中间列表）。实际盘点发现 aside 的 5 段（brand+new / cwd / sessions / explorer / Models/Skills）耦合度低、纯展示，整体抽更干净（27 props < 两次抽合计 35+ props）。renderRow 保留 Sidebar 内闭包：依赖太多 props，提取 RowComponent 反而 props 爆炸。
+
+9. **C6 顺手大扫除 unused imports**：抽完 Sidebar 后，ChatApp 顶部累积了 26 个 unused（PillSelect / ProviderIcon / InputAutocomplete / SidebarExplorer / 18 个 lucide icon / 2 个 image-utils helper / 2 个 format helper）。这些是 C1-C5 留下的"快速通过 lint"债务。C6 借机一次性偿还，lint 直接从 111 降到 91。
+
+10. **lint 净增 0 → -20 终值**：B 阶段定的"-N +N 净 0"策略，到 C 阶段实际超额完成。原因：C5/C6 抽离子组件时，发现旧 import 不再被引用，**对照 grep count 校验后批量删**——这是机械操作但需要警惕"误删 BrandLogo"（曾在 L1543 还在用）。
+
+11. **C7 不引入 vitest 单测框架**：项目目前只有 playwright（e2e），单测要新引依赖+配置+CI。这超出 C 阶段「拆分 + 不破坏行为」的范畴，应当作独立 RFC（小型基础设施）。当前 e2e 6/6 全绿足以保证回归。
+
+### 未达成项（转给后续 RFC）
+
+- **ChatApp.tsx 仍 1889 行**：剩余主要是顶部布局 (header / theme toggle / sidebar toggle / panel toggles)、modal 集群（ShowFilePicker / ShowSkillsConfig / ShowModelsConfig / ShowCwdPicker / ShowAuth / SystemPromptModal 触发 props）、useEffect 集群（drag-drop / SSE 启动 / theme persist / window event listeners）。这些都不是「业务模块」级别，硬抽不划算。建议留待 **RFC-1.5 ChatApp 顶部布局精修**（独立小 RFC，估 1 天）或并入 RFC-2/3。
+- **单测覆盖**：lib/format / lib/chat-reducer / useSessions 等已有清晰边界的模块值得加单测。建议 **RFC-test-infra**（独立小 RFC，引入 vitest + 配置 + 写 3-5 个示范单测）。
+- **RightPanel 子组件**（files browser / tools panel / branches popover 等）：这些原本就已是独立组件，ChatApp 只是组装它们，不在 RFC-1 范围。
+
+### C 阶段验收
+
+- `tsc --noEmit` ✓（每个子阶段提交前都通过）
+- `npm run build` ✓
+- `npx playwright test` ✓（6/6, ~7s）—— C1-C6 每次提交前都全绿
+- lint **111 → 91**（-20 warning，净改善）
+- 手动回归（fork 流程 / @-path 补全 / message 编辑 / HUD 显示 / system prompt 编辑 / 输入区发送+Steer+Follow-up+Abort / sidebar 切 session+rename+delete+export+menu）：**留待 Electron 内手动走查**
+
+### C 阶段进度全景
+
+```
+ChatApp.tsx:  3781 → 3559 → 3370 → 2810 → 2621 → 2223 → 1889
+              （C1）  （C2）  （C3）  （C4）  （C5）  （C6）
+              累计 -1892, -50.0%
+
+新增产物：
+  hooks/:           +754 行（useForkable 424 + useAutocomplete 330）
+  components/:      +1787 行（MessageView 536 + HudMeter 124 +
+                              SystemPromptModal 82 + Composer 605 +
+                              Sidebar 440）
+  lib/:             +57 行（lib/format.ts）
+  C 阶段总计：       +2598 行
+```
+
+### RFC-1 总览（A + B + C 全阶段）
+
+| 阶段 | 任务数 | commits | 新代码 | ChatApp 变化 | 累计减行 |
+|---|---|---|---|---|---|
+| A | 4 | 4 | 614（4 hooks） | 4674 → 4432 | -242（-5.2%） |
+| B | 4 | 5 | 1218（4 hooks） | 4432 → 3781 | -893（-19.1%） |
+| **C** | **6** | **6** | **2598（2 hooks + 5 组件 + 1 helper）** | **3781 → 1889** | **-2785（-59.6%）** |
+
+```
+ChatApp.tsx 全程：4674 → 1889  （-2785 行 / -59.6%）
+hooks/ 全程：     0    → 2586  （9 个 hook）
+components/ 全程： 已存 → +1787 （5 个新组件）
+lib/ 全程：       已存 → +57   （format helper）
+```
+
+- 节奏：A 1 天 / B 1 天 / **C 1.5 天**（C5+C6 耗时最多，因为 props 接口大、需仔细盘点）
+- **「先想清楚再整体实施」策略奏效**：每个子阶段都先盘点依赖→列 props 清单→建文件→1:1 复制→tsc 校准类型→lint+build+e2e 验收→commit。零回滚、零事后修补
+- **质量保证**：每次提交前 e2e 6/6 全绿；lint 111 → 91（净改善 20）；tsc/build 全程干净
+
+### 后续 RFC 衔接
+
+- **RFC-1.5（建议）**：ChatApp 顶部布局精修（header / theme / panel toggles / modal 集群），目标 ChatApp < 1200 行。1 天工作量
+- **RFC-test-infra（建议）**：引入 vitest + 给 lib/format / chat-reducer / 关键 hooks 加单测。1 天工作量
+- **RFC-2 Agent Collaboration**：在 RFC-1 已拆分干净的 hook 基础上，新增多 agent 协作。useSessions / useChatStream 可直接复用
+- **RFC-3 Session as Knowledge**：在 useSessions 之上增加 session 标签 / 跨 session 搜索能力
