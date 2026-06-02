@@ -22,6 +22,14 @@ export interface CollabExtensionOptions {
   onApprovalNeeded: (req: ApprovalRequest) => Promise<ApprovalResponse>;
   /** 当前 agentId（用于 approval id 复合 key，区分多 session 并发）。 */
   getAgentId: () => string;
+  /**
+   * B4：查询某 ruleId 是否已在本 session "不再问"集合中。
+   * 命中 ask 规则时若返回 true → 直接放行（不调 onApprovalNeeded、不弹气泡）。
+   * undefined / false → 走原 ask 流程。
+   *
+   * 可选参数：B1/B2 没有此能力，老调用方不传也能跑（视为永不命中）。
+   */
+  hasRemember?: (ruleId: string) => boolean;
 }
 
 export function createCollabExtension(
@@ -43,7 +51,13 @@ export function createCollabExtension(
           };
         }
 
-        // rule.on === "ask"：等用户决策
+        // rule.on === "ask"：先查 session remember（B4）。
+        // 命中 → 静默放行（前端 chat 流也不会出现气泡——因为不推 approval_request）。
+        if (opts.hasRemember && opts.hasRemember(rule.id)) {
+          return;
+        }
+
+        // 走真审批通道：弹气泡 + await 用户决策（或超时）。
         const req: ApprovalRequest = {
           id: `${opts.getAgentId()}:${event.toolCallId}`,
           agentId: opts.getAgentId(),

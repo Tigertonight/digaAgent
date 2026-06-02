@@ -31,30 +31,44 @@ export interface UseApprovalsOptions {
   onError?: (msg: string) => void;
 }
 
+/** B4：approve 的可选项——传 remember 让 server 把 (agentId, ruleId) 加入 session 记忆。 */
+export interface ApproveOptions {
+  /** "this-session" = 本 session 内同 ruleId 不再问；undefined = 只这次 */
+  remember?: "this-session";
+  /** 触发审批的 ruleId（remember 必须配合 ruleId 才生效）。 */
+  ruleId?: string;
+}
+
 export interface UseApprovalsReturn {
-  approve: (toolCallId: string) => Promise<void>;
+  approve: (toolCallId: string, opts?: ApproveOptions) => Promise<void>;
   deny: (toolCallId: string, denyReason?: string) => Promise<void>;
+}
+
+interface PostDecisionBody {
+  toolCallId: string;
+  decision: ApprovalDecision;
+  denyReason?: string;
+  remember?: "this-session";
+  ruleId?: string;
 }
 
 async function postDecision(
   agentId: string,
-  toolCallId: string,
-  decision: ApprovalDecision,
-  denyReason: string | undefined,
+  body: PostDecisionBody,
   onError: ((m: string) => void) | undefined
 ): Promise<void> {
   try {
     const r = await fetch(`/api/agent/${agentId}/approval`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ toolCallId, decision, denyReason }),
+      body: JSON.stringify(body),
     });
     if (!r.ok) {
       const text = await r.text().catch(() => "");
-      onError?.(`approval ${decision} failed: ${r.status} ${text}`);
+      onError?.(`approval ${body.decision} failed: ${r.status} ${text}`);
     }
   } catch (e) {
-    onError?.(`approval ${decision} network error: ${String(e)}`);
+    onError?.(`approval ${body.decision} network error: ${String(e)}`);
   }
 }
 
@@ -62,9 +76,18 @@ export function useApprovals(opts: UseApprovalsOptions): UseApprovalsReturn {
   const { agentId, onError } = opts;
 
   const approve = useCallback<UseApprovalsReturn["approve"]>(
-    async (toolCallId) => {
+    async (toolCallId, approveOpts) => {
       if (!agentId) return;
-      await postDecision(agentId, toolCallId, "allow", undefined, onError);
+      await postDecision(
+        agentId,
+        {
+          toolCallId,
+          decision: "allow",
+          remember: approveOpts?.remember,
+          ruleId: approveOpts?.ruleId,
+        },
+        onError
+      );
     },
     [agentId, onError]
   );
@@ -72,7 +95,11 @@ export function useApprovals(opts: UseApprovalsOptions): UseApprovalsReturn {
   const deny = useCallback<UseApprovalsReturn["deny"]>(
     async (toolCallId, denyReason) => {
       if (!agentId) return;
-      await postDecision(agentId, toolCallId, "deny", denyReason, onError);
+      await postDecision(
+        agentId,
+        { toolCallId, decision: "deny", denyReason },
+        onError
+      );
     },
     [agentId, onError]
   );

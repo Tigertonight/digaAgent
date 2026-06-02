@@ -37,8 +37,11 @@ interface MessagesScrollAreaProps {
   onChangeForkText: (v: string) => void;
   onSubmitFork: (entryId: string) => Promise<void>;
   onForkToNewSession: (entryId: string) => Promise<void>;
-  /** RFC-2 Phase B3：approval part 点 Allow */
-  onApproveCall?: (toolCallId: string) => void;
+  /** RFC-2 Phase B3/B4：approval part 点 Allow（B4 加 opts.remember） */
+  onApproveCall?: (
+    toolCallId: string,
+    opts?: { remember?: "this-session"; ruleId?: string }
+  ) => void;
   /** RFC-2 Phase B3：approval part 点 Deny */
   onDenyCall?: (toolCallId: string) => void;
 }

@@ -46,6 +46,24 @@ export interface UseAgentEventsOptions {
   refreshForkList: (agentId: string, ownerKey: RunnerKey) => void;
   /** agent_end / compaction_end 时刷新 tokens/cost 统计 */
   refreshStats: (agentId: string, ownerKey: RunnerKey) => void;
+  /**
+   * RFC-2 Phase B4：查询 collab 总开关是否启用。
+   * 每次 approval_request 都重新调用——支持用户运行时改开关立即生效。
+   * 不传 = 视为始终启用（向后兼容）。
+   */
+  isCollabEnabled?: () => boolean;
+  /**
+   * RFC-2 Phase B4：当 collab 关闭时被调用——前端立即 POST allow 绕过气泡。
+   * 不传则关闭无效果（气泡仍弹）。
+   *
+   * 注意：必须使用接到的 agentId（事件的 aidForEvents），不能 capture activeKey ——
+   * 因为切到 B 时 A 的 SSE 仍在跑，A 的 approval 应 POST 到 A 的路由。
+   */
+  autoApprove?: (
+    agentId: string,
+    toolCallId: string,
+    ruleId?: string
+  ) => void;
 }
 
 export interface UseAgentEventsReturn {
@@ -129,6 +147,8 @@ export function useAgentEvents(
     refreshSessions,
     refreshForkList,
     refreshStats,
+    isCollabEnabled,
+    autoApprove,
   } = opts;
 
   const handleAgentEvent = useCallback<UseAgentEventsReturn["handleAgentEvent"]>(
@@ -222,10 +242,28 @@ export function useAgentEvents(
           }));
           return;
 
-        // ===== RFC-2 Phase B3：审批气泡（collab 自定义事件） =====
+        // ===== RFC-2 Phase B3 / B4：审批气泡（collab 自定义事件） =====
         // 与 reducer 事件同走 applyEvent；不影响 agentPhase（保留当前 phase）。
         // 用户感知：危险命令前，chat 流出现一个 approval part；点完后 status 变更。
-        case "approval_request":
+        case "approval_request": {
+          // B4：如果用户在 Settings 关掉了总开关，前端直接 auto-allow，不渲染气泡。
+          // server 端不读 settings，所以是前端"绕过 UI 自动放行"模式。
+          if (isCollabEnabled && !isCollabEnabled()) {
+            if (autoApprove && aidForEvents) {
+              const req = (ev as { request?: { toolCallId?: string; ruleId?: string } })
+                .request;
+              if (req?.toolCallId) {
+                autoApprove(aidForEvents, req.toolCallId, req.ruleId);
+              }
+            }
+            // 不调 applyEvent —— 气泡不入 chat 流
+            return;
+          }
+          updateRunner(ownerKey, (s) => ({
+            chatState: applyEvent(s.chatState, ev),
+          }));
+          return;
+        }
         case "approval_resolved":
           updateRunner(ownerKey, (s) => ({
             chatState: applyEvent(s.chatState, ev),
@@ -242,6 +280,8 @@ export function useAgentEvents(
       refreshSessions,
       refreshForkList,
       refreshStats,
+      isCollabEnabled,
+      autoApprove,
     ]
   );
 

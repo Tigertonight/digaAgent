@@ -51,8 +51,14 @@ export interface MessageViewProps {
   isStreaming?: boolean;
   /** 当前会话 cwd：传给 Markdown 用于解析消息里出现的相对图片路径 */
   cwd?: string;
-  /** RFC-2 Phase B3：approval part 点 Allow 时回调 */
-  onApproveCall?: (toolCallId: string) => void;
+  /**
+   * RFC-2 Phase B3：approval part 点 Allow 时回调。
+   * B4：可选 opts.remember = "this-session" + opts.ruleId 让 server 记住本会话不再问。
+   */
+  onApproveCall?: (
+    toolCallId: string,
+    opts?: { remember?: "this-session"; ruleId?: string }
+  ) => void;
   /** RFC-2 Phase B3：approval part 点 Deny 时回调 */
   onDenyCall?: (toolCallId: string) => void;
 }

@@ -24,7 +24,11 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 import { createCollabExtension } from "./collab/extension";
 import { DEFAULT_RULES } from "./collab/rules";
-import { registerPendingApproval } from "./collab/server-store";
+import {
+  clearSessionRemember,
+  hasSessionRemember,
+  registerPendingApproval,
+} from "./collab/server-store";
 import type {
   ApprovalRequestEvent,
   ApprovalResolvedEvent,
@@ -194,6 +198,9 @@ export async function createAgent(opts: CreateOptions): Promise<{
   const collabExtension = createCollabExtension({
     getRules: () => DEFAULT_RULES,
     getAgentId: () => id,
+    // B4：让 extension 在命中 ask 规则前先查"本 session 不再问"集合，
+    // 命中即静默放行——比 onApprovalNeeded 后再返回 allow 更彻底（不弹气泡也不推事件）。
+    hasRemember: (ruleId: string) => hasSessionRemember(id, ruleId),
     onApprovalNeeded: async (req) => {
       const rec = recordHolder.current;
       // 安全网：理论上 rec 一定有；若没有则降级 auto-allow（避免卡死 agent）。
@@ -297,6 +304,8 @@ export function disposeAgent(id: string) {
   rec.unsubscribe();
   rec.session.dispose();
   reg.agents.delete(id);
+  // B4：清理"本 session 不再问"记忆，避免悬挂（其他 agentId 复用同 globalThis store 不受影响）
+  clearSessionRemember(id);
 }
 
 /** 给 SSE 用：拿从某个 seq 之后的所有事件（按 seq 升序） */
