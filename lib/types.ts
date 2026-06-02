@@ -1,5 +1,7 @@
 /** 给 client 用的共享类型 */
 
+import type { SessionMeta } from "./meta/types";
+
 export interface SessionInfoLite {
   id: string;
   path: string;
@@ -13,6 +15,11 @@ export interface SessionInfoLite {
   firstMessage: string;
   /** 服务端检测到这个 session 当前有 active AgentSession 进程在跑 */
   isRunning?: boolean;
+  /**
+   * RFC-3 Phase A：mini-pi-web 自维护的元数据（title / pinned / ...）。
+   * 没有 meta 文件时缺省 undefined；UI 自己做 fallback。
+   */
+  meta?: SessionMeta;
 }
 
 /** SDK 的 thinking level */
