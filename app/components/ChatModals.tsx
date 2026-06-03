@@ -5,6 +5,7 @@ import SkillsPanel from "./SkillsPanel";
 import ToolsPanel from "./ToolsPanel";
 import AuthPanel from "./AuthPanel";
 import ModelsConfigPanel from "./ModelsConfigPanel";
+import { ProviderSetupWizard } from "./ProviderSetupWizard";
 import BranchesPopover from "./BranchesPopover";
 import ImageLightbox from "./ImageLightbox";
 import { SystemPromptModal } from "./SystemPromptModal";
@@ -27,6 +28,11 @@ interface ChatModalsProps {
   // Tools
   showTools: boolean;
   onCloseTools: () => void;
+  // Provider setup
+  showProviderSetup: boolean;
+  onCloseProviderSetup: () => void;
+  onProviderSetupOpenAuth: (provider?: string) => void;
+  onProviderSetupOpenModelsConfig: () => void;
   // Auth
   showAuth: boolean;
   onCloseAuth: () => void;
@@ -58,6 +64,10 @@ export function ChatModals({
   onCloseSkills,
   showTools,
   onCloseTools,
+  showProviderSetup,
+  onCloseProviderSetup,
+  onProviderSetupOpenAuth,
+  onProviderSetupOpenModelsConfig,
   showAuth,
   onCloseAuth,
   onAuthChanged,
@@ -144,6 +154,13 @@ export function ChatModals({
             <ToolsPanel agentId={agentId} onClose={onCloseTools} />
           </div>
         </div>
+      )}
+      {showProviderSetup && (
+        <ProviderSetupWizard
+          onClose={onCloseProviderSetup}
+          onOpenAuth={onProviderSetupOpenAuth}
+          onOpenModelsConfig={onProviderSetupOpenModelsConfig}
+        />
       )}
       {showAuth && (
         <AuthPanel onClose={onCloseAuth} onChanged={onAuthChanged} />

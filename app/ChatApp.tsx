@@ -285,6 +285,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   };
   const [showAuth, setShowAuth] = useState(false);
   const [showModelsConfig, setShowModelsConfig] = useState(false);
+  const [showProviderSetup, setShowProviderSetup] = useState(false);
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
   const [showCwdPicker, setShowCwdPicker] = useState(false);
   const [showFilePicker, setShowFilePicker] = useState(false);
@@ -1409,6 +1410,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           budgetSpent={budgetSpent}
           budgetStatus={budgetStatus}
           budgetHasOverride={budgetHasOverride}
+          hasAuthedProviders={visibleProviders.length > 0}
           onToggleSidebar={() => setSidebarOpen((v) => !v)}
           onToggleTheme={toggleTheme}
           onOpenBranches={() => setShowBranches(true)}
@@ -1432,6 +1434,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                 .catch((e) => setError(String(e)));
             }
           }}
+          onOpenProviderSetup={() => setShowProviderSetup(true)}
           onOpenAuth={() => setShowAuth(true)}
           onToggleTools={toggleTools}
           onToggleFiles={toggleFiles}
@@ -1553,6 +1556,10 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         onCloseSkills={toggleSkills}
         showTools={showTools}
         onCloseTools={toggleTools}
+        showProviderSetup={showProviderSetup}
+        onCloseProviderSetup={() => setShowProviderSetup(false)}
+        onProviderSetupOpenAuth={() => setShowAuth(true)}
+        onProviderSetupOpenModelsConfig={() => setShowModelsConfig(true)}
         showAuth={showAuth}
         onCloseAuth={() => setShowAuth(false)}
         onAuthChanged={() => reloadProviders(false)}
@@ -1579,4 +1586,3 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     </div>
   );
 }
-
