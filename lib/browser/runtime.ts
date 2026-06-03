@@ -10,6 +10,8 @@ import {
   type BrowserActionLog,
   type BrowserExtractResult,
   type BrowserSnapshot,
+  type BrowserStepSnapshot,
+  type BrowserVerifyResult,
 } from "./types";
 import { assertBrowserSiteAllowed } from "./policy";
 
@@ -37,7 +39,7 @@ function emptyRecord(): BrowserRecord {
     browser: null,
     context: null,
     page: null,
-    snapshot: { ...EMPTY_BROWSER_SNAPSHOT, logs: [] },
+    snapshot: { ...EMPTY_BROWSER_SNAPSHOT, logs: [], steps: [] },
   };
 }
 
@@ -70,6 +72,25 @@ function finishLog(log: BrowserActionLog, error?: string) {
   log.status = error ? "error" : "done";
   log.error = error;
   log.completedAt = Date.now();
+}
+
+function pushStep(
+  rec: BrowserRecord,
+  log: BrowserActionLog,
+  snapshot: BrowserSnapshot
+) {
+  const step: BrowserStepSnapshot = {
+    id: log.id,
+    action: log.action,
+    label: log.label,
+    status: log.status === "error" ? "error" : "done",
+    url: snapshot.url,
+    title: snapshot.title,
+    screenshotDataUrl: snapshot.screenshotDataUrl,
+    createdAt: log.completedAt ?? Date.now(),
+    error: log.error,
+  };
+  rec.snapshot.steps = [step, ...rec.snapshot.steps].slice(0, 50);
 }
 
 async function loadPlaywright(): Promise<PlaywrightModule> {
@@ -143,6 +164,7 @@ async function runAction<T>(
     const result = await fn(page, rec);
     finishLog(log);
     const snapshot = await refreshSnapshot(rec, page);
+    pushStep(rec, log, snapshot);
     return { result, snapshot };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -150,6 +172,7 @@ async function runAction<T>(
     rec.snapshot.status = "error";
     rec.snapshot.error = message;
     rec.snapshot.updatedAt = Date.now();
+    pushStep(rec, log, rec.snapshot);
     throw err;
   }
 }
@@ -160,7 +183,15 @@ function targetLocator(page: Page, selector: string): Locator {
 
 export function getBrowserSnapshot(agentId: string): BrowserSnapshot {
   const rec = reg.browsers.get(agentId);
-  return rec?.snapshot ?? { ...EMPTY_BROWSER_SNAPSHOT, logs: [] };
+  return rec?.snapshot ?? { ...EMPTY_BROWSER_SNAPSHOT, logs: [], steps: [] };
+}
+
+export async function browserRefresh(agentId: string): Promise<BrowserSnapshot> {
+  const rec = reg.browsers.get(agentId);
+  if (!rec?.page || rec.page.isClosed()) {
+    return rec?.snapshot ?? { ...EMPTY_BROWSER_SNAPSHOT, logs: [], steps: [] };
+  }
+  return refreshSnapshot(rec, rec.page);
 }
 
 export async function browserOpen(agentId: string, url: string) {
@@ -261,9 +292,49 @@ export async function browserExtract(agentId: string) {
   });
 }
 
+export async function browserVerify(
+  agentId: string,
+  input: { expectation: string; selector?: string; text?: string }
+) {
+  return runAction(agentId, "verify", input.expectation, async (page) => {
+    const title = await page.title().catch(() => null);
+    const url = page.url() || null;
+    let passed = false;
+    let evidence = "";
+    if (input.selector) {
+      const count = await targetLocator(page, input.selector).count();
+      passed = count > 0;
+      evidence = passed
+        ? `Selector is visible: ${input.selector}`
+        : `Selector was not found: ${input.selector}`;
+    } else if (input.text) {
+      const count = await page.getByText(input.text).count();
+      passed = count > 0;
+      evidence = passed
+        ? `Text is visible: ${input.text}`
+        : `Text was not found: ${input.text}`;
+    } else {
+      const bodyText = await page.locator("body").innerText().catch(() => "");
+      passed = bodyText
+        .toLowerCase()
+        .includes(input.expectation.toLowerCase().slice(0, 80));
+      evidence = passed
+        ? "Expectation text appears in the page body."
+        : "Expectation text was not found in the page body.";
+    }
+    return {
+      passed,
+      expectation: input.expectation,
+      evidence,
+      url,
+      title,
+    } satisfies BrowserVerifyResult;
+  });
+}
+
 export async function browserClose(agentId: string): Promise<BrowserSnapshot> {
   const rec = reg.browsers.get(agentId);
-  if (!rec) return { ...EMPTY_BROWSER_SNAPSHOT, logs: [] };
+  if (!rec) return { ...EMPTY_BROWSER_SNAPSHOT, logs: [], steps: [] };
   const log = pushLog(rec, "close", "close browser");
   try {
     await rec.context?.close().catch(() => {});

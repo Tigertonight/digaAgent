@@ -16,6 +16,18 @@ export interface BrowserActionLog {
   error?: string;
 }
 
+export interface BrowserStepSnapshot {
+  id: string;
+  action: string;
+  label: string;
+  status: "done" | "error";
+  url: string | null;
+  title: string | null;
+  screenshotDataUrl: string | null;
+  createdAt: number;
+  error?: string;
+}
+
 export interface BrowserSnapshot {
   status: BrowserRuntimeStatus;
   url: string | null;
@@ -24,6 +36,7 @@ export interface BrowserSnapshot {
   updatedAt: number | null;
   error: string | null;
   logs: BrowserActionLog[];
+  steps: BrowserStepSnapshot[];
 }
 
 export interface BrowserStateEvent {
@@ -37,6 +50,14 @@ export interface BrowserExtractResult {
   text: string;
   links: Array<{ text: string; href: string }>;
   inputs: Array<{ label: string; type: string; name: string; placeholder: string }>;
+}
+
+export interface BrowserVerifyResult {
+  passed: boolean;
+  expectation: string;
+  evidence: string;
+  url: string | null;
+  title: string | null;
 }
 
 export type BrowserSiteDecision = "local" | "allowed" | "blocked" | "unknown";
@@ -60,4 +81,5 @@ export const EMPTY_BROWSER_SNAPSHOT: BrowserSnapshot = {
   updatedAt: null,
   error: null,
   logs: [],
+  steps: [],
 };
