@@ -108,3 +108,52 @@ test("provider switch selects the provider's first model before set_model", asyn
     });
   await expect(page.getByText("provider and modelId required")).toBeHidden();
 });
+
+test("provider/model selection repairs stale localStorage model ids", async ({
+  page,
+}) => {
+  await installSseMock(page);
+  await installApiFixtures(page, { providersResponse });
+  await page.addInitScript(() => {
+    localStorage.setItem("pi-provider-id", "rednote-runway-local");
+    localStorage.setItem("pi-model-id", "gpt-5.2");
+  });
+
+  let createBody: unknown = null;
+  await page.route("**/api/agent/new", async (route) => {
+    createBody = route.request().postDataJSON();
+    return route.fulfill({
+      json: {
+        id: "agent-1",
+        sessionId: "00000000-0000-0000-0000-000000000001",
+        sessionFile:
+          "/tmp/e2e-sessions/00000000-0000-0000-0000-000000000001.jsonl",
+        thinkingLevel: "medium",
+        supportsThinking: true,
+        availableThinkingLevels: ["low", "medium", "high"],
+      },
+    });
+  });
+
+  await page.goto("/?e2e=1");
+  await page.waitForSelector("text=Diga Agent", { timeout: 10_000 });
+
+  const selects = page.locator("select");
+  await expect(selects.nth(0)).toHaveValue("rednote-runway-local");
+  await expect(selects.nth(1)).toHaveValue(
+    "claude-opus-4-7-rednote-runway"
+  );
+
+  await editor(page).fill("hello");
+  await sendBtn(page).click();
+
+  await expect
+    .poll(() => createBody)
+    .toEqual(
+      expect.objectContaining({
+        provider: "rednote-runway-local",
+        modelId: "claude-opus-4-7-rednote-runway",
+      })
+    );
+  await expect(page.getByText("model not found")).toBeHidden();
+});
