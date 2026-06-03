@@ -35,6 +35,7 @@ interface ChatModalsProps {
   onProviderSetupOpenModelsConfig: () => void;
   // Auth
   showAuth: boolean;
+  authInitialProvider?: string | null;
   onCloseAuth: () => void;
   onAuthChanged: () => void;
   // ModelsConfig
@@ -69,6 +70,7 @@ export function ChatModals({
   onProviderSetupOpenAuth,
   onProviderSetupOpenModelsConfig,
   showAuth,
+  authInitialProvider,
   onCloseAuth,
   onAuthChanged,
   showModelsConfig,
@@ -163,7 +165,11 @@ export function ChatModals({
         />
       )}
       {showAuth && (
-        <AuthPanel onClose={onCloseAuth} onChanged={onAuthChanged} />
+        <AuthPanel
+          onClose={onCloseAuth}
+          initialProvider={authInitialProvider}
+          onChanged={onAuthChanged}
+        />
       )}
       {showModelsConfig && (
         <ModelsConfigPanel
