@@ -369,6 +369,46 @@ describe("applyEvent — shim duplicate completion guards", () => {
     expect(s.messages[0].parts).toEqual([{ kind: "text", text: "answer" }]);
   });
 
+  it("dedupes full non-streaming assistant starts without responseId in the same turn", () => {
+    let s = createInitialState([
+      { role: "user", parts: [{ kind: "text", text: "who are you" }] },
+    ]);
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "I am pi." }],
+      timestamp: 1000,
+    };
+
+    s = applyEvent(s, { type: "message_start", message });
+    s = applyEvent(s, { type: "message_start", message });
+
+    expect(s.messages).toHaveLength(2);
+    expect(s.messages[1].parts).toEqual([{ kind: "text", text: "I am pi." }]);
+  });
+
+  it("merges a later responseId onto an existing full assistant in the same turn", () => {
+    let s = createInitialState([
+      { role: "user", parts: [{ kind: "text", text: "who are you" }] },
+    ]);
+    const first = {
+      role: "assistant",
+      content: [{ type: "text", text: "I am pi." }],
+      timestamp: 1000,
+    };
+    const replay = {
+      ...first,
+      responseId: "msg-late-id",
+      provider: "rednote-runway-local",
+    };
+
+    s = applyEvent(s, { type: "message_start", message: first });
+    s = applyEvent(s, { type: "message_start", message: replay });
+
+    expect(s.messages).toHaveLength(2);
+    expect(s.messages[1].parts).toEqual([{ kind: "text", text: "I am pi." }]);
+    expect(s.messages[1].meta?.responseId).toBe("msg-late-id");
+  });
+
   it("keeps provider/model/usage pinned to the assistant message", () => {
     let s = createInitialState();
     const startMessage = {

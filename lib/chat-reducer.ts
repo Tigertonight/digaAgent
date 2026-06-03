@@ -232,6 +232,30 @@ function assistantIndexByResponseId(
   return -1;
 }
 
+function lastUserIndex(messages: ChatMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") return i;
+  }
+  return -1;
+}
+
+function assistantIndexInCurrentTurn(
+  messages: ChatMessage[],
+  responseId: string | undefined,
+  parts: MessagePart[]
+): number {
+  const after = lastUserIndex(messages);
+  const incomingText = textFromParts(parts);
+  for (let i = messages.length - 1; i > after; i--) {
+    const m = messages[i];
+    if (m.role !== "assistant") continue;
+    if (responseId && m.meta?.responseId === responseId) return i;
+    const existingText = textFromParts(m.parts ?? []);
+    if (incomingText && existingText === incomingText) return i;
+  }
+  return -1;
+}
+
 /** thinking 段已经"翻篇"——出现 text 或 tool 时调用，给最后一个未结束的 thinking 打 endedAt */
 function sealLastThinkingIfOpen(parts: MessagePart[]) {
   for (let i = parts.length - 1; i >= 0; i--) {
@@ -317,32 +341,34 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
       } else if (m.role === "assistant") {
         const parts = partsFromContent(m.content);
         const nextMeta = metaFromMessage(m);
-        if (m.responseId) {
-          const existingIdx = assistantIndexByResponseId(
-            state.messages,
-            m.responseId
+        const byResponseId = m.responseId
+          ? assistantIndexByResponseId(state.messages, m.responseId)
+          : -1;
+        const existingIdx =
+          byResponseId >= 0
+            ? byResponseId
+            : assistantIndexInCurrentTurn(state.messages, m.responseId, parts);
+        if (existingIdx >= 0) {
+          const existing = state.messages[existingIdx];
+          const existingParts = existing.parts ?? [];
+          state.messages[existingIdx] = {
+            ...existing,
+            parts:
+              existingParts.length === 0 && parts.length > 0
+                ? parts
+                : existingParts,
+            timestamp: existing.timestamp ?? m.timestamp,
+            meta: mergeMeta(existing.meta, nextMeta),
+          };
+          state.activeAssistantIndex = existingIdx;
+          state.activeAssistantResponseId =
+            m.responseId ?? existing.meta?.responseId;
+          const initialText = textFromParts(
+            state.messages[existingIdx].parts ?? []
           );
-          if (existingIdx >= 0) {
-            const existing = state.messages[existingIdx];
-            const existingParts = existing.parts ?? [];
-            state.messages[existingIdx] = {
-              ...existing,
-              parts:
-                existingParts.length === 0 && parts.length > 0
-                  ? parts
-                  : existingParts,
-              timestamp: existing.timestamp ?? m.timestamp,
-              meta: mergeMeta(existing.meta, nextMeta),
-            };
-            state.activeAssistantIndex = existingIdx;
-            state.activeAssistantResponseId = m.responseId;
-            const initialText = textFromParts(
-              state.messages[existingIdx].parts ?? []
-            );
-            state.activeAssistantReplayText = initialText || undefined;
-            state.activeAssistantReplayOffset = initialText ? 0 : undefined;
-            return state;
-          }
+          state.activeAssistantReplayText = initialText || undefined;
+          state.activeAssistantReplayOffset = initialText ? 0 : undefined;
+          return state;
         }
         // 起一个新的 active assistant 占位
         state.messages.push({
