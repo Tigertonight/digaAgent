@@ -12,6 +12,7 @@ import {
   Wrench,
   PanelRight,
   RefreshCw,
+  Globe,
 } from "lucide-react";
 import { IconButton, iconSizeMap } from "./IconButton";
 import { HudMeter } from "./HudMeter";
@@ -34,6 +35,7 @@ interface TopHeaderProps {
   currentSessionFile: string | null;
   showTools: boolean;
   showFiles: boolean;
+  showBrowser: boolean;
   /** RFC-2 Phase A：Budget 当前生效配置 + 实时状态（来自 useBudget） */
   budget: SessionBudget;
   budgetSpent: BudgetSpent;
@@ -50,6 +52,7 @@ interface TopHeaderProps {
   onReconnectSession: () => void;
   onToggleTools: () => void;
   onToggleFiles: () => void;
+  onToggleBrowser: () => void;
 }
 
 export function TopHeader({
@@ -62,6 +65,7 @@ export function TopHeader({
   currentSessionFile,
   showTools,
   showFiles,
+  showBrowser,
   budget,
   budgetSpent,
   budgetStatus,
@@ -77,6 +81,7 @@ export function TopHeader({
   onReconnectSession,
   onToggleTools,
   onToggleFiles,
+  onToggleBrowser,
 }: TopHeaderProps) {
   const sseLabel =
     sseStatus === "active"
@@ -233,6 +238,20 @@ export function TopHeader({
           aria-label="Tools 面板"
           active={showTools}
           icon={<Wrench size={iconSizeMap.sm} />}
+        />
+        <IconButton
+          onClick={onToggleBrowser}
+          disabled={!agentId}
+          title={
+            !agentId
+              ? "需先发送一条消息以建立 session"
+              : showBrowser
+                ? "关闭 Browser 面板"
+                : "打开 Browser 面板"
+          }
+          aria-label="Browser 面板"
+          active={showBrowser}
+          icon={<Globe size={iconSizeMap.sm} />}
         />
         <IconButton
           onClick={onToggleFiles}

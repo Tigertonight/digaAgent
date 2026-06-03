@@ -13,6 +13,7 @@
  *   - 草稿首次发送拿到 sessionFile 后，runner 在 Map 里被 rename：
  *     delete("draft") + set(sessionFile, runner)，然后新建空草稿
  */
+import { EMPTY_BROWSER_SNAPSHOT, type BrowserSnapshot } from "./browser/types";
 import type {
   ForkableUserMessage,
   ImageContentLite,
@@ -113,6 +114,7 @@ export interface RunnerState {
   stats: StatsSnapshot | null;
   toolsCount: ToolsCountSnapshot | null;
   pendingMessages: PendingMessagesSnapshot;
+  browser: BrowserSnapshot;
 
   // thinking 能力
   thinkingLevel: ThinkingLevel;
@@ -159,6 +161,7 @@ export function emptyRunner(): RunnerState {
     stats: null,
     toolsCount: null,
     pendingMessages: { steering: [], followUp: [] },
+    browser: { ...EMPTY_BROWSER_SNAPSHOT, logs: [] },
 
     thinkingLevel: "medium",
     availableThinkingLevels: [...THINKING_LEVELS],

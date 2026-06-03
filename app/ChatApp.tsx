@@ -52,6 +52,7 @@ import { SidebarSearch } from "./components/SidebarSearch";
 import { TopHeader } from "./components/TopHeader";
 import { MessagesScrollArea } from "./components/MessagesScrollArea";
 import { RightPanelContainer } from "./components/RightPanelContainer";
+import { BrowserPanel } from "./components/BrowserPanel";
 import { ChatModals } from "./components/ChatModals";
 import { BudgetExceededModal } from "./components/BudgetExceededModal";
 
@@ -233,7 +234,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
   // 右侧抽屉：files | skills | tools | null（互斥，localStorage 持久化）
   const [rightPanel, setRightPanel] = useState<
-    "files" | "skills" | "tools" | null
+    "files" | "skills" | "tools" | "browser" | null
   >(null);
 
   // 右侧 panel 宽度（仅 files/tools 用 inline 形态需要，skills 是 modal）
@@ -327,7 +328,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   useEffect(() => {
     try {
       const v = localStorage.getItem("pi-right-panel");
-      if (v === "files" || v === "skills" || v === "tools") setRightPanel(v);
+      if (v === "files" || v === "skills" || v === "tools" || v === "browser")
+        setRightPanel(v);
       else if (localStorage.getItem("pi-show-files") === "1") {
         setRightPanel("files");
       }
@@ -336,7 +338,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     }
   }, []);
   const persistRightPanel = (
-    v: "files" | "skills" | "tools" | null
+    v: "files" | "skills" | "tools" | "browser" | null
   ) => {
     try {
       if (v) localStorage.setItem("pi-right-panel", v);
@@ -368,9 +370,17 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       return next;
     });
   };
+  const toggleBrowser = () => {
+    setRightPanel((prev) => {
+      const next = prev === "browser" ? null : "browser";
+      persistRightPanel(next);
+      return next;
+    });
+  };
   const showFiles = rightPanel === "files";
   const showSkills = rightPanel === "skills";
   const showTools = rightPanel === "tools";
+  const showBrowser = rightPanel === "browser";
 
   // 任何 previewStore 触发(html/url/image)时,确保右侧 FileBrowser 展开
   useEffect(() => {
@@ -1544,6 +1554,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           currentSessionFile={currentSessionFile}
           showTools={showTools}
           showFiles={showFiles}
+          showBrowser={showBrowser}
           budget={budget}
           budgetSpent={budgetSpent}
           budgetStatus={budgetStatus}
@@ -1579,6 +1590,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           onReconnectSession={reconnectActiveSession}
           onToggleTools={toggleTools}
           onToggleFiles={toggleFiles}
+          onToggleBrowser={toggleBrowser}
         />
 
         {messages.length === 0 && !error ? (
@@ -1677,6 +1689,14 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         }}
         onLayoutChange={setFilesLayout}
       />
+      {showBrowser && (
+        <BrowserPanel
+          agentId={agentId}
+          snapshot={activeSnapshot.browser}
+          width={rightPanelWidth}
+          onClose={toggleBrowser}
+        />
+      )}
       <ChatModals
         cwd={cwd}
         agentId={agentId}

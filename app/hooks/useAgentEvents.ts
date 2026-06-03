@@ -27,6 +27,7 @@ import { useCallback } from "react";
 import { applyEvent } from "@/lib/chat-reducer";
 import type { ApprovalRequest } from "@/lib/collab/types";
 import type { ClarificationRequest } from "@/lib/clarification/types";
+import type { BrowserSnapshot } from "@/lib/browser/types";
 import type {
   AgentPhase,
   RunnerKey,
@@ -259,6 +260,13 @@ export function useAgentEvents(
               followUp: [...(q.followUp ?? [])],
             },
           });
+          return;
+        }
+
+        // ===== Browser use 状态：Playwright runtime -> 右侧 Browser panel =====
+        case "browser_state": {
+          const snapshot = (ev as { snapshot?: BrowserSnapshot }).snapshot;
+          if (snapshot) updateRunner(ownerKey, { browser: snapshot });
           return;
         }
 
