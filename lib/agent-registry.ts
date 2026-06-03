@@ -24,6 +24,8 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 import { createCollabExtension } from "./collab/extension";
 import { createClarificationExtension } from "./clarification/extension";
+import { createBrowserExtension } from "./browser/extension";
+import { disposeBrowser } from "./browser/runtime";
 import { DEFAULT_RULES } from "./collab/rules";
 import {
   clearSessionRemember,
@@ -42,6 +44,7 @@ import type {
   ClarificationRequestEvent,
   ClarificationResolvedEvent,
 } from "./clarification/types";
+import type { BrowserStateEvent } from "./browser/types";
 
 /**
  * Ring buffer 里允许的事件类型。
@@ -57,7 +60,8 @@ export type RingBufferEvent =
   | ApprovalRequestEvent
   | ApprovalResolvedEvent
   | ClarificationRequestEvent
-  | ClarificationResolvedEvent;
+  | ClarificationResolvedEvent
+  | BrowserStateEvent;
 
 interface AgentRecord {
   id: string;
@@ -155,6 +159,7 @@ export function pushExternalEvent(
     | ApprovalResolvedEvent
     | ClarificationRequestEvent
     | ClarificationResolvedEvent
+    | BrowserStateEvent
 ): void {
   const seq = rec.nextSeq++;
   rec.events[seq % MAX_EVENTS_PER_AGENT] = { seq, event };
@@ -276,11 +281,20 @@ export async function createAgent(opts: CreateOptions): Promise<{
     },
   });
 
+  const browserExtension = createBrowserExtension({
+    getAgentId: () => id,
+    onBrowserState: (snapshot) => {
+      const rec = recordHolder.current;
+      if (!rec) return;
+      pushExternalEvent(rec, { type: "browser_state", snapshot });
+    },
+  });
+
   const resourceLoader = new DefaultResourceLoader({
     cwd: opts.cwd,
     agentDir: getAgentDir(),
     settingsManager: getSettingsManager(opts.cwd),
-    extensionFactories: [collabExtension, clarificationExtension],
+    extensionFactories: [collabExtension, clarificationExtension, browserExtension],
   });
 
   const { session } = await createAgentSession({
@@ -350,6 +364,7 @@ export function disposeAgent(id: string) {
   // B4：清理"本 session 不再问"记忆，避免悬挂（其他 agentId 复用同 globalThis store 不受影响）
   clearSessionRemember(id);
   clearAgentClarifications(id);
+  void disposeBrowser(id);
 }
 
 /** 给 SSE 用：拿从某个 seq 之后的所有事件（按 seq 升序） */
