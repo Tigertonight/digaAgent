@@ -23,16 +23,25 @@ import {
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import { createCollabExtension } from "./collab/extension";
+import { createClarificationExtension } from "./clarification/extension";
 import { DEFAULT_RULES } from "./collab/rules";
 import {
   clearSessionRemember,
   hasSessionRemember,
   registerPendingApproval,
 } from "./collab/server-store";
+import {
+  clearAgentClarifications,
+  registerPendingClarification,
+} from "./clarification/server-store";
 import type {
   ApprovalRequestEvent,
   ApprovalResolvedEvent,
 } from "./collab/types";
+import type {
+  ClarificationRequestEvent,
+  ClarificationResolvedEvent,
+} from "./clarification/types";
 
 /**
  * Ring buffer 里允许的事件类型。
@@ -46,7 +55,9 @@ import type {
 export type RingBufferEvent =
   | AgentSessionEvent
   | ApprovalRequestEvent
-  | ApprovalResolvedEvent;
+  | ApprovalResolvedEvent
+  | ClarificationRequestEvent
+  | ClarificationResolvedEvent;
 
 interface AgentRecord {
   id: string;
@@ -139,7 +150,11 @@ export function getPackageManager(cwd?: string): DefaultPackageManager {
  */
 export function pushExternalEvent(
   rec: AgentRecord,
-  event: ApprovalRequestEvent | ApprovalResolvedEvent
+  event:
+    | ApprovalRequestEvent
+    | ApprovalResolvedEvent
+    | ClarificationRequestEvent
+    | ClarificationResolvedEvent
 ): void {
   const seq = rec.nextSeq++;
   rec.events[seq % MAX_EVENTS_PER_AGENT] = { seq, event };
@@ -233,11 +248,39 @@ export async function createAgent(opts: CreateOptions): Promise<{
     },
   });
 
+  const clarificationExtension = createClarificationExtension({
+    getAgentId: () => id,
+    onClarificationNeeded: async (req) => {
+      const rec = recordHolder.current;
+      if (!rec) {
+        console.error(
+          "[clarification] ask_user called but record not ready; returning empty response",
+          req.id
+        );
+        return { customText: "No UI channel was available." };
+      }
+      pushExternalEvent(rec, {
+        type: "clarification_request",
+        request: req,
+      });
+      const resp = await registerPendingClarification(req);
+      pushExternalEvent(rec, {
+        type: "clarification_resolved",
+        id: req.id,
+        requestId: req.requestId,
+        selectedOptionId: resp.selectedOptionId,
+        customText: resp.customText,
+        resolvedBy: "user",
+      });
+      return resp;
+    },
+  });
+
   const resourceLoader = new DefaultResourceLoader({
     cwd: opts.cwd,
     agentDir: getAgentDir(),
     settingsManager: getSettingsManager(opts.cwd),
-    extensionFactories: [collabExtension],
+    extensionFactories: [collabExtension, clarificationExtension],
   });
 
   const { session } = await createAgentSession({
@@ -306,6 +349,7 @@ export function disposeAgent(id: string) {
   reg.agents.delete(id);
   // B4：清理"本 session 不再问"记忆，避免悬挂（其他 agentId 复用同 globalThis store 不受影响）
   clearSessionRemember(id);
+  clearAgentClarifications(id);
 }
 
 /** 给 SSE 用：拿从某个 seq 之后的所有事件（按 seq 升序） */

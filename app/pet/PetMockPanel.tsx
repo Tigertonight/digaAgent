@@ -26,6 +26,7 @@ type MockKind =
   | "retry"
   | "compacting"
   | "approval"
+  | "clarification"
   | "budget_warning"
   | "budget_blocked";
 
@@ -45,6 +46,7 @@ function buildMockSession(kind: MockKind): PetSessionInfo {
     retry: null,
     compacting: false,
     pendingApproval: null,
+    pendingClarification: null,
     budget: null,
     error: null,
     sseStatus: "active",
@@ -124,6 +126,19 @@ function buildMockSession(kind: MockKind): PetSessionInfo {
           createdAt: Date.now(),
         },
       };
+    case "clarification":
+      return {
+        ...base,
+        streaming: true,
+        agentPhase: { kind: "thinking" },
+        pendingClarification: {
+          count: 1,
+          title: "需要你确认下一步",
+          question: "先收口 MVP 还是完整重构？",
+          recommendedLabel: "先收口 MVP",
+          createdAt: Date.now(),
+        },
+      };
     case "budget_warning":
       return {
         ...base,
@@ -178,6 +193,7 @@ const KINDS: { kind: MockKind; label: string; color: string }[] = [
   { kind: "retry", label: "Retry", color: "#fbbf24" },
   { kind: "compacting", label: "Compacting", color: "#fcd34d" },
   { kind: "approval", label: "Approval", color: "#f59e0b" },
+  { kind: "clarification", label: "Clarify", color: "#14b8a6" },
   { kind: "budget_warning", label: "Budget Warn", color: "#eab308" },
   { kind: "budget_blocked", label: "Budget Stop", color: "#f97316" },
 ];

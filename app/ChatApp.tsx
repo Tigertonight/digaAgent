@@ -36,6 +36,7 @@ import { useBudget } from "./hooks/useBudget";
 import { useBudgetEnforcer, type BudgetTrigger } from "./hooks/useBudgetEnforcer";
 import { useForkable } from "./hooks/useForkable";
 import { useApprovals } from "./hooks/useApprovals";
+import { useClarifications } from "./hooks/useClarifications";
 import { useSessionMeta } from "./hooks/useSessionMeta";
 import { useSearch } from "./hooks/useSearch";
 import { useProviderModel } from "./hooks/useProviderModel";
@@ -690,6 +691,16 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     onError: setError,
   });
 
+  // RFC-5：主动追问 / 推荐下一步 user actions。
+  const {
+    choose: chooseClarification,
+    respond: respondClarification,
+    loadPending: loadPendingClarifications,
+  } = useClarifications({
+    agentId,
+    onError: setError,
+  });
+
   // ===== 宠物状态推送（hook 化，见 app/hooks/usePetPusher.ts）=====
   usePetPusher({
     runnersRef,
@@ -1092,7 +1103,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // RFC-2 Phase B4：注入 isCollabEnabled + autoApprove —— 当用户关掉总开关时，
   // 前端绕过气泡 UI 自动 POST allow。loadCollabSettings 每次 approval_request
   // 都重读 localStorage，让用户改了 Settings 立即生效（不依赖 React state）。
-  const { handleAgentEvent, restorePendingApprovals } = useAgentEvents({
+  const {
+    handleAgentEvent,
+    restorePendingApprovals,
+    restorePendingClarifications,
+  } = useAgentEvents({
     updateRunner,
     playDoneSound,
     refreshSessions,
@@ -1120,10 +1135,21 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       if (cancelled || requests.length === 0) return;
       restorePendingApprovals(requests, agentId, ownerKey);
     });
+    void loadPendingClarifications().then((requests) => {
+      if (cancelled || requests.length === 0) return;
+      restorePendingClarifications(requests, agentId, ownerKey);
+    });
     return () => {
       cancelled = true;
     };
-  }, [agentId, activeKey, loadPendingApprovals, restorePendingApprovals]);
+  }, [
+    agentId,
+    activeKey,
+    loadPendingApprovals,
+    loadPendingClarifications,
+    restorePendingApprovals,
+    restorePendingClarifications,
+  ]);
 
   // ===== Turn 控制中枢（RFC-1 阶段 B2-a，已抽到 useChatStream） =====
   // agentAction（通用 POST 通道）+ send / onAbort / onCompact / onAbortCompaction
@@ -1468,6 +1494,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             onForkToNewSession={forkToNewSession}
             onApproveCall={approveCall}
             onDenyCall={denyCall}
+            onChooseClarification={chooseClarification}
+            onRespondClarification={respondClarification}
           />
         )}
 

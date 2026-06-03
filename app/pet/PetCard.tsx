@@ -9,6 +9,7 @@ const STATE_COLOR: Record<PetAnimState, string> = {
   idle: "#6b7280",
   complete: "#10b981",
   approval: "#f59e0b",
+  clarification: "#14b8a6",
   budget_warning: "#eab308",
   budget_blocked: "#f97316",
   thinking: "#6366f1",
@@ -23,6 +24,7 @@ const STATE_LABEL: Record<PetAnimState, string> = {
   idle: "空闲",
   complete: "已完成",
   approval: "待授权",
+  clarification: "待确认",
   budget_warning: "预算预警",
   budget_blocked: "预算暂停",
   thinking: "思考中",
@@ -125,7 +127,9 @@ export default function PetCard({
   const isError = animState === "error";
   const isOffline = animState === "offline";
   const isActionRequired =
-    animState === "approval" || animState === "budget_blocked";
+    animState === "approval" ||
+    animState === "clarification" ||
+    animState === "budget_blocked";
   const isBudgetWarning = animState === "budget_warning";
 
   return (
@@ -262,7 +266,11 @@ export default function PetCard({
           title="回到主窗口处理"
         >
           <span style={{ flex: 1, fontWeight: 600 }}>
-            {animState === "approval" ? "需要授权" : "预算已暂停"}
+            {animState === "approval"
+              ? "需要授权"
+              : animState === "clarification"
+                ? "需要确认下一步"
+                : "预算已暂停"}
           </span>
           <span style={{ fontSize: 10, color: "#fde68a" }}>
             回主窗口处理

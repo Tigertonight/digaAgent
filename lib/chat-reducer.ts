@@ -13,6 +13,7 @@
  * 跟 pi-web 的渲染模型对齐。
  */
 import type { ChatMessage, MessagePart } from "./types";
+import type { ClarificationOption } from "./clarification/types";
 
 /* SDK 事件的最小化类型（用 any-ish 但 narrow 到必要字段） */
 interface AnyEvent {
@@ -44,17 +45,28 @@ interface AnyEvent {
   // approval_request (RFC-2 Phase B3 自定义事件)
   request?: {
     id: string;
-    toolCallId: string;
-    toolName: string;
-    input: Record<string, unknown>;
+    agentId?: string;
+    requestId?: string;
+    toolCallId?: string;
+    toolName?: string;
+    input?: Record<string, unknown>;
     ruleId?: string;
+    title?: string;
+    question?: string;
+    context?: string;
+    options?: ClarificationOption[];
+    recommendedOptionId?: string;
     createdAt: number;
   };
   // approval_resolved (RFC-2 Phase B3 自定义事件)
   id?: string;
   decision?: "allow" | "deny";
-  resolvedBy?: "user" | "timeout" | "default";
+  resolvedBy?: "user" | "timeout" | "default" | "abort";
   denyReason?: string;
+  // clarification_request / clarification_resolved (RFC-5 自定义事件)
+  selectedOptionId?: string;
+  customText?: string;
+  requestId?: string;
 }
 
 export interface ReducerState {
@@ -127,6 +139,17 @@ function findApprovalPartIndex(parts: MessagePart[], id: string): number {
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i];
     if (p.kind === "approval" && p.id === id) return i;
+  }
+  return -1;
+}
+
+function findClarificationPartIndex(
+  parts: MessagePart[],
+  id: string
+): number {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i];
+    if (p.kind === "clarification" && p.id === id) return i;
   }
   return -1;
 }
@@ -274,6 +297,10 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
     case "approval_request": {
       const r = ev.request;
       if (!r) return state;
+      if (!r.toolCallId || !r.toolName || !r.input) return state;
+      const toolCallId = r.toolCallId;
+      const toolName = r.toolName;
+      const input = r.input;
       replaceActive((msg) => {
         const parts = (msg.parts ?? []).slice();
         // 防御：同 id 重复 push（不应发生）→ 跳过
@@ -282,9 +309,9 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         parts.push({
           kind: "approval",
           id: r.id,
-          toolCallId: r.toolCallId,
-          toolName: r.toolName,
-          input: r.input,
+          toolCallId,
+          toolName,
+          input,
           ruleId: r.ruleId,
           status: "pending",
           createdAt: r.createdAt,
@@ -297,6 +324,12 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
     case "approval_resolved": {
       const id = ev.id;
       if (!id || !ev.decision) return state;
+      const resolvedBy =
+        ev.resolvedBy === "user" ||
+        ev.resolvedBy === "timeout" ||
+        ev.resolvedBy === "default"
+          ? ev.resolvedBy
+          : undefined;
       // 不用 ensureAssistant：approval part 必然挂在某个已存在的 assistant message 上；
       // 而且 resolved 时可能 active 已经 closed（message_end 跑过了），找不到不 push 新 active。
       // 遍历倒序找最近一条带该 approval id 的 assistant message。
@@ -311,8 +344,65 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         parts[pi] = {
           ...cur,
           status: ev.decision === "allow" ? "allowed" : "denied",
-          resolvedBy: ev.resolvedBy,
+          resolvedBy,
           denyReason: ev.denyReason,
+        };
+        state.messages[mi] = { ...m, parts };
+        break;
+      }
+      return state;
+    }
+
+    // ===== RFC-5：Agent 主动追问 / 推荐下一步 =====
+    case "clarification_request": {
+      const r = ev.request;
+      if (!r) return state;
+      if (!r.requestId || !r.title || !r.question || !r.options) return state;
+      const requestId = r.requestId;
+      const title = r.title;
+      const question = r.question;
+      const options = r.options;
+      replaceActive((msg) => {
+        const parts = (msg.parts ?? []).slice();
+        if (findClarificationPartIndex(parts, r.id) >= 0) return msg;
+        sealLastThinkingIfOpen(parts);
+        parts.push({
+          kind: "clarification",
+          id: r.id,
+          requestId,
+          title,
+          question,
+          context: r.context,
+          options,
+          recommendedOptionId: r.recommendedOptionId,
+          status: "pending",
+          createdAt: r.createdAt,
+        });
+        return { ...msg, parts };
+      });
+      return state;
+    }
+
+    case "clarification_resolved": {
+      const id = ev.id;
+      if (!id) return state;
+      for (let mi = state.messages.length - 1; mi >= 0; mi--) {
+        const m = state.messages[mi];
+        if (m.role !== "assistant" || !m.parts) continue;
+        const pi = findClarificationPartIndex(m.parts, id);
+        if (pi < 0) continue;
+        const parts = m.parts.slice();
+        const cur = parts[pi];
+        if (cur.kind !== "clarification") break;
+        parts[pi] = {
+          ...cur,
+          status: "resolved",
+          selectedOptionId: ev.selectedOptionId,
+          customText: ev.customText,
+          resolvedBy:
+            ev.resolvedBy === "abort" || ev.resolvedBy === "user"
+              ? ev.resolvedBy
+              : "user",
         };
         state.messages[mi] = { ...m, parts };
         break;

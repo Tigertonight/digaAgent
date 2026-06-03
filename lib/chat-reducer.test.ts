@@ -388,3 +388,106 @@ describe("applyEvent — approval_request / approval_resolved (RFC-2 Phase B3)",
     expect(p.status).toBe("allowed");
   });
 });
+
+describe("applyEvent — clarification_request / clarification_resolved (RFC-5)", () => {
+  function clarificationRequest(id = "agent-1:q1") {
+    return {
+      id,
+      agentId: "agent-1",
+      requestId: id.split(":")[1] ?? "q1",
+      title: "需要你确认下一步",
+      question: "先做 MVP 还是完整重构？",
+      context: "两条路径成本不同",
+      options: [
+        {
+          id: "mvp",
+          label: "先做 MVP",
+          description: "更快闭环",
+          value: "先实现 MVP",
+        },
+        {
+          id: "full",
+          label: "完整重构",
+          description: "长期更干净",
+          value: "完整重构",
+        },
+      ],
+      recommendedOptionId: "mvp",
+      createdAt: 3456,
+    };
+  }
+
+  function setupActiveAssistantWithClarification() {
+    let s = createInitialState();
+    s = applyEvent(s, { type: "message_start", message: { role: "assistant" } });
+    s = applyEvent(s, {
+      type: "clarification_request",
+      request: clarificationRequest(),
+    });
+    return s;
+  }
+
+  it("clarification_request 在 active assistant 末尾 push clarification part", () => {
+    const s = setupActiveAssistantWithClarification();
+    const parts = s.messages[s.activeAssistantIndex].parts as MessagePart[];
+    expect(parts).toHaveLength(1);
+    const p = parts[0];
+    expect(p.kind).toBe("clarification");
+    if (p.kind !== "clarification") throw new Error("type narrow");
+    expect(p.id).toBe("agent-1:q1");
+    expect(p.requestId).toBe("q1");
+    expect(p.status).toBe("pending");
+    expect(p.recommendedOptionId).toBe("mvp");
+    expect(p.options).toHaveLength(2);
+  });
+
+  it("同 id 重复 clarification_request → 不重复 push", () => {
+    let s = setupActiveAssistantWithClarification();
+    s = applyEvent(s, {
+      type: "clarification_request",
+      request: { ...clarificationRequest(), createdAt: 9999 },
+    });
+    const parts = s.messages[s.activeAssistantIndex].parts as MessagePart[];
+    expect(parts).toHaveLength(1);
+    const p = parts[0];
+    if (p.kind !== "clarification") throw new Error("type narrow");
+    expect(p.createdAt).toBe(3456);
+  });
+
+  it("clarification_request 恢复到无 active assistant 时会新建 pending 卡片", () => {
+    let s = createInitialState([
+      { role: "user", parts: [{ kind: "text", text: "build it" }] },
+      { role: "assistant", parts: [{ kind: "text", text: "I need a choice." }] },
+    ]);
+    s = applyEvent(s, {
+      type: "clarification_request",
+      request: clarificationRequest("agent-1:q-restored"),
+    });
+
+    expect(s.activeAssistantIndex).toBe(2);
+    const p = (s.messages[2].parts as MessagePart[])[0];
+    if (p.kind !== "clarification") throw new Error("type narrow");
+    expect(p.status).toBe("pending");
+    expect(p.id).toBe("agent-1:q-restored");
+  });
+
+  it("clarification_resolved 在 message_end 后仍能更新旧 assistant part", () => {
+    let s = setupActiveAssistantWithClarification();
+    s = applyEvent(s, { type: "message_end", message: { role: "assistant" } });
+    expect(s.activeAssistantIndex).toBe(-1);
+    s = applyEvent(s, {
+      type: "clarification_resolved",
+      id: "agent-1:q1",
+      requestId: "q1",
+      selectedOptionId: "mvp",
+      resolvedBy: "user",
+    });
+
+    const m = s.messages[s.messages.length - 1];
+    const p = (m.parts as MessagePart[])[0];
+    if (p.kind !== "clarification") throw new Error("type narrow");
+    expect(p.status).toBe("resolved");
+    expect(p.selectedOptionId).toBe("mvp");
+    expect(p.resolvedBy).toBe("user");
+  });
+});

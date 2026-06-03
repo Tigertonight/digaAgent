@@ -212,6 +212,12 @@ body.pet-window {
   50%      { box-shadow: 0 0 28px rgba(245,158,11,0.78); }
 }
 
+/* clarification 待确认：青绿色慢脉动，表示需要用户选择下一步 */
+@keyframes pet-glow-clarification {
+  0%, 100% { box-shadow: 0 0 14px rgba(20,184,166,0.42); }
+  50%      { box-shadow: 0 0 28px rgba(20,184,166,0.74); }
+}
+
 /* budget 预警：黄色脉动，低于错误态强度 */
 @keyframes pet-glow-budget {
   0%, 100% { box-shadow: 0 0 12px rgba(234,179,8,0.38); }

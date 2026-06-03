@@ -44,6 +44,10 @@ interface MessagesScrollAreaProps {
   ) => void;
   /** RFC-2 Phase B3：approval part 点 Deny */
   onDenyCall?: (toolCallId: string) => void;
+  /** RFC-5：clarification 推荐项点击 */
+  onChooseClarification?: (requestId: string, optionId: string) => void;
+  /** RFC-5：clarification 自定义回复 */
+  onRespondClarification?: (requestId: string, customText: string) => void;
 }
 
 export function MessagesScrollArea({
@@ -71,6 +75,8 @@ export function MessagesScrollArea({
   onForkToNewSession,
   onApproveCall,
   onDenyCall,
+  onChooseClarification,
+  onRespondClarification,
 }: MessagesScrollAreaProps) {
   return (
     <div className="relative flex flex-1 overflow-hidden">
@@ -149,6 +155,8 @@ export function MessagesScrollArea({
                   cwd={cwd}
                   onApproveCall={onApproveCall}
                   onDenyCall={onDenyCall}
+                  onChooseClarification={onChooseClarification}
+                  onRespondClarification={onRespondClarification}
                 />
               );
               if (!isVisible) return <div key={stableKey}>{view}</div>;

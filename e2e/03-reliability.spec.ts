@@ -56,6 +56,65 @@ test("reliability: pending approval 可通过 snapshot 恢复为审批气泡", a
   await expect(page.getByText("rm -rf /tmp/e2e-danger")).toBeVisible();
 });
 
+test("reliability: pending clarification 可恢复并提交推荐项", async ({
+  bootedPage: page,
+}) => {
+  let posted: unknown = null;
+  await page.route("**/api/agent/*/clarification", async (route) => {
+    const method = route.request().method();
+    const url = route.request().url();
+    const agentId = url.match(/\/api\/agent\/([^/]+)\/clarification/)?.[1];
+    if (method === "GET") {
+      return route.fulfill({
+        json: {
+          clarifications: [
+            {
+              id: `${agentId}:q-restored`,
+              agentId,
+              requestId: "q-restored",
+              title: "需要你确认下一步",
+              question: "先做 MVP 还是完整重构？",
+              context: "两条路径成本不同。",
+              options: [
+                {
+                  id: "mvp",
+                  label: "先做 MVP",
+                  description: "更快闭环，不影响现有布局",
+                  value: "先实现 MVP",
+                },
+                {
+                  id: "full",
+                  label: "完整重构",
+                  description: "长期更干净，但风险更高",
+                  value: "完整重构",
+                },
+              ],
+              recommendedOptionId: "mvp",
+              createdAt: Date.now(),
+            },
+          ],
+        },
+      });
+    }
+    posted = await route.request().postDataJSON();
+    return route.fulfill({ json: { ok: true } });
+  });
+
+  await editor(page).fill("trigger clarification restore");
+  await sendBtn(page).click();
+  await activeAgentId(page);
+
+  await expect(page.getByText("需要你确认下一步")).toBeVisible();
+  await expect(page.getByText("先做 MVP 还是完整重构？")).toBeVisible();
+  await expect(page.getByText("推荐")).toBeVisible();
+
+  await page.getByRole("button", { name: /先做 MVP/ }).click();
+  await expect.poll(() => posted).toEqual({
+    requestId: "q-restored",
+    selectedOptionId: "mvp",
+  });
+});
+
 test("reliability: 搜索冷构建显示 building 和 timeout 提示", async ({
   bootedPage: page,
 }) => {
