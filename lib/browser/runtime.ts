@@ -9,6 +9,7 @@ import {
   EMPTY_BROWSER_SNAPSHOT,
   type BrowserActionLog,
   type BrowserExtractResult,
+  type BrowserPointerState,
   type BrowserSnapshot,
   type BrowserStepSnapshot,
   type BrowserVerifyResult,
@@ -87,6 +88,7 @@ function pushStep(
     url: snapshot.url,
     title: snapshot.title,
     screenshotDataUrl: snapshot.screenshotDataUrl,
+    pointer: snapshot.pointer,
     createdAt: log.completedAt ?? Date.now(),
     error: log.error,
   };
@@ -181,6 +183,46 @@ function targetLocator(page: Page, selector: string): Locator {
   return page.locator(selector).first();
 }
 
+async function pointerFromSelector(
+  page: Page,
+  selector: string,
+  action: string,
+  label: string
+): Promise<BrowserPointerState | null> {
+  const box = await targetLocator(page, selector).boundingBox().catch(() => null);
+  const viewport = page.viewportSize();
+  if (!box || !viewport) return null;
+  return {
+    x: clamp01((box.x + box.width / 2) / viewport.width),
+    y: clamp01((box.y + box.height / 2) / viewport.height),
+    action,
+    label,
+    updatedAt: Date.now(),
+  };
+}
+
+function pointerFromPoint(
+  page: Page,
+  x: number,
+  y: number,
+  action: string,
+  label: string
+): BrowserPointerState | null {
+  const viewport = page.viewportSize();
+  if (!viewport) return null;
+  return {
+    x: clamp01(x / viewport.width),
+    y: clamp01(y / viewport.height),
+    action,
+    label,
+    updatedAt: Date.now(),
+  };
+}
+
+function clamp01(n: number) {
+  return Math.max(0, Math.min(1, n));
+}
+
 export function getBrowserSnapshot(agentId: string): BrowserSnapshot {
   const rec = reg.browsers.get(agentId);
   return rec?.snapshot ?? { ...EMPTY_BROWSER_SNAPSHOT, logs: [], steps: [] };
@@ -196,7 +238,8 @@ export async function browserRefresh(agentId: string): Promise<BrowserSnapshot> 
 
 export async function browserOpen(agentId: string, url: string) {
   const normalized = await assertBrowserSiteAllowed(url);
-  return runAction(agentId, "open", normalized, async (page) => {
+  return runAction(agentId, "open", normalized, async (page, rec) => {
+    rec.snapshot.pointer = null;
     await page.goto(normalized, { waitUntil: "domcontentloaded" });
     return { url: page.url() };
   });
@@ -212,24 +255,56 @@ export async function browserClick(
   agentId: string,
   input: { selector?: string; x?: number; y?: number }
 ) {
-  return runAction(agentId, "click", input.selector ?? `${input.x},${input.y}`, async (page) => {
-    if (input.selector) await targetLocator(page, input.selector).click();
-    else if (typeof input.x === "number" && typeof input.y === "number") {
-      await page.mouse.click(input.x, input.y);
-    } else {
-      throw new Error("selector or x/y required");
+  return runAction(
+    agentId,
+    "click",
+    input.selector ?? `${input.x},${input.y}`,
+    async (page, rec) => {
+      if (input.selector) {
+        const label = input.selector;
+        const pointer = await pointerFromSelector(
+          page,
+          input.selector,
+          "click",
+          label
+        );
+        await targetLocator(page, input.selector).click();
+        if (pointer) rec.snapshot.pointer = pointer;
+      } else if (typeof input.x === "number" && typeof input.y === "number") {
+        const label = `${input.x},${input.y}`;
+        rec.snapshot.pointer = pointerFromPoint(
+          page,
+          input.x,
+          input.y,
+          "click",
+          label
+        );
+        await page.mouse.click(input.x, input.y);
+      } else {
+        throw new Error("selector or x/y required");
+      }
+      return { url: page.url() };
     }
-    return { url: page.url() };
-  });
+  );
 }
 
 export async function browserType(
   agentId: string,
   input: { text: string; selector?: string; pressEnter?: boolean }
 ) {
-  return runAction(agentId, "type", input.selector ?? "keyboard", async (page) => {
-    if (input.selector) await targetLocator(page, input.selector).fill(input.text);
-    else await page.keyboard.type(input.text);
+  return runAction(agentId, "type", input.selector ?? "keyboard", async (page, rec) => {
+    if (input.selector) {
+      const pointer = await pointerFromSelector(
+        page,
+        input.selector,
+        "type",
+        input.selector
+      );
+      await targetLocator(page, input.selector).fill(input.text);
+      if (pointer) rec.snapshot.pointer = pointer;
+    } else {
+      await page.keyboard.type(input.text);
+    }
     if (input.pressEnter) await page.keyboard.press("Enter");
     return { url: page.url() };
   });

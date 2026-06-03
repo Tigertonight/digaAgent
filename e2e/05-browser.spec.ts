@@ -95,6 +95,57 @@ test("browser panel: browser_state SSE 同步截图和操作日志", async ({
   await expect(editor(page)).toHaveValue(/Button overlaps here/);
 });
 
+test("browser panel: browser_state 自动展开并显示虚拟鼠标", async ({
+  bootedPage: page,
+}) => {
+  await editor(page).fill("search with browser");
+  await sendBtn(page).click();
+  const agentId = await activeAgentId(page);
+
+  await expect(page.getByText("Open a URL or ask the agent")).toBeHidden();
+
+  await pushSseEvent(
+    page,
+    agentId,
+    {
+      type: "browser_state",
+      snapshot: {
+        status: "ready",
+        url: "https://www.baidu.com/s?wd=%E8%BF%AA%E8%BF%A6",
+        title: "百度搜索",
+        screenshotDataUrl:
+          "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        updatedAt: Date.now(),
+        error: null,
+        pointer: {
+          x: 0.42,
+          y: 0.34,
+          action: "click",
+          label: "#kw",
+          updatedAt: Date.now(),
+        },
+        logs: [
+          {
+            id: "log-click",
+            action: "click",
+            label: "#kw",
+            status: "done",
+            createdAt: Date.now(),
+            completedAt: Date.now(),
+          },
+        ],
+        steps: [],
+      },
+    },
+    "20"
+  );
+
+  await expect(page.getByText("READY")).toBeVisible();
+  await expect(page.getByAltText("Browser screenshot")).toBeVisible();
+  await expect(page.getByLabel("Browser virtual cursor")).toBeVisible();
+  await expect(page.getByText("click").first()).toBeVisible();
+});
+
 test("browser panel: 外部站点需要显式 allow,本地站点自动允许", async ({
   bootedPage: page,
 }) => {

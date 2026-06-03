@@ -1,8 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Camera, Globe, RefreshCw, Square, X, Radio } from "lucide-react";
+import {
+  Camera,
+  Globe,
+  MousePointer2,
+  Radio,
+  RefreshCw,
+  Square,
+  X,
+} from "lucide-react";
 import type {
+  BrowserPointerState,
   BrowserSiteCheck,
   BrowserSnapshot,
   BrowserStepSnapshot,
@@ -31,7 +40,9 @@ export function BrowserPanel({
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const [dragRect, setDragRect] = useState<Rect | null>(null);
   const [draftComment, setDraftComment] = useState("");
+  const [pointerTrail, setPointerTrail] = useState<PointerTrail | null>(null);
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const previousPointerRef = useRef<BrowserPointerState | null>(null);
   const steps = snapshot.steps ?? [];
 
   const selectedStep = useMemo(
@@ -41,6 +52,7 @@ export function BrowserPanel({
   const displayShot = selectedStep?.screenshotDataUrl ?? snapshot.screenshotDataUrl;
   const displayUrl = selectedStep?.url ?? snapshot.url;
   const displayTitle = selectedStep?.title ?? snapshot.title;
+  const displayPointer = selectedStep?.pointer ?? snapshot.pointer ?? null;
 
   useEffect(() => {
     if (snapshot.url) setUrl(snapshot.url);
@@ -52,6 +64,20 @@ export function BrowserPanel({
       setSelectedStepId(null);
     }
   }, [selectedStepId, steps]);
+
+  useEffect(() => {
+    if (!displayPointer) {
+      setPointerTrail(null);
+      previousPointerRef.current = null;
+      return;
+    }
+    const prev = previousPointerRef.current;
+    setPointerTrail({
+      from: prev ? { x: prev.x, y: prev.y } : null,
+      to: { x: displayPointer.x, y: displayPointer.y },
+    });
+    previousPointerRef.current = displayPointer;
+  }, [displayPointer]);
 
   useEffect(() => {
     const trimmed = url.trim();
@@ -371,6 +397,12 @@ export function BrowserPanel({
               className="w-full h-full object-contain select-none"
               draggable={false}
             />
+            {pointerTrail && displayPointer && (
+              <VirtualPointer
+                pointer={displayPointer}
+                trail={pointerTrail}
+              />
+            )}
             {dragRect && dragRect.w > 0.01 && dragRect.h > 0.01 && (
               <div
                 className="absolute border-2"
@@ -523,6 +555,75 @@ interface Rect {
   y: number;
   w: number;
   h: number;
+}
+
+interface Point {
+  x: number;
+  y: number;
+}
+
+interface PointerTrail {
+  from: Point | null;
+  to: Point;
+}
+
+function VirtualPointer({
+  pointer,
+  trail,
+}: {
+  pointer: BrowserPointerState;
+  trail: PointerTrail;
+}) {
+  const from = trail.from ?? trail.to;
+  return (
+    <div
+      aria-label="Browser virtual cursor"
+      className="pointer-events-none absolute inset-0"
+    >
+      <svg
+        className="absolute inset-0 h-full w-full"
+        viewBox="0 0 100 100"
+        preserveAspectRatio="none"
+      >
+        <line
+          x1={from.x * 100}
+          y1={from.y * 100}
+          x2={trail.to.x * 100}
+          y2={trail.to.y * 100}
+          stroke="rgba(59,130,246,0.75)"
+          strokeWidth="0.45"
+          strokeDasharray="1.4 1.2"
+          vectorEffect="non-scaling-stroke"
+        />
+      </svg>
+      <div
+        className="absolute -translate-x-1 -translate-y-1 transition-[left,top] duration-500 ease-out"
+        style={{ left: `${pointer.x * 100}%`, top: `${pointer.y * 100}%` }}
+      >
+        <div className="relative">
+          <MousePointer2
+            size={24}
+            fill="rgba(59,130,246,0.95)"
+            strokeWidth={2.4}
+            style={{
+              color: "#eff6ff",
+              filter: "drop-shadow(0 2px 5px rgba(15,23,42,0.45))",
+            }}
+          />
+          <span
+            className="absolute left-5 top-4 whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] font-medium"
+            style={{
+              borderColor: "rgba(59,130,246,0.40)",
+              background: "rgba(15,23,42,0.86)",
+              color: "#dbeafe",
+            }}
+          >
+            {pointer.action}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function clamp(n: number) {

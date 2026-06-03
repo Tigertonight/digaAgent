@@ -16,6 +16,14 @@ export interface BrowserActionLog {
   error?: string;
 }
 
+export interface BrowserPointerState {
+  x: number;
+  y: number;
+  action: string;
+  label: string;
+  updatedAt: number;
+}
+
 export interface BrowserStepSnapshot {
   id: string;
   action: string;
@@ -24,6 +32,7 @@ export interface BrowserStepSnapshot {
   url: string | null;
   title: string | null;
   screenshotDataUrl: string | null;
+  pointer: BrowserPointerState | null;
   createdAt: number;
   error?: string;
 }
@@ -35,6 +44,7 @@ export interface BrowserSnapshot {
   screenshotDataUrl: string | null;
   updatedAt: number | null;
   error: string | null;
+  pointer: BrowserPointerState | null;
   logs: BrowserActionLog[];
   steps: BrowserStepSnapshot[];
 }
@@ -80,6 +90,7 @@ export const EMPTY_BROWSER_SNAPSHOT: BrowserSnapshot = {
   screenshotDataUrl: null,
   updatedAt: null,
   error: null,
+  pointer: null,
   logs: [],
   steps: [],
 };
