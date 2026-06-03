@@ -10,6 +10,7 @@ import {
   browserOpen,
   browserScreenshot,
   browserType,
+  browserVerify,
   browserWait,
 } from "./runtime";
 import type { BrowserSnapshot } from "./types";
@@ -43,6 +44,18 @@ const WaitParams = Type.Object({
   selector: Type.Optional(Type.String({ description: "CSS selector to wait for." })),
   text: Type.Optional(Type.String({ description: "Visible text to wait for." })),
   ms: Type.Optional(Type.Number({ description: "Milliseconds to wait." })),
+});
+
+const VerifyParams = Type.Object({
+  expectation: Type.String({
+    description: "The expected page state or behavior to verify.",
+  }),
+  selector: Type.Optional(
+    Type.String({ description: "CSS selector expected to be visible." })
+  ),
+  text: Type.Optional(
+    Type.String({ description: "Visible text expected on the page." })
+  ),
 });
 
 const EmptyParams = Type.Object({});
@@ -170,6 +183,32 @@ export function createBrowserExtension(
               "",
               result.text || "(no visible text)",
             ].join("\n"),
+            snapshot,
+            result
+          );
+        },
+      })
+    );
+
+    pi.registerTool(
+      defineTool<typeof VerifyParams, { snapshot: BrowserSnapshot; result?: unknown }>({
+        name: "browser_verify",
+        label: "Browser Verify",
+        description:
+          "Verify the current browser page against an expectation, selector, or visible text. Use after implementing a UI fix to produce a pass/fail result.",
+        promptSnippet: "Verify the current browser page and report pass/fail evidence.",
+        promptGuidelines: [
+          "Use browser_verify after code changes when the user asked for browser validation.",
+          "Prefer selector or text checks for objective verification.",
+          "Report failures with the evidence returned by the tool.",
+        ],
+        parameters: VerifyParams,
+        executionMode: "sequential",
+        async execute(_toolCallId, params) {
+          const { result, snapshot } = await browserVerify(opts.getAgentId(), params);
+          opts.onBrowserState(snapshot);
+          return textResult(
+            `${result.passed ? "PASS" : "FAIL"}: ${result.expectation}\n${result.evidence}`,
             snapshot,
             result
           );

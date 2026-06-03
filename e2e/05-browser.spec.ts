@@ -52,6 +52,19 @@ test("browser panel: browser_state SSE 同步截图和操作日志", async ({
             completedAt: Date.now(),
           },
         ],
+        steps: [
+          {
+            id: "log-1",
+            action: "open",
+            label: "http://localhost:3000/settings",
+            status: "done",
+            url: "http://localhost:3000/settings",
+            title: "Settings",
+            screenshotDataUrl:
+              "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+            createdAt: Date.now(),
+          },
+        ],
       },
     },
     "20"
@@ -64,8 +77,22 @@ test("browser panel: browser_state SSE 同步截图和操作日志", async ({
   await expect(page.getByText("· Settings")).toBeVisible();
   await expect(page.getByAltText("Browser screenshot")).toBeVisible();
   await expect(page.getByText("Browser actions")).toBeVisible();
-  await expect(page.getByText("open")).toBeVisible();
-  await expect(page.getByTitle("http://localhost:3000/settings")).toBeVisible();
+  await expect(page.getByText("open").first()).toBeVisible();
+  await expect(page.getByTitle("http://localhost:3000/settings").first()).toBeVisible();
+  await expect(page.getByText("Step timeline")).toBeVisible();
+  await page.getByRole("button", { name: /open/ }).last().click();
+  await expect(page.getByText("replay")).toBeVisible();
+
+  const shot = page.getByAltText("Browser screenshot");
+  const box = await shot.boundingBox();
+  if (!box) throw new Error("screenshot missing bounding box");
+  await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.55);
+  await page.mouse.up();
+  await page.getByLabel("Browser annotation comment").fill("Button overlaps here");
+  await page.getByRole("button", { name: "Add" }).click();
+  await expect(editor(page)).toHaveValue(/Button overlaps here/);
 });
 
 test("browser panel: 外部站点需要显式 allow,本地站点自动允许", async ({

@@ -3,6 +3,7 @@ import { getAgent, pushExternalEvent } from "@/lib/agent-registry";
 import {
   browserClose,
   browserOpen,
+  browserRefresh,
   browserScreenshot,
   getBrowserSnapshot,
 } from "@/lib/browser/runtime";
@@ -39,6 +40,11 @@ export async function POST(
     }
     if (type === "screenshot") {
       const { snapshot } = await browserScreenshot(id);
+      pushExternalEvent(rec, { type: "browser_state", snapshot });
+      return NextResponse.json({ ok: true, snapshot });
+    }
+    if (type === "refresh") {
+      const snapshot = await browserRefresh(id);
       pushExternalEvent(rec, { type: "browser_state", snapshot });
       return NextResponse.json({ ok: true, snapshot });
     }

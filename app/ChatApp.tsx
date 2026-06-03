@@ -1695,6 +1695,13 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           snapshot={activeSnapshot.browser}
           width={rightPanelWidth}
           onClose={toggleBrowser}
+          onAnnotate={(text) => {
+            setComposerInput((cur) => {
+              const sep = cur.trim() ? "\n\n" : "";
+              return `${cur}${sep}${text}`;
+            });
+            requestAnimationFrame(() => inputRef.current?.focus());
+          }}
         />
       )}
       <ChatModals
