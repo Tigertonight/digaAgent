@@ -104,6 +104,8 @@ export interface ReducerState {
   activeAssistantIndex: number;
   /** 当前 assistant message 的 responseId，用于兼容非标准 shim 的重复 delta */
   activeAssistantResponseId?: string;
+  /** 非标准 shim 若已在 message_start 给完整文本，后续重复 text_delta 要忽略 */
+  activeAssistantHasFinalContent?: boolean;
   /** 已收尾 responseId，迟到的重复 delta 直接忽略 */
   completedAssistantResponseIds?: string[];
 }
@@ -266,6 +268,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
     messages: prev.messages.slice(),
     activeAssistantIndex: prev.activeAssistantIndex,
     activeAssistantResponseId: prev.activeAssistantResponseId,
+    activeAssistantHasFinalContent: prev.activeAssistantHasFinalContent,
     completedAssistantResponseIds: prev.completedAssistantResponseIds,
   };
 
@@ -308,6 +311,8 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         });
         state.activeAssistantIndex = state.messages.length - 1;
         state.activeAssistantResponseId = m.responseId;
+        state.activeAssistantHasFinalContent =
+          !!m.stopReason && textFromParts(parts).length > 0;
       } else if (m.role === "tool") {
         // tool result 类的 message，一般已经在 tool_execution_end 里处理过，跳过
       }
@@ -333,6 +338,12 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         );
         if (sub.type === "text_delta" && sub.delta) {
           if (
+            state.activeAssistantHasFinalContent &&
+            (!responseId || responseId === state.activeAssistantResponseId)
+          ) {
+            return { ...msg, meta: nextMeta };
+          }
+          if (
             responseId &&
             responseId === state.activeAssistantResponseId &&
             textFromParts(parts) === sub.delta
@@ -342,6 +353,12 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
           sealLastThinkingIfOpen(parts);
           appendToLastTextPart(parts, sub.delta);
         } else if (sub.type === "thinking_delta" && sub.delta) {
+          if (
+            state.activeAssistantHasFinalContent &&
+            (!responseId || responseId === state.activeAssistantResponseId)
+          ) {
+            return { ...msg, meta: nextMeta };
+          }
           appendToLastThinkingPart(parts, sub.delta);
         }
         return { ...msg, parts, meta: nextMeta };
@@ -382,6 +399,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
       }
       state.activeAssistantIndex = -1;
       state.activeAssistantResponseId = undefined;
+      state.activeAssistantHasFinalContent = undefined;
       return state;
     }
 

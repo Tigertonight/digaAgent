@@ -1626,6 +1626,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             error={error}
             currentProvider={currentProvider}
             modelId={modelId}
+            activeAssistantIndex={chatState.activeAssistantIndex}
             agentPhase={agentPhase}
             cwd={cwd}
             streaming={streaming}
