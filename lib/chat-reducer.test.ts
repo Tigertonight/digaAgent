@@ -280,6 +280,48 @@ describe("applyEvent — shim duplicate completion guards", () => {
     expect(s.activeAssistantIndex).toBe(-1);
     expect(s.messages[0].parts).toEqual([{ kind: "text", text: "answer" }]);
   });
+
+  it("keeps provider/model/usage pinned to the assistant message", () => {
+    let s = createInitialState();
+    const startMessage = {
+      role: "assistant",
+      responseId: "msg-usage",
+      provider: "rednote-runway-local",
+      model: "claude-opus-4-7",
+      api: "openai-completions",
+      content: [{ type: "text", text: "answer" }],
+      timestamp: 1000,
+    };
+    const endMessage = {
+      ...startMessage,
+      usage: {
+        input: 12,
+        output: 8,
+        cacheRead: 3,
+        cacheWrite: 0,
+        totalTokens: 23,
+        cost: { total: 0.0012 },
+      },
+    };
+
+    s = applyEvent(s, { type: "message_start", message: startMessage });
+    s = applyEvent(s, { type: "message_end", message: endMessage });
+
+    expect(s.messages[0].meta).toEqual({
+      provider: "rednote-runway-local",
+      model: "claude-opus-4-7",
+      api: "openai-completions",
+      responseId: "msg-usage",
+      usage: {
+        input: 12,
+        output: 8,
+        cacheRead: 3,
+        cacheWrite: 0,
+        total: 23,
+        cost: 0.0012,
+      },
+    });
+  });
 });
 
 describe("applyEvent — approval_request / approval_resolved (RFC-2 Phase B3)", () => {
