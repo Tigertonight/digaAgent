@@ -76,6 +76,9 @@ export function useSseManager(
 
   // ===== 连接池 =====
   const esMapRef = useRef<Map<RunnerKey, EventSource>>(new Map());
+  const lastSeqRef = useRef<
+    Map<RunnerKey, { agentId: string; seq: number }>
+  >(new Map());
 
   // 回调 ref：让 attachSseFor 不依赖 onEvent / onStatusChange 的引用稳定性
   // （ChatApp 内 handleAgentEvent 是函数声明，每次 render 重建；
@@ -115,7 +118,14 @@ export function useSseManager(
         }
       }
 
-      const es = new EventSource(`/api/agent/${agentId}/events`);
+      const lastSeqRecord = lastSeqRef.current.get(key);
+      const lastSeq =
+        lastSeqRecord?.agentId === agentId ? lastSeqRecord.seq : undefined;
+      const since =
+        typeof lastSeq === "number" && Number.isFinite(lastSeq)
+          ? `?since=${encodeURIComponent(String(lastSeq))}`
+          : "";
+      const es = new EventSource(`/api/agent/${agentId}/events${since}`);
       esMapRef.current.set(key, es);
 
       es.onopen = () => {
@@ -128,6 +138,11 @@ export function useSseManager(
           // 后端 SSE envelope 带 id: <seq>，浏览器把它写到 ev.lastEventId
           const seq = ev.lastEventId ? Number(ev.lastEventId) : NaN;
           if (Number.isFinite(seq)) {
+            const lastSeen = lastSeqRef.current.get(key);
+            if (lastSeen?.agentId === agentId && seq <= lastSeen.seq) {
+              return;
+            }
+            lastSeqRef.current.set(key, { agentId, seq });
             onStatusChangeRef.current(key, { lastSeq: seq });
           }
           onEventRef.current(event, agentId, key);
@@ -156,6 +171,7 @@ export function useSseManager(
         }
       }
       map.clear();
+      lastSeqRef.current.clear();
     };
   }, []);
 
