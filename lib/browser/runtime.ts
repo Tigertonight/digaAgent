@@ -11,6 +11,7 @@ import {
   type BrowserExtractResult,
   type BrowserSnapshot,
 } from "./types";
+import { assertBrowserSiteAllowed } from "./policy";
 
 type PlaywrightModule = typeof import("playwright");
 
@@ -69,18 +70,6 @@ function finishLog(log: BrowserActionLog, error?: string) {
   log.status = error ? "error" : "done";
   log.error = error;
   log.completedAt = Date.now();
-}
-
-function normalizeUrl(url: string): string {
-  const trimmed = url.trim();
-  if (!trimmed) throw new Error("url required");
-  if (/^https?:\/\//i.test(trimmed) || /^file:\/\//i.test(trimmed)) {
-    return trimmed;
-  }
-  if (/^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(\/|$)/i.test(trimmed)) {
-    return `http://${trimmed}`;
-  }
-  return `https://${trimmed}`;
 }
 
 async function loadPlaywright(): Promise<PlaywrightModule> {
@@ -175,7 +164,7 @@ export function getBrowserSnapshot(agentId: string): BrowserSnapshot {
 }
 
 export async function browserOpen(agentId: string, url: string) {
-  const normalized = normalizeUrl(url);
+  const normalized = await assertBrowserSiteAllowed(url);
   return runAction(agentId, "open", normalized, async (page) => {
     await page.goto(normalized, { waitUntil: "domcontentloaded" });
     return { url: page.url() };
