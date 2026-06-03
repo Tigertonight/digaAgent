@@ -22,6 +22,7 @@ import { useSyncExternalStore } from "react";
 import { Plus, GitBranch, Settings, Brain, Pin, Search, X } from "lucide-react";
 import type { SessionInfoLite } from "@/lib/types";
 import { formatRelativeTime, shortCwd } from "@/lib/format";
+import type { SseStatus } from "@/lib/session-runner";
 import { BrandLogo } from "./BrandLogo";
 import SidebarExplorer from "./SidebarExplorer";
 
@@ -42,6 +43,10 @@ export interface SidebarProps {
   selectedId: string | null;
   setSelectedId: (id: string) => void;
   lastSeenMap: Record<string, string>;
+  sessionStatusMap?: Map<
+    string,
+    { sseStatus: SseStatus; streaming: boolean }
+  >;
 
   // ===== sidebar 临时态（renamingFor / menuFor / pendingDeleteId） =====
   renamingFor: string | null;
@@ -111,6 +116,7 @@ export function Sidebar(props: SidebarProps) {
     selectedId,
     setSelectedId,
     lastSeenMap,
+    sessionStatusMap,
     renamingFor,
     setRenamingFor,
     renameDraft,
@@ -263,6 +269,10 @@ export function Sidebar(props: SidebarProps) {
             // （主窗口失焦/被遮挡）。markSessionSeen 在用户真聚焦时已写
             // lastSeenMap，所以聚焦着的 active session 这里自然不会 unread。
             const isRunning = !!s.isRunning;
+            const runnerStatus = sessionStatusMap?.get(s.path);
+            const sseStatus = runnerStatus?.sseStatus ?? "idle";
+            const isLive = sseStatus === "active";
+            const isLost = sseStatus === "lost";
             const seenAt = lastSeenMap[s.id];
             // hydrated gate：SSR/首次 hydrate 时强制 false，避免 lastSeenMap
             // 在客户端注水前误判全部未读。
@@ -412,6 +422,35 @@ export function Sidebar(props: SidebarProps) {
                       className="text-[10px] truncate mt-0.5 flex items-center gap-1.5"
                       style={{ color: "var(--fg-faint)" }}
                     >
+                      {(isRunning || isLost || isLive) && (
+                        <>
+                          <span
+                            className="shrink-0 rounded px-1 py-px uppercase"
+                            style={{
+                              background: isLost
+                                ? "rgba(239,68,68,0.14)"
+                                : isRunning
+                                  ? "rgba(251,191,36,0.14)"
+                                  : "rgba(34,197,94,0.12)",
+                              color: isLost
+                                ? "#fca5a5"
+                                : isRunning
+                                  ? "#facc15"
+                                  : "#86efac",
+                            }}
+                            title={
+                              isLost
+                                ? "事件流已断开，可切入当前 session 后重连"
+                                : isRunning
+                                  ? "后台任务仍在运行"
+                                  : "事件流连接中"
+                            }
+                          >
+                            {isLost ? "lost" : isRunning ? "running" : "live"}
+                          </span>
+                          <span aria-hidden="true">·</span>
+                        </>
+                      )}
                       <span className="shrink-0">
                         {formatRelativeTime(s.modified)}
                       </span>

@@ -11,6 +11,7 @@ import {
   Sparkles,
   Wrench,
   PanelRight,
+  RefreshCw,
 } from "lucide-react";
 import { IconButton, iconSizeMap } from "./IconButton";
 import { HudMeter } from "./HudMeter";
@@ -46,6 +47,7 @@ interface TopHeaderProps {
   onRevealInFinder: () => void;
   onOpenProviderSetup: () => void;
   onOpenAuth: () => void;
+  onReconnectSession: () => void;
   onToggleTools: () => void;
   onToggleFiles: () => void;
 }
@@ -72,9 +74,17 @@ export function TopHeader({
   onRevealInFinder,
   onOpenProviderSetup,
   onOpenAuth,
+  onReconnectSession,
   onToggleTools,
   onToggleFiles,
 }: TopHeaderProps) {
+  const sseLabel =
+    sseStatus === "active"
+      ? "Live"
+      : sseStatus === "lost"
+        ? "Disconnected"
+        : null;
+
   return (
     <header
       className="border-b grid items-center text-xs"
@@ -147,18 +157,42 @@ export function TopHeader({
           status={budgetStatus}
           hasOverride={budgetHasOverride}
         />
-        {sseStatus !== "idle" && (
+        {sseLabel && (
           <span
-            className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
+            className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 shrink-0"
             style={{
+              borderColor:
+                sseStatus === "active"
+                  ? "rgba(34,197,94,0.45)"
+                  : "rgba(239,68,68,0.45)",
+              color: sseStatus === "active" ? "#86efac" : "#fca5a5",
               background:
-                sseStatus === "active" ? "#22c55e" : "#ef4444",
+                sseStatus === "active"
+                  ? "rgba(34,197,94,0.10)"
+                  : "rgba(239,68,68,0.10)",
             }}
             title={
               sseStatus === "active"
                 ? "Live sync active"
-                : "Connection lost"
+                : "Connection lost. Session may still be running in background."
             }
+          >
+            <span
+              className="inline-block h-1.5 w-1.5 rounded-full"
+              style={{
+                background: sseStatus === "active" ? "#22c55e" : "#ef4444",
+              }}
+            />
+            <span>{sseLabel}</span>
+          </span>
+        )}
+        {sseStatus === "lost" && (
+          <IconButton
+            onClick={onReconnectSession}
+            disabled={!agentId}
+            title="重连当前 session 的事件流"
+            aria-label="重连当前 session"
+            icon={<RefreshCw size={iconSizeMap.sm} />}
           />
         )}
         {electronApi && currentSessionFile && (

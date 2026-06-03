@@ -778,6 +778,21 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     return out;
   }, [chatState.messages, forkableUserMessages]);
 
+  const sessionStatusMap = useMemo(() => {
+    const map = new Map<
+      string,
+      { sseStatus: "idle" | "active" | "lost"; streaming: boolean }
+    >();
+    for (const [key, runner] of runnersRef.current.entries()) {
+      if (key === DRAFT_KEY) continue;
+      map.set(key, {
+        sseStatus: runner.sseStatus,
+        streaming: runner.streaming,
+      });
+    }
+    return map;
+  }, [activeSnapshot, runnersRef, sessions]);
+
   // 给 minimap 用：按 visible(user/assistant) 数量准备 ref 数组
   const visibleMessageCount = useMemo(
     () =>
@@ -1028,6 +1043,13 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     });
     return unsub;
   }, [sessions, attachSseFor]);
+
+  const reconnectActiveSession = useCallback(() => {
+    if (!agentId) return;
+    const key = activeKeyRef.current;
+    updateRunner(key, { sseStatus: "idle" });
+    attachSseFor(key, agentId);
+  }, [agentId, activeKeyRef, updateRunner, attachSseFor]);
 
   /**
    * +New chat:
@@ -1362,6 +1384,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         selectedId={selectedId}
         setSelectedId={setSelectedId}
         lastSeenMap={lastSeenMap}
+        sessionStatusMap={sessionStatusMap}
         renamingFor={renamingFor}
         setRenamingFor={setRenamingFor}
         renameDraft={renameDraft}
@@ -1457,6 +1480,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             setAuthInitialProvider(null);
             setShowAuth(true);
           }}
+          onReconnectSession={reconnectActiveSession}
           onToggleTools={toggleTools}
           onToggleFiles={toggleFiles}
         />
