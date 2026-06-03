@@ -307,6 +307,31 @@ describe("applyEvent — shim duplicate completion guards", () => {
     expect(s.messages[0].parts).toEqual([{ kind: "text", text: "hello world" }]);
   });
 
+  it("ignores full delta replay even when update responseId differs", () => {
+    let s = createInitialState();
+    const message = {
+      role: "assistant",
+      responseId: "msg-start-id",
+      content: [{ type: "text", text: "我先看看你这个项目长啥样，再给针对性建议。" }],
+      timestamp: 1000,
+    };
+
+    s = applyEvent(s, { type: "message_start", message });
+    s = applyEvent(s, {
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "我先看看你这个项目长啥样，再给针对性建议。",
+        partial: { responseId: "different-update-id" },
+      },
+    });
+
+    expect(s.messages).toHaveLength(1);
+    expect(s.messages[0].parts).toEqual([
+      { kind: "text", text: "我先看看你这个项目长啥样，再给针对性建议。" },
+    ]);
+  });
+
   it("continues appending when a delta extends beyond the replayed prefix", () => {
     let s = createInitialState();
     const message = {
