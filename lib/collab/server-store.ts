@@ -112,9 +112,16 @@ export function resolveApproval(
   return true;
 }
 
-/** 调试用：当前所有 pending（不导出给生产逻辑使用）。 */
-export function listPendingApprovals(): ApprovalRequest[] {
-  return Array.from(store.pending.values()).map((p) => p.request);
+/**
+ * 当前 pending approvals。
+ *
+ * 不做持久化，只暴露进程内仍在 await 的审批请求。agentId 过滤用于页面刷新或多 tab
+ * 恢复同一个 agent 的审批 UI，避免把其他 session 的气泡混进来。
+ */
+export function listPendingApprovals(agentId?: string): ApprovalRequest[] {
+  const items = Array.from(store.pending.values()).map((p) => p.request);
+  if (!agentId) return items;
+  return items.filter((req) => req.agentId === agentId);
 }
 
 /* ===================== Session Remember (B4) ===================== */
