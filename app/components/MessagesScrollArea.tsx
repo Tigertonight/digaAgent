@@ -13,6 +13,7 @@ interface MessagesScrollAreaProps {
   error: string | null;
   currentProvider: ProviderInfo | undefined;
   modelId: string;
+  activeAssistantIndex: number;
   agentPhase: AgentPhase;
   cwd: string;
   streaming: boolean;
@@ -52,6 +53,7 @@ export function MessagesScrollArea({
   error,
   currentProvider,
   modelId,
+  activeAssistantIndex,
   agentPhase,
   cwd,
   streaming,
@@ -89,12 +91,6 @@ export function MessagesScrollArea({
             </div>
           )}
           {(() => {
-            const lastAssistantIdx = (() => {
-              for (let k = messages.length - 1; k >= 0; k--) {
-                if (messages[k].role === "assistant") return k;
-              }
-              return -1;
-            })();
             const modelLabel = currentProvider?.models.find(
               (mm) => mm.id === modelId
             )?.name;
@@ -103,8 +99,8 @@ export function MessagesScrollArea({
               const isVisible =
                 m.role === "user" || m.role === "assistant";
               const currentRefIdx = isVisible ? refIdx++ : -1;
-              const isLastAssistant =
-                m.role === "assistant" && i === lastAssistantIdx;
+              const isActiveAssistant =
+                m.role === "assistant" && i === activeAssistantIndex;
               const usage = m.meta?.usage;
               const messageMeta =
                 usage && (usage.total > 0 || usage.cost > 0)
@@ -153,9 +149,9 @@ export function MessagesScrollArea({
                   modelLabel={messageModelLabel}
                   meta={messageMeta}
                   streamingPhase={
-                    isLastAssistant && streaming ? agentPhase : undefined
+                    isActiveAssistant && streaming ? agentPhase : undefined
                   }
-                  isStreaming={isLastAssistant && streaming}
+                  isStreaming={isActiveAssistant && streaming}
                   cwd={cwd}
                   onApproveCall={onApproveCall}
                   onDenyCall={onDenyCall}

@@ -281,6 +281,33 @@ describe("applyEvent — shim duplicate completion guards", () => {
     expect(s.messages[0].parts).toEqual([{ kind: "text", text: "answer" }]);
   });
 
+  it("ignores chunked delta replay after a full final message_start", () => {
+    let s = createInitialState();
+    const message = {
+      role: "assistant",
+      responseId: "msg-chunk-replay",
+      content: [{ type: "text", text: "hello world" }],
+      stopReason: "stop",
+      timestamp: 1000,
+    };
+
+    s = applyEvent(s, { type: "message_start", message });
+    for (const delta of ["hello", " ", "world"]) {
+      s = applyEvent(s, {
+        type: "message_update",
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta,
+          partial: { responseId: message.responseId },
+        },
+      });
+    }
+    s = applyEvent(s, { type: "message_end", message });
+
+    expect(s.messages).toHaveLength(1);
+    expect(s.messages[0].parts).toEqual([{ kind: "text", text: "hello world" }]);
+  });
+
   it("keeps provider/model/usage pinned to the assistant message", () => {
     let s = createInitialState();
     const startMessage = {
