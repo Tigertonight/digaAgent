@@ -52,6 +52,8 @@ export interface MessageViewProps {
   isStreaming?: boolean;
   /** 当前会话 cwd：传给 Markdown 用于解析消息里出现的相对图片路径 */
   cwd?: string;
+  /** 点击 assistant 里的 http(s) 链接时，交给右侧 Browser Panel 打开 */
+  onOpenUrl?: (href: string) => void;
   /**
    * RFC-2 Phase B3：approval part 点 Allow 时回调。
    * B4：可选 opts.remember = "this-session" + opts.ruleId 让 server 记住本会话不再问。
@@ -85,6 +87,7 @@ export const MessageView = memo(function MessageView({
   streamingPhase,
   isStreaming,
   cwd,
+  onOpenUrl,
   onApproveCall,
   onDenyCall,
   onChooseClarification,
@@ -311,7 +314,12 @@ export const MessageView = memo(function MessageView({
           if (p.kind === "text") {
             return (
               <div key={i} style={{ color: "var(--text)" }}>
-                <Markdown text={p.text} streaming={i === tailTextIdx} cwd={cwd} />
+                <Markdown
+                  text={p.text}
+                  streaming={i === tailTextIdx}
+                  cwd={cwd}
+                  onOpenUrl={onOpenUrl}
+                />
               </div>
             );
           }
