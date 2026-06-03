@@ -236,6 +236,10 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const [rightPanel, setRightPanel] = useState<
     "files" | "skills" | "tools" | "browser" | null
   >(null);
+  const [browserOpenRequest, setBrowserOpenRequest] = useState<{
+    id: number;
+    url: string;
+  } | null>(null);
 
   // 右侧 panel 宽度（仅 files/tools 用 inline 形态需要，skills 是 modal）
   const [rightPanelWidth, setRightPanelWidth] = useState(480);
@@ -523,6 +527,19 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     supportsThinking,
     sseStatus,
   } = activeSnapshot;
+
+  const openUrlInBrowserPanel = useCallback(
+    (url: string) => {
+      if (!agentId) {
+        previewStore.openUrl(url);
+        return;
+      }
+      setRightPanel("browser");
+      persistRightPanel("browser");
+      setBrowserOpenRequest({ id: Date.now(), url });
+    },
+    [agentId]
+  );
 
   // ===== Setter wrappers(同名,所有调用点不动)=====
   // 通用 helper:把 React 风格的 setter (value | (prev) => value) 路由到 updateActive。
@@ -1626,6 +1643,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             onChangeForkText={setForkText}
             onSubmitFork={submitFork}
             onForkToNewSession={forkToNewSession}
+            onOpenUrl={openUrlInBrowserPanel}
             onApproveCall={approveCall}
             onDenyCall={denyCall}
             onChooseClarification={chooseClarification}
@@ -1701,6 +1719,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           agentId={agentId}
           snapshot={activeSnapshot.browser}
           width={rightPanelWidth}
+          openRequest={browserOpenRequest}
           onClose={toggleBrowser}
           onAnnotate={(text) => {
             setComposerInput((cur) => {

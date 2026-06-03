@@ -21,6 +21,7 @@ interface BrowserPanelProps {
   agentId: string | null;
   snapshot: BrowserSnapshot;
   width: number;
+  openRequest?: { id: number; url: string } | null;
   onClose: () => void;
   onAnnotate: (text: string) => void;
 }
@@ -29,6 +30,7 @@ export function BrowserPanel({
   agentId,
   snapshot,
   width,
+  openRequest,
   onClose,
   onAnnotate,
 }: BrowserPanelProps) {
@@ -102,7 +104,10 @@ export function BrowserPanel({
     };
   }, [url]);
 
-  const run = async (type: "open" | "screenshot" | "close") => {
+  const run = async (
+    type: "open" | "screenshot" | "close",
+    targetUrl?: string
+  ) => {
     if (!agentId) return;
     setBusy(true);
     setError(null);
@@ -110,7 +115,9 @@ export function BrowserPanel({
       const r = await fetch(`/api/browser/${agentId}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(type === "open" ? { type, url } : { type }),
+        body: JSON.stringify(
+          type === "open" ? { type, url: targetUrl ?? url } : { type }
+        ),
       });
       const data = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(data.error ?? r.statusText);
@@ -120,6 +127,13 @@ export function BrowserPanel({
       setBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (!openRequest?.url) return;
+    setUrl(openRequest.url);
+    void run("open", openRequest.url);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openRequest?.id]);
 
   useEffect(() => {
     if (!live || !agentId) return;

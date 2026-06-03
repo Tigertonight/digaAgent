@@ -163,6 +163,8 @@ interface Props {
   streaming?: boolean;
   /** 当前会话 cwd:用于把消息里出现的相对图片路径解析成绝对路径并自动渲染 */
   cwd?: string;
+  /** http(s) 链接点击处理；聊天区用于改走右侧 Browser Panel */
+  onOpenUrl?: (href: string) => void;
 }
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif)\b/i;
@@ -220,6 +222,7 @@ export default function Markdown({
   size = "normal",
   streaming = false,
   cwd,
+  onOpenUrl,
 }: Props) {
   const isLight = useIsLight();
   const codeStyle = isLight ? oneLight : oneDark;
@@ -280,13 +283,22 @@ export default function Markdown({
                 <a
                   {...props}
                   href={href}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  target={onOpenUrl && isHttp ? undefined : "_blank"}
+                  rel={onOpenUrl && isHttp ? undefined : "noopener noreferrer"}
+                  onClick={
+                    onOpenUrl && isHttp
+                      ? (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          onOpenUrl(href);
+                        }
+                      : undefined
+                  }
                   className="text-blue-500 hover:underline"
                 >
                   {children}
                 </a>
-                {isHttp && (
+                {isHttp && !onOpenUrl && (
                   <button
                     type="button"
                     onClick={(e) => {

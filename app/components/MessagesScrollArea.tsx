@@ -33,6 +33,7 @@ interface MessagesScrollAreaProps {
   onChangeForkText: (v: string) => void;
   onSubmitFork: (entryId: string) => Promise<void>;
   onForkToNewSession: (entryId: string) => Promise<void>;
+  onOpenUrl?: (href: string) => void;
   /** RFC-2 Phase B3/B4：approval part 点 Allow（B4 加 opts.remember） */
   onApproveCall?: (
     toolCallId: string,
@@ -68,6 +69,7 @@ export function MessagesScrollArea({
   onChangeForkText,
   onSubmitFork,
   onForkToNewSession,
+  onOpenUrl,
   onApproveCall,
   onDenyCall,
   onChooseClarification,
@@ -147,6 +149,7 @@ export function MessagesScrollArea({
                   onChangeForkText={onChangeForkText}
                   onSubmitFork={onSubmitFork}
                   onForkToNewSession={onForkToNewSession}
+                  onOpenUrl={onOpenUrl}
                   modelLabel={messageModelLabel}
                   meta={messageMeta}
                   streamingPhase={
