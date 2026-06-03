@@ -1,7 +1,8 @@
 # RFC-4: Productization Pass
 
-> **状态**：Planning
+> **状态**：Completed
 > **创建**：2026-06-03
+> **完成**：2026-06-03
 > **目标**：把 mini-pi-web 从“功能可用”推进到“新用户能配置、长任务能放心跑、核心代码能继续演进”的 Beta+ 状态
 > **范围**：Provider/Auth Onboarding、Long-running Reliability、ChatApp Thin Pass
 > **预计工期**：5-7 人天
@@ -533,3 +534,65 @@ RFC-4 完成时应满足：
 - `ChatApp.tsx` 接近或低于 1200 行。
 - AuthPanel / ModelsConfigPanel 不再是 800+ 行大组件。
 - 至少新增 2 条 e2e：provider setup、reliability。
+
+---
+
+## 9. 执行回顾
+
+### 9.1 完成情况
+
+RFC-4 已按 A → B → C 顺序完成，所有计划内 commit 均已落地：
+
+- Phase A Provider/Auth Onboarding：完成首次配置向导、`useProviderStatus`、API Key 保存后验证、`openai` 与 `openai-codex` 授权说明、provider setup e2e。
+- Phase B Long-running Reliability：完成 pending approvals 查询接口、刷新后恢复待审批气泡、搜索冷构建 building/timeout 提示、SSE lost/running 状态增强、reliability e2e。
+- Phase C ChatApp Thin Pass：完成 `useProviderModel`、modal reducer、拆分 `AuthPanel` / `OAuthLoginModal` / `AuthProviderRow`、拆分 `ModelsConfigPanel` / `ProviderConfigCard` / `ModelConfigRow`。
+
+### 9.2 最终质量门禁
+
+2026-06-03 已执行完整门禁：
+
+```bash
+npm test
+npx tsc --noEmit
+npm run build
+npx playwright test
+```
+
+结果：
+
+| Gate | Result |
+|---|---|
+| Vitest | 11 files / 154 tests passed |
+| TypeScript | passed |
+| Next build | passed |
+| Playwright | 9 tests passed |
+
+### 9.3 结构指标
+
+| File | RFC 前目标 | RFC 后 |
+|---|---:|---:|
+| `app/components/AuthPanel.tsx` | 450 行以内 | 327 行 |
+| `app/components/ModelsConfigPanel.tsx` | 500 行以内 | 440 行 |
+| `app/ChatApp.tsx` | 接近或低于 1200 行 | 1587 行 |
+
+`AuthPanel` 和 `ModelsConfigPanel` 已达到拆分目标。`ChatApp.tsx` 未降到 1200 行以内，原因是本轮 C 阶段优先保证 A/B 后续改动稳定，并只抽走 provider/model 与 modal 状态；`ChatApp` 仍保留 session lifecycle、composer orchestration、right panel、forking、budget、SSE wiring 等多条横切流程。下一轮若继续瘦身，建议优先抽：
+
+- `useRightPanelState`：files/skills/tools 互斥、宽度、布局、持久化。
+- `useSystemPromptActions`：system prompt modal 打开、加载、错误文案。
+- `useSessionReconnect`：主窗口与 pet 的 SSE reconnect 逻辑。
+- `useChatHeaderActions`：TopHeader 相关动作聚合。
+
+### 9.4 产品化收益
+
+- 新用户从主界面可直接进入 Provider Setup，并按 API Key / Codex OAuth / Claude / Custom endpoint 分流。
+- 用户保存 API Key 后能看到最小模型调用验证结果，减少“填了 key 但不知道能不能用”的不确定感。
+- ChatGPT/Codex OAuth 与 OpenAI Platform API Key 已在 UI 和文档中明确区分。
+- 长任务场景下，pending approval 刷新后可恢复，搜索冷构建不再表现为 UI 假死，SSE lost 状态可见并支持当前 session 重连。
+- Auth / Models 两个重面板已拆为可继续维护的小组件，为后续自定义 endpoint 与 OAuth 体验迭代降低成本。
+
+### 9.5 剩余风险
+
+- Pending approvals 仍是进程内恢复，进程重启后会丢；持久化审批状态应另开 RFC。
+- Search index 仍是内存全量重建，数据量继续增长后需要 in-flight 去重、持久化或增量索引。
+- OAuth 行为仍依赖 SDK/provider 侧流程变化，需要在后续版本继续用真实授权路径做手测。
+- `ChatApp.tsx` 仍偏厚，虽然关键面板已拆，但核心 orchestrator 还需要下一轮结构瘦身。
