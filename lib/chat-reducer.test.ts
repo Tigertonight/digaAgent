@@ -330,6 +330,45 @@ describe("applyEvent — shim duplicate completion guards", () => {
     expect(s.messages[0].parts).toEqual([{ kind: "text", text: "hello world" }]);
   });
 
+  it("does not create a second assistant for duplicate message_start responseId", () => {
+    let s = createInitialState();
+    const message = {
+      role: "assistant",
+      responseId: "msg-start-replay",
+      content: [{ type: "text", text: "answer" }],
+      timestamp: 1000,
+    };
+
+    s = applyEvent(s, { type: "message_start", message });
+    s = applyEvent(s, { type: "message_start", message });
+
+    expect(s.messages).toHaveLength(1);
+    expect(s.activeAssistantIndex).toBe(0);
+    expect(s.messages[0].parts).toEqual([{ kind: "text", text: "answer" }]);
+  });
+
+  it("ignores duplicate message_start after message_end for same responseId", () => {
+    let s = createInitialState();
+    const message = {
+      role: "assistant",
+      responseId: "msg-start-after-end",
+      content: [{ type: "text", text: "answer" }],
+      timestamp: 1000,
+    };
+
+    s = applyEvent(s, { type: "message_start", message });
+    s = applyEvent(s, { type: "message_end", message });
+    s = applyEvent(s, { type: "message_start", message });
+    s = applyEvent(s, { type: "message_update", assistantMessageEvent: {
+      type: "text_delta",
+      delta: "answer",
+      partial: { responseId: message.responseId },
+    } });
+
+    expect(s.messages).toHaveLength(1);
+    expect(s.messages[0].parts).toEqual([{ kind: "text", text: "answer" }]);
+  });
+
   it("keeps provider/model/usage pinned to the assistant message", () => {
     let s = createInitialState();
     const startMessage = {
