@@ -22,6 +22,8 @@ interface AnyEvent {
   message?: {
     role: string;
     timestamp?: number;
+    responseId?: string;
+    stopReason?: string;
     content?: Array<{
       type: string;
       text?: string;
@@ -34,6 +36,16 @@ interface AnyEvent {
   assistantMessageEvent?: {
     type: string;
     delta?: string;
+    partial?: {
+      responseId?: string;
+      content?: Array<{
+        type: string;
+        text?: string;
+        thinking?: string;
+        data?: string;
+        mimeType?: string;
+      }>;
+    };
   };
   // tool_execution_*
   toolCallId?: string;
@@ -73,6 +85,10 @@ export interface ReducerState {
   messages: ChatMessage[];
   /** 当前正在生成的 assistant message 在 messages 里的 index；-1 表示无 */
   activeAssistantIndex: number;
+  /** 当前 assistant message 的 responseId，用于兼容非标准 shim 的重复 delta */
+  activeAssistantResponseId?: string;
+  /** 已收尾 responseId，迟到的重复 delta 直接忽略 */
+  completedAssistantResponseIds?: string[];
 }
 
 export function createInitialState(messages: ChatMessage[] = []): ReducerState {
@@ -113,6 +129,33 @@ function appendToLastThinkingPart(parts: MessagePart[], delta: string) {
   } else {
     parts.push({ kind: "thinking", text: delta, startedAt: Date.now() });
   }
+}
+
+function partsFromContent(
+  content?: Array<{
+    type: string;
+    text?: string;
+    thinking?: string;
+    data?: string;
+    mimeType?: string;
+  }>
+): MessagePart[] {
+  const parts: MessagePart[] = [];
+  for (const c of content ?? []) {
+    if (c.type === "text" && c.text) parts.push({ kind: "text", text: c.text });
+    else if (c.type === "thinking" && c.thinking)
+      parts.push({ kind: "thinking", text: c.thinking });
+    else if (c.type === "image" && c.data && c.mimeType)
+      parts.push({ kind: "image", data: c.data, mimeType: c.mimeType });
+  }
+  return parts;
+}
+
+function textFromParts(parts: MessagePart[]) {
+  return parts
+    .filter((p): p is Extract<MessagePart, { kind: "text" }> => p.kind === "text")
+    .map((p) => p.text)
+    .join("");
 }
 
 /** thinking 段已经"翻篇"——出现 text 或 tool 时调用，给最后一个未结束的 thinking 打 endedAt */
@@ -163,6 +206,8 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
   const state: ReducerState = {
     messages: prev.messages.slice(),
     activeAssistantIndex: prev.activeAssistantIndex,
+    activeAssistantResponseId: prev.activeAssistantResponseId,
+    completedAssistantResponseIds: prev.completedAssistantResponseIds,
   };
 
   const replaceActive = (mutator: (m: ChatMessage) => ChatMessage) => {
@@ -195,12 +240,14 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         // user message 不算 active assistant
       } else if (m.role === "assistant") {
         // 起一个新的 active assistant 占位
+        const parts = partsFromContent(m.content);
         state.messages.push({
           role: "assistant",
-          parts: [],
+          parts,
           timestamp: m.timestamp,
         });
         state.activeAssistantIndex = state.messages.length - 1;
+        state.activeAssistantResponseId = m.responseId;
       } else if (m.role === "tool") {
         // tool result 类的 message，一般已经在 tool_execution_end 里处理过，跳过
       }
@@ -210,9 +257,24 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
     case "message_update": {
       const sub = ev.assistantMessageEvent;
       if (!sub) return state;
+      const responseId = sub.partial?.responseId ?? ev.message?.responseId;
+      if (
+        responseId &&
+        state.activeAssistantIndex < 0 &&
+        state.completedAssistantResponseIds?.includes(responseId)
+      ) {
+        return state;
+      }
       replaceActive((msg) => {
         const parts = (msg.parts ?? []).slice();
         if (sub.type === "text_delta" && sub.delta) {
+          if (
+            responseId &&
+            responseId === state.activeAssistantResponseId &&
+            textFromParts(parts) === sub.delta
+          ) {
+            return msg;
+          }
           sealLastThinkingIfOpen(parts);
           appendToLastTextPart(parts, sub.delta);
         } else if (sub.type === "thinking_delta" && sub.delta) {
@@ -232,15 +294,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         let parts: MessagePart[];
         if (!cur.parts || cur.parts.length === 0) {
           // 兜底：deltas 没累积到 parts，从 message.content 重建
-          parts = [];
-          for (const c of m.content ?? []) {
-            if (c.type === "text" && c.text)
-              parts.push({ kind: "text", text: c.text });
-            else if (c.type === "thinking" && c.thinking)
-              parts.push({ kind: "thinking", text: c.thinking });
-            else if (c.type === "image" && c.data && c.mimeType)
-              parts.push({ kind: "image", data: c.data, mimeType: c.mimeType });
-          }
+          parts = partsFromContent(m.content);
         } else {
           parts = cur.parts.slice();
         }
@@ -252,7 +306,17 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
           timestamp: finalTs,
         };
       }
+      const responseId = m?.responseId ?? state.activeAssistantResponseId;
+      if (responseId) {
+        state.completedAssistantResponseIds = [
+          responseId,
+          ...(state.completedAssistantResponseIds ?? []).filter(
+            (id) => id !== responseId
+          ),
+        ].slice(0, 20);
+      }
       state.activeAssistantIndex = -1;
+      state.activeAssistantResponseId = undefined;
       return state;
     }
 

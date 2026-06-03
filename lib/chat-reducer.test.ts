@@ -244,6 +244,44 @@ describe("ctxToMessages", () => {
   });
 });
 
+describe("applyEvent — shim duplicate completion guards", () => {
+  it("uses full assistant content from message_start and ignores duplicate deltas", () => {
+    let s = createInitialState();
+    const message = {
+      role: "assistant",
+      responseId: "msg-1",
+      content: [{ type: "text", text: "answer" }],
+      stopReason: "stop",
+      timestamp: 1000,
+    };
+
+    s = applyEvent(s, { type: "message_start", message });
+    s = applyEvent(s, {
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "answer",
+        partial: message,
+      },
+      message,
+    });
+    s = applyEvent(s, { type: "message_end", message });
+    s = applyEvent(s, {
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "answer",
+        partial: message,
+      },
+      message,
+    });
+
+    expect(s.messages).toHaveLength(1);
+    expect(s.activeAssistantIndex).toBe(-1);
+    expect(s.messages[0].parts).toEqual([{ kind: "text", text: "answer" }]);
+  });
+});
+
 describe("applyEvent — approval_request / approval_resolved (RFC-2 Phase B3)", () => {
   /** 帮助函数：先起一个 active assistant，再喂 approval_request。 */
   function setupActiveAssistantWithApproval() {
