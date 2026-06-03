@@ -4,10 +4,7 @@ import type { RefObject } from "react";
 import { MessageView } from "./MessageView";
 import { ChatMinimap } from "../ChatMinimap";
 import type { ChatMessage } from "@/lib/types";
-import type {
-  AgentPhase,
-  StatsSnapshot,
-} from "@/lib/session-runner";
+import type { AgentPhase } from "@/lib/session-runner";
 import type { ProviderInfo } from "@/lib/types";
 
 interface MessagesScrollAreaProps {
@@ -16,7 +13,6 @@ interface MessagesScrollAreaProps {
   error: string | null;
   currentProvider: ProviderInfo | undefined;
   modelId: string;
-  stats: StatsSnapshot | null;
   agentPhase: AgentPhase;
   cwd: string;
   streaming: boolean;
@@ -55,7 +51,6 @@ export function MessagesScrollArea({
   error,
   currentProvider,
   modelId,
-  stats,
   agentPhase,
   cwd,
   streaming,
@@ -108,6 +103,20 @@ export function MessagesScrollArea({
               const currentRefIdx = isVisible ? refIdx++ : -1;
               const isLastAssistant =
                 m.role === "assistant" && i === lastAssistantIdx;
+              const usage = m.meta?.usage;
+              const messageMeta =
+                usage && (usage.total > 0 || usage.cost > 0)
+                  ? {
+                      input: usage.input,
+                      output: usage.output,
+                      cost: usage.cost,
+                    }
+                  : undefined;
+              const messageModelLabel =
+                m.meta?.model && m.meta.provider === currentProvider?.provider
+                  ? currentProvider?.models.find((mm) => mm.id === m.meta?.model)
+                      ?.name ?? m.meta.model
+                  : m.meta?.model ?? modelLabel;
               // key 稳定且唯一：
               //   1) 优先 entryId（user message 从后端拿到的稳定 id）
               //   2) 否则用 role:timestamp:index 三元组
@@ -138,16 +147,8 @@ export function MessagesScrollArea({
                   onChangeForkText={onChangeForkText}
                   onSubmitFork={onSubmitFork}
                   onForkToNewSession={onForkToNewSession}
-                  modelLabel={modelLabel}
-                  meta={
-                    isLastAssistant && stats && stats.total > 0
-                      ? {
-                          input: stats.input,
-                          output: stats.output,
-                          cost: stats.cost,
-                        }
-                      : undefined
-                  }
+                  modelLabel={messageModelLabel}
+                  meta={messageMeta}
                   streamingPhase={
                     isLastAssistant && streaming ? agentPhase : undefined
                   }

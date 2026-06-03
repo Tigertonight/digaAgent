@@ -157,6 +157,25 @@ export interface ChatMessage {
   entryId?: string;
   /** SDK AgentMessage.timestamp（ms epoch）；流式时由 message_start/end 写入，恢复时由 ctxToMessages 写入 */
   timestamp?: number;
+  /** SDK message 级别元信息；用于把模型名 / token 用量固定到具体 assistant 回复上 */
+  meta?: ChatMessageMeta;
+}
+
+export interface ChatMessageUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number;
+  cost: number;
+}
+
+export interface ChatMessageMeta {
+  provider?: string;
+  model?: string;
+  api?: string;
+  responseId?: string;
+  usage?: ChatMessageUsage;
 }
 
 /** SDK getUserMessagesForForking() 返回的条目 */

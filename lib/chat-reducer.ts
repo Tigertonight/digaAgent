@@ -12,7 +12,12 @@
  * 这样可以保证 text/thinking/tool 的顺序与 LLM 实际产出顺序一致，
  * 跟 pi-web 的渲染模型对齐。
  */
-import type { ChatMessage, MessagePart } from "./types";
+import type {
+  ChatMessage,
+  ChatMessageMeta,
+  ChatMessageUsage,
+  MessagePart,
+} from "./types";
 import type { ClarificationOption } from "./clarification/types";
 
 /* SDK 事件的最小化类型（用 any-ish 但 narrow 到必要字段） */
@@ -23,7 +28,19 @@ interface AnyEvent {
     role: string;
     timestamp?: number;
     responseId?: string;
+    provider?: string;
+    model?: string;
+    api?: string;
     stopReason?: string;
+    usage?: {
+      input?: number;
+      output?: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+      total?: number;
+      totalTokens?: number;
+      cost?: number | { total?: number };
+    };
     content?: Array<{
       type: string;
       text?: string;
@@ -158,6 +175,48 @@ function textFromParts(parts: MessagePart[]) {
     .join("");
 }
 
+function toNumber(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
+
+function usageFromMessage(m?: AnyEvent["message"]): ChatMessageUsage | undefined {
+  const u = m?.usage;
+  if (!u) return undefined;
+  const input = toNumber(u.input);
+  const output = toNumber(u.output);
+  const cacheRead = toNumber(u.cacheRead);
+  const cacheWrite = toNumber(u.cacheWrite);
+  const total =
+    toNumber(u.totalTokens) ||
+    toNumber(u.total) ||
+    input + output + cacheRead + cacheWrite;
+  const cost =
+    typeof u.cost === "number" ? toNumber(u.cost) : toNumber(u.cost?.total);
+  return { input, output, cacheRead, cacheWrite, total, cost };
+}
+
+function metaFromMessage(m?: AnyEvent["message"]): ChatMessageMeta | undefined {
+  if (!m) return undefined;
+  const usage = usageFromMessage(m);
+  const meta: ChatMessageMeta = {
+    provider: m.provider,
+    model: m.model,
+    api: m.api,
+    responseId: m.responseId,
+    usage,
+  };
+  return Object.values(meta).some((v) => v !== undefined) ? meta : undefined;
+}
+
+function mergeMeta(
+  prev: ChatMessageMeta | undefined,
+  next: ChatMessageMeta | undefined
+): ChatMessageMeta | undefined {
+  if (!prev) return next;
+  if (!next) return prev;
+  return { ...prev, ...next, usage: next.usage ?? prev.usage };
+}
+
 /** thinking 段已经"翻篇"——出现 text 或 tool 时调用，给最后一个未结束的 thinking 打 endedAt */
 function sealLastThinkingIfOpen(parts: MessagePart[]) {
   for (let i = parts.length - 1; i >= 0; i--) {
@@ -245,6 +304,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
           role: "assistant",
           parts,
           timestamp: m.timestamp,
+          meta: metaFromMessage(m),
         });
         state.activeAssistantIndex = state.messages.length - 1;
         state.activeAssistantResponseId = m.responseId;
@@ -267,6 +327,10 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
       }
       replaceActive((msg) => {
         const parts = (msg.parts ?? []).slice();
+        const nextMeta = mergeMeta(
+          msg.meta,
+          metaFromMessage(ev.message) ?? (responseId ? { responseId } : undefined)
+        );
         if (sub.type === "text_delta" && sub.delta) {
           if (
             responseId &&
@@ -280,7 +344,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         } else if (sub.type === "thinking_delta" && sub.delta) {
           appendToLastThinkingPart(parts, sub.delta);
         }
-        return { ...msg, parts };
+        return { ...msg, parts, meta: nextMeta };
       });
       return state;
     }
@@ -304,6 +368,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
           ...cur,
           parts,
           timestamp: finalTs,
+          meta: mergeMeta(cur.meta, metaFromMessage(m)),
         };
       }
       const responseId = m?.responseId ?? state.activeAssistantResponseId;
@@ -503,6 +568,11 @@ export function ctxToMessages(
   ctxMessages: Array<{
     role: string;
     timestamp?: number;
+    responseId?: string;
+    provider?: string;
+    model?: string;
+    api?: string;
+    usage?: NonNullable<AnyEvent["message"]>["usage"];
     content?: Array<{
       type: string;
       text?: string;
@@ -579,7 +649,12 @@ export function ctxToMessages(
           });
         }
       }
-      out.push({ role: "assistant", parts, timestamp: m.timestamp });
+      out.push({
+        role: "assistant",
+        parts,
+        timestamp: m.timestamp,
+        meta: metaFromMessage({ ...m, role: "assistant" }),
+      });
     }
     // 跳过 role=tool 的独立 message，它们已经被合并到 assistant 的 tool part 里
   }
