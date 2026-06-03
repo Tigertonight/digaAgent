@@ -30,6 +30,7 @@ import { NextResponse } from "next/server";
 import { getAgent } from "@/lib/agent-registry";
 import {
   addSessionRemember,
+  listPendingApprovals,
   resolveApproval,
 } from "@/lib/collab/server-store";
 import type { ApprovalDecision } from "@/lib/collab/types";
@@ -42,6 +43,21 @@ interface ApprovalBody {
   denyReason?: unknown;
   remember?: unknown;
   ruleId?: unknown;
+}
+
+export async function GET(
+  _req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id: agentId } = await params;
+  const rec = getAgent(agentId);
+  if (!rec) {
+    return NextResponse.json({ error: "agent not found" }, { status: 404 });
+  }
+
+  return NextResponse.json({
+    approvals: listPendingApprovals(agentId),
+  });
 }
 
 export async function POST(

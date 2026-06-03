@@ -22,7 +22,10 @@
  */
 
 import { useCallback } from "react";
-import type { ApprovalDecision } from "@/lib/collab/types";
+import type {
+  ApprovalDecision,
+  ApprovalRequest,
+} from "@/lib/collab/types";
 
 export interface UseApprovalsOptions {
   /** 当前活跃 agent id；null 时 action 退化为 no-op（不应该被触发） */
@@ -42,6 +45,7 @@ export interface ApproveOptions {
 export interface UseApprovalsReturn {
   approve: (toolCallId: string, opts?: ApproveOptions) => Promise<void>;
   deny: (toolCallId: string, denyReason?: string) => Promise<void>;
+  loadPending: () => Promise<ApprovalRequest[]>;
 }
 
 interface PostDecisionBody {
@@ -75,6 +79,26 @@ async function postDecision(
 export function useApprovals(opts: UseApprovalsOptions): UseApprovalsReturn {
   const { agentId, onError } = opts;
 
+  const loadPending = useCallback<UseApprovalsReturn["loadPending"]>(
+    async () => {
+      if (!agentId) return [];
+      try {
+        const r = await fetch(`/api/agent/${agentId}/approval`);
+        if (!r.ok) {
+          const text = await r.text().catch(() => "");
+          onError?.(`load pending approvals failed: ${r.status} ${text}`);
+          return [];
+        }
+        const d = (await r.json()) as { approvals?: ApprovalRequest[] };
+        return Array.isArray(d.approvals) ? d.approvals : [];
+      } catch (e) {
+        onError?.(`load pending approvals network error: ${String(e)}`);
+        return [];
+      }
+    },
+    [agentId, onError]
+  );
+
   const approve = useCallback<UseApprovalsReturn["approve"]>(
     async (toolCallId, approveOpts) => {
       if (!agentId) return;
@@ -104,5 +128,5 @@ export function useApprovals(opts: UseApprovalsOptions): UseApprovalsReturn {
     [agentId, onError]
   );
 
-  return { approve, deny };
+  return { approve, deny, loadPending };
 }
