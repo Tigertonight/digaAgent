@@ -19,7 +19,7 @@ import { NextResponse } from "next/server";
 import { search } from "@/lib/search";
 import type { SearchResponse } from "@/lib/search/types";
 
-import { getSearchIndex } from "./cache";
+import { getSearchIndexWithMeta } from "./cache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,7 +44,7 @@ export async function POST(req: Request) {
     const limitRaw = typeof body.limit === "number" ? body.limit : DEFAULT_LIMIT;
     const limit = Math.max(1, Math.min(MAX_LIMIT, Math.floor(limitRaw)));
 
-    const index = await getSearchIndex();
+    const { index, cacheHit, buildMs } = await getSearchIndexWithMeta();
     const results = search(index, query, limit);
 
     const resp: SearchResponse = {
@@ -52,6 +52,8 @@ export async function POST(req: Request) {
       builtAt: index.builtAt,
       durationMs: Date.now() - t0,
       totalDocs: index.docs.size,
+      indexStatus: cacheHit ? "cached" : "rebuilt",
+      indexBuildMs: cacheHit ? undefined : buildMs,
     };
     return NextResponse.json(resp);
   } catch (e) {

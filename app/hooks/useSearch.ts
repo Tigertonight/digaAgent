@@ -28,8 +28,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { SearchResponse, SearchResult } from "@/lib/search/types";
 
 const DEBOUNCE_MS = 200;
+const BUILDING_NOTICE_MS = 600;
+const TIMEOUT_NOTICE_MS = 5_000;
 
-export type SearchStatus = "idle" | "loading" | "ready" | "error";
+export type SearchStatus =
+  | "idle"
+  | "loading"
+  | "building"
+  | "timeout"
+  | "ready"
+  | "error";
 
 export interface UseSearchState {
   query: string;
@@ -40,12 +48,15 @@ export interface UseSearchState {
   totalDocs: number;
   /** server 端搜索耗时 ms */
   durationMs: number | null;
+  indexStatus: SearchResponse["indexStatus"] | null;
+  indexBuildMs: number | null;
   error: string | null;
 }
 
 export interface UseSearchReturn extends UseSearchState {
   setQuery: (q: string) => void;
   clear: () => void;
+  retry: () => void;
   /** query 是否处于"非空且 trim 后非空"状态——UI 用这个决定要不要替换 sessions 列表 */
   isActive: boolean;
 }
@@ -62,12 +73,16 @@ const INITIAL: UseSearchState = {
   builtAt: null,
   totalDocs: 0,
   durationMs: null,
+  indexStatus: null,
+  indexBuildMs: null,
   error: null,
 };
 
 export function useSearch(opts: UseSearchOptions = {}): UseSearchReturn {
   const [state, setState] = useState<UseSearchState>(INITIAL);
+  const [retryNonce, setRetryNonce] = useState(0);
   const latestQueryRef = useRef("");
+  const requestIdRef = useRef(0);
 
   const fetcher = opts.fetcher ?? fetch;
 
@@ -78,6 +93,17 @@ export function useSearch(opts: UseSearchOptions = {}): UseSearchReturn {
   const clear = useCallback(() => {
     setState(INITIAL);
     latestQueryRef.current = "";
+    requestIdRef.current += 1;
+  }, []);
+
+  const retry = useCallback(() => {
+    setState((s) => ({
+      ...s,
+      status: s.query.trim() ? "loading" : "idle",
+      error: null,
+      durationMs: null,
+    }));
+    setRetryNonce((n) => n + 1);
   }, []);
 
   useEffect(() => {
@@ -91,6 +117,7 @@ export function useSearch(opts: UseSearchOptions = {}): UseSearchReturn {
       // 解决：放到 microtask 里。queueMicrotask 是异步回调，规则不抓。
       queueMicrotask(() => {
         if (latestQueryRef.current === "") {
+          requestIdRef.current += 1;
           setState((s) =>
             s.status === "idle" && s.results.length === 0
               ? s
@@ -102,8 +129,37 @@ export function useSearch(opts: UseSearchOptions = {}): UseSearchReturn {
     }
 
     const handle = setTimeout(async () => {
+      const requestId = requestIdRef.current + 1;
+      requestIdRef.current = requestId;
       // 进入 loading（异步回调内 setState，不触发 set-state-in-effect）
-      setState((s) => ({ ...s, status: "loading", error: null }));
+      setState((s) => ({
+        ...s,
+        status: "loading",
+        error: null,
+        durationMs: null,
+        indexStatus: null,
+        indexBuildMs: null,
+      }));
+
+      const stillCurrent = () =>
+        latestQueryRef.current === trimmed &&
+        requestIdRef.current === requestId;
+      const buildingTimer = setTimeout(() => {
+        if (stillCurrent()) {
+          setState((s) =>
+            s.status === "loading" ? { ...s, status: "building" } : s,
+          );
+        }
+      }, BUILDING_NOTICE_MS);
+      const timeoutTimer = setTimeout(() => {
+        if (stillCurrent()) {
+          setState((s) =>
+            s.status === "loading" || s.status === "building"
+              ? { ...s, status: "timeout" }
+              : s,
+          );
+        }
+      }, TIMEOUT_NOTICE_MS);
 
       try {
         const r = await fetcher("/api/search", {
@@ -114,7 +170,7 @@ export function useSearch(opts: UseSearchOptions = {}): UseSearchReturn {
         });
 
         // race 防护：用户已经又改了 query，丢弃这次结果
-        if (latestQueryRef.current !== trimmed) return;
+        if (!stillCurrent()) return;
 
         if (!r.ok) {
           const text = await r.text().catch(() => "");
@@ -127,7 +183,7 @@ export function useSearch(opts: UseSearchOptions = {}): UseSearchReturn {
         }
 
         const data = (await r.json()) as SearchResponse;
-        if (latestQueryRef.current !== trimmed) return;
+        if (!stillCurrent()) return;
 
         setState((s) => ({
           ...s,
@@ -136,25 +192,31 @@ export function useSearch(opts: UseSearchOptions = {}): UseSearchReturn {
           builtAt: data.builtAt,
           totalDocs: data.totalDocs,
           durationMs: data.durationMs,
+          indexStatus: data.indexStatus ?? null,
+          indexBuildMs: data.indexBuildMs ?? null,
           error: null,
         }));
       } catch (e) {
-        if (latestQueryRef.current !== trimmed) return;
+        if (!stillCurrent()) return;
         setState((s) => ({
           ...s,
           status: "error",
           error: String(e),
         }));
+      } finally {
+        clearTimeout(buildingTimer);
+        clearTimeout(timeoutTimer);
       }
     }, DEBOUNCE_MS);
 
     return () => clearTimeout(handle);
-  }, [state.query, fetcher]);
+  }, [state.query, fetcher, retryNonce]);
 
   return {
     ...state,
     setQuery,
     clear,
+    retry,
     isActive: state.query.trim().length > 0,
   };
 }

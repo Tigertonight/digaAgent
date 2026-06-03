@@ -14,16 +14,18 @@
  */
 
 import type { SearchResult } from "@/lib/search/types";
+import type { SearchStatus } from "@/app/hooks/useSearch";
 
 import { shortCwd } from "@/lib/format";
 
 export interface SidebarSearchProps {
   query: string;
-  status: "idle" | "loading" | "ready" | "error";
+  status: SearchStatus;
   results: SearchResult[];
   totalDocs: number;
   durationMs: number | null;
   error: string | null;
+  onRetry: () => void;
   /** 点击结果时跳到该 session */
   onSelect: (sessionId: string) => void;
   /** 当前选中的 session id，用于结果列表高亮 */
@@ -71,6 +73,7 @@ export function SidebarSearch(props: SidebarSearchProps) {
     totalDocs,
     durationMs,
     error,
+    onRetry,
     onSelect,
     selectedId,
     sessionLookup,
@@ -88,6 +91,12 @@ export function SidebarSearch(props: SidebarSearchProps) {
       >
         <span>
           {status === "loading" && "搜索中…"}
+          {status === "building" && "Building index…"}
+          {status === "timeout" && (
+            <span>
+              Building index is taking longer than usual.
+            </span>
+          )}
           {status === "ready" &&
             `${results.length} 命中 · ${totalDocs} session 索引`}
           {status === "error" && (
@@ -97,6 +106,19 @@ export function SidebarSearch(props: SidebarSearchProps) {
         </span>
         {durationMs != null && status === "ready" && (
           <span style={{ color: "var(--fg-faint)" }}>{durationMs}ms</span>
+        )}
+        {status === "timeout" && (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="rounded border px-1.5 py-0.5 hover:opacity-80"
+            style={{
+              borderColor: "var(--border)",
+              color: "var(--text)",
+            }}
+          >
+            Retry
+          </button>
         )}
       </div>
 
