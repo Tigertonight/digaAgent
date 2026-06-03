@@ -81,9 +81,13 @@ interface AgentRecord {
   unsubscribe: () => void;
   /** 当前是否在跑(agent_start/end 之间为 true);给 sidebar 标"运行中"用 */
   isStreaming: boolean;
+  /** local shim 可能给完整 assistant 内容但漏掉 done/end，用 watchdog 兜底收尾 */
+  finishWatchdog: ReturnType<typeof setTimeout> | null;
+  pendingFinishMessage: unknown | null;
 }
 
 const MAX_EVENTS_PER_AGENT = 5000;
+const FINISH_WATCHDOG_MS = 1800;
 
 interface GlobalRegistry {
   agents: Map<string, AgentRecord>;
@@ -162,9 +166,58 @@ export function pushExternalEvent(
     | ClarificationResolvedEvent
     | BrowserStateEvent
 ): void {
+  pushAgentEvent(rec, event);
+}
+
+function pushAgentEvent(rec: AgentRecord, event: RingBufferEvent): void {
   const seq = rec.nextSeq++;
   rec.events[seq % MAX_EVENTS_PER_AGENT] = { seq, event };
   for (const l of rec.listeners) l();
+}
+
+function messageHasStopReason(event: unknown): event is { message: unknown } {
+  if (!event || typeof event !== "object") return false;
+  const e = event as {
+    message?: { role?: string; stopReason?: unknown };
+    assistantMessageEvent?: { partial?: { role?: string; stopReason?: unknown } };
+  };
+  const msg = e.message ?? e.assistantMessageEvent?.partial;
+  return msg?.role === "assistant" && typeof msg.stopReason === "string";
+}
+
+function clearFinishWatchdog(rec: AgentRecord) {
+  if (rec.finishWatchdog) {
+    clearTimeout(rec.finishWatchdog);
+    rec.finishWatchdog = null;
+  }
+  rec.pendingFinishMessage = null;
+}
+
+function scheduleFinishWatchdog(rec: AgentRecord, message: unknown) {
+  rec.pendingFinishMessage = message;
+  if (rec.finishWatchdog) clearTimeout(rec.finishWatchdog);
+  rec.finishWatchdog = setTimeout(() => {
+    rec.finishWatchdog = null;
+    const finalMessage = rec.pendingFinishMessage;
+    rec.pendingFinishMessage = null;
+    if (!rec.isStreaming || !finalMessage) return;
+
+    // Some OpenAI-compatible local shims return a full assistant message with
+    // stopReason but never emit the provider's final done event. The SDK then
+    // stays streaming forever. Close the UI turn and abort the dangling run.
+    void rec.session.abort().catch(() => {});
+    pushAgentEvent(rec, {
+      type: "message_end",
+      message: finalMessage,
+    } as AgentSessionEvent);
+    pushAgentEvent(rec, {
+      type: "queue_update",
+      steering: [],
+      followUp: [],
+    } as AgentSessionEvent);
+    rec.isStreaming = false;
+    pushAgentEvent(rec, { type: "agent_end" } as AgentSessionEvent);
+  }, FINISH_WATCHDOG_MS);
 }
 
 export interface CreateOptions {
@@ -321,6 +374,8 @@ export async function createAgent(opts: CreateOptions): Promise<{
     listeners: new Set(),
     unsubscribe: () => {},
     isStreaming: false,
+    finishWatchdog: null,
+    pendingFinishMessage: null,
   };
   // 让 CollabExtension 的闭包能 push 自定义事件（approval_request/resolved）
   recordHolder.current = record;
@@ -328,11 +383,16 @@ export async function createAgent(opts: CreateOptions): Promise<{
   // 把 AgentSession 的事件流接到 ring buffer + 通知 listeners
   record.unsubscribe = session.subscribe((event) => {
     // 维护"是否正在跑"flag —— sidebar 状态点直接读它
-    if (event.type === "agent_start") record.isStreaming = true;
-    else if (event.type === "agent_end") record.isStreaming = false;
-    const seq = record.nextSeq++;
-    record.events[seq % MAX_EVENTS_PER_AGENT] = { seq, event };
-    for (const l of record.listeners) l();
+    if (event.type === "agent_start") {
+      clearFinishWatchdog(record);
+      record.isStreaming = true;
+    } else if (event.type === "message_end" || event.type === "agent_end") {
+      clearFinishWatchdog(record);
+      if (event.type === "agent_end") record.isStreaming = false;
+    } else if (messageHasStopReason(event)) {
+      scheduleFinishWatchdog(record, event.message);
+    }
+    pushAgentEvent(record, event);
   });
 
   reg.agents.set(id, record);
@@ -365,6 +425,7 @@ export function getRunningSessionFiles(): Set<string> {
 export function disposeAgent(id: string) {
   const rec = reg.agents.get(id);
   if (!rec) return;
+  clearFinishWatchdog(rec);
   rec.unsubscribe();
   rec.session.dispose();
   reg.agents.delete(id);
