@@ -47,6 +47,7 @@ import {
 } from "lucide-react";
 import type {
   PendingAttachment,
+  PendingMessagesSnapshot,
   RetryInfo,
   ToolsCountSnapshot,
 } from "@/lib/session-runner";
@@ -78,6 +79,7 @@ export interface ComposerProps {
   streaming: boolean;
   compacting: boolean;
   agentId: string | null;
+  pendingMessages: PendingMessagesSnapshot;
 
   // ===== 附件 =====
   pendingImages: ImageContentLite[];
@@ -138,6 +140,7 @@ export function Composer(props: ComposerProps) {
     streaming,
     compacting,
     agentId,
+    pendingMessages,
     pendingImages,
     pendingFiles,
     removePendingImage,
@@ -253,6 +256,7 @@ export function Composer(props: ComposerProps) {
             ))}
           </div>
         )}
+        <QueuedMessagesBar pendingMessages={pendingMessages} />
         {/* 卡片：textarea + 内嵌 Send */}
         <div
           className="relative rounded-xl border transition-colors focus-within:border-[color:var(--accent)]"
@@ -601,5 +605,69 @@ function FileChip({
         <X size={12} />
       </button>
     </div>
+  );
+}
+
+function QueuedMessagesBar({
+  pendingMessages,
+}: {
+  pendingMessages: PendingMessagesSnapshot;
+}) {
+  const items = [
+    ...pendingMessages.steering.map((text, index) => ({
+      id: `steer-${index}`,
+      kind: "Steer",
+      text,
+    })),
+    ...pendingMessages.followUp.map((text, index) => ({
+      id: `follow-${index}`,
+      kind: "Follow-up",
+      text,
+    })),
+  ];
+  if (items.length === 0) return null;
+
+  return (
+    <details
+      className="mb-2 rounded-md border px-3 py-2 text-xs"
+      style={{
+        background: "var(--bg-panel)",
+        borderColor: "var(--border-soft)",
+        color: "var(--text-muted)",
+      }}
+    >
+      <summary className="cursor-pointer select-none font-medium">
+        Queued {items.length} message{items.length > 1 ? "s" : ""}
+        {pendingMessages.followUp.length > 0 &&
+          ` · ${pendingMessages.followUp.length} follow-up`}
+        {pendingMessages.steering.length > 0 &&
+          ` · ${pendingMessages.steering.length} steer`}
+      </summary>
+      <div className="mt-2 space-y-1.5">
+        {items.map((item, index) => (
+          <div
+            key={item.id}
+            className="rounded border px-2 py-1.5"
+            style={{
+              borderColor: "var(--border-soft)",
+              background: "var(--bg-panel-2)",
+            }}
+          >
+            <div
+              className="mb-0.5 text-[10px] uppercase tracking-wide"
+              style={{ color: "var(--fg-faint)" }}
+            >
+              {index + 1}. {item.kind}
+            </div>
+            <div
+              className="whitespace-pre-wrap break-words line-clamp-3"
+              style={{ color: "var(--text)" }}
+            >
+              {item.text}
+            </div>
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }

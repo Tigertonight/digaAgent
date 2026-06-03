@@ -53,6 +53,11 @@ export interface ToolsCountSnapshot {
   total: number;
 }
 
+export interface PendingMessagesSnapshot {
+  steering: string[];
+  followUp: string[];
+}
+
 /** 拖入的非图片附件 chip（与 ChatApp 内 PendingAttachment 同形） */
 export type PendingAttachmentKind =
   | "folder"
@@ -107,6 +112,7 @@ export interface RunnerState {
   // HUD
   stats: StatsSnapshot | null;
   toolsCount: ToolsCountSnapshot | null;
+  pendingMessages: PendingMessagesSnapshot;
 
   // thinking 能力
   thinkingLevel: ThinkingLevel;
@@ -152,6 +158,7 @@ export function emptyRunner(): RunnerState {
 
     stats: null,
     toolsCount: null,
+    pendingMessages: { steering: [], followUp: [] },
 
     thinkingLevel: "medium",
     availableThinkingLevels: [...THINKING_LEVELS],
@@ -177,4 +184,3 @@ export function applyPatch(prev: RunnerState, patch: RunnerPatch): RunnerState {
   const delta = typeof patch === "function" ? patch(prev) : patch;
   return { ...prev, ...delta };
 }
-
