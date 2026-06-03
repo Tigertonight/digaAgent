@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Camera, Globe, RefreshCw, Square, X } from "lucide-react";
-import type { BrowserSnapshot } from "@/lib/browser/types";
+import type { BrowserSiteCheck, BrowserSnapshot } from "@/lib/browser/types";
 
 interface BrowserPanelProps {
   agentId: string | null;
@@ -20,10 +20,34 @@ export function BrowserPanel({
   const [url, setUrl] = useState(snapshot.url ?? "http://localhost:3000");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [site, setSite] = useState<BrowserSiteCheck | null>(null);
 
   useEffect(() => {
     if (snapshot.url) setUrl(snapshot.url);
   }, [snapshot.url]);
+
+  useEffect(() => {
+    const trimmed = url.trim();
+    if (!trimmed) {
+      setSite(null);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      fetch(`/api/browser/policy?url=${encodeURIComponent(trimmed)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: BrowserSiteCheck | null) => {
+          if (!cancelled) setSite(data);
+        })
+        .catch(() => {
+          if (!cancelled) setSite(null);
+        });
+    }, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [url]);
 
   const run = async (type: "open" | "screenshot" | "close") => {
     if (!agentId) return;
@@ -37,6 +61,29 @@ export function BrowserPanel({
       });
       const data = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(data.error ?? r.statusText);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updateSitePolicy = async (type: "allow" | "block" | "remove") => {
+    if (!site) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/browser/policy", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ type, origin: site.origin }),
+      });
+      const data = (await r.json().catch(() => ({}))) as { error?: string };
+      if (!r.ok) throw new Error(data.error ?? r.statusText);
+      const next = await fetch(
+        `/api/browser/policy?url=${encodeURIComponent(url)}`
+      );
+      setSite((await next.json()) as BrowserSiteCheck);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -69,6 +116,7 @@ export function BrowserPanel({
           }}
         >
           <input
+            aria-label="Browser URL"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             disabled={!agentId || busy}
@@ -131,6 +179,65 @@ export function BrowserPanel({
         />
         <span className="uppercase">{snapshot.status}</span>
         {snapshot.title && <span className="truncate">· {snapshot.title}</span>}
+      </div>
+
+      <div
+        className="shrink-0 border-b px-2 py-1.5 flex items-center gap-2 text-[11px]"
+        style={{ borderColor: "var(--border-soft)" }}
+      >
+        <span
+          className="rounded border px-1.5 py-0.5 uppercase"
+          style={{
+            borderColor: siteBorder(site?.decision),
+            color: siteColor(site?.decision),
+            background: siteBg(site?.decision),
+          }}
+        >
+          {site?.decision ?? "checking"}
+        </span>
+        <span
+          className="min-w-0 flex-1 truncate"
+          title={site?.origin ?? url}
+          style={{ color: "var(--text-muted)" }}
+        >
+          {site?.origin ?? url}
+        </span>
+        {site && site.decision !== "local" && (
+          <>
+            <button
+              type="button"
+              disabled={busy || site.decision === "allowed"}
+              onClick={() => void updateSitePolicy("allow")}
+              className="rounded border px-1.5 py-0.5 disabled:opacity-45"
+              style={{ borderColor: "var(--border)" }}
+              title="Allow this site for browser use"
+            >
+              Allow
+            </button>
+            <button
+              type="button"
+              disabled={busy || site.decision === "blocked"}
+              onClick={() => void updateSitePolicy("block")}
+              className="rounded border px-1.5 py-0.5 disabled:opacity-45"
+              style={{ borderColor: "var(--border)" }}
+              title="Block this site"
+            >
+              Block
+            </button>
+            {(site.decision === "allowed" || site.decision === "blocked") && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void updateSitePolicy("remove")}
+                className="rounded border px-1.5 py-0.5 disabled:opacity-45"
+                style={{ borderColor: "var(--border)" }}
+                title="Reset this site's policy"
+              >
+                Reset
+              </button>
+            )}
+          </>
+        )}
       </div>
 
       {(error || snapshot.error) && (
@@ -219,4 +326,25 @@ function statusColor(status: string) {
     return "#f59e0b";
   if (status === "error") return "#ef4444";
   return "#737373";
+}
+
+function siteColor(decision?: string) {
+  if (decision === "local" || decision === "allowed") return "#86efac";
+  if (decision === "blocked") return "#fca5a5";
+  if (decision === "unknown") return "#fcd34d";
+  return "var(--text-muted)";
+}
+
+function siteBorder(decision?: string) {
+  if (decision === "local" || decision === "allowed") return "rgba(34,197,94,0.45)";
+  if (decision === "blocked") return "rgba(239,68,68,0.45)";
+  if (decision === "unknown") return "rgba(245,158,11,0.50)";
+  return "var(--border)";
+}
+
+function siteBg(decision?: string) {
+  if (decision === "local" || decision === "allowed") return "rgba(34,197,94,0.10)";
+  if (decision === "blocked") return "rgba(239,68,68,0.10)";
+  if (decision === "unknown") return "rgba(245,158,11,0.10)";
+  return "transparent";
 }

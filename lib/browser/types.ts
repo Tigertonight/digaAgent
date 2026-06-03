@@ -39,6 +39,19 @@ export interface BrowserExtractResult {
   inputs: Array<{ label: string; type: string; name: string; placeholder: string }>;
 }
 
+export type BrowserSiteDecision = "local" | "allowed" | "blocked" | "unknown";
+
+export interface BrowserSitePolicy {
+  allowedOrigins: string[];
+  blockedOrigins: string[];
+}
+
+export interface BrowserSiteCheck {
+  origin: string;
+  decision: BrowserSiteDecision;
+  policy: BrowserSitePolicy;
+}
+
 export const EMPTY_BROWSER_SNAPSHOT: BrowserSnapshot = {
   status: "idle",
   url: null,

@@ -65,5 +65,52 @@ test("browser panel: browser_state SSE 同步截图和操作日志", async ({
   await expect(page.getByAltText("Browser screenshot")).toBeVisible();
   await expect(page.getByText("Browser actions")).toBeVisible();
   await expect(page.getByText("open")).toBeVisible();
-  await expect(page.getByText("http://localhost:3000/settings")).toBeVisible();
+  await expect(page.getByTitle("http://localhost:3000/settings")).toBeVisible();
+});
+
+test("browser panel: 外部站点需要显式 allow,本地站点自动允许", async ({
+  bootedPage: page,
+}) => {
+  let externalDecision = "unknown";
+  await page.route("**/api/browser/policy**", async (route) => {
+    const url = new URL(route.request().url());
+    const method = route.request().method();
+    const target = url.searchParams.get("url") ?? "https://example.com";
+    const origin = target.includes("localhost")
+      ? "http://localhost:3000"
+      : "https://example.com";
+    if (method === "GET") {
+      const decision = origin.includes("localhost")
+        ? "local"
+        : externalDecision;
+      return route.fulfill({
+        json: {
+          origin,
+          decision,
+          policy: {
+            allowedOrigins: decision === "allowed" ? [origin] : [],
+            blockedOrigins: decision === "blocked" ? [origin] : [],
+          },
+        },
+      });
+    }
+    const body = (await route.request().postDataJSON()) as { type?: string };
+    externalDecision = body.type === "allow" ? "allowed" : body.type === "block" ? "blocked" : "unknown";
+    return route.fulfill({ json: { ok: true, origin, policy: {} } });
+  });
+
+  await editor(page).fill("open browser");
+  await sendBtn(page).click();
+  await activeAgentId(page);
+  await page.getByLabel("Browser 面板").click();
+
+  const urlInput = page.getByLabel("Browser URL");
+  await urlInput.fill("https://example.com/docs");
+  await expect(page.getByText("unknown", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Allow" }).click();
+  await expect(page.getByText("allowed", { exact: true })).toBeVisible();
+
+  await urlInput.fill("http://localhost:3000/settings");
+  await expect(page.getByText("local", { exact: true })).toBeVisible();
 });
