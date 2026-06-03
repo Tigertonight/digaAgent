@@ -38,9 +38,9 @@ import { useForkable } from "./hooks/useForkable";
 import { useApprovals } from "./hooks/useApprovals";
 import { useSessionMeta } from "./hooks/useSessionMeta";
 import { useSearch } from "./hooks/useSearch";
+import { useProviderModel } from "./hooks/useProviderModel";
 import { loadCollabSettings } from "@/lib/collab/settings";
 import { useAutocomplete } from "./hooks/useAutocomplete";
-import { useProviderStatus } from "./hooks/useProviderStatus";
 import { useMessageRefs } from "./ChatMinimap";
 import { EmptyState } from "./components/EmptyState";
 import { Composer } from "./components/Composer";
@@ -181,24 +181,16 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
   // 图片/文件附件相关 hook 调用挪到 setter wrappers 之后（依赖 setPendingImages/setPendingFiles）
 
-  // provider/model 选择
-  const { providers, reloadProviders: fetchProviders } = useProviderStatus();
-  // provider/model 选择持久化:用户切过模型后,刷新/重启都保留;
-  // 仅当 localStorage 没值时才用后端 defaultProvider/defaultModelId 兜底。
-  const [providerId, setProviderId] = useState<string>(() => {
-    if (typeof window === "undefined") return "";
-    return localStorage.getItem("pi-provider-id") ?? "";
-  });
-  const [modelId, setModelId] = useState<string>(() => {
-    if (typeof window === "undefined") return "";
-    return localStorage.getItem("pi-model-id") ?? "";
-  });
-  useEffect(() => {
-    if (providerId) localStorage.setItem("pi-provider-id", providerId);
-  }, [providerId]);
-  useEffect(() => {
-    if (modelId) localStorage.setItem("pi-model-id", modelId);
-  }, [modelId]);
+  const {
+    providers,
+    visibleProviders,
+    currentProvider,
+    providerId,
+    setProviderId,
+    modelId,
+    setModelId,
+    reloadProviders,
+  } = useProviderModel();
 
   // thinking 字段(thinkingLevel / availableThinkingLevels / supportsThinking)
   // 已挪到 RunnerState。见下方 activeSnapshot 解构区。
@@ -385,45 +377,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
   // currentSessionFile 已挪到 RunnerState.sessionFile(下方解构提供同名别名)。
 
-  // 启动时拉 providers
-  // applyDefaults 时:优先尊重当前 state(来自 localStorage),仅当为空或失效才用后端 default
-  const reloadProviders = useCallback((applyDefaults: boolean) => {
-    void fetchProviders()
-      .then((data) => {
-        if (!data?.providers) return;
-        if (!applyDefaults) return;
-        // 用 setter 拿当前值判断,避免把 providerId/modelId 写进 useCallback 依赖
-        setProviderId((curProv) => {
-          setModelId((curModel) => {
-            const provExists = data.providers.some(
-              (p) => p.provider === (curProv || "")
-            );
-            const modelExists =
-              provExists &&
-              data.providers
-                .find((p) => p.provider === curProv)
-                ?.models?.some((m) => m.id === curModel);
-            // 当前选择仍然有效 → 不动
-            if (provExists && modelExists) return curModel;
-            // 失效或没值 → 落到后端 default
-            if (data.defaultModelId) return data.defaultModelId;
-            return curModel;
-          });
-          const provExists = data.providers.some(
-            (p) => p.provider === (curProv || "")
-          );
-          if (provExists) return curProv;
-          if (data.defaultProvider) return data.defaultProvider;
-          return curProv;
-        });
-      })
-      .catch((e) => console.warn("load providers failed", e));
-  }, [fetchProviders]);
-
-  useEffect(() => {
-    reloadProviders(true);
-  }, [reloadProviders]);
-
   // 点外面关闭 session ⋯ 菜单
   useEffect(() => {
     if (!menuFor) return;
@@ -505,16 +458,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         ])
       ),
     [sessions]
-  );
-
-  const currentProvider = useMemo(
-    () => providers.find((p) => p.provider === providerId),
-    [providers, providerId]
-  );
-
-  const visibleProviders = useMemo(
-    () => providers.filter((p) => p.hasAuth),
-    [providers]
   );
 
   // ===== 当前活跃 runner 的解构(P1-4)=====
