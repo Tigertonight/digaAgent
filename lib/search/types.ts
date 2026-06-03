@@ -81,4 +81,8 @@ export interface SearchResponse {
   durationMs: number;
   /** 索引中 session 总数 */
   totalDocs: number;
+  /** 本次搜索使用缓存还是触发了重建；向后兼容的诊断字段。 */
+  indexStatus?: "cached" | "rebuilt";
+  /** 若触发重建，记录索引构建耗时。 */
+  indexBuildMs?: number;
 }

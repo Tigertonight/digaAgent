@@ -1392,6 +1392,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
               totalDocs={searchHook.totalDocs}
               durationMs={searchHook.durationMs}
               error={searchHook.error}
+              onRetry={searchHook.retry}
               onSelect={(id) => {
                 searchHook.clear();
                 setSelectedId(id);

@@ -37,17 +37,26 @@ async function fingerprint(): Promise<{
 }
 
 export async function getSearchIndex(): Promise<SearchIndex> {
+  return (await getSearchIndexWithMeta()).index;
+}
+
+export async function getSearchIndexWithMeta(): Promise<{
+  index: SearchIndex;
+  cacheHit: boolean;
+  buildMs: number;
+}> {
   const fp = await fingerprint();
   if (
     cache &&
     cache.maxModified === fp.maxModified &&
     cache.sessionCount === fp.sessionCount
   ) {
-    return cache.index;
+    return { index: cache.index, cacheHit: true, buildMs: 0 };
   }
+  const t0 = Date.now();
   const index = await buildSearchIndexFromAllSessions();
   cache = { index, ...fp };
-  return index;
+  return { index, cacheHit: false, buildMs: Date.now() - t0 };
 }
 
 /** 测试 / dev 用：强制清缓存 */
