@@ -8,6 +8,7 @@ import {
   FileText,
   FolderOpen,
   KeyRound,
+  Sparkles,
   Wrench,
   PanelRight,
 } from "lucide-react";
@@ -37,11 +38,13 @@ interface TopHeaderProps {
   budgetSpent: BudgetSpent;
   budgetStatus: BudgetStatus;
   budgetHasOverride: boolean;
+  hasAuthedProviders: boolean;
   onToggleSidebar: () => void;
   onToggleTheme: () => void;
   onOpenBranches: () => void;
   onOpenSystemPrompt: () => void;
   onRevealInFinder: () => void;
+  onOpenProviderSetup: () => void;
   onOpenAuth: () => void;
   onToggleTools: () => void;
   onToggleFiles: () => void;
@@ -61,11 +64,13 @@ export function TopHeader({
   budgetSpent,
   budgetStatus,
   budgetHasOverride,
+  hasAuthedProviders,
   onToggleSidebar,
   onToggleTheme,
   onOpenBranches,
   onOpenSystemPrompt,
   onRevealInFinder,
+  onOpenProviderSetup,
   onOpenAuth,
   onToggleTools,
   onToggleFiles,
@@ -164,6 +169,17 @@ export function TopHeader({
             icon={<FolderOpen size={iconSizeMap.sm} />}
           />
         )}
+        <IconButton
+          onClick={onOpenProviderSetup}
+          title={
+            hasAuthedProviders
+              ? "配置 Provider / 模型"
+              : "首次配置 Provider"
+          }
+          aria-label="Provider setup"
+          active={!hasAuthedProviders}
+          icon={<Sparkles size={iconSizeMap.sm} />}
+        />
         <IconButton
           onClick={onOpenAuth}
           title="管理 Provider 凭证"
