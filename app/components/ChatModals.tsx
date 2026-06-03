@@ -10,44 +10,48 @@ import BranchesPopover from "./BranchesPopover";
 import ImageLightbox from "./ImageLightbox";
 import { SystemPromptModal } from "./SystemPromptModal";
 
+interface ChatModalsState {
+  showCwdPicker: boolean;
+  showFilePicker: boolean;
+  showSkills: boolean;
+  showTools: boolean;
+  showProviderSetup: boolean;
+  showAuth: boolean;
+  authInitialProvider?: string | null;
+  showModelsConfig: boolean;
+  showSystemPrompt: boolean;
+  systemPromptText: string | null;
+  showBranches: boolean;
+}
+
 interface ChatModalsProps {
   // shared
   cwd: string;
   agentId: string | null;
+  state: ChatModalsState;
   // CwdPicker
-  showCwdPicker: boolean;
   onCloseCwdPicker: () => void;
   onPickCwd: (picked: string) => void;
   // FilePicker
-  showFilePicker: boolean;
   onCloseFilePicker: () => void;
   onPickFile: (absPath: string) => void;
   // Skills
-  showSkills: boolean;
   onCloseSkills: () => void;
   // Tools
-  showTools: boolean;
   onCloseTools: () => void;
   // Provider setup
-  showProviderSetup: boolean;
   onCloseProviderSetup: () => void;
   onProviderSetupOpenAuth: (provider?: string) => void;
   onProviderSetupOpenModelsConfig: () => void;
   // Auth
-  showAuth: boolean;
-  authInitialProvider?: string | null;
   onCloseAuth: () => void;
   onAuthChanged: () => void;
   // ModelsConfig
-  showModelsConfig: boolean;
   onCloseModelsConfig: () => void;
   onModelsConfigChanged: () => void;
   // SystemPrompt
-  showSystemPrompt: boolean;
-  systemPromptText: string | null;
   onCloseSystemPrompt: () => void;
   // Branches
-  showBranches: boolean;
   onCloseBranches: () => void;
   onBranchesNavigated: () => void;
 }
@@ -55,34 +59,38 @@ interface ChatModalsProps {
 export function ChatModals({
   cwd,
   agentId,
-  showCwdPicker,
+  state,
   onCloseCwdPicker,
   onPickCwd,
-  showFilePicker,
   onCloseFilePicker,
   onPickFile,
-  showSkills,
   onCloseSkills,
-  showTools,
   onCloseTools,
-  showProviderSetup,
   onCloseProviderSetup,
   onProviderSetupOpenAuth,
   onProviderSetupOpenModelsConfig,
-  showAuth,
-  authInitialProvider,
   onCloseAuth,
   onAuthChanged,
-  showModelsConfig,
   onCloseModelsConfig,
   onModelsConfigChanged,
-  showSystemPrompt,
-  systemPromptText,
   onCloseSystemPrompt,
-  showBranches,
   onCloseBranches,
   onBranchesNavigated,
 }: ChatModalsProps) {
+  const {
+    showCwdPicker,
+    showFilePicker,
+    showSkills,
+    showTools,
+    showProviderSetup,
+    showAuth,
+    authInitialProvider,
+    showModelsConfig,
+    showSystemPrompt,
+    systemPromptText,
+    showBranches,
+  } = state;
+
   return (
     <>
       {showCwdPicker && (
