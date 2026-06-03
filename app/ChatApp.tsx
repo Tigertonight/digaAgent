@@ -39,6 +39,7 @@ import { useApprovals } from "./hooks/useApprovals";
 import { useSessionMeta } from "./hooks/useSessionMeta";
 import { useSearch } from "./hooks/useSearch";
 import { useProviderModel } from "./hooks/useProviderModel";
+import { useChatModalsState } from "./hooks/useChatModalsState";
 import { loadCollabSettings } from "@/lib/collab/settings";
 import { useAutocomplete } from "./hooks/useAutocomplete";
 import { useMessageRefs } from "./ChatMinimap";
@@ -274,22 +275,31 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     document.body.style.cursor = "ew-resize";
     document.body.style.userSelect = "none";
   };
-  const [showAuth, setShowAuth] = useState(false);
-  const [authInitialProvider, setAuthInitialProvider] = useState<string | null>(
-    null
-  );
-  const [showModelsConfig, setShowModelsConfig] = useState(false);
-  const [showProviderSetup, setShowProviderSetup] = useState(false);
-  const [showSystemPrompt, setShowSystemPrompt] = useState(false);
-  const [showCwdPicker, setShowCwdPicker] = useState(false);
-  const [showFilePicker, setShowFilePicker] = useState(false);
-  const [showBranches, setShowBranches] = useState(false);
+  const {
+    showAuth,
+    authInitialProvider,
+    showModelsConfig,
+    showProviderSetup,
+    showSystemPrompt,
+    systemPromptText,
+    showCwdPicker,
+    showFilePicker,
+    showBranches,
+    setShowAuth,
+    openAuth,
+    closeAuth,
+    setShowModelsConfig,
+    setShowProviderSetup,
+    setShowSystemPrompt,
+    setShowCwdPicker,
+    setShowFilePicker,
+    setShowBranches,
+    setSystemPromptText,
+    closeSystemPrompt,
+  } = useChatModalsState();
   /** RFC-2 Phase A3：Budget 命中后由 useBudgetEnforcer 设置；非 null 时弹 BudgetExceededModal */
   const [budgetPausedTrigger, setBudgetPausedTrigger] =
     useState<BudgetTrigger | null>(null);
-  const [systemPromptText, setSystemPromptText] = useState<string | null>(
-    null
-  );
   // sseStatus 已挪到 RunnerState(每个会话独立的 SSE 状态)。
   // forksCollapsed / toggleForks 已挪到 useForkable hook（C1）
   /** 当前打开 ⋯ 菜单的 session id；renaming 时存 inline edit 状态 */
@@ -1420,8 +1430,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           }}
           onOpenProviderSetup={() => setShowProviderSetup(true)}
           onOpenAuth={() => {
-            setAuthInitialProvider(null);
-            setShowAuth(true);
+            openAuth();
           }}
           onReconnectSession={reconnectActiveSession}
           onToggleTools={toggleTools}
@@ -1524,13 +1533,24 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       <ChatModals
         cwd={cwd}
         agentId={agentId}
-        showCwdPicker={showCwdPicker}
+        state={{
+          showCwdPicker,
+          showFilePicker,
+          showSkills,
+          showTools,
+          showProviderSetup,
+          showAuth,
+          authInitialProvider,
+          showModelsConfig,
+          showSystemPrompt,
+          systemPromptText,
+          showBranches,
+        }}
         onCloseCwdPicker={() => setShowCwdPicker(false)}
         onPickCwd={(picked) => {
           setCwd(picked);
           setShowCwdPicker(false);
         }}
-        showFilePicker={showFilePicker}
         onCloseFilePicker={() => setShowFilePicker(false)}
         onPickFile={(absPath) => {
           setInput((cur) => {
@@ -1540,34 +1560,18 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           });
           setShowFilePicker(false);
         }}
-        showSkills={showSkills}
         onCloseSkills={toggleSkills}
-        showTools={showTools}
         onCloseTools={toggleTools}
-        showProviderSetup={showProviderSetup}
         onCloseProviderSetup={() => setShowProviderSetup(false)}
         onProviderSetupOpenAuth={(provider) => {
-          setAuthInitialProvider(provider ?? null);
-          setShowAuth(true);
+          openAuth(provider);
         }}
         onProviderSetupOpenModelsConfig={() => setShowModelsConfig(true)}
-        showAuth={showAuth}
-        authInitialProvider={authInitialProvider}
-        onCloseAuth={() => {
-          setShowAuth(false);
-          setAuthInitialProvider(null);
-        }}
+        onCloseAuth={closeAuth}
         onAuthChanged={() => reloadProviders(false)}
-        showModelsConfig={showModelsConfig}
         onCloseModelsConfig={() => setShowModelsConfig(false)}
         onModelsConfigChanged={() => reloadProviders(false)}
-        showSystemPrompt={showSystemPrompt}
-        systemPromptText={systemPromptText}
-        onCloseSystemPrompt={() => {
-          setShowSystemPrompt(false);
-          setSystemPromptText(null);
-        }}
-        showBranches={showBranches}
+        onCloseSystemPrompt={closeSystemPrompt}
         onCloseBranches={() => setShowBranches(false)}
         onBranchesNavigated={() => {
           void reloadFromCurrentSession();
