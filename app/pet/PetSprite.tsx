@@ -28,6 +28,8 @@ export default function PetSprite({ animState, size = 80 }: Props) {
         return "pet-breathe 4s ease-in-out infinite";
       case "approval":
         return "pet-glow-warning 1.4s ease-in-out infinite";
+      case "clarification":
+        return "pet-glow-clarification 1.4s ease-in-out infinite";
       case "budget_warning":
         return "pet-glow-budget 1.8s ease-in-out infinite";
       case "budget_blocked":
@@ -83,6 +85,33 @@ export default function PetSprite({ animState, size = 80 }: Props) {
           }}
         >
           !
+        </span>
+      );
+    }
+    if (animState === "clarification") {
+      return (
+        <span
+          aria-label="等待确认"
+          style={{
+            position: "absolute",
+            top: -2,
+            right: -2,
+            minWidth: 18,
+            height: 18,
+            borderRadius: 9,
+            background: "#14b8a6",
+            color: "#fff",
+            border: "2px solid rgba(17,24,39,0.75)",
+            fontSize: 11,
+            fontWeight: 800,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            lineHeight: 1,
+            animation: "pet-badge-pulse 1.4s ease-out infinite",
+          }}
+        >
+          ?
         </span>
       );
     }

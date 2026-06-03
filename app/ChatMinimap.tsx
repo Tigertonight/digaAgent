@@ -37,6 +37,10 @@ function getMessagePreview(msg: ChatMessage): string {
   }
   // assistant 没 text 但有 tool 调用，显示工具名
   if (msg.role === "assistant") {
+    const clarification = parts.find((p) => p.kind === "clarification");
+    if (clarification?.kind === "clarification") {
+      return clarification.question.slice(0, 200);
+    }
     const toolNames = parts
       .filter((p): p is Extract<typeof parts[number], { kind: "tool" }> =>
         p.kind === "tool"
@@ -61,6 +65,7 @@ function hasRenderableContent(msg: ChatMessage): boolean {
   const parts = msg.parts ?? [];
   if (parts.some((p) => p.kind === "text" && p.text)) return true;
   if (parts.some((p) => p.kind === "tool")) return true;
+  if (parts.some((p) => p.kind === "clarification")) return true;
   if (parts.some((p) => p.kind === "image")) return true;
   if (msg.text) return true;
   return false;

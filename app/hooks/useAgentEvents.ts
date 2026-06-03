@@ -26,6 +26,7 @@
 import { useCallback } from "react";
 import { applyEvent } from "@/lib/chat-reducer";
 import type { ApprovalRequest } from "@/lib/collab/types";
+import type { ClarificationRequest } from "@/lib/clarification/types";
 import type {
   AgentPhase,
   RunnerKey,
@@ -89,6 +90,14 @@ export interface UseAgentEventsReturn {
    */
   restorePendingApprovals: (
     requests: ApprovalRequest[],
+    agentId: string,
+    ownerKey: RunnerKey
+  ) => void;
+  /**
+   * 页面刷新 / SSE 重连后，从 HTTP snapshot 恢复仍在 pending 的追问卡片。
+   */
+  restorePendingClarifications: (
+    requests: ClarificationRequest[],
     agentId: string,
     ownerKey: RunnerKey
   ) => void;
@@ -280,6 +289,14 @@ export function useAgentEvents(
           }));
           return;
 
+        // ===== RFC-5：主动追问 / 推荐下一步（clarification 自定义事件） =====
+        case "clarification_request":
+        case "clarification_resolved":
+          updateRunner(ownerKey, (s) => ({
+            chatState: applyEvent(s.chatState, ev),
+          }));
+          return;
+
         default:
           return;
       }
@@ -310,5 +327,24 @@ export function useAgentEvents(
     [handleAgentEvent]
   );
 
-  return { handleAgentEvent, restorePendingApprovals };
+  const restorePendingClarifications = useCallback<
+    UseAgentEventsReturn["restorePendingClarifications"]
+  >(
+    (requests, aidForEvents, ownerKey) => {
+      for (const request of requests) {
+        handleAgentEvent(
+          { type: "clarification_request", request },
+          aidForEvents,
+          ownerKey
+        );
+      }
+    },
+    [handleAgentEvent]
+  );
+
+  return {
+    handleAgentEvent,
+    restorePendingApprovals,
+    restorePendingClarifications,
+  };
 }

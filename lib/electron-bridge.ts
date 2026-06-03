@@ -28,6 +28,14 @@ export interface PetApprovalInfo {
   createdAt: number;
 }
 
+export interface PetClarificationInfo {
+  count: number;
+  title: string;
+  question: string;
+  recommendedLabel: string | null;
+  createdAt: number;
+}
+
 export type PetBudgetLevel = "ok" | "warning" | "blocked";
 
 export interface PetBudgetInfo {
@@ -59,6 +67,8 @@ export interface PetSessionInfo {
   compacting: boolean;
   /** 当前 session 是否有待处理的工具审批 */
   pendingApproval: PetApprovalInfo | null;
+  /** 当前 session 是否有待处理的 agent 主动追问 */
+  pendingClarification: PetClarificationInfo | null;
   /** 当前 session 的预算状态摘要（仅推送到当前活跃 session） */
   budget: PetBudgetInfo | null;
   /** agent 级错误（致命错误，需要主动喊用户） */

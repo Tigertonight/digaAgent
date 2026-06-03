@@ -15,6 +15,7 @@ function session(overrides: Partial<PetSessionInfo> = {}): PetSessionInfo {
     retry: null,
     compacting: false,
     pendingApproval: null,
+    pendingClarification: null,
     budget: null,
     error: null,
     sseStatus: "active",
@@ -92,6 +93,31 @@ describe("pet state matrix", () => {
     const text = derivePetBubbleText(s, "budget_blocked", Date.now());
     expect(text.primary).toBe("已暂停：预算到达上限");
     expect(text.secondary).toBe("费用 / 时长");
+    expect(text.priority).toBe("high");
+  });
+
+  it("clarification outranks budget blocked and asks user to confirm", () => {
+    const s = session({
+      pendingClarification: {
+        count: 1,
+        title: "需要你确认下一步",
+        question: "先做 MVP 还是完整重构？",
+        recommendedLabel: "先做 MVP",
+        createdAt: 1,
+      },
+      budget: {
+        level: "blocked",
+        label: "已暂停：预算到达上限",
+        detail: "费用",
+        triggered: ["cost"],
+        peakRatio: 1,
+      },
+    });
+
+    expect(derivePetAnimState(s)).toBe("clarification");
+    const text = derivePetBubbleText(s, "clarification", Date.now());
+    expect(text.primary).toBe("等待你确认");
+    expect(text.secondary).toBe("推荐：先做 MVP");
     expect(text.priority).toBe("high");
   });
 

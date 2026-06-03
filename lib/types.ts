@@ -1,6 +1,7 @@
 /** 给 client 用的共享类型 */
 
 import type { SessionMeta } from "./meta/types";
+import type { ClarificationOption } from "./clarification/types";
 
 export interface SessionInfoLite {
   id: string;
@@ -108,6 +109,27 @@ export type MessagePart =
       /** deny 时的人话原因（如果有） */
       denyReason?: string;
       /** 创建时间（ms epoch），UI 计倒计时用 */
+      createdAt: number;
+    }
+  | {
+      /**
+       * Agent 主动追问 / 下一步建议卡片（RFC-5）。
+       *
+       * 与 approval 不同：这里不是授权某个工具，而是让用户在多个可行路径中
+       * 选择一个，或输入自定义补充，agent 再按该选择继续。
+       */
+      kind: "clarification";
+      id: string;
+      requestId: string;
+      title: string;
+      question: string;
+      context?: string;
+      options: ClarificationOption[];
+      recommendedOptionId?: string;
+      status: "pending" | "resolved";
+      selectedOptionId?: string;
+      customText?: string;
+      resolvedBy?: "user" | "abort";
       createdAt: number;
     };
 

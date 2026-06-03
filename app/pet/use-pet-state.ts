@@ -17,6 +17,7 @@ export type PetAnimState =
   | "idle"
   | "complete"
   | "approval"
+  | "clarification"
   | "budget_warning"
   | "budget_blocked"
   | "thinking"
@@ -46,6 +47,7 @@ export function derivePetAnimState(
   if (session.sseStatus === "lost") return "offline";
   if (session.error) return "error";
   if (session.pendingApproval) return "approval";
+  if (session.pendingClarification) return "clarification";
   if (session.budget?.level === "blocked") return "budget_blocked";
   if (session.budget?.level === "warning") return "budget_warning";
 
@@ -145,6 +147,17 @@ export function derivePetBubbleText(
         secondary: approval
           ? [approval.toolName, approval.toolTarget].filter(Boolean).join(" · ")
           : "点击回主窗口处理",
+        priority: "high",
+      };
+    }
+    case "clarification": {
+      const clarification = session.pendingClarification;
+      const count = clarification?.count ?? 1;
+      return {
+        primary: count > 1 ? `等待你确认 (${count})` : "等待你确认",
+        secondary: clarification?.recommendedLabel
+          ? `推荐：${clarification.recommendedLabel}`
+          : clarification?.question ?? "点击回主窗口处理",
         priority: "high",
       };
     }
@@ -348,6 +361,7 @@ export function usePetState() {
         nextState !== "offline" &&
         nextState !== "error" &&
         nextState !== "approval" &&
+        nextState !== "clarification" &&
         nextState !== "budget_warning" &&
         nextState !== "budget_blocked"
       ) {
@@ -368,6 +382,7 @@ export function usePetState() {
         next === "offline" ||
         next === "error" ||
         next === "approval" ||
+        next === "clarification" ||
         next === "budget_warning" ||
         next === "budget_blocked"
       ) {

@@ -26,6 +26,7 @@ import { previewStore } from "@/lib/preview-store";
 import Markdown from "./Markdown";
 import ToolRender from "./ToolRender";
 import { ApprovalBubble } from "./ApprovalBubble";
+import { ClarificationCard } from "./ClarificationCard";
 
 export interface MessageViewProps {
   msg: ChatMessage;
@@ -61,6 +62,10 @@ export interface MessageViewProps {
   ) => void;
   /** RFC-2 Phase B3：approval part 点 Deny 时回调 */
   onDenyCall?: (toolCallId: string) => void;
+  /** RFC-5：clarification 推荐项点击 */
+  onChooseClarification?: (requestId: string, optionId: string) => void;
+  /** RFC-5：clarification 自定义回复 */
+  onRespondClarification?: (requestId: string, customText: string) => void;
 }
 
 export const MessageView = memo(function MessageView({
@@ -82,6 +87,8 @@ export const MessageView = memo(function MessageView({
   cwd,
   onApproveCall,
   onDenyCall,
+  onChooseClarification,
+  onRespondClarification,
 }: MessageViewProps) {
   // user：右侧气泡（支持 text + image parts 混合）
   if (msg.role === "user") {
@@ -321,6 +328,16 @@ export const MessageView = memo(function MessageView({
               />
             );
           }
+          if (p.kind === "clarification") {
+            return (
+              <ClarificationCard
+                key={i}
+                part={p}
+                onChoose={onChooseClarification}
+                onRespond={onRespondClarification}
+              />
+            );
+          }
           if (p.kind === "image") {
             const src = `data:${p.mimeType};base64,${p.data}`;
             return (
@@ -505,6 +522,8 @@ function extractPlainText(parts: MessagePart[]): string {
     if (p.kind === "text") out.push(p.text);
     else if (p.kind === "thinking") {
       // 不复制 thinking 内容
+    } else if (p.kind === "clarification") {
+      out.push([p.title, p.question].filter(Boolean).join("\n"));
     }
   }
   return out.join("\n").trim();

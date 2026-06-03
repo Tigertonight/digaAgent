@@ -8,6 +8,7 @@ const STATE_COLOR: Record<PetAnimState, string> = {
   idle: "#6b7280", // gray-500 —— 从未开始
   complete: "#10b981", // emerald-500 —— 已完成（已读历史回复）
   approval: "#f59e0b", // amber-500 —— 等待用户授权
+  clarification: "#14b8a6", // teal-500 —— 等待用户确认下一步
   budget_warning: "#eab308", // yellow-500 —— 接近预算
   budget_blocked: "#f97316", // orange-500 —— 预算暂停
   thinking: "#6366f1", // indigo-500
@@ -30,6 +31,7 @@ export default function PetBubble({ animState, bubbleText }: Props) {
     animState === "thinking" ||
     animState === "running" ||
     animState === "approval" ||
+    animState === "clarification" ||
     animState === "budget_warning" ||
     animState === "budget_blocked";
 

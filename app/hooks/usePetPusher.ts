@@ -144,6 +144,33 @@ function derivePendingApproval(
   return { ...newest, count: pending.length };
 }
 
+function derivePendingClarification(
+  messages: ChatMessage[]
+): PetSessionInfo["pendingClarification"] {
+  const pending: NonNullable<PetSessionInfo["pendingClarification"]>[] = [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const parts = messages[i]?.parts;
+    if (!parts) continue;
+    for (let j = parts.length - 1; j >= 0; j--) {
+      const p = parts[j];
+      if (p.kind !== "clarification" || p.status !== "pending") continue;
+      const recommended = p.options.find(
+        (opt) => opt.id === p.recommendedOptionId
+      );
+      pending.push({
+        count: 1,
+        title: p.title,
+        question: p.question,
+        recommendedLabel: recommended?.label ?? null,
+        createdAt: p.createdAt,
+      });
+    }
+  }
+  if (pending.length === 0) return null;
+  const newest = pending[0];
+  return { ...newest, count: pending.length };
+}
+
 const BUDGET_WARNING_RATIO = 0.8;
 
 function formatBudgetDimension(dim: "cost" | "turns" | "duration"): string {
@@ -336,6 +363,9 @@ export function usePetPusher(params: UsePetPusherParams): void {
         const pendingApproval = derivePendingApproval(
           runner.chatState.messages
         );
+        const pendingClarification = derivePendingClarification(
+          runner.chatState.messages
+        );
         const matchingBudgetTrigger =
           budgetPausedTrigger?.agentId === runner.agentId
             ? budgetPausedTrigger
@@ -357,6 +387,7 @@ export function usePetPusher(params: UsePetPusherParams): void {
           retry: runner.retryInfo,
           compacting: runner.compacting,
           pendingApproval,
+          pendingClarification,
           budget,
           error,
           sseStatus: runner.sseStatus,
@@ -390,6 +421,7 @@ export function usePetPusher(params: UsePetPusherParams): void {
             retry: null,
             compacting: false,
             pendingApproval: null,
+            pendingClarification: null,
             budget: null,
             error: null,
             sseStatus: "idle",
