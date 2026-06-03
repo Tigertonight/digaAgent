@@ -19,6 +19,14 @@ interface Props {
   onChanged?: () => void;
 }
 
+interface AuthTestResult {
+  ok: boolean;
+  error?: string;
+  latencyMs?: number;
+  status?: number;
+  model?: { provider: string; id: string; name?: string };
+}
+
 export default function AuthPanel({ onClose, onChanged }: Props) {
   const {
     authData: data,
@@ -35,6 +43,10 @@ export default function AuthPanel({ onClose, onChanged }: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const [keyInput, setKeyInput] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  const [testing, setTesting] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<Record<string, AuthTestResult>>(
+    {}
+  );
 
   // OAuth 登录弹层：当前正在登录哪个 provider
   const [oauthProvider, setOauthProvider] = useState<string | null>(null);
@@ -68,6 +80,39 @@ export default function AuthPanel({ onClose, onChanged }: Props) {
     setKeyInput("");
   }, []);
 
+  const testAuth = useCallback(async (provider: string) => {
+    setTesting(provider);
+    setError(null);
+    setTestResult((cur) => {
+      const next = { ...cur };
+      delete next[provider];
+      return next;
+    });
+    try {
+      const r = await fetch("/api/auth/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider }),
+      });
+      const d = (await r.json()) as AuthTestResult;
+      setTestResult((cur) => ({
+        ...cur,
+        [provider]: {
+          ...d,
+          ok: Boolean(d.ok && r.ok),
+          error: d.error ?? (!r.ok ? `HTTP ${r.status}` : undefined),
+        },
+      }));
+    } catch (e) {
+      setTestResult((cur) => ({
+        ...cur,
+        [provider]: { ok: false, error: String(e) },
+      }));
+    } finally {
+      setTesting(null);
+    }
+  }, []);
+
   const saveKey = useCallback(
     async (provider: string) => {
       const k = keyInput.trim();
@@ -87,6 +132,7 @@ export default function AuthPanel({ onClose, onChanged }: Props) {
           setKeyInput("");
           await load();
           onChanged?.();
+          void testAuth(provider);
         }
       } catch (e) {
         setError(String(e));
@@ -94,7 +140,7 @@ export default function AuthPanel({ onClose, onChanged }: Props) {
         setBusy(null);
       }
     },
-    [keyInput, load, onChanged]
+    [keyInput, load, onChanged, testAuth]
   );
 
   const removeKey = useCallback(
@@ -208,6 +254,8 @@ export default function AuthPanel({ onClose, onChanged }: Props) {
           {filtered.map((p) => {
             const isEditing = editing === p.provider;
             const isBusy = busy === p.provider;
+            const isTesting = testing === p.provider;
+            const result = testResult[p.provider];
             return (
               <div
                 key={p.provider}
@@ -271,6 +319,19 @@ export default function AuthPanel({ onClose, onChanged }: Props) {
                       </button>
                       {(p.credentialType === "api_key" ||
                         p.credentialType === "oauth") && (
+                        <button
+                          type="button"
+                          onClick={() => void testAuth(p.provider)}
+                          disabled={isBusy || isTesting}
+                          className="px-1.5 py-0.5 text-[10px] rounded border hover:opacity-80 disabled:opacity-50"
+                          style={{ borderColor: "var(--border)" }}
+                          title={`验证 ${p.provider} 凭证是否可调用模型`}
+                        >
+                          {isTesting ? "…" : "Test"}
+                        </button>
+                      )}
+                      {(p.credentialType === "api_key" ||
+                        p.credentialType === "oauth") && (
                         <ConfirmButton
                           onConfirm={() => void removeKey(p.provider)}
                           disabled={isBusy}
@@ -287,6 +348,28 @@ export default function AuthPanel({ onClose, onChanged }: Props) {
                     </div>
                   )}
                 </div>
+                {result && (
+                  <div
+                    className="mt-2 rounded border px-2 py-1 text-[10px]"
+                    style={{
+                      borderColor: result.ok
+                        ? "rgba(34,197,94,0.45)"
+                        : "rgba(248,113,113,0.45)",
+                      background: result.ok
+                        ? "rgba(34,197,94,0.10)"
+                        : "rgba(248,113,113,0.10)",
+                      color: result.ok ? "#86efac" : "#fca5a5",
+                    }}
+                  >
+                    {result.ok
+                      ? `Test passed${
+                          result.model?.id ? ` · ${result.model.id}` : ""
+                        }${
+                          result.latencyMs ? ` · ${result.latencyMs}ms` : ""
+                        }`
+                      : `Test failed: ${result.error ?? "unknown error"}`}
+                  </div>
+                )}
                 {p.supportsOAuth && !isEditing && (
                   <div className="mt-2 flex items-center gap-2">
                     <button
