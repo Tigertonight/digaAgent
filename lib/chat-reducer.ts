@@ -221,6 +221,17 @@ function mergeMeta(
   return { ...prev, ...next, usage: next.usage ?? prev.usage };
 }
 
+function assistantIndexByResponseId(
+  messages: ChatMessage[],
+  responseId: string
+): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === "assistant" && m.meta?.responseId === responseId) return i;
+  }
+  return -1;
+}
+
 /** thinking 段已经"翻篇"——出现 text 或 tool 时调用，给最后一个未结束的 thinking 打 endedAt */
 function sealLastThinkingIfOpen(parts: MessagePart[]) {
   for (let i = parts.length - 1; i >= 0; i--) {
@@ -304,13 +315,41 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         });
         // user message 不算 active assistant
       } else if (m.role === "assistant") {
-        // 起一个新的 active assistant 占位
         const parts = partsFromContent(m.content);
+        const nextMeta = metaFromMessage(m);
+        if (m.responseId) {
+          const existingIdx = assistantIndexByResponseId(
+            state.messages,
+            m.responseId
+          );
+          if (existingIdx >= 0) {
+            const existing = state.messages[existingIdx];
+            const existingParts = existing.parts ?? [];
+            state.messages[existingIdx] = {
+              ...existing,
+              parts:
+                existingParts.length === 0 && parts.length > 0
+                  ? parts
+                  : existingParts,
+              timestamp: existing.timestamp ?? m.timestamp,
+              meta: mergeMeta(existing.meta, nextMeta),
+            };
+            state.activeAssistantIndex = existingIdx;
+            state.activeAssistantResponseId = m.responseId;
+            const initialText = textFromParts(
+              state.messages[existingIdx].parts ?? []
+            );
+            state.activeAssistantReplayText = initialText || undefined;
+            state.activeAssistantReplayOffset = initialText ? 0 : undefined;
+            return state;
+          }
+        }
+        // 起一个新的 active assistant 占位
         state.messages.push({
           role: "assistant",
           parts,
           timestamp: m.timestamp,
-          meta: metaFromMessage(m),
+          meta: nextMeta,
         });
         state.activeAssistantIndex = state.messages.length - 1;
         state.activeAssistantResponseId = m.responseId;
