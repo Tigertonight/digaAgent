@@ -4,8 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   SessionInfoLite,
   ChatMessage,
-  ProviderInfo,
-  ProvidersResponse,
   ThinkingLevel,
   ImageContentLite,
   ForkableUserMessage,
@@ -42,6 +40,7 @@ import { useSessionMeta } from "./hooks/useSessionMeta";
 import { useSearch } from "./hooks/useSearch";
 import { loadCollabSettings } from "@/lib/collab/settings";
 import { useAutocomplete } from "./hooks/useAutocomplete";
+import { useProviderStatus } from "./hooks/useProviderStatus";
 import { useMessageRefs } from "./ChatMinimap";
 import { EmptyState } from "./components/EmptyState";
 import { Composer } from "./components/Composer";
@@ -183,7 +182,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // 图片/文件附件相关 hook 调用挪到 setter wrappers 之后（依赖 setPendingImages/setPendingFiles）
 
   // provider/model 选择
-  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const { providers, reloadProviders: fetchProviders } = useProviderStatus();
   // provider/model 选择持久化:用户切过模型后,刷新/重启都保留;
   // 仅当 localStorage 没值时才用后端 defaultProvider/defaultModelId 兜底。
   const [providerId, setProviderId] = useState<string>(() => {
@@ -386,11 +385,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // 启动时拉 providers
   // applyDefaults 时:优先尊重当前 state(来自 localStorage),仅当为空或失效才用后端 default
   const reloadProviders = useCallback((applyDefaults: boolean) => {
-    void fetch("/api/providers")
-      .then((r) => r.json() as Promise<ProvidersResponse>)
+    void fetchProviders()
       .then((data) => {
-        if (!data.providers) return;
-        setProviders(data.providers);
+        if (!data?.providers) return;
         if (!applyDefaults) return;
         // 用 setter 拿当前值判断,避免把 providerId/modelId 写进 useCallback 依赖
         setProviderId((curProv) => {
@@ -418,7 +415,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         });
       })
       .catch((e) => console.warn("load providers failed", e));
-  }, []);
+  }, [fetchProviders]);
 
   useEffect(() => {
     reloadProviders(true);

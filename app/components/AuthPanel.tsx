@@ -11,26 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { KeyRound, Check } from "lucide-react";
 import { ProviderIcon } from "./ProviderIcon";
 import { ConfirmButton } from "./ConfirmButton";
-
-interface AuthItem {
-  provider: string;
-  displayName: string;
-  hasAuth: boolean;
-  credentialType: "api_key" | "oauth" | null;
-  status: {
-    configured: boolean;
-    source?: string;
-    label?: string;
-  };
-  supportsOAuth: boolean;
-}
-
-interface AuthResponse {
-  providers: AuthItem[];
-  oauthProviders: string[];
-  authPath?: string;
-  error?: string;
-}
+import { useProviderStatus } from "@/app/hooks/useProviderStatus";
 
 interface Props {
   onClose: () => void;
@@ -39,8 +20,13 @@ interface Props {
 }
 
 export default function AuthPanel({ onClose, onChanged }: Props) {
-  const [data, setData] = useState<AuthResponse | null>(null);
-  const [loading, setLoading] = useState(false);
+  const {
+    authData: data,
+    authProviders,
+    authLoading: loading,
+    authError,
+    reloadAuth: load,
+  } = useProviderStatus({ autoLoadAuth: true });
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [showAll, setShowAll] = useState(false);
@@ -53,29 +39,14 @@ export default function AuthPanel({ onClose, onChanged }: Props) {
   // OAuth 登录弹层：当前正在登录哪个 provider
   const [oauthProvider, setOauthProvider] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const r = await fetch("/api/auth");
-      const d = (await r.json()) as AuthResponse;
-      if (d.error) setError(d.error);
-      else setData(d);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (authError) setError(authError);
+  }, [authError]);
 
   const filtered = useMemo(() => {
-    if (!data) return [];
+    if (!authProviders) return [];
     const q = search.trim().toLowerCase();
-    let list = data.providers;
+    let list = authProviders;
     if (!showAll) list = list.filter((p) => p.hasAuth || p.supportsOAuth);
     if (q) {
       list = list.filter(
@@ -85,7 +56,7 @@ export default function AuthPanel({ onClose, onChanged }: Props) {
       );
     }
     return list;
-  }, [data, search, showAll]);
+  }, [authProviders, search, showAll]);
 
   const startEdit = useCallback((provider: string) => {
     setEditing(provider);
