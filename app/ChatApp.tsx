@@ -61,6 +61,8 @@ interface Props {
 }
 
 type Theme = "dark" | "light";
+const INPUT_HISTORY_KEY = "diga:composer:history:v1";
+const INPUT_HISTORY_LIMIT = 100;
 
 // SLASH_COMMANDS / SlashName / detectAutocompleteToken 已搬到 hooks/useAutocomplete.ts（RFC-1 阶段 C2）。
 
@@ -68,6 +70,20 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // setError 需要在 useSessions（B1）之前声明，作为 onError 回调注入。
   // 顶层 error 用于 UI banner 展示；useState setter 身份稳定，可安全提前。
   const [error, setError] = useState<string | null>(null);
+  const [inputHistory, setInputHistory] = useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = localStorage.getItem(INPUT_HISTORY_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed)
+        ? parsed.filter((x): x is string => typeof x === "string")
+        : [];
+    } catch {
+      return [];
+    }
+  });
+  const historyCursorRef = useRef<number | null>(null);
+  const historyDraftRef = useRef("");
 
   // ===== 多会话核心容器与 SSE 连接池（RFC-1 阶段 A1 + A2） =====
   // - runnersRef（useRunners）：所有会话工作面的"权威存储"
@@ -1235,6 +1251,89 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     return "no session";
   }, [agentSessionId, selectedId]);
 
+  const rememberComposerInput = useCallback((text: string) => {
+    const value = text.trim();
+    if (!value) return;
+    historyCursorRef.current = null;
+    historyDraftRef.current = "";
+    setInputHistory((cur) => {
+      const withoutDuplicate = cur.filter((item) => item !== value);
+      const next = [...withoutDuplicate, value].slice(-INPUT_HISTORY_LIMIT);
+      try {
+        localStorage.setItem(INPUT_HISTORY_KEY, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  }, []);
+
+  const navigateInputHistory = useCallback(
+    (direction: "prev" | "next") => {
+      if (inputHistory.length === 0) return false;
+      const current = inputRef.current;
+      if (!current) return false;
+
+      const atStart =
+        current.selectionStart === 0 && current.selectionEnd === 0;
+      const atEnd =
+        current.selectionStart === current.value.length &&
+        current.selectionEnd === current.value.length;
+      const browsingHistory = historyCursorRef.current != null;
+      if (!browsingHistory) {
+        if (direction === "prev" && !atStart && input.trim()) return false;
+        if (direction === "next" && !atEnd) return false;
+      }
+
+      if (historyCursorRef.current == null) {
+        historyDraftRef.current = input;
+        historyCursorRef.current = inputHistory.length;
+      }
+
+      const nextCursor =
+        direction === "prev"
+          ? Math.max(0, historyCursorRef.current - 1)
+          : Math.min(inputHistory.length, historyCursorRef.current + 1);
+      historyCursorRef.current = nextCursor;
+
+      const nextValue =
+        nextCursor === inputHistory.length
+          ? historyDraftRef.current
+          : inputHistory[nextCursor];
+      setInput(nextValue);
+      requestAnimationFrame(() => {
+        const el = inputRef.current;
+        if (!el) return;
+        const pos = direction === "prev" ? 0 : el.value.length;
+        el.setSelectionRange(pos, pos);
+      });
+      return true;
+    },
+    [input, inputHistory, inputRef, setInput]
+  );
+
+  const sendWithHistory = useCallback(async () => {
+    rememberComposerInput(input);
+    await send();
+  }, [input, rememberComposerInput, send]);
+
+  const steerWithHistory = useCallback(async () => {
+    rememberComposerInput(input);
+    await onSteer();
+  }, [input, onSteer, rememberComposerInput]);
+
+  const followUpWithHistory = useCallback(async () => {
+    rememberComposerInput(input);
+    await onFollowUp();
+  }, [input, onFollowUp, rememberComposerInput]);
+
+  const setComposerInput = useCallback(
+    (v: string | ((cur: string) => string)) => {
+      historyCursorRef.current = null;
+      historyDraftRef.current = "";
+      setInput(v);
+    },
+    [setInput]
+  );
+
   // ===== Autocomplete + Slash 命令（RFC-1 阶段 C2，已抽到 useAutocomplete） =====
   // 抽离内容：4 个 AC state + 3 个 handler + runSlashCommand(7 case) + onKeyDown 拦截块。
   // startNewSession / onCompact / 4 个 modal setter 通过参数注入；hook 对 UI state 零反向依赖。
@@ -1264,11 +1363,27 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // 自动补全弹层打开时拦截上下/Enter/Tab/Esc（消费则直接 return）
     if (tryHandleAutocompleteKey(e)) return;
+    if (
+      (e.key === "ArrowUp" || e.key === "ArrowDown") &&
+      !e.shiftKey &&
+      !e.altKey &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.nativeEvent.isComposing
+    ) {
+      const handled = navigateInputHistory(
+        e.key === "ArrowUp" ? "prev" : "next"
+      );
+      if (handled) {
+        e.preventDefault();
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       // streaming 时 Enter 默认走 follow_up（排队），shift+Enter 才换行
-      if (streaming) void onFollowUp();
-      else void send();
+      if (streaming) void followUpWithHistory();
+      else void sendWithHistory();
     }
   };
 
@@ -1501,7 +1616,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
         <Composer
           input={input}
-          setInput={setInput}
+          setInput={setComposerInput}
           inputRef={inputRef}
           fileInputRef={fileInputRef}
           onKeyDown={onKeyDown}
@@ -1509,6 +1624,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           streaming={streaming}
           compacting={compacting}
           agentId={agentId}
+          pendingMessages={activeSnapshot.pendingMessages}
           pendingImages={pendingImages}
           pendingFiles={pendingFiles}
           removePendingImage={removePendingImage}
@@ -1521,9 +1637,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           applyAutocomplete={applyAutocomplete}
           refreshAutocomplete={refreshAutocomplete}
           closeAutocomplete={closeAutocomplete}
-          send={send}
-          onSteer={onSteer}
-          onFollowUp={onFollowUp}
+          send={sendWithHistory}
+          onSteer={steerWithHistory}
+          onFollowUp={followUpWithHistory}
           onAbort={onAbort}
           onCompact={onCompact}
           onAbortCompaction={onAbortCompaction}

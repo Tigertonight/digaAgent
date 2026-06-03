@@ -247,6 +247,21 @@ export function useAgentEvents(
           return;
         }
 
+        // ===== SDK 输入队列状态（steer / follow-up） =====
+        case "queue_update": {
+          const q = ev as {
+            steering?: readonly string[];
+            followUp?: readonly string[];
+          };
+          updateRunner(ownerKey, {
+            pendingMessages: {
+              steering: [...(q.steering ?? [])],
+              followUp: [...(q.followUp ?? [])],
+            },
+          });
+          return;
+        }
+
         // ===== reducer 驱动事件（message_* / tool_execution_*） =====
         // 这些事件需要基于"当前 runner 的 chatState"做 reducer，所以走 patch-as-function 形式
         case "message_start":
