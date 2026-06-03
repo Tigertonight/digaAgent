@@ -406,9 +406,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
           metaFromMessage(ev.message) ?? (responseId ? { responseId } : undefined)
         );
         if (sub.type === "text_delta" && sub.delta) {
-          const isSameResponse =
-            !responseId || responseId === state.activeAssistantResponseId;
-          if (state.activeAssistantReplayText && isSameResponse) {
+          if (state.activeAssistantReplayText) {
             const offset = state.activeAssistantReplayOffset ?? 0;
             const replayText = state.activeAssistantReplayText;
             const replayChunk = replayText.slice(offset, offset + sub.delta.length);
@@ -433,10 +431,14 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
             state.activeAssistantReplayText = undefined;
             state.activeAssistantReplayOffset = undefined;
           }
+          const currentText = textFromParts(parts);
+          if (currentText === sub.delta) {
+            return { ...msg, meta: nextMeta };
+          }
           if (
             responseId &&
             responseId === state.activeAssistantResponseId &&
-            textFromParts(parts) === sub.delta
+            currentText === sub.delta
           ) {
             return msg;
           }
