@@ -67,6 +67,12 @@ export interface UseAgentEventsOptions {
     toolCallId: string,
     ruleId?: string
   ) => void;
+  /** Browser runtime 有新状态时触发，用于自动展开右侧 Browser 面板。 */
+  onBrowserState?: (
+    snapshot: BrowserSnapshot,
+    agentId: string,
+    ownerKey: RunnerKey
+  ) => void;
 }
 
 export interface UseAgentEventsReturn {
@@ -169,6 +175,7 @@ export function useAgentEvents(
     refreshStats,
     isCollabEnabled,
     autoApprove,
+    onBrowserState,
   } = opts;
 
   const handleAgentEvent = useCallback<UseAgentEventsReturn["handleAgentEvent"]>(
@@ -266,7 +273,10 @@ export function useAgentEvents(
         // ===== Browser use 状态：Playwright runtime -> 右侧 Browser panel =====
         case "browser_state": {
           const snapshot = (ev as { snapshot?: BrowserSnapshot }).snapshot;
-          if (snapshot) updateRunner(ownerKey, { browser: snapshot });
+          if (snapshot) {
+            updateRunner(ownerKey, { browser: snapshot });
+            onBrowserState?.(snapshot, aidForEvents, ownerKey);
+          }
           return;
         }
 
@@ -332,6 +342,7 @@ export function useAgentEvents(
       refreshStats,
       isCollabEnabled,
       autoApprove,
+      onBrowserState,
     ]
   );
 

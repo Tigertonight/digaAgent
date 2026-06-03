@@ -1140,6 +1140,14 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     refreshForkList: (aid, key) => refreshForkListRef.current?.(aid, key),
     refreshStats,
     isCollabEnabled: () => loadCollabSettings().enabled,
+    onBrowserState: (_snapshot, _aid, ownerKey) => {
+      if (ownerKey !== activeKey) return;
+      setRightPanel((prev) => {
+        if (prev === "browser") return prev;
+        persistRightPanel("browser");
+        return "browser";
+      });
+    },
     autoApprove: (aid, toolCallId) => {
       // 注意：autoApprove 用的是 SSE 携带的 aid（可能 ≠ activeKey），
       // 直接 fetch 而非用 approveCall（后者绑定 activeKey）。
