@@ -5,9 +5,9 @@
  * - 列出所有 provider 的认证状态（hasAuth / source / credential type）
  * - 支持设置 API key（PUT /api/auth）
  * - 支持删除凭证（DELETE /api/auth?provider=...）
- * - OAuth 标记 supportsOAuth=true 的会显示提示，但不在此处登录（需 CLI）
+ * - OAuth 标记 supportsOAuth=true 的 provider 支持在此处打开授权登录
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { KeyRound, Check } from "lucide-react";
 import { ProviderIcon } from "./ProviderIcon";
 import { ConfirmButton } from "./ConfirmButton";
@@ -15,6 +15,7 @@ import { useProviderStatus } from "@/app/hooks/useProviderStatus";
 
 interface Props {
   onClose: () => void;
+  initialProvider?: string | null;
   /** 任何变更后调用，方便父组件刷新 providers/models */
   onChanged?: () => void;
 }
@@ -27,7 +28,7 @@ interface AuthTestResult {
   model?: { provider: string; id: string; name?: string };
 }
 
-export default function AuthPanel({ onClose, onChanged }: Props) {
+export default function AuthPanel({ onClose, initialProvider, onChanged }: Props) {
   const {
     authData: data,
     authProviders,
@@ -50,10 +51,27 @@ export default function AuthPanel({ onClose, onChanged }: Props) {
 
   // OAuth 登录弹层：当前正在登录哪个 provider
   const [oauthProvider, setOauthProvider] = useState<string | null>(null);
+  const initialProviderRef = useRef(initialProvider?.trim() || null);
 
   useEffect(() => {
     if (authError) setError(authError);
   }, [authError]);
+
+  useEffect(() => {
+    const provider = initialProviderRef.current;
+    if (!provider || !data) return;
+    const hit = data.providers.find((p) => p.provider === provider);
+    if (!hit) return;
+    setSearch(provider);
+    setShowAll(true);
+    if (hit.supportsOAuth && provider === "openai-codex") {
+      setOauthProvider(provider);
+    } else {
+      setEditing(provider);
+      setKeyInput("");
+    }
+    initialProviderRef.current = null;
+  }, [data]);
 
   const filtered = useMemo(() => {
     if (!authProviders) return [];
@@ -298,8 +316,26 @@ export default function AuthPanel({ onClose, onChanged }: Props) {
                         ` · source: ${p.status.source}`}
                       {p.status.label && ` (${p.status.label})`}
                       {p.credentialType && ` · stored: ${p.credentialType}`}
-                      {p.supportsOAuth && " · oauth available (use CLI: pi login)"}
+                      {p.supportsOAuth && " · oauth available"}
                     </div>
+                    {p.provider === "openai-codex" && (
+                      <div
+                        className="mt-0.5 text-[10px]"
+                        style={{ color: "var(--fg-faint)" }}
+                      >
+                        ChatGPT/Codex OAuth uses your ChatGPT subscription
+                        session, not an OpenAI Platform API key.
+                      </div>
+                    )}
+                    {p.provider === "openai" && (
+                      <div
+                        className="mt-0.5 text-[10px]"
+                        style={{ color: "var(--fg-faint)" }}
+                      >
+                        Standard OpenAI API provider. Use an OpenAI Platform
+                        API key here.
+                      </div>
+                    )}
                   </span>
                   {!isEditing && (
                     <div className="flex items-center gap-1 shrink-0">

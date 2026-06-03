@@ -283,6 +283,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     document.body.style.userSelect = "none";
   };
   const [showAuth, setShowAuth] = useState(false);
+  const [authInitialProvider, setAuthInitialProvider] = useState<string | null>(
+    null
+  );
   const [showModelsConfig, setShowModelsConfig] = useState(false);
   const [showProviderSetup, setShowProviderSetup] = useState(false);
   const [showSystemPrompt, setShowSystemPrompt] = useState(false);
@@ -1432,7 +1435,10 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             }
           }}
           onOpenProviderSetup={() => setShowProviderSetup(true)}
-          onOpenAuth={() => setShowAuth(true)}
+          onOpenAuth={() => {
+            setAuthInitialProvider(null);
+            setShowAuth(true);
+          }}
           onToggleTools={toggleTools}
           onToggleFiles={toggleFiles}
         />
@@ -1555,10 +1561,17 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         onCloseTools={toggleTools}
         showProviderSetup={showProviderSetup}
         onCloseProviderSetup={() => setShowProviderSetup(false)}
-        onProviderSetupOpenAuth={() => setShowAuth(true)}
+        onProviderSetupOpenAuth={(provider) => {
+          setAuthInitialProvider(provider ?? null);
+          setShowAuth(true);
+        }}
         onProviderSetupOpenModelsConfig={() => setShowModelsConfig(true)}
         showAuth={showAuth}
-        onCloseAuth={() => setShowAuth(false)}
+        authInitialProvider={authInitialProvider}
+        onCloseAuth={() => {
+          setShowAuth(false);
+          setAuthInitialProvider(null);
+        }}
         onAuthChanged={() => reloadProviders(false)}
         showModelsConfig={showModelsConfig}
         onCloseModelsConfig={() => setShowModelsConfig(false)}
