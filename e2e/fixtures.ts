@@ -18,11 +18,43 @@ interface FakeAgent {
   // 测试通过 page.evaluate 推事件用的 SSE 控制器；实际由 install-sse-mock 在 page 内创建
 }
 
+interface ApiFixtureOptions {
+  providersResponse?: unknown;
+  authResponse?: unknown;
+  modelsConfigResponse?: unknown;
+}
+
+const defaultProvidersResponse = {
+  providers: [
+    {
+      provider: "anthropic",
+      displayName: "Anthropic",
+      hasAuth: true,
+      models: [
+        {
+          id: "claude-haiku-4-5-20251001",
+          name: "Claude Haiku 4.5",
+          reasoning: true,
+          contextWindow: 200_000,
+          maxTokens: 8192,
+        },
+      ],
+    },
+  ],
+  total: 1,
+  authedCount: 1,
+  defaultProvider: "anthropic",
+  defaultModelId: "claude-haiku-4-5-20251001",
+};
+
 /**
  * 给 ChatApp 启动需要的最小接口集合返 fixture。
  * 调用方再额外 page.route 覆盖 /api/agent/new 和 /api/agent/:id/events 走自己的 stub。
  */
-export async function installApiFixtures(page: Page) {
+export async function installApiFixtures(
+  page: Page,
+  options: ApiFixtureOptions = {}
+) {
   // 在 page 内挂一个 sessions 数组，POST /api/agent/new 时 push，GET /api/sessions 读它
   await page.addInitScript(() => {
     const w = window as unknown as {
@@ -59,28 +91,7 @@ export async function installApiFixtures(page: Page) {
     }
     if (url.endsWith("/api/providers")) {
       return route.fulfill({
-        json: {
-          providers: [
-            {
-              provider: "anthropic",
-              displayName: "Anthropic",
-              hasAuth: true,
-              models: [
-                {
-                  id: "claude-haiku-4-5-20251001",
-                  name: "Claude Haiku 4.5",
-                  reasoning: true,
-                  contextWindow: 200_000,
-                  maxTokens: 8192,
-                },
-              ],
-            },
-          ],
-          total: 1,
-          authedCount: 1,
-          defaultProvider: "anthropic",
-          defaultModelId: "claude-haiku-4-5-20251001",
-        },
+        json: options.providersResponse ?? defaultProvidersResponse,
       });
     }
     if (url.endsWith("/api/sessions")) {
@@ -97,13 +108,17 @@ export async function installApiFixtures(page: Page) {
       return route.fulfill({ json: { home: "/tmp" } });
     }
     if (url.endsWith("/api/auth")) {
-      return route.fulfill({ json: { providers: [] } });
+      return route.fulfill({
+        json: options.authResponse ?? { providers: [] },
+      });
     }
     if (url.endsWith("/api/skills")) {
       return route.fulfill({ json: { skills: [] } });
     }
     if (url.endsWith("/api/models-config")) {
-      return route.fulfill({ json: { providers: [] } });
+      return route.fulfill({
+        json: options.modelsConfigResponse ?? { providers: [] },
+      });
     }
     if (url.endsWith("/api/files")) {
       return route.fulfill({ json: { entries: [] } });
