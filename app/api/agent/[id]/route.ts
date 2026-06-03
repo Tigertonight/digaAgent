@@ -138,7 +138,7 @@ export async function GET(
     id: rec.id,
     sessionId: rec.session.sessionId,
     sessionFile: rec.session.sessionFile,
-    isStreaming: rec.session.isStreaming,
+    isStreaming: rec.isStreaming,
     isCompacting: (rec.session as unknown as { isCompacting?: boolean })
       .isCompacting,
     thinkingLevel: rec.session.thinkingLevel,
@@ -196,7 +196,7 @@ export async function POST(
         }
         const images = parseImages(body.images);
         // 如果当前在 streaming，默认按 followUp 处理；否则正常 prompt
-        if (rec.session.isStreaming) {
+        if (rec.isStreaming) {
           await rec.session.prompt(text, {
             streamingBehavior: "followUp",
             images,
