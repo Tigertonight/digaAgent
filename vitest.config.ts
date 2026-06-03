@@ -11,7 +11,11 @@ import path from "node:path";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["lib/**/*.{test,spec}.ts", "app/pet/**/*.{test,spec}.ts"],
+    include: [
+      "lib/**/*.{test,spec}.ts",
+      "app/pet/**/*.{test,spec}.ts",
+      "app/api/**/*.{test,spec}.ts",
+    ],
     exclude: ["node_modules", ".next", "dist", "e2e"],
   },
   resolve: {
