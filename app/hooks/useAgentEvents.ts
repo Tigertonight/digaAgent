@@ -25,6 +25,7 @@
 
 import { useCallback } from "react";
 import { applyEvent } from "@/lib/chat-reducer";
+import type { ApprovalRequest } from "@/lib/collab/types";
 import type {
   AgentPhase,
   RunnerKey,
@@ -79,6 +80,15 @@ export interface UseAgentEventsReturn {
    */
   handleAgentEvent: (
     event: AgentEvent,
+    agentId: string,
+    ownerKey: RunnerKey
+  ) => void;
+  /**
+   * 页面刷新 / SSE 重连后，从 HTTP snapshot 恢复仍在 pending 的审批气泡。
+   * 内部复用 approval_request 路径，保证和实时 SSE 到达时的 reducer 行为一致。
+   */
+  restorePendingApprovals: (
+    requests: ApprovalRequest[],
     agentId: string,
     ownerKey: RunnerKey
   ) => void;
@@ -285,5 +295,20 @@ export function useAgentEvents(
     ]
   );
 
-  return { handleAgentEvent };
+  const restorePendingApprovals = useCallback<
+    UseAgentEventsReturn["restorePendingApprovals"]
+  >(
+    (requests, aidForEvents, ownerKey) => {
+      for (const request of requests) {
+        handleAgentEvent(
+          { type: "approval_request", request },
+          aidForEvents,
+          ownerKey
+        );
+      }
+    },
+    [handleAgentEvent]
+  );
+
+  return { handleAgentEvent, restorePendingApprovals };
 }

@@ -345,6 +345,32 @@ describe("applyEvent — approval_request / approval_resolved (RFC-2 Phase B3)",
     expect(p.createdAt).toBe(1234);
   });
 
+  it("approval_request 恢复到无 active assistant 的状态时会新建 pending 气泡", () => {
+    let s = createInitialState([
+      { role: "user", parts: [{ kind: "text", text: "run a command" }] },
+      { role: "assistant", parts: [{ kind: "text", text: "checking..." }] },
+    ]);
+    s = applyEvent(s, {
+      type: "approval_request",
+      request: {
+        id: "agent-1:tool-call-restored",
+        toolCallId: "tool-call-restored",
+        toolName: "bash",
+        input: { command: "rm -rf /tmp/xx" },
+        ruleId: "dangerous-bash-destructive",
+        createdAt: 2345,
+      },
+    });
+
+    expect(s.activeAssistantIndex).toBe(2);
+    const msg = s.messages[2];
+    expect(msg.role).toBe("assistant");
+    const p = (msg.parts as MessagePart[])[0];
+    if (p.kind !== "approval") throw new Error("type narrow");
+    expect(p.status).toBe("pending");
+    expect(p.id).toBe("agent-1:tool-call-restored");
+  });
+
   it("approval_resolved 在 message_end 之后到达（active 已 closed）→ 仍能找到旧 assistant 的 approval part", () => {
     let s = setupActiveAssistantWithApproval();
     s = applyEvent(s, { type: "message_end", message: { role: "assistant" } });

@@ -738,7 +738,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
   // RFC-2 Phase B3：工具审批 user actions（Allow / Deny POST）
   // approve/deny 直接走 fetch，server 端 resolve 后 SSE 推 approval_resolved 自然更新气泡。
-  const { approve: approveCall, deny: denyCall } = useApprovals({
+  const {
+    approve: approveCall,
+    deny: denyCall,
+    loadPending: loadPendingApprovals,
+  } = useApprovals({
     agentId,
     onError: setError,
   });
@@ -1110,7 +1114,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // RFC-2 Phase B4：注入 isCollabEnabled + autoApprove —— 当用户关掉总开关时，
   // 前端绕过气泡 UI 自动 POST allow。loadCollabSettings 每次 approval_request
   // 都重读 localStorage，让用户改了 Settings 立即生效（不依赖 React state）。
-  const { handleAgentEvent } = useAgentEvents({
+  const { handleAgentEvent, restorePendingApprovals } = useAgentEvents({
     updateRunner,
     playDoneSound,
     refreshSessions,
@@ -1129,6 +1133,19 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       );
     },
   });
+
+  useEffect(() => {
+    if (!agentId) return;
+    let cancelled = false;
+    const ownerKey = activeKey;
+    void loadPendingApprovals().then((requests) => {
+      if (cancelled || requests.length === 0) return;
+      restorePendingApprovals(requests, agentId, ownerKey);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId, activeKey, loadPendingApprovals, restorePendingApprovals]);
 
   // ===== Turn 控制中枢（RFC-1 阶段 B2-a，已抽到 useChatStream） =====
   // agentAction（通用 POST 通道）+ send / onAbort / onCompact / onAbortCompaction
