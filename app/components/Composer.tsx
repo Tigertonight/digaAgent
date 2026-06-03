@@ -388,7 +388,14 @@ export function Composer(props: ComposerProps) {
           {visibleProviders.length > 1 && (
             <PillSelect
               value={providerId}
-              onChange={(e) => onChangeModel(e.target.value, "")}
+              onChange={(e) => {
+                const nextProviderId = e.target.value;
+                const nextProvider = visibleProviders.find(
+                  (p) => p.provider === nextProviderId
+                );
+                const nextModelId = nextProvider?.models[0]?.id ?? "";
+                onChangeModel(nextProviderId, nextModelId);
+              }}
               title={
                 currentProvider?.hasAuth
                   ? `auth: ${currentProvider.authSource ?? "?"} (${currentProvider.authLabel ?? ""})`
