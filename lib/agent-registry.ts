@@ -26,6 +26,7 @@ import { createCollabExtension } from "./collab/extension";
 import { createClarificationExtension } from "./clarification/extension";
 import { createBrowserExtension } from "./browser/extension";
 import { disposeBrowser } from "./browser/runtime";
+import { createClipboardExtension } from "./clipboard/extension";
 import { DEFAULT_RULES } from "./collab/rules";
 import {
   clearSessionRemember,
@@ -289,12 +290,18 @@ export async function createAgent(opts: CreateOptions): Promise<{
       pushExternalEvent(rec, { type: "browser_state", snapshot });
     },
   });
+  const clipboardExtension = createClipboardExtension();
 
   const resourceLoader = new DefaultResourceLoader({
     cwd: opts.cwd,
     agentDir: getAgentDir(),
     settingsManager: getSettingsManager(opts.cwd),
-    extensionFactories: [collabExtension, clarificationExtension, browserExtension],
+    extensionFactories: [
+      collabExtension,
+      clarificationExtension,
+      browserExtension,
+      clipboardExtension,
+    ],
   });
 
   const { session } = await createAgentSession({
