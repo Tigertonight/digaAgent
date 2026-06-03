@@ -104,8 +104,10 @@ export interface ReducerState {
   activeAssistantIndex: number;
   /** 当前 assistant message 的 responseId，用于兼容非标准 shim 的重复 delta */
   activeAssistantResponseId?: string;
-  /** 非标准 shim 若已在 message_start 给完整文本，后续重复 text_delta 要忽略 */
-  activeAssistantHasFinalContent?: boolean;
+  /** 非标准 shim 若已在 message_start 给文本，后续 text_delta 可能是在重放这段文本 */
+  activeAssistantReplayText?: string;
+  /** 已经吞掉的重放文本长度 */
+  activeAssistantReplayOffset?: number;
   /** 已收尾 responseId，迟到的重复 delta 直接忽略 */
   completedAssistantResponseIds?: string[];
 }
@@ -268,7 +270,8 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
     messages: prev.messages.slice(),
     activeAssistantIndex: prev.activeAssistantIndex,
     activeAssistantResponseId: prev.activeAssistantResponseId,
-    activeAssistantHasFinalContent: prev.activeAssistantHasFinalContent,
+    activeAssistantReplayText: prev.activeAssistantReplayText,
+    activeAssistantReplayOffset: prev.activeAssistantReplayOffset,
     completedAssistantResponseIds: prev.completedAssistantResponseIds,
   };
 
@@ -311,8 +314,9 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         });
         state.activeAssistantIndex = state.messages.length - 1;
         state.activeAssistantResponseId = m.responseId;
-        state.activeAssistantHasFinalContent =
-          !!m.stopReason && textFromParts(parts).length > 0;
+        const initialText = textFromParts(parts);
+        state.activeAssistantReplayText = initialText || undefined;
+        state.activeAssistantReplayOffset = initialText ? 0 : undefined;
       } else if (m.role === "tool") {
         // tool result 类的 message，一般已经在 tool_execution_end 里处理过，跳过
       }
@@ -337,11 +341,32 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
           metaFromMessage(ev.message) ?? (responseId ? { responseId } : undefined)
         );
         if (sub.type === "text_delta" && sub.delta) {
-          if (
-            state.activeAssistantHasFinalContent &&
-            (!responseId || responseId === state.activeAssistantResponseId)
-          ) {
-            return { ...msg, meta: nextMeta };
+          const isSameResponse =
+            !responseId || responseId === state.activeAssistantResponseId;
+          if (state.activeAssistantReplayText && isSameResponse) {
+            const offset = state.activeAssistantReplayOffset ?? 0;
+            const replayText = state.activeAssistantReplayText;
+            const replayChunk = replayText.slice(offset, offset + sub.delta.length);
+            if (replayChunk === sub.delta) {
+              state.activeAssistantReplayOffset = offset + sub.delta.length;
+              if (state.activeAssistantReplayOffset >= replayText.length) {
+                state.activeAssistantReplayText = undefined;
+                state.activeAssistantReplayOffset = undefined;
+              }
+              return { ...msg, meta: nextMeta };
+            }
+            const remainingReplay = replayText.slice(offset);
+            if (remainingReplay && sub.delta.startsWith(remainingReplay)) {
+              state.activeAssistantReplayText = undefined;
+              state.activeAssistantReplayOffset = undefined;
+              const suffix = sub.delta.slice(remainingReplay.length);
+              if (!suffix) return { ...msg, meta: nextMeta };
+              sealLastThinkingIfOpen(parts);
+              appendToLastTextPart(parts, suffix);
+              return { ...msg, parts, meta: nextMeta };
+            }
+            state.activeAssistantReplayText = undefined;
+            state.activeAssistantReplayOffset = undefined;
           }
           if (
             responseId &&
@@ -353,12 +378,8 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
           sealLastThinkingIfOpen(parts);
           appendToLastTextPart(parts, sub.delta);
         } else if (sub.type === "thinking_delta" && sub.delta) {
-          if (
-            state.activeAssistantHasFinalContent &&
-            (!responseId || responseId === state.activeAssistantResponseId)
-          ) {
-            return { ...msg, meta: nextMeta };
-          }
+          state.activeAssistantReplayText = undefined;
+          state.activeAssistantReplayOffset = undefined;
           appendToLastThinkingPart(parts, sub.delta);
         }
         return { ...msg, parts, meta: nextMeta };
@@ -399,7 +420,8 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
       }
       state.activeAssistantIndex = -1;
       state.activeAssistantResponseId = undefined;
-      state.activeAssistantHasFinalContent = undefined;
+      state.activeAssistantReplayText = undefined;
+      state.activeAssistantReplayOffset = undefined;
       return state;
     }
 
