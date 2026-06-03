@@ -14,7 +14,7 @@
  * 7. 兜底：当前 selectedId 对应的 session 若没被 runner 路径加入（刚切到历史 session、
  *    agentId 还没建立），也推一个最小化条目，保证宠物侧 displaySession.find() 能命中
  *
- * Hook 完全无外部状态——5 个 ref 全部封闭在 hook 内：
+ * Hook 的高频计时/节流状态封闭在内部 ref；外部只传入当前快照与摘要：
  *   - streamingStartedAtRef   每个 session 的 streaming 起始时间戳
  *   - petPushTimerRef         节流定时器
  *   - petLastPushedAtRef      上次推送时间
@@ -25,8 +25,10 @@ import type React from "react";
 import { useEffect, useRef } from "react";
 import { getElectronApi } from "@/lib/electron-bridge";
 import type { PetState, PetSessionInfo } from "@/lib/electron-bridge";
+import type { BudgetStatus } from "@/lib/budget/types";
 import type { RunnerKey, RunnerState } from "@/lib/session-runner";
 import type { ChatMessage, SessionInfoLite } from "@/lib/types";
+import type { BudgetTrigger } from "./useBudgetEnforcer";
 
 /**
  * 派生宠物气泡副文案的"工具操作目标"摘要。
@@ -92,6 +94,125 @@ function derivePetToolTarget(
   return null;
 }
 
+function summarizeToolInput(input: Record<string, unknown>): string | null {
+  const command = typeof input.command === "string" ? input.command : null;
+  if (command) return command.slice(0, 30);
+
+  const path =
+    typeof input.file_path === "string"
+      ? input.file_path
+      : typeof input.path === "string"
+        ? input.path
+        : typeof input.filePath === "string"
+          ? input.filePath
+          : null;
+  if (path) {
+    const base = path.split("/").pop() ?? path;
+    return base.length > 30 ? "…" + base.slice(-29) : base;
+  }
+
+  const query =
+    typeof input.pattern === "string"
+      ? input.pattern
+      : typeof input.query === "string"
+        ? input.query
+        : null;
+  return query ? query.slice(0, 30) : null;
+}
+
+function derivePendingApproval(
+  messages: ChatMessage[]
+): PetSessionInfo["pendingApproval"] {
+  const pending: NonNullable<PetSessionInfo["pendingApproval"]>[] = [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const parts = messages[i]?.parts;
+    if (!parts) continue;
+    for (let j = parts.length - 1; j >= 0; j--) {
+      const p = parts[j];
+      if (p.kind !== "approval" || p.status !== "pending") continue;
+      pending.push({
+        count: 1,
+        toolName: p.toolName,
+        toolTarget: summarizeToolInput(p.input),
+        ruleId: p.ruleId,
+        createdAt: p.createdAt,
+      });
+    }
+  }
+  if (pending.length === 0) return null;
+  const newest = pending[0];
+  return { ...newest, count: pending.length };
+}
+
+const BUDGET_WARNING_RATIO = 0.8;
+
+function formatBudgetDimension(dim: "cost" | "turns" | "duration"): string {
+  if (dim === "cost") return "费用";
+  if (dim === "turns") return "轮次";
+  return "时长";
+}
+
+function deriveBudgetSummary(
+  status: BudgetStatus | null,
+  pausedTrigger: BudgetTrigger | null
+): PetSessionInfo["budget"] {
+  if (!status) return null;
+  const triggered =
+    pausedTrigger?.triggered.length && pausedTrigger.triggered.length > 0
+      ? pausedTrigger.triggered
+      : status.triggered;
+
+  if (triggered.length > 0) {
+    const labels = triggered.map(formatBudgetDimension).join(" / ");
+    return {
+      level: "blocked",
+      label: "已暂停：预算到达上限",
+      detail: labels,
+      triggered: [...triggered],
+      peakRatio: 1,
+    };
+  }
+
+  const ratios: { dim: "cost" | "turns" | "duration"; ratio: number }[] = [];
+  const b = status.budget;
+  const spent = status.spent;
+  if (b.maxCostUsd && b.maxCostUsd > 0) {
+    ratios.push({ dim: "cost", ratio: spent.costUsd / b.maxCostUsd });
+  }
+  if (b.maxTurns && b.maxTurns > 0) {
+    ratios.push({ dim: "turns", ratio: spent.turns / b.maxTurns });
+  }
+  if (b.maxDurationSec && b.maxDurationSec > 0) {
+    ratios.push({
+      dim: "duration",
+      ratio: spent.durationSec / b.maxDurationSec,
+    });
+  }
+  if (ratios.length === 0) return null;
+
+  let peak = ratios[0];
+  for (const r of ratios) {
+    if (r.ratio > peak.ratio) peak = r;
+  }
+  if (peak.ratio < BUDGET_WARNING_RATIO) {
+    return {
+      level: "ok",
+      label: "预算正常",
+      detail: null,
+      triggered: [],
+      peakRatio: peak.ratio,
+    };
+  }
+
+  return {
+    level: "warning",
+    label: "接近预算上限",
+    detail: `${formatBudgetDimension(peak.dim)} ${Math.round(peak.ratio * 100)}%`,
+    triggered: [],
+    peakRatio: peak.ratio,
+  };
+}
+
 export interface UsePetPusherParams {
   /** runner 字典 ref（来自 useRunners） */
   runnersRef: React.MutableRefObject<Map<RunnerKey, RunnerState>>;
@@ -105,6 +226,12 @@ export interface UsePetPusherParams {
   lastSeenMap: Record<string, string>;
   /** 活跃 runner 快照（作为 effect deps，涵盖 runner 流式更新） */
   activeSnapshot: unknown;
+  /** 当前活跃 agent id；budgetStatus 只对应这个 agent */
+  activeAgentId: string | null;
+  /** 当前活跃 session 的预算状态摘要来源 */
+  budgetStatus: BudgetStatus | null;
+  /** Budget 命中暂停弹窗触发源，用于把 blocked 状态延续给宠物 */
+  budgetPausedTrigger: BudgetTrigger | null;
 }
 
 export function usePetPusher(params: UsePetPusherParams): void {
@@ -115,6 +242,9 @@ export function usePetPusher(params: UsePetPusherParams): void {
     lastSeenMapRef,
     lastSeenMap,
     activeSnapshot,
+    activeAgentId,
+    budgetStatus,
+    budgetPausedTrigger,
   } = params;
 
   // 每个 session 的 streaming 起始时间戳（streaming false→true 时记录）
@@ -203,6 +333,17 @@ export function usePetPusher(params: UsePetPusherParams): void {
         }
 
         const sessionId = sess?.id ?? key;
+        const pendingApproval = derivePendingApproval(
+          runner.chatState.messages
+        );
+        const matchingBudgetTrigger =
+          budgetPausedTrigger?.agentId === runner.agentId
+            ? budgetPausedTrigger
+            : null;
+        const budget =
+          runner.agentId === activeAgentId
+            ? deriveBudgetSummary(budgetStatus, matchingBudgetTrigger)
+            : null;
         pushedSessionIds.add(sessionId);
         petSessions.push({
           id: sessionId,
@@ -215,6 +356,8 @@ export function usePetPusher(params: UsePetPusherParams): void {
           currentToolTarget,
           retry: runner.retryInfo,
           compacting: runner.compacting,
+          pendingApproval,
+          budget,
           error,
           sseStatus: runner.sseStatus,
           streamingStartedAt,
@@ -246,6 +389,8 @@ export function usePetPusher(params: UsePetPusherParams): void {
             currentToolTarget: null,
             retry: null,
             compacting: false,
+            pendingApproval: null,
+            budget: null,
             error: null,
             sseStatus: "idle",
             streamingStartedAt: null,
@@ -284,5 +429,12 @@ export function usePetPusher(params: UsePetPusherParams): void {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSnapshot, sessions, selectedId]); // activeSnapshot 变化涵盖了 runner 的流式更新
+  }, [
+    activeSnapshot,
+    sessions,
+    selectedId,
+    activeAgentId,
+    budgetStatus,
+    budgetPausedTrigger,
+  ]); // activeSnapshot 变化涵盖了 runner 的流式更新
 }

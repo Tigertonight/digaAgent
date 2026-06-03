@@ -16,6 +16,9 @@ import type { PetState, PetSessionInfo } from "@/lib/electron-bridge";
 export type PetAnimState =
   | "idle"
   | "complete"
+  | "approval"
+  | "budget_warning"
+  | "budget_blocked"
   | "thinking"
   | "running"
   | "attention"
@@ -39,9 +42,12 @@ export function derivePetAnimState(
 ): PetAnimState {
   if (!session || !session.agentId) return "idle";
 
-  // 异常优先
-  if (session.error) return "error";
+  // 高优先级状态按 Pet State Matrix 排序
   if (session.sseStatus === "lost") return "offline";
+  if (session.error) return "error";
+  if (session.pendingApproval) return "approval";
+  if (session.budget?.level === "blocked") return "budget_blocked";
+  if (session.budget?.level === "warning") return "budget_warning";
 
   if (!session.streaming) {
     // agent 存在但不在流式：
@@ -80,15 +86,6 @@ export function derivePetBubbleText(
     return { primary: "等待启动", secondary: null, priority: "normal" };
   }
 
-  // L4: agent error
-  if (session.error) {
-    return {
-      primary: "出错了",
-      secondary: session.error.slice(0, 40),
-      priority: "high",
-    };
-  }
-
   // L4/L3: SSE 离线
   if (session.sseStatus === "lost") {
     // 有 lostElapsedMs 时显示"距上次正常 Xs"，否则保留"点击重连"兜底
@@ -99,6 +96,15 @@ export function derivePetBubbleText(
     return {
       primary: "连接已断开",
       secondary,
+      priority: "high",
+    };
+  }
+
+  // L4: agent error
+  if (session.error) {
+    return {
+      primary: "出错了",
+      secondary: session.error.slice(0, 40),
       priority: "high",
     };
   }
@@ -130,6 +136,31 @@ export function derivePetBubbleText(
     case "complete": {
       // 有 lastMessage 且已读 = 历史上完成过、用户已看过
       return { primary: "已完成", secondary: session.name, priority: "normal" };
+    }
+    case "approval": {
+      const approval = session.pendingApproval;
+      const count = approval?.count ?? 1;
+      return {
+        primary: count > 1 ? `等待授权 (${count})` : "等待授权",
+        secondary: approval
+          ? [approval.toolName, approval.toolTarget].filter(Boolean).join(" · ")
+          : "点击回主窗口处理",
+        priority: "high",
+      };
+    }
+    case "budget_warning": {
+      return {
+        primary: session.budget?.label ?? "接近预算上限",
+        secondary: session.budget?.detail ?? "点击查看预算",
+        priority: "normal",
+      };
+    }
+    case "budget_blocked": {
+      return {
+        primary: session.budget?.label ?? "已暂停：预算到达上限",
+        secondary: session.budget?.detail ?? "点击调整预算",
+        priority: "high",
+      };
     }
     case "thinking": {
       const kind = session.agentPhase?.kind;
@@ -312,8 +343,14 @@ export function usePetState() {
     // streaming 刚结束 → done 闪现（仅在无 error/offline 时）
     if (wasStreaming && !isStreaming && focused) {
       const nextState = derivePetAnimState(focused);
-      // 异常态不显示 done（错误比成功优先级高）
-      if (nextState !== "error" && nextState !== "offline") {
+      // 高优先级状态不显示 done（它们比完成回执更重要）
+      if (
+        nextState !== "offline" &&
+        nextState !== "error" &&
+        nextState !== "approval" &&
+        nextState !== "budget_warning" &&
+        nextState !== "budget_blocked"
+      ) {
         setAnimState("done");
         if (doneTimerRef.current) clearTimeout(doneTimerRef.current);
         doneTimerRef.current = setTimeout(() => {
@@ -327,7 +364,13 @@ export function usePetState() {
     // done 计时期间不打断（除非进入异常态）
     if (doneTimerRef.current) {
       const next = derivePetAnimState(focused);
-      if (next === "error" || next === "offline") {
+      if (
+        next === "offline" ||
+        next === "error" ||
+        next === "approval" ||
+        next === "budget_warning" ||
+        next === "budget_blocked"
+      ) {
         clearTimeout(doneTimerRef.current);
         doneTimerRef.current = null;
         setAnimState(next);

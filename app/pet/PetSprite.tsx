@@ -26,6 +26,12 @@ export default function PetSprite({ animState, size = 80 }: Props) {
       case "complete":
         // 已完成、已读：与 idle 相同的轻呼吸（视觉差异只在气泡绿点）
         return "pet-breathe 4s ease-in-out infinite";
+      case "approval":
+        return "pet-glow-warning 1.4s ease-in-out infinite";
+      case "budget_warning":
+        return "pet-glow-budget 1.8s ease-in-out infinite";
+      case "budget_blocked":
+        return "pet-glow-error 1.5s ease-in-out infinite";
       case "thinking":
         return "pet-glow-thinking 1.2s ease-in-out infinite";
       case "running":
@@ -47,11 +53,68 @@ export default function PetSprite({ animState, size = 80 }: Props) {
   const imgFilter = (() => {
     if (animState === "offline") return "grayscale(0.85) brightness(0.85)";
     if (animState === "error") return "saturate(1.2)";
+    if (animState === "budget_blocked") return "saturate(1.15)";
     return "none";
   })();
 
   // 徽章：attention=蓝点脉动（提示性而非警告性）/ offline=灰色叉
   const badge = (() => {
+    if (animState === "approval") {
+      return (
+        <span
+          aria-label="等待授权"
+          style={{
+            position: "absolute",
+            top: -2,
+            right: -2,
+            minWidth: 18,
+            height: 18,
+            borderRadius: 9,
+            background: "#f59e0b",
+            color: "#111827",
+            border: "2px solid rgba(17,24,39,0.75)",
+            fontSize: 11,
+            fontWeight: 800,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            lineHeight: 1,
+            animation: "pet-badge-pulse 1.4s ease-out infinite",
+          }}
+        >
+          !
+        </span>
+      );
+    }
+    if (animState === "budget_warning" || animState === "budget_blocked") {
+      return (
+        <span
+          aria-label={
+            animState === "budget_blocked" ? "预算已暂停" : "预算预警"
+          }
+          style={{
+            position: "absolute",
+            top: -2,
+            right: -2,
+            minWidth: 18,
+            height: 18,
+            borderRadius: 9,
+            background:
+              animState === "budget_blocked" ? "#f97316" : "#eab308",
+            color: "#111827",
+            border: "2px solid rgba(17,24,39,0.75)",
+            fontSize: 10,
+            fontWeight: 800,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            lineHeight: 1,
+          }}
+        >
+          $
+        </span>
+      );
+    }
     if (animState === "attention") {
       return (
         <span
