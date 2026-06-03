@@ -2,6 +2,26 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useProviderStatus } from "./useProviderStatus";
+import type { ProviderInfo } from "@/lib/types";
+
+export function normalizeProviderModelSelection(
+  providers: ProviderInfo[],
+  providerId: string,
+  modelId: string,
+  defaultProvider?: string
+) {
+  const provider =
+    providers.find((p) => p.provider === providerId) ??
+    providers.find((p) => p.provider === defaultProvider) ??
+    providers[0];
+  if (!provider) return { providerId: "", modelId: "" };
+
+  const modelExists = provider.models.some((m) => m.id === modelId);
+  return {
+    providerId: provider.provider,
+    modelId: modelExists ? modelId : (provider.models[0]?.id ?? ""),
+  };
+}
 
 export function useProviderModel() {
   const { providers, reloadProviders: fetchProviders } = useProviderStatus();
@@ -16,10 +36,12 @@ export function useProviderModel() {
 
   useEffect(() => {
     if (providerId) localStorage.setItem("pi-provider-id", providerId);
+    else localStorage.removeItem("pi-provider-id");
   }, [providerId]);
 
   useEffect(() => {
     if (modelId) localStorage.setItem("pi-model-id", modelId);
+    else localStorage.removeItem("pi-model-id");
   }, [modelId]);
 
   const reloadProviders = useCallback(
@@ -29,24 +51,19 @@ export function useProviderModel() {
           if (!data?.providers || !applyDefaults) return;
           setProviderId((curProv) => {
             setModelId((curModel) => {
-              const provExists = data.providers.some(
-                (p) => p.provider === (curProv || "")
-              );
-              const modelExists =
-                provExists &&
-                data.providers
-                  .find((p) => p.provider === curProv)
-                  ?.models?.some((m) => m.id === curModel);
-              if (provExists && modelExists) return curModel;
-              if (data.defaultModelId) return data.defaultModelId;
-              return curModel;
+              return normalizeProviderModelSelection(
+                data.providers,
+                curProv,
+                curModel,
+                data.defaultProvider
+              ).modelId;
             });
-            const provExists = data.providers.some(
-              (p) => p.provider === (curProv || "")
-            );
-            if (provExists) return curProv;
-            if (data.defaultProvider) return data.defaultProvider;
-            return curProv;
+            return normalizeProviderModelSelection(
+              data.providers,
+              curProv,
+              "",
+              data.defaultProvider
+            ).providerId;
           });
         })
         .catch((e) => console.warn("load providers failed", e));
