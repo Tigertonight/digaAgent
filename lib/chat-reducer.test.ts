@@ -281,13 +281,12 @@ describe("applyEvent — shim duplicate completion guards", () => {
     expect(s.messages[0].parts).toEqual([{ kind: "text", text: "answer" }]);
   });
 
-  it("ignores chunked delta replay after a full final message_start", () => {
+  it("ignores chunked delta replay after a full message_start", () => {
     let s = createInitialState();
     const message = {
       role: "assistant",
       responseId: "msg-chunk-replay",
       content: [{ type: "text", text: "hello world" }],
-      stopReason: "stop",
       timestamp: 1000,
     };
 
@@ -305,6 +304,29 @@ describe("applyEvent — shim duplicate completion guards", () => {
     s = applyEvent(s, { type: "message_end", message });
 
     expect(s.messages).toHaveLength(1);
+    expect(s.messages[0].parts).toEqual([{ kind: "text", text: "hello world" }]);
+  });
+
+  it("continues appending when a delta extends beyond the replayed prefix", () => {
+    let s = createInitialState();
+    const message = {
+      role: "assistant",
+      responseId: "msg-replay-prefix",
+      content: [{ type: "text", text: "hello" }],
+      timestamp: 1000,
+    };
+
+    s = applyEvent(s, { type: "message_start", message });
+    s = applyEvent(s, {
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "hello world",
+        partial: { responseId: message.responseId },
+      },
+    });
+    s = applyEvent(s, { type: "message_end", message });
+
     expect(s.messages[0].parts).toEqual([{ kind: "text", text: "hello world" }]);
   });
 
