@@ -669,16 +669,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     return () => clearTimeout(id);
   }, [compactError, setCompactError]);
 
-  // ===== 宠物状态推送（hook 化，见 app/hooks/usePetPusher.ts）=====
-  usePetPusher({
-    runnersRef,
-    sessions,
-    selectedId,
-    lastSeenMapRef,
-    lastSeenMap,
-    activeSnapshot,
-  });
-
   // RFC-2 Phase A：会话级 Budget MVP
   // 输入 activeSnapshot + agentId，输出当前预算/消耗/状态（duration 维度内部按 1s tick 刷新）
   const {
@@ -698,6 +688,19 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   } = useApprovals({
     agentId,
     onError: setError,
+  });
+
+  // ===== 宠物状态推送（hook 化，见 app/hooks/usePetPusher.ts）=====
+  usePetPusher({
+    runnersRef,
+    sessions,
+    selectedId,
+    lastSeenMapRef,
+    lastSeenMap,
+    activeSnapshot,
+    activeAgentId: agentId,
+    budgetStatus,
+    budgetPausedTrigger,
   });
 
   // 宠物窗口发来的 "切到指定 session" 请求

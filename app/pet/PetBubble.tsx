@@ -7,6 +7,9 @@ import type { PetAnimState, PetBubbleText } from "./use-pet-state";
 const STATE_COLOR: Record<PetAnimState, string> = {
   idle: "#6b7280", // gray-500 —— 从未开始
   complete: "#10b981", // emerald-500 —— 已完成（已读历史回复）
+  approval: "#f59e0b", // amber-500 —— 等待用户授权
+  budget_warning: "#eab308", // yellow-500 —— 接近预算
+  budget_blocked: "#f97316", // orange-500 —— 预算暂停
   thinking: "#6366f1", // indigo-500
   running: "#a855f7", // purple-500
   attention: "#6366f1", // indigo-500（与 thinking 同色，靠"红/蓝点"形态区分）
@@ -23,6 +26,12 @@ interface Props {
 export default function PetBubble({ animState, bubbleText }: Props) {
   const color = STATE_COLOR[animState];
   const isHighPriority = bubbleText.priority === "high";
+  const shouldPulse =
+    animState === "thinking" ||
+    animState === "running" ||
+    animState === "approval" ||
+    animState === "budget_warning" ||
+    animState === "budget_blocked";
 
   return (
     <div
@@ -60,10 +69,7 @@ export default function PetBubble({ animState, bubbleText }: Props) {
             background: color,
             boxShadow: `0 0 6px ${color}`,
             flexShrink: 0,
-            animation:
-              animState === "thinking" || animState === "running"
-                ? "pulse 1s ease-in-out infinite"
-                : "none",
+            animation: shouldPulse ? "pulse 1s ease-in-out infinite" : "none",
           }}
         />
         <span

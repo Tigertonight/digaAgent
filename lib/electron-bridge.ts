@@ -20,6 +20,24 @@ export interface PetRetryInfo {
   errorMessage?: string;
 }
 
+export interface PetApprovalInfo {
+  count: number;
+  toolName: string;
+  toolTarget: string | null;
+  ruleId?: string;
+  createdAt: number;
+}
+
+export type PetBudgetLevel = "ok" | "warning" | "blocked";
+
+export interface PetBudgetInfo {
+  level: PetBudgetLevel;
+  label: string;
+  detail: string | null;
+  triggered: ("cost" | "turns" | "duration")[];
+  peakRatio: number | null;
+}
+
 export interface PetSessionInfo {
   id: string;
   agentId: string | null;
@@ -39,6 +57,10 @@ export interface PetSessionInfo {
   retry: PetRetryInfo | null;
   /** 上下文压缩中（手动 compact 或 auto_compaction 之间） */
   compacting: boolean;
+  /** 当前 session 是否有待处理的工具审批 */
+  pendingApproval: PetApprovalInfo | null;
+  /** 当前 session 的预算状态摘要（仅推送到当前活跃 session） */
+  budget: PetBudgetInfo | null;
   /** agent 级错误（致命错误，需要主动喊用户） */
   error: string | null;
   /** SSE 连接状态 */

@@ -8,6 +8,9 @@ import { derivePetAnimState } from "./use-pet-state";
 const STATE_COLOR: Record<PetAnimState, string> = {
   idle: "#6b7280",
   complete: "#10b981",
+  approval: "#f59e0b",
+  budget_warning: "#eab308",
+  budget_blocked: "#f97316",
   thinking: "#6366f1",
   running: "#a855f7",
   attention: "#6366f1",
@@ -19,6 +22,9 @@ const STATE_COLOR: Record<PetAnimState, string> = {
 const STATE_LABEL: Record<PetAnimState, string> = {
   idle: "空闲",
   complete: "已完成",
+  approval: "待授权",
+  budget_warning: "预算预警",
+  budget_blocked: "预算暂停",
   thinking: "思考中",
   running: "运行中",
   attention: "待回复",
@@ -118,6 +124,9 @@ export default function PetCard({
   const canAbort = !!session?.streaming && !aborting;
   const isError = animState === "error";
   const isOffline = animState === "offline";
+  const isActionRequired =
+    animState === "approval" || animState === "budget_blocked";
+  const isBudgetWarning = animState === "budget_warning";
 
   return (
     <div
@@ -125,13 +134,13 @@ export default function PetCard({
         position: "relative",
         width: 280,
         background: "rgba(17,24,39,0.96)",
-        border: isError || isOffline
+        border: isError || isOffline || isActionRequired || isBudgetWarning
           ? `1px solid ${color}`
           : "1px solid rgba(255,255,255,0.1)",
         borderRadius: 16,
         padding: 12,
         backdropFilter: "blur(16px)",
-        boxShadow: isError || isOffline
+        boxShadow: isError || isOffline || isActionRequired || isBudgetWarning
           ? `0 8px 32px rgba(0,0,0,0.6), 0 0 0 4px ${color}22`
           : "0 8px 32px rgba(0,0,0,0.6)",
         fontSize: 12,
@@ -228,6 +237,36 @@ export default function PetCard({
           <span style={{ fontSize: 13, lineHeight: 1 }}>⚠</span>
           <span style={{ flex: 1, fontWeight: 600 }}>连接已断开</span>
           <span style={{ fontSize: 10, color: "#fda4af" }}>点击重连</span>
+        </button>
+      )}
+
+      {/* ===== action-required banner：审批 / Budget 阻断 ===== */}
+      {isActionRequired && !isOffline && (
+        <button
+          onClick={onFocusMain}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            width: "100%",
+            background: `${color}22`,
+            border: `1px solid ${color}66`,
+            borderRadius: 8,
+            padding: "6px 10px",
+            marginBottom: 10,
+            color: "#fef3c7",
+            fontSize: 11,
+            cursor: "pointer",
+            textAlign: "left",
+          }}
+          title="回到主窗口处理"
+        >
+          <span style={{ flex: 1, fontWeight: 600 }}>
+            {animState === "approval" ? "需要授权" : "预算已暂停"}
+          </span>
+          <span style={{ fontSize: 10, color: "#fde68a" }}>
+            回主窗口处理
+          </span>
         </button>
       )}
 

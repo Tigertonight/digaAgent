@@ -24,7 +24,10 @@ type MockKind =
   | "offline"
   | "error"
   | "retry"
-  | "compacting";
+  | "compacting"
+  | "approval"
+  | "budget_warning"
+  | "budget_blocked";
 
 const STORAGE_KEY = "pet:mock:lastKind";
 
@@ -41,6 +44,8 @@ function buildMockSession(kind: MockKind): PetSessionInfo {
     currentToolTarget: null,
     retry: null,
     compacting: false,
+    pendingApproval: null,
+    budget: null,
     error: null,
     sseStatus: "active",
     streamingStartedAt: null,
@@ -106,6 +111,46 @@ function buildMockSession(kind: MockKind): PetSessionInfo {
         agentPhase: { kind: "thinking" },
         compacting: true,
       };
+    case "approval":
+      return {
+        ...base,
+        streaming: true,
+        agentPhase: { kind: "thinking" },
+        pendingApproval: {
+          count: 1,
+          toolName: "Bash",
+          toolTarget: "rm -rf build",
+          ruleId: "dangerous-bash-destructive",
+          createdAt: Date.now(),
+        },
+      };
+    case "budget_warning":
+      return {
+        ...base,
+        streaming: true,
+        agentPhase: { kind: "running_tools", tools: [{ id: "t1", name: "Edit" }] },
+        currentTool: "Edit",
+        currentToolTarget: "ChatApp.tsx",
+        budget: {
+          level: "warning",
+          label: "接近预算上限",
+          detail: "轮次 82%",
+          triggered: [],
+          peakRatio: 0.82,
+        },
+      };
+    case "budget_blocked":
+      return {
+        ...base,
+        lastMessage: "当前任务已因 Budget 命中而暂停。",
+        budget: {
+          level: "blocked",
+          label: "已暂停：预算到达上限",
+          detail: "费用 / 时长",
+          triggered: ["cost", "duration"],
+          peakRatio: 1,
+        },
+      };
   }
 }
 
@@ -132,6 +177,9 @@ const KINDS: { kind: MockKind; label: string; color: string }[] = [
   { kind: "error", label: "Error", color: "#fb7185" },
   { kind: "retry", label: "Retry", color: "#fbbf24" },
   { kind: "compacting", label: "Compacting", color: "#fcd34d" },
+  { kind: "approval", label: "Approval", color: "#f59e0b" },
+  { kind: "budget_warning", label: "Budget Warn", color: "#eab308" },
+  { kind: "budget_blocked", label: "Budget Stop", color: "#f97316" },
 ];
 
 export default function PetMockPanel({ onInject }: Props) {
