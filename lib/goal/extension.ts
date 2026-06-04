@@ -3,7 +3,7 @@ import {
   defineTool,
   type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
-import type { AgentGoal, GoalUpdateInput } from "./types";
+import type { AgentGoal, GoalUpdateInput, GoalUpdateResult } from "./types";
 
 const GoalUpdateParams = Type.Object({
   status: Type.Union([Type.Literal("complete"), Type.Literal("blocked")], {
@@ -22,7 +22,7 @@ export interface GoalExtensionOptions {
   onGoalUpdate: (
     agentId: string,
     input: GoalUpdateInput
-  ) => Promise<AgentGoal | null> | AgentGoal | null;
+  ) => Promise<GoalUpdateResult> | GoalUpdateResult;
 }
 
 export function createGoalExtension(opts: GoalExtensionOptions): ExtensionFactory {
@@ -52,17 +52,24 @@ export function createGoalExtension(opts: GoalExtensionOptions): ExtensionFactor
             };
           }
 
-          const goal = await opts.onGoalUpdate(agentId, {
+          const result = await opts.onGoalUpdate(agentId, {
             status: params.status,
             blockedReason: params.blockedReason,
           });
-          const text =
-            params.status === "complete"
+
+          let text: string;
+          if (params.status === "complete") {
+            text = result.accepted
               ? "Goal marked complete."
-              : `Goal marked blocked${params.blockedReason ? `: ${params.blockedReason}` : "."}`;
+              : result.rejectionNote ??
+                "Goal completion was not accepted yet; keep working and record evidence.";
+          } else {
+            text = `Goal marked blocked${params.blockedReason ? `: ${params.blockedReason}` : "."}`;
+          }
+
           return {
             content: [{ type: "text", text }],
-            details: { goal },
+            details: { goal: result.goal },
           };
         },
       })

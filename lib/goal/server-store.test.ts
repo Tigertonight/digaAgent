@@ -1,6 +1,9 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  __resetGoalStoreForTest,
+  __setGoalStoreRootForTest,
   clearGoal,
   getGoal,
   noteGoalContinuation,
@@ -9,8 +12,18 @@ import {
 } from "./server-store";
 
 describe("goal server store", () => {
+  let root: string;
+
   beforeEach(() => {
-    __resetGoalStoreForTest();
+    // Use a temp root so the facade's disk persistence never touches the real
+    // ~/.mini-pi during tests (修正 5).
+    root = mkdtempSync(path.join(os.tmpdir(), "mini-pi-goals-"));
+    __setGoalStoreRootForTest(root);
+  });
+
+  afterEach(() => {
+    __setGoalStoreRootForTest(null);
+    rmSync(root, { recursive: true, force: true });
   });
 
   it("sets and clears a session goal", () => {
