@@ -7,6 +7,7 @@ import { ConfirmButton } from "@/app/components/ConfirmButton";
 import { BudgetSettingsSection } from "./BudgetSettingsSection";
 import { CollabSettingsSection } from "./CollabSettingsSection";
 import { WorkflowNetworkPolicySection } from "./WorkflowNetworkPolicySection";
+import { McpServersSection } from "./McpServersSection";
 
 /* ===================== Web 模式 Settings（用 /api/auth） ===================== */
 
@@ -140,6 +141,7 @@ function WebSettingsPanel() {
         <CollabSettingsSection />
 
         <WorkflowNetworkPolicySection />
+        <McpServersSection />
 
         <section className="text-xs text-neutral-500 leading-relaxed">
           Web 模式下凭证写到{" "}
@@ -462,6 +464,7 @@ export default function SettingsPanel() {
         <CollabSettingsSection />
 
         <WorkflowNetworkPolicySection />
+        <McpServersSection />
 
         <section className="text-xs text-neutral-500 leading-relaxed">
           Key 保存在系统 keychain（macOS Keychain），不写明文文件。修改后点{" "}

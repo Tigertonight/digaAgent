@@ -224,6 +224,7 @@ export function Composer(props: ComposerProps) {
         )}
         <GoalBar
           goal={goal}
+          agentId={agentId}
           disabled={!agentId}
           onPause={onGoalPause}
           onResume={onGoalResume}

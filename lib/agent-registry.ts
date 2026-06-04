@@ -58,11 +58,19 @@ import {
   registerPendingClarification,
 } from "./clarification/server-store";
 import {
+  buildGoalRecap,
   clearGoal,
+  finishGoalTurn,
   getGoal,
   noteGoalContinuation,
   setGoalStatus,
+  startGoalTurn,
 } from "./goal/server-store";
+import { applyGoalUpdate } from "./goal/update";
+import { shouldStopRetrying } from "./goal/blocked-state";
+import { bridgeProgressEvidence } from "./goal/evidence-bridge";
+import { getDefinition } from "./subagents/registry";
+import { loadMcpToolDefinitions } from "./mcp/loader";
 import { updateProgress } from "./progress/server-store";
 import type {
   ApprovalRequestEvent,
@@ -251,11 +259,14 @@ export function pushProgressEvent(
   pushExternalEvent(rec, { type: "progress_updated", progress });
 }
 
-function buildGoalContinuationPrompt(goal: AgentGoal): string {
+function buildGoalContinuationPrompt(goal: AgentGoal, recap?: string): string {
   return [
     "Continue working toward the active goal:",
     "",
     goal.objective,
+    ...(recap && recap.trim()
+      ? ["", "Context from previous turns (do not repeat finished work):", recap]
+      : []),
     "",
     "Do the next useful step. If the full goal is achieved, call goal_update with status=complete.",
     "Keep the user-visible progress current with update_progress when steps start, finish, block, or produce evidence artifacts.",
@@ -267,6 +278,18 @@ function buildGoalContinuationPrompt(goal: AgentGoal): string {
 function maybeContinueGoal(rec: AgentRecord): void {
   const goal = getGoal(rec.id);
   if (!goal || goal.status !== "active") return;
+
+  // Dead-loop guard: if the goal keeps hitting the same blocker, stop
+  // auto-retrying and surface the concrete unblock action to the user instead of
+  // burning tokens on a wall we cannot pass.
+  if (shouldStopRetrying(goal.blockedState)) {
+    const state = goal.blockedState!;
+    const paused = setGoalStatus(rec.id, "paused", {
+      pauseReason: `Stuck on a repeated blocker (${state.repeatedCount}x): ${state.unblockAction}`,
+    });
+    pushGoalEvent(rec, paused);
+    return;
+  }
 
   if (
     listPendingApprovals(rec.id).length > 0 ||
@@ -288,7 +311,8 @@ function maybeContinueGoal(rec: AgentRecord): void {
   setTimeout(() => {
     const latest = getGoal(rec.id);
     if (!latest || latest.status !== "active" || rec.isStreaming) return;
-    void rec.session.prompt(buildGoalContinuationPrompt(latest)).catch((e) => {
+    const recap = buildGoalRecap(rec.id);
+    void rec.session.prompt(buildGoalContinuationPrompt(latest, recap)).catch((e) => {
       const paused = setGoalStatus(rec.id, "paused", {
         pauseReason: e instanceof Error ? e.message : "Goal continuation failed.",
       });
@@ -388,6 +412,11 @@ export interface CreateOptions {
   hidden?: boolean;
   /** Main agents enable delegate_subagents; child subagents disable it to avoid recursion. */
   enableSubagents?: boolean;
+  /**
+   * MCP server scope (Sprint 5). undefined = main agent (all enabled servers);
+   * a list = specialist scope (only those servers); [] = no MCP tools.
+   */
+  mcpServers?: string[];
 }
 
 export async function createAgent(opts: CreateOptions): Promise<{
@@ -594,6 +623,104 @@ export async function createAgent(opts: CreateOptions): Promise<{
     return resp;
   }
 
+  async function requestSubagentWorktreeMergeApproval(params: {
+    taskId: string;
+    title: string;
+    worktree: { id: string; path: string; branchName: string; baseRef: string };
+    diff: { stat: string; diff: string };
+  }) {
+    const rec = recordHolder.current;
+    if (!rec) {
+      return {
+        decision: "deny" as const,
+        denyReason: "No UI approval channel was available.",
+      };
+    }
+    const toolCallId = `subagent-merge:${params.taskId}:${params.worktree.id}`;
+    const req = {
+      id: `${id}:${toolCallId}`,
+      agentId: id,
+      toolCallId,
+      toolName: "subagent:merge_worktree",
+      input: {
+        taskId: params.taskId,
+        title: params.title,
+        worktree: params.worktree,
+        stat: params.diff.stat,
+        diffPreview: params.diff.diff.slice(0, 12000),
+        truncated: params.diff.diff.length > 12000,
+      },
+      reason: "manual" as const,
+      ruleId: "subagent-merge-worktree",
+      defaultDecision: "deny" as const,
+      createdAt: Date.now(),
+    };
+    pushExternalEvent(rec, { type: "approval_request", request: req });
+    const resp = await registerPendingApproval(req);
+    const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
+      resp.denyReason === undefined && resp.decision === req.defaultDecision
+        ? "timeout"
+        : "user";
+    pushExternalEvent(rec, {
+      type: "approval_resolved",
+      id: req.id,
+      toolCallId: req.toolCallId,
+      decision: resp.decision,
+      resolvedBy,
+      denyReason: resp.denyReason,
+    });
+    return resp;
+  }
+
+  async function requestMcpToolApproval(params: {
+    serverId: string;
+    tool: string;
+    input: Record<string, unknown>;
+  }) {
+    const rec = recordHolder.current;
+    if (!rec) {
+      return {
+        decision: "deny" as const,
+        denyReason: "No UI approval channel was available.",
+      };
+    }
+    const ruleId = `mcp:${params.serverId}:${params.tool}`;
+    if (hasSessionRemember(id, ruleId)) {
+      return { decision: "allow" as const };
+    }
+    const toolCallId = `mcp:${params.serverId}:${params.tool}:${Date.now()}`;
+    const req = {
+      id: `${id}:${toolCallId}`,
+      agentId: id,
+      toolCallId,
+      toolName: `mcp:${params.serverId}/${params.tool}`,
+      input: {
+        serverId: params.serverId,
+        tool: params.tool,
+        argsPreview: JSON.stringify(params.input).slice(0, 800),
+      },
+      reason: "manual" as const,
+      ruleId,
+      defaultDecision: "deny" as const,
+      createdAt: Date.now(),
+    };
+    pushExternalEvent(rec, { type: "approval_request", request: req });
+    const resp = await registerPendingApproval(req);
+    const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
+      resp.denyReason === undefined && resp.decision === req.defaultDecision
+        ? "timeout"
+        : "user";
+    pushExternalEvent(rec, {
+      type: "approval_resolved",
+      id: req.id,
+      toolCallId: req.toolCallId,
+      decision: resp.decision,
+      resolvedBy,
+      denyReason: resp.denyReason,
+    });
+    return resp;
+  }
+
   async function requestWorkflowNetworkApproval(params: {
     workflowId: string;
     objective: string;
@@ -766,18 +893,21 @@ export async function createAgent(opts: CreateOptions): Promise<{
     getAgentId: () => id,
     getGoal,
     onGoalUpdate: (_agentId, input) => {
-      const goal = setGoalStatus(id, input.status, {
-        blockedReason: input.blockedReason,
-      });
+      // Route through the stop-time verifier. A rejected `complete` keeps the
+      // goal active and returns a rejection note for the model.
+      const result = applyGoalUpdate(id, input);
       const rec = recordHolder.current;
-      if (rec) pushGoalEvent(rec, goal);
-      return goal;
+      if (rec && result.accepted) pushGoalEvent(rec, result.goal);
+      return result;
     },
   });
   const progressExtension = createProgressExtension({
     getAgentId: () => id,
     onProgressUpdate: (_agentId, input) => {
       const progress = updateProgress(id, input);
+      // Bridge progress artifacts into goal evidence (only when a goal is
+      // active). De-dupes by id, so repeated updates are safe.
+      bridgeProgressEvidence(id, progress);
       const rec = recordHolder.current;
       if (rec) pushProgressEvent(rec, progress);
       return progress;
@@ -811,6 +941,15 @@ export async function createAgent(opts: CreateOptions): Promise<{
           getChild: getAgent,
           disposeChild: disposeAgent,
           pushParentEvent: (event) => pushExternalEvent(rec, event),
+          resolveDefinition: (sid) => getDefinition(opts.cwd, sid),
+          worktrees: createGitWorktreeManager(opts.cwd),
+          approveSubagentMerge: (params) =>
+            requestSubagentWorktreeMergeApproval({
+              taskId: params.taskId,
+              title: params.title,
+              worktree: params.worktree,
+              diff: params.diff,
+            }),
         },
         input,
         signal
@@ -838,6 +977,7 @@ export async function createAgent(opts: CreateOptions): Promise<{
                 getChild: getAgent,
                 disposeChild: disposeAgent,
                 pushParentEvent: (event) => pushExternalEvent(rec, event),
+                resolveDefinition: (sid) => getDefinition(opts.cwd, sid),
               },
               subagentInput,
               subagentSignal
@@ -869,6 +1009,7 @@ export async function createAgent(opts: CreateOptions): Promise<{
                 getChild: getAgent,
                 disposeChild: disposeAgent,
                 pushParentEvent: (event) => pushExternalEvent(rec, event),
+                resolveDefinition: (sid) => getDefinition(opts.cwd, sid),
               },
               subagentInput,
               subagentSignal
@@ -909,6 +1050,7 @@ export async function createAgent(opts: CreateOptions): Promise<{
                 getChild: getAgent,
                 disposeChild: disposeAgent,
                 pushParentEvent: (event) => pushExternalEvent(rec, event),
+                resolveDefinition: (sid) => getDefinition(opts.cwd, sid),
               },
               subagentInput,
               subagentSignal
@@ -950,6 +1092,31 @@ export async function createAgent(opts: CreateOptions): Promise<{
   });
   await resourceLoader.reload();
 
+  // Load MCP tools (Sprint 5). Best-effort: failures never block agent creation.
+  // Main agent (mcpServers undefined) sees all enabled servers; child subagents
+  // are scoped to their declared servers (or none).
+  let mcpTools: ToolDefinition[] = [];
+  try {
+    mcpTools = await loadMcpToolDefinitions({
+      allowedMcpServers: opts.mcpServers,
+      rules: [],
+      requestApproval: (params) => requestMcpToolApproval(params),
+      onAudit: () => {},
+    });
+  } catch {
+    mcpTools = [];
+  }
+
+  const baseCustomTools: ToolDefinition[] =
+    opts.enableSubagents === false
+      ? []
+      : [
+          delegateSubagentsTool as unknown as ToolDefinition,
+          dynamicWorkflowTool as unknown as ToolDefinition,
+          workflowScriptTool as unknown as ToolDefinition,
+        ];
+  const allCustomTools = [...baseCustomTools, ...mcpTools];
+
   const { session } = await createAgentSession({
     cwd: opts.cwd,
     model,
@@ -960,14 +1127,7 @@ export async function createAgent(opts: CreateOptions): Promise<{
     authStorage: getAuth(),
     modelRegistry: mr,
     resourceLoader,
-    customTools:
-      opts.enableSubagents === false
-        ? undefined
-        : [
-            delegateSubagentsTool as unknown as ToolDefinition,
-            dynamicWorkflowTool as unknown as ToolDefinition,
-            workflowScriptTool as unknown as ToolDefinition,
-          ],
+    customTools: allCustomTools.length > 0 ? allCustomTools : undefined,
   });
 
   if (!opts.tools) {
@@ -1007,10 +1167,33 @@ export async function createAgent(opts: CreateOptions): Promise<{
     if (event.type === "agent_start") {
       clearFinishWatchdog(record);
       record.isStreaming = true;
+      // Open a goal turn when this run is driving an active goal. Records turn
+      // history so a long goal's progress survives restart (M2).
+      const goal = getGoal(record.id);
+      if (goal && goal.status === "active") {
+        startGoalTurn(record.id);
+      }
     } else if (event.type === "message_end" || event.type === "agent_end") {
       clearFinishWatchdog(record);
       if (event.type === "agent_end") {
         record.isStreaming = false;
+        // Close the open goal turn before deciding whether to auto-continue. The
+        // goal's terminal status (complete/blocked) maps onto the turn status.
+        const goal = getGoal(record.id);
+        if (goal) {
+          const turnStatus =
+            goal.status === "complete"
+              ? "completed"
+              : goal.status === "blocked"
+                ? "blocked"
+                : "completed";
+          finishGoalTurn(record.id, {
+            status: turnStatus,
+            ...(goal.status === "blocked" && goal.blockedReason
+              ? { blockedReason: goal.blockedReason }
+              : {}),
+          });
+        }
         maybeContinueGoal(record);
       }
     } else if (messageHasStopReason(event)) {
