@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Loader2, RotateCcw, X } from "lucide-react";
 import type {
   SessionInfoLite,
   ChatMessage,
@@ -8,16 +9,19 @@ import type {
   ImageContentLite,
   ForkableUserMessage,
 } from "@/lib/types";
+import type { WorkflowResumeSnapshot } from "@/lib/workflows/types";
 import { extractImagesFromClipboard } from "@/lib/image-utils";
 import { getElectronApi, type AppInfo } from "@/lib/electron-bridge";
 import { useAudio } from "@/lib/use-audio";
 import { useDragDrop } from "@/lib/use-drag-drop";
 import { previewStore } from "@/lib/preview-store";
 import {
+  appendRestoredSubagentBatches,
   createInitialState,
   ctxToMessages,
   type ReducerState,
 } from "@/lib/chat-reducer";
+import type { SubagentBatch } from "@/lib/subagents/types";
 import {
   emptyRunner,
   DRAFT_KEY,
@@ -51,6 +55,7 @@ import { Sidebar } from "./components/Sidebar";
 import { SidebarSearch } from "./components/SidebarSearch";
 import { TopHeader } from "./components/TopHeader";
 import { MessagesScrollArea } from "./components/MessagesScrollArea";
+import type { WorkflowWorktreeAction } from "./components/MessageView";
 import { RightPanelContainer } from "./components/RightPanelContainer";
 import { BrowserPanel } from "./components/BrowserPanel";
 import { ChatModals } from "./components/ChatModals";
@@ -66,6 +71,231 @@ const INPUT_HISTORY_KEY = "diga:composer:history:v1";
 const INPUT_HISTORY_LIMIT = 100;
 
 // SLASH_COMMANDS / SlashName / detectAutocompleteToken 已搬到 hooks/useAutocomplete.ts（RFC-1 阶段 C2）。
+
+function formatWorkflowTime(ms: number | undefined): string {
+  if (!ms) return "";
+  try {
+    return new Date(ms).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
+
+function formatWorkflowResumeSummaries(
+  snapshot: WorkflowResumeSnapshot | undefined,
+  checkpointName: string | undefined
+): string[] {
+  if (!snapshot) return [];
+  const selectedCheckpoint = checkpointName
+    ? snapshot.checkpointSummaries.find((item) => item.name === checkpointName)
+    : snapshot.checkpointSummaries.at(-1);
+  const checkpointSummaries = snapshot.checkpointSummaries.slice(-5);
+  const artifactSummaries = snapshot.artifactSummaries.slice(-5);
+  const lines: string[] = [];
+  if (selectedCheckpoint) {
+    lines.push(
+      "Selected checkpoint preview:",
+      `- ${selectedCheckpoint.name}: ${selectedCheckpoint.preview || "(empty)"}`
+    );
+  }
+  if (checkpointSummaries.length > 0) {
+    lines.push(
+      "",
+      "Recent checkpoints:",
+      ...checkpointSummaries.map(
+        (item) => `- ${item.name}: ${item.preview || "(empty)"}`
+      )
+    );
+  }
+  if (artifactSummaries.length > 0) {
+    lines.push(
+      "",
+      "Recent artifacts:",
+      ...artifactSummaries.map(
+        (item) => `- ${item.name}: ${item.preview || "(empty)"}`
+      )
+    );
+  }
+  return lines;
+}
+
+function WorkflowHistoryPanel({
+  items,
+  loading,
+  onRefresh,
+  onClose,
+  onResume,
+}: {
+  items: WorkflowResumeSnapshot[];
+  loading: boolean;
+  onRefresh: () => void | Promise<void>;
+  onClose: () => void;
+  onResume: (snapshot: WorkflowResumeSnapshot, checkpointName?: string) => void;
+}) {
+  const visible = items.slice(0, 50);
+  const [selectedCheckpoints, setSelectedCheckpoints] = useState<
+    Record<string, string>
+  >({});
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/35 px-4 pt-16">
+      <div
+        className="flex max-h-[72vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border shadow-2xl"
+        style={{
+          borderColor: "var(--border)",
+          background: "var(--bg-panel)",
+          color: "var(--text)",
+        }}
+      >
+        <div
+          className="flex h-11 items-center gap-2 border-b px-3"
+          style={{ borderColor: "var(--border)" }}
+        >
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-semibold">Workflow history</div>
+            <div className="truncate text-[11px]" style={{ color: "var(--text-muted)" }}>
+              Resume from persisted checkpoints and artifacts
+            </div>
+          </div>
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => void onRefresh()}
+            className="inline-flex h-7 items-center gap-1 rounded border px-2 text-xs disabled:opacity-50"
+            style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+          >
+            {loading ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+            Refresh
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-7 w-7 items-center justify-center rounded border"
+            style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+            aria-label="Close workflow history"
+            title="Close"
+          >
+            <X size={14} />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto p-2">
+          {loading && visible.length === 0 ? (
+            <div className="flex h-32 items-center justify-center gap-2 text-sm" style={{ color: "var(--text-muted)" }}>
+              <Loader2 size={15} className="animate-spin" />
+              Loading workflows
+            </div>
+          ) : visible.length === 0 ? (
+            <div className="flex h-32 items-center justify-center text-sm" style={{ color: "var(--text-muted)" }}>
+              No resumable workflow history yet
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              {visible.map((item) => (
+                <div
+                  key={item.workflowId}
+                  className="rounded border px-3 py-2"
+                  style={{
+                    borderColor: "var(--border-soft)",
+                    background: "rgba(255,255,255,0.02)",
+                  }}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium">
+                        {item.objective || item.workflowId}
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px]" style={{ color: "var(--text-muted)" }}>
+                        <span>{item.status}</span>
+                        <span>{item.checkpointNames.length} checkpoints</span>
+                        <span>{item.artifactNames.length} artifacts</span>
+                        {item.lastCheckpoint ? (
+                          <span>Latest: {item.lastCheckpoint.name}</span>
+                        ) : null}
+                        <span>{formatWorkflowTime(item.lastCheckpoint?.createdAt)}</span>
+                      </div>
+                      {!item.canResume && item.reason ? (
+                        <div className="mt-1 text-[11px]" style={{ color: "var(--text-muted)" }}>
+                          {item.reason}
+                        </div>
+                      ) : null}
+                      {item.canResume && item.checkpointNames.length > 1 ? (
+                        <label className="mt-2 flex max-w-sm items-center gap-2 text-[11px]" style={{ color: "var(--text-muted)" }}>
+                          <span className="shrink-0">Checkpoint</span>
+                          <select
+                            value={
+                              selectedCheckpoints[item.workflowId] ??
+                              item.lastCheckpoint?.name ??
+                              item.checkpointNames[item.checkpointNames.length - 1] ??
+                              ""
+                            }
+                            onChange={(event) =>
+                              setSelectedCheckpoints((cur) => ({
+                                ...cur,
+                                [item.workflowId]: event.target.value,
+                              }))
+                            }
+                            className="min-w-0 flex-1 rounded border bg-transparent px-2 py-1 text-[11px] outline-none"
+                            style={{
+                              borderColor: "var(--border-soft)",
+                              color: "var(--text)",
+                            }}
+                          >
+                            {item.checkpointNames.map((name) => (
+                              <option key={name} value={name}>
+                                {name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      ) : null}
+                      {(item.checkpointSummaries.at(-1)?.preview ||
+                        item.artifactSummaries.at(-1)?.preview) && (
+                        <div
+                          className="mt-2 line-clamp-2 text-[11px]"
+                          style={{ color: "var(--text-muted)" }}
+                          title={
+                            item.checkpointSummaries.at(-1)?.preview ??
+                            item.artifactSummaries.at(-1)?.preview
+                          }
+                        >
+                          {item.checkpointSummaries.at(-1)?.preview ??
+                            item.artifactSummaries.at(-1)?.preview}
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      disabled={!item.canResume}
+                      onClick={() =>
+                        onResume(
+                          item,
+                          selectedCheckpoints[item.workflowId] ??
+                            item.lastCheckpoint?.name
+                        )
+                      }
+                      className="inline-flex h-7 shrink-0 items-center gap-1 rounded border px-2 text-xs disabled:cursor-not-allowed disabled:opacity-45"
+                      style={{
+                        borderColor: "var(--border-soft)",
+                        color: item.canResume ? "var(--text)" : "var(--text-muted)",
+                      }}
+                    >
+                      <RotateCcw size={13} />
+                      Resume
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // setError 需要在 useSessions（B1）之前声明，作为 onError 回调注入。
@@ -328,6 +558,14 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [renamingFor, setRenamingFor] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
+  const [showWorkflowHistory, setShowWorkflowHistory] = useState(false);
+  const [workflowHistory, setWorkflowHistory] = useState<WorkflowResumeSnapshot[]>(
+    []
+  );
+  const [workflowHistoryAgentId, setWorkflowHistoryAgentId] = useState<
+    string | null
+  >(null);
+  const [workflowHistoryLoading, setWorkflowHistoryLoading] = useState(false);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   useEffect(() => {
     try {
@@ -522,6 +760,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     retryInfo,
     stats,
     toolsCount,
+    goal,
+    progress,
     thinkingLevel,
     availableThinkingLevels,
     supportsThinking,
@@ -788,21 +1028,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     return out;
   }, [chatState.messages, forkableUserMessages]);
 
-  const sessionStatusMap = useMemo(() => {
-    const map = new Map<
-      string,
-      { sseStatus: "idle" | "active" | "lost"; streaming: boolean }
-    >();
-    for (const [key, runner] of runnersRef.current.entries()) {
-      if (key === DRAFT_KEY) continue;
-      map.set(key, {
-        sseStatus: runner.sseStatus,
-        streaming: runner.streaming,
-      });
-    }
-    return map;
-  }, [activeSnapshot, runnersRef, sessions]);
-
   // 给 minimap 用：按 visible(user/assistant) 数量准备 ref 数组
   const visibleMessageCount = useMemo(
     () =>
@@ -907,7 +1132,14 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           return;
         }
         updateRunner(key, {
-          chatState: createInitialState(ctxToMessages(ctx.messages ?? [])),
+          chatState: createInitialState(
+            appendRestoredSubagentBatches(
+              ctxToMessages(ctx.messages ?? []),
+              Array.isArray(ctx.subagentBatches)
+                ? (ctx.subagentBatches as SubagentBatch[])
+                : undefined
+            )
+          ),
           ...(Array.isArray(ctx.forkableUserMessages)
             ? {
                 forkableUserMessages:
@@ -931,7 +1163,16 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         setError(ctx.error);
         return;
       }
-      setChatState(createInitialState(ctxToMessages(ctx.messages ?? [])));
+      setChatState(
+        createInitialState(
+          appendRestoredSubagentBatches(
+            ctxToMessages(ctx.messages ?? []),
+            Array.isArray(ctx.subagentBatches)
+              ? (ctx.subagentBatches as SubagentBatch[])
+              : undefined
+          )
+        )
+      );
       if (Array.isArray(ctx.forkableUserMessages)) {
         setForkableUserMessages(
           ctx.forkableUserMessages as ForkableUserMessage[]
@@ -1208,6 +1449,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // 留下：startNewSession / runSlashCommand / onChangeModel（仍在本文件，复用 agentAction）
   const {
     agentAction,
+    ensureAgent,
     send,
     onAbort,
     onCompact,
@@ -1215,6 +1457,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     onSteer,
     onFollowUp,
     onChangeThinking,
+    startGoal,
   } = useChatStream({
     agentId,
     input,
@@ -1254,7 +1497,15 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     status: budgetStatus,
     budget,
     onAbort,
-    onPause: setBudgetPausedTrigger,
+    onPause: (trigger) => {
+      setBudgetPausedTrigger(trigger);
+      if (trigger.agentId) {
+        void agentAction(trigger.agentId, {
+          type: "goal_pause",
+          reason: "Budget limit reached.",
+        }).catch(() => {});
+      }
+    },
   });
 
   // "提高上限并继续"：把当前 budget 各启用维度 × 2 写入 session override
@@ -1345,10 +1596,73 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     [input, inputHistory, inputRef, setInput]
   );
 
+  const runGoalCommand = useCallback(
+    async (raw: string): Promise<boolean> => {
+      const trimmed = raw.trim();
+      if (!trimmed.startsWith("/goal")) return false;
+      const rest = trimmed.slice("/goal".length).trim();
+      if (!rest) {
+        setError(goal ? `当前 goal: ${goal.objective}` : "当前没有 active goal");
+        setInput("");
+        return true;
+      }
+      if (rest === "pause") {
+        if (agentId) {
+          await agentAction(agentId, { type: "goal_pause" }).catch(() => {});
+        }
+        setInput("");
+        return true;
+      }
+      if (rest === "resume") {
+        if (agentId) {
+          await agentAction(agentId, { type: "goal_resume" }).catch(() => {});
+        }
+        setInput("");
+        return true;
+      }
+      if (rest === "clear") {
+        if (agentId) {
+          await agentAction(agentId, { type: "goal_clear" }).catch(() => {});
+        }
+        setInput("");
+        return true;
+      }
+      rememberComposerInput(raw);
+      setInput("");
+      await startGoal(rest);
+      return true;
+    },
+    [
+      agentId,
+      agentAction,
+      goal,
+      rememberComposerInput,
+      setError,
+      setInput,
+      startGoal,
+    ]
+  );
+
+  const handleGoalPause = useCallback(async () => {
+    if (!agentId) return;
+    await agentAction(agentId, { type: "goal_pause" }).catch(() => {});
+  }, [agentId, agentAction]);
+
+  const handleGoalResume = useCallback(async () => {
+    if (!agentId) return;
+    await agentAction(agentId, { type: "goal_resume" }).catch(() => {});
+  }, [agentId, agentAction]);
+
+  const handleGoalClear = useCallback(async () => {
+    if (!agentId) return;
+    await agentAction(agentId, { type: "goal_clear" }).catch(() => {});
+  }, [agentId, agentAction]);
+
   const sendWithHistory = useCallback(async () => {
+    if (await runGoalCommand(input)) return;
     rememberComposerInput(input);
     await send();
-  }, [input, rememberComposerInput, send]);
+  }, [input, rememberComposerInput, runGoalCommand, send]);
 
   const steerWithHistory = useCallback(async () => {
     rememberComposerInput(input);
@@ -1367,6 +1681,185 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       setInput(v);
     },
     [setInput]
+  );
+
+  const resumeWorkflowFromCard = useCallback(
+    (
+      workflowId: string,
+      objective: string,
+      checkpointName?: string,
+      snapshot?: WorkflowResumeSnapshot
+    ) => {
+      const summaryLines = formatWorkflowResumeSummaries(snapshot, checkpointName);
+      const prompt = [
+        "请从这个历史 workflow 的 checkpoint/artifact 继续执行，不要从头重跑全部工作。",
+        "",
+        `workflowId: ${workflowId}`,
+        `previousObjective: ${objective}`,
+        checkpointName ? `checkpointName: ${checkpointName}` : "",
+        ...summaryLines,
+        "",
+        checkpointName
+          ? "请使用 run_workflow_script，并设置 resumeFromWorkflowId 为上面的 workflowId，resumeFromCheckpointName 为上面的 checkpointName。"
+          : "请使用 run_workflow_script，并设置 resumeFromWorkflowId 为上面的 workflowId。",
+        "新的 workflow harness 应读取 workflow.resume.lastCheckpoint 和 workflow.readArtifact(name)，只规划并执行剩余步骤，最后综合给出结果。",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      setComposerInput(prompt);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    },
+    [inputRef, setComposerInput]
+  );
+
+  const loadWorkflowHistory = useCallback(async () => {
+    if (!agentId) return;
+    setWorkflowHistoryLoading(true);
+    setError(null);
+    try {
+      const r = await fetch(`/api/agent/${agentId}/workflows`);
+      const d = (await r.json()) as {
+        resumes?: WorkflowResumeSnapshot[];
+        error?: string;
+      };
+      if (!r.ok) throw new Error(d.error ?? `workflow history HTTP ${r.status}`);
+      setWorkflowHistory(Array.isArray(d.resumes) ? d.resumes : []);
+      setWorkflowHistoryAgentId(agentId);
+    } catch (e) {
+      setError(`workflow history error: ${String(e)}`);
+    } finally {
+      setWorkflowHistoryLoading(false);
+    }
+  }, [agentId]);
+
+  const openWorkflowHistory = useCallback(() => {
+    if (!agentId) return;
+    setShowWorkflowHistory(true);
+    if (workflowHistoryAgentId !== agentId) {
+      void loadWorkflowHistory();
+    }
+  }, [agentId, loadWorkflowHistory, workflowHistoryAgentId]);
+
+  const resumeWorkflowFromHistory = useCallback(
+    (snapshot: WorkflowResumeSnapshot, checkpointName?: string) => {
+      resumeWorkflowFromCard(
+        snapshot.workflowId,
+        snapshot.objective,
+        checkpointName,
+        snapshot
+      );
+      setShowWorkflowHistory(false);
+    },
+    [resumeWorkflowFromCard]
+  );
+
+  const handleWorkflowWorktreeAction = useCallback(
+    async (
+      action: "retry_merge" | "cleanup",
+      workflowId: string,
+      worktree: WorkflowWorktreeAction
+    ) => {
+      if (!agentId) {
+        const message = "当前没有可用的 agent，无法操作 workflow worktree";
+        setError(message);
+        throw new Error(message);
+      }
+      setError(null);
+      const r = await fetch(`/api/agent/${agentId}/workflows`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type:
+            action === "retry_merge"
+              ? "retry_merge_worktree"
+              : "cleanup_worktree",
+          workflowId,
+          worktree,
+        }),
+      });
+      const d = (await r.json().catch(() => ({}))) as {
+        artifact?: { name: string; value: unknown; createdAt: number };
+        error?: string;
+      };
+      if (!r.ok || d.error) {
+        const message =
+          d.error ?? `workflow worktree action failed: HTTP ${r.status}`;
+        setError(message);
+        throw new Error(message);
+      }
+      if (d.artifact) {
+        handleAgentEvent(
+          {
+            type: "workflow_artifact",
+            workflowId,
+            artifact: d.artifact,
+          },
+          agentId,
+          activeKeyRef.current
+        );
+      }
+    },
+    [activeKeyRef, agentId, handleAgentEvent]
+  );
+
+  const retrySubagentTaskFromCard = useCallback(
+    async (batchId: string, taskId: string) => {
+      const ensured = await ensureAgent();
+      if (!ensured) {
+        setError("当前没有可用的 parent agent，无法重试 subagent task");
+        return;
+      }
+      setError(null);
+      const r = await fetch(`/api/agent/${ensured.aid}/subagents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "retry", batchId, taskId }),
+      });
+      const data = (await r.json().catch(() => null)) as {
+        error?: string;
+      } | null;
+      if (!r.ok || data?.error) {
+        setError(data?.error ?? `重试 subagent task 失败: HTTP ${r.status}`);
+      }
+    },
+    [ensureAgent]
+  );
+
+  const resumeSubagentBatchFromCard = useCallback(
+    async (batchId: string) => {
+      const ensured = await ensureAgent();
+      if (!ensured) {
+        setError("当前没有可用的 parent agent，无法继续 subagent batch");
+        return;
+      }
+      setError(null);
+      const r = await fetch(`/api/agent/${ensured.aid}/subagents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "resume", batchId }),
+      });
+      const data = (await r.json().catch(() => null)) as {
+        error?: string;
+      } | null;
+      if (!r.ok || data?.error) {
+        setError(data?.error ?? `继续 subagent batch 失败: HTTP ${r.status}`);
+      }
+    },
+    [ensureAgent]
+  );
+
+  const openSubagentSessionFromCard = useCallback(
+    (sessionFile: string) => {
+      const target = sessions.find((session) => session.path === sessionFile);
+      if (!target) {
+        refreshSessions();
+        setError("找不到这个 child subagent session；已刷新 session 列表");
+        return;
+      }
+      setError(null);
+      setSelectedId(target.id);
+    },
+    [refreshSessions, sessions, setSelectedId]
   );
 
   // ===== Autocomplete + Slash 命令（RFC-1 阶段 C2，已抽到 useAutocomplete） =====
@@ -1516,7 +2009,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         selectedId={selectedId}
         setSelectedId={setSelectedId}
         lastSeenMap={lastSeenMap}
-        sessionStatusMap={sessionStatusMap}
         renamingFor={renamingFor}
         setRenamingFor={setRenamingFor}
         renameDraft={renameDraft}
@@ -1601,6 +2093,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
               setSystemPromptText(`error: ${String(e)}`);
             }
           }}
+          onOpenWorkflows={openWorkflowHistory}
           onRevealInFinder={() => {
             if (electronApi && currentSessionFile) {
               void electronApi
@@ -1649,6 +2142,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             onDenyCall={denyCall}
             onChooseClarification={chooseClarification}
             onRespondClarification={respondClarification}
+            onResumeWorkflow={resumeWorkflowFromCard}
+            onWorkflowWorktreeAction={handleWorkflowWorktreeAction}
+            onRetrySubagentTask={retrySubagentTaskFromCard}
+            onResumeSubagentBatch={resumeSubagentBatchFromCard}
+            onOpenSubagentSession={openSubagentSessionFromCard}
           />
         )}
 
@@ -1663,6 +2161,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           compacting={compacting}
           agentId={agentId}
           pendingMessages={activeSnapshot.pendingMessages}
+          goal={goal}
+          progress={progress}
           pendingImages={pendingImages}
           pendingFiles={pendingFiles}
           removePendingImage={removePendingImage}
@@ -1681,6 +2181,10 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           onAbort={onAbort}
           onCompact={onCompact}
           onAbortCompaction={onAbortCompaction}
+          onGoalPause={handleGoalPause}
+          onGoalResume={handleGoalResume}
+          onGoalClear={handleGoalClear}
+          onOpenProgressUrl={openUrlInBrowserPanel}
           retryInfo={retryInfo}
           compactError={compactError}
           visibleProviders={visibleProviders}
@@ -1729,6 +2233,15 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             });
             requestAnimationFrame(() => inputRef.current?.focus());
           }}
+        />
+      )}
+      {showWorkflowHistory && (
+        <WorkflowHistoryPanel
+          items={workflowHistory}
+          loading={workflowHistoryLoading}
+          onRefresh={loadWorkflowHistory}
+          onClose={() => setShowWorkflowHistory(false)}
+          onResume={resumeWorkflowFromHistory}
         />
       )}
       <ChatModals

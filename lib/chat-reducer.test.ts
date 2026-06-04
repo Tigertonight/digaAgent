@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { applyEvent, createInitialState, ctxToMessages } from "./chat-reducer";
+import {
+  appendRestoredSubagentBatches,
+  applyEvent,
+  createInitialState,
+  ctxToMessages,
+} from "./chat-reducer";
 import type { ChatMessage, MessagePart } from "./types";
 
 describe("createInitialState", () => {
@@ -241,6 +246,128 @@ describe("ctxToMessages", () => {
     ]);
     expect(out[0].parts).toHaveLength(1);
     expect((out[0].parts![0] as { toolCallId: string }).toolCallId).toBe("ok");
+  });
+});
+
+describe("appendRestoredSubagentBatches", () => {
+  it("appends persisted subagent batches that are not already present", () => {
+    const messages = ctxToMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+      },
+    ]);
+    const out = appendRestoredSubagentBatches(messages, [
+      {
+        id: "batch-restored",
+        parentAgentId: "agent-1",
+        parentSessionPath: "/tmp/session.jsonl",
+        status: "completed",
+        reason: "restore audit",
+        planning: {
+          status: "accepted",
+          plannedAt: 90,
+          rationale: "restore audit",
+          taskCount: 1,
+          concurrency: 1,
+          maxConcurrency: 1,
+          warnings: [],
+        },
+        verification: {
+          status: "passed",
+          verifiedAt: 210,
+          summary: "1 passed, 0 warnings, 0 failed.",
+          passed: 1,
+          warnings: 0,
+          failed: 0,
+        },
+        synthesis: {
+          status: "ready",
+          generatedAt: 220,
+          summary: "Synthesis ready: 1 usable, 0 caution, 0 rejected.",
+          usableTaskIds: ["q1"],
+          cautionTaskIds: [],
+          rejectedTaskIds: [],
+        },
+        createdAt: 100,
+        endedAt: 200,
+        tasks: [
+          {
+            id: "q1",
+            title: "Question 1",
+            prompt: "Answer Q1",
+            role: "general",
+            status: "completed",
+            answer: "restored answer",
+            answerPreview: "restored answer",
+            verification: {
+              status: "passed",
+              verifiedAt: 210,
+              checks: [
+                {
+                  id: "answer-present",
+                  status: "passed",
+                  message: "Task produced an answer.",
+                },
+              ],
+            },
+            attempts: [
+              {
+                attempt: 1,
+                status: "failed",
+                error: "old failure",
+                retriedAt: 150,
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    expect(out).toHaveLength(2);
+    const restored = out[1].parts?.[0];
+    expect(restored?.kind).toBe("subagent_batch");
+    if (restored?.kind !== "subagent_batch") throw new Error("type narrow");
+    expect(restored.id).toBe("batch-restored");
+    expect(restored.restored).toBe(true);
+    expect(restored.planning?.status).toBe("accepted");
+    expect(restored.verification?.status).toBe("passed");
+    expect(restored.synthesis?.status).toBe("ready");
+    expect(restored.tasks[0]).toMatchObject({
+      status: "completed",
+      answer: "restored answer",
+      verification: { status: "passed" },
+      attempts: [{ attempt: 1, status: "failed" }],
+    });
+  });
+
+  it("does not append a persisted batch already reconstructed from tool results", () => {
+    const seed: ChatMessage[] = [
+      {
+        role: "assistant",
+        parts: [
+          {
+            kind: "subagent_batch",
+            id: "batch-1",
+            reason: "already present",
+            status: "completed",
+            createdAt: 100,
+            tasks: [],
+          },
+        ],
+      },
+    ];
+    const out = appendRestoredSubagentBatches(seed, [
+      {
+        id: "batch-1",
+        parentAgentId: "agent-1",
+        status: "completed",
+        reason: "already present",
+        createdAt: 100,
+        tasks: [],
+      },
+    ]);
+    expect(out).toBe(seed);
   });
 });
 
@@ -722,5 +849,265 @@ describe("applyEvent — clarification_request / clarification_resolved (RFC-5)"
     expect(p.status).toBe("resolved");
     expect(p.selectedOptionId).toBe("mvp");
     expect(p.resolvedBy).toBe("user");
+  });
+});
+
+describe("applyEvent — subagent batch events (RFC-6)", () => {
+  it("tracks subagent task progress inside one assistant part", () => {
+    let s = createInitialState();
+    s = applyEvent(s, { type: "message_start", message: { role: "assistant" } });
+    s = applyEvent(s, {
+      type: "subagent_batch_start",
+      batch: {
+        id: "batch-1",
+        parentAgentId: "agent-1",
+        status: "running",
+        reason: "questions are independent",
+        createdAt: 100,
+        planning: {
+          status: "accepted",
+          plannedAt: 100,
+          rationale: "questions are independent",
+          taskCount: 2,
+          concurrency: 2,
+          maxConcurrency: 2,
+          warnings: [],
+        },
+        tasks: [
+          {
+            id: "q1",
+            title: "Question 1",
+            prompt: "Answer Q1",
+            role: "general",
+            status: "pending",
+          },
+          {
+            id: "q2",
+            title: "Question 2",
+            prompt: "Answer Q2",
+            role: "rag",
+            status: "pending",
+          },
+        ],
+      },
+    });
+
+    let part = (s.messages[s.activeAssistantIndex].parts as MessagePart[])[0];
+    expect(part.kind).toBe("subagent_batch");
+    if (part.kind !== "subagent_batch") throw new Error("type narrow");
+    expect(part.planning?.concurrency).toBe(2);
+    expect(part.tasks.map((task) => task.status)).toEqual([
+      "pending",
+      "pending",
+    ]);
+
+    s = applyEvent(s, {
+      type: "subagent_task_start",
+      batchId: "batch-1",
+      taskId: "q1",
+      agentId: "child-1",
+      title: "Question 1",
+      role: "general",
+      startedAt: 120,
+    });
+    s = applyEvent(s, {
+      type: "subagent_task_end",
+      batchId: "batch-1",
+      taskId: "q1",
+      status: "completed",
+      answerPreview: "Q1 answer",
+      endedAt: 180,
+      verification: {
+        status: "passed",
+        verifiedAt: 181,
+        checks: [
+          {
+            id: "answer-present",
+            status: "passed",
+            message: "Task produced an answer.",
+          },
+        ],
+      },
+    });
+    s = applyEvent(s, {
+      type: "subagent_batch_end",
+      batchId: "batch-1",
+      status: "completed",
+      endedAt: 220,
+      verification: {
+        status: "warning",
+        verifiedAt: 220,
+        summary: "1 passed, 1 warnings, 0 failed.",
+        passed: 1,
+        warnings: 1,
+        failed: 0,
+      },
+      synthesis: {
+        status: "partial",
+        generatedAt: 221,
+        summary: "Synthesis partial: 1 usable, 1 caution, 0 rejected.",
+        usableTaskIds: ["q1"],
+        cautionTaskIds: ["q2"],
+        rejectedTaskIds: [],
+      },
+    });
+
+    part = (s.messages[s.activeAssistantIndex].parts as MessagePart[])[0];
+    if (part.kind !== "subagent_batch") throw new Error("type narrow");
+    expect(part.status).toBe("completed");
+    expect(part.endedAt).toBe(220);
+    expect(part.verification?.status).toBe("warning");
+    expect(part.synthesis?.status).toBe("partial");
+    expect(part.tasks[0]).toMatchObject({
+      status: "completed",
+      agentId: "child-1",
+      answerPreview: "Q1 answer",
+      startedAt: 120,
+      endedAt: 180,
+      verification: { status: "passed" },
+    });
+    expect(part.tasks[1].status).toBe("pending");
+  });
+
+  it("merges subagent retry attempts from task events", () => {
+    let s = createInitialState();
+    s = applyEvent(s, { type: "message_start", message: { role: "assistant" } });
+    s = applyEvent(s, {
+      type: "subagent_batch_start",
+      batch: {
+        id: "batch-retry",
+        parentAgentId: "agent-1",
+        status: "running",
+        reason: "retry one task",
+        createdAt: 100,
+        tasks: [
+          {
+            id: "q1",
+            title: "Question 1",
+            prompt: "Answer Q1",
+            role: "general",
+            status: "completed",
+            answer: "old answer",
+            attempts: [
+              {
+                attempt: 1,
+                agentId: "child-1",
+                status: "failed",
+                error: "first failure",
+                retriedAt: 150,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const attempts = [
+      {
+        attempt: 1,
+        agentId: "child-1",
+        status: "failed" as const,
+        error: "first failure",
+        retriedAt: 150,
+      },
+      {
+        attempt: 2,
+        agentId: "child-2",
+        status: "completed" as const,
+        answer: "old answer",
+        retriedAt: 200,
+      },
+    ];
+    s = applyEvent(s, {
+      type: "subagent_task_start",
+      batchId: "batch-retry",
+      taskId: "q1",
+      agentId: "child-3",
+      title: "Question 1",
+      role: "general",
+      startedAt: 220,
+      attempts,
+    });
+    s = applyEvent(s, {
+      type: "subagent_task_end",
+      batchId: "batch-retry",
+      taskId: "q1",
+      status: "completed",
+      answer: "new answer",
+      endedAt: 260,
+      attempts,
+    });
+
+    const part = (s.messages[s.activeAssistantIndex].parts as MessagePart[])[0];
+    if (part.kind !== "subagent_batch") throw new Error("type narrow");
+    expect(part.tasks[0].attempts).toEqual(attempts);
+    expect(part.tasks[0]).toMatchObject({
+      status: "completed",
+      agentId: "child-3",
+      answer: "new answer",
+    });
+  });
+});
+
+describe("applyEvent — workflow script events", () => {
+  it("tracks workflow checkpoints, artifacts, logs, and completion", () => {
+    let s = createInitialState();
+    s = applyEvent(s, { type: "message_start", message: { role: "assistant" } });
+    s = applyEvent(s, {
+      type: "workflow_start",
+      run: {
+        id: "workflow-1",
+        parentAgentId: "agent-1",
+        objective: "Review project",
+        rationale: "Needs a generated harness",
+        status: "running",
+        script: "return true",
+        manifest: {
+          capabilities: ["spawn_agent", "read_files"],
+          maxAgents: 8,
+          maxConcurrency: 4,
+          timeoutMs: 600000,
+          runtime: "process",
+        },
+        artifacts: [],
+        checkpoints: [],
+        logs: [],
+        createdAt: 100,
+      },
+    });
+    s = applyEvent(s, {
+      type: "workflow_log",
+      workflowId: "workflow-1",
+      log: { level: "info", message: "stage:start", createdAt: 110 },
+    });
+    s = applyEvent(s, {
+      type: "workflow_checkpoint",
+      workflowId: "workflow-1",
+      checkpoint: { name: "draft", value: { ok: true }, createdAt: 120 },
+    });
+    s = applyEvent(s, {
+      type: "workflow_artifact",
+      workflowId: "workflow-1",
+      artifact: { name: "summary", value: "done", createdAt: 130 },
+    });
+    s = applyEvent(s, {
+      type: "workflow_end",
+      workflowId: "workflow-1",
+      status: "completed",
+      endedAt: 180,
+      artifacts: [{ name: "summary", value: "done", createdAt: 130 }],
+      checkpoints: [{ name: "draft", value: { ok: true }, createdAt: 120 }],
+      logs: [{ level: "info", message: "stage:start", createdAt: 110 }],
+      returnValue: { ok: true },
+    });
+
+    const part = (s.messages[s.activeAssistantIndex].parts as MessagePart[])[0];
+    expect(part.kind).toBe("workflow_run");
+    if (part.kind !== "workflow_run") throw new Error("type narrow");
+    expect(part.status).toBe("completed");
+    expect(part.checkpoints[0].name).toBe("draft");
+    expect(part.artifacts[0].name).toBe("summary");
+    expect(part.logs[0].message).toBe("stage:start");
+    expect(part.returnValue).toEqual({ ok: true });
   });
 });

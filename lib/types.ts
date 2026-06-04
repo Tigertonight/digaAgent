@@ -2,6 +2,23 @@
 
 import type { SessionMeta } from "./meta/types";
 import type { ClarificationOption } from "./clarification/types";
+import type {
+  SubagentAuditEvent,
+  SubagentBatchStatus,
+  SubagentBatchSynthesis,
+  SubagentBatchPlan,
+  SubagentBatchVerification,
+  SubagentRole,
+  SubagentTaskStatus,
+  SubagentTaskVerification,
+} from "./subagents/types";
+import type {
+  WorkflowArtifact,
+  WorkflowCheckpoint,
+  WorkflowManifest,
+  WorkflowRunStatus,
+  WorkflowScriptLog,
+} from "./workflows/types";
 
 export interface SessionInfoLite {
   id: string;
@@ -131,6 +148,84 @@ export type MessagePart =
       customText?: string;
       resolvedBy?: "user" | "abort";
       createdAt: number;
+    }
+  | {
+      /**
+       * Multi-subagent 协作状态卡（RFC-6）。
+       *
+       * 只展示 parent agent 汇总过来的 batch/task 状态；child agent 的完整
+       * message stream 不进入主聊天，避免多个流互相打架。
+       */
+      kind: "subagent_batch";
+      id: string;
+      reason: string;
+      status: SubagentBatchStatus;
+      restored?: boolean;
+      planning?: SubagentBatchPlan;
+      verification?: SubagentBatchVerification;
+      synthesis?: SubagentBatchSynthesis;
+      auditEvents?: SubagentAuditEvent[];
+      tasks: Array<{
+        id: string;
+        title: string;
+        role?: SubagentRole;
+        status: SubagentTaskStatus;
+        agentId?: string;
+        answer?: string;
+        answerPreview?: string;
+        error?: string;
+        sessionFile?: string;
+        startedAt?: number;
+        endedAt?: number;
+        usage?: {
+          turns?: number;
+          costUsd?: number;
+          inputTokens?: number;
+          outputTokens?: number;
+        };
+        verification?: SubagentTaskVerification;
+        attempts?: Array<{
+          attempt: number;
+          agentId?: string;
+          status: "completed" | "failed" | "aborted" | "timeout";
+          answer?: string;
+          answerPreview?: string;
+          error?: string;
+          sessionFile?: string;
+          startedAt?: number;
+          endedAt?: number;
+          usage?: {
+            turns?: number;
+            costUsd?: number;
+            inputTokens?: number;
+            outputTokens?: number;
+          };
+          retriedAt: number;
+        }>;
+      }>;
+      createdAt: number;
+      endedAt?: number;
+    }
+  | {
+      /**
+       * Dynamic workflow script harness 状态卡。
+       *
+       * 展示 workflow 级 lifecycle；实际子任务继续由 subagent_batch part 展示。
+       */
+      kind: "workflow_run";
+      id: string;
+      objective: string;
+      rationale: string;
+      status: WorkflowRunStatus;
+      manifest?: WorkflowManifest;
+      resumedFromWorkflowId?: string;
+      checkpoints: WorkflowCheckpoint[];
+      artifacts: WorkflowArtifact[];
+      logs: WorkflowScriptLog[];
+      createdAt: number;
+      endedAt?: number;
+      returnValue?: unknown;
+      error?: string;
     };
 
 /** SDK ImageContent 形态 —— 给 /api/agent/[id] 发图用 */

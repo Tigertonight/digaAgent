@@ -1,11 +1,13 @@
 "use client";
 
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   PanelLeft,
   Sun,
   Moon,
   GitBranch,
   FileText,
+  History,
   FolderOpen,
   KeyRound,
   Sparkles,
@@ -13,6 +15,8 @@ import {
   PanelRight,
   RefreshCw,
   Globe,
+  Plus,
+  ChevronRight,
 } from "lucide-react";
 import { IconButton, iconSizeMap } from "./IconButton";
 import { HudMeter } from "./HudMeter";
@@ -46,6 +50,7 @@ interface TopHeaderProps {
   onToggleTheme: () => void;
   onOpenBranches: () => void;
   onOpenSystemPrompt: () => void;
+  onOpenWorkflows: () => void;
   onRevealInFinder: () => void;
   onOpenProviderSetup: () => void;
   onOpenAuth: () => void;
@@ -53,6 +58,57 @@ interface TopHeaderProps {
   onToggleTools: () => void;
   onToggleFiles: () => void;
   onToggleBrowser: () => void;
+}
+
+interface CommandMenuItemProps {
+  icon: ReactNode;
+  label: string;
+  description?: string;
+  shortcut?: string;
+  disabled?: boolean;
+  onClick: () => void;
+}
+
+function CommandMenuItem({
+  icon,
+  label,
+  description,
+  shortcut,
+  disabled,
+  onClick,
+}: CommandMenuItemProps) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="group flex w-full items-center gap-3 rounded px-2.5 py-2 text-left transition-colors hover:bg-[color:var(--bg-hover)] disabled:cursor-not-allowed disabled:opacity-45"
+    >
+      <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded border border-[color:var(--border)] bg-[color:var(--bg-subtle)] text-[color:var(--text-muted)]">
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13px] font-medium text-[color:var(--text)]">
+          {label}
+        </span>
+        {description ? (
+          <span className="block truncate text-[11px] text-[color:var(--text-muted)]">
+            {description}
+          </span>
+        ) : null}
+      </span>
+      {shortcut ? (
+        <span className="shrink-0 rounded bg-[color:var(--bg-selected)] px-1.5 py-0.5 text-[11px] text-[color:var(--text-muted)]">
+          {shortcut}
+        </span>
+      ) : (
+        <ChevronRight
+          size={13}
+          className="shrink-0 text-[color:var(--text-dim)] opacity-0 transition-opacity group-hover:opacity-100"
+        />
+      )}
+    </button>
+  );
 }
 
 export function TopHeader({
@@ -75,6 +131,7 @@ export function TopHeader({
   onToggleTheme,
   onOpenBranches,
   onOpenSystemPrompt,
+  onOpenWorkflows,
   onRevealInFinder,
   onOpenProviderSetup,
   onOpenAuth,
@@ -83,12 +140,40 @@ export function TopHeader({
   onToggleFiles,
   onToggleBrowser,
 }: TopHeaderProps) {
+  const [commandOpen, setCommandOpen] = useState(false);
+  const commandRef = useRef<HTMLDivElement | null>(null);
   const sseLabel =
     sseStatus === "active"
       ? "Live"
       : sseStatus === "lost"
         ? "Disconnected"
         : null;
+
+  useEffect(() => {
+    if (!commandOpen) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (commandRef.current?.contains(target)) return;
+      setCommandOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setCommandOpen(false);
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [commandOpen]);
+
+  const runCommand = (fn: () => void) => {
+    setCommandOpen(false);
+    fn();
+  };
 
   return (
     <header
@@ -105,7 +190,7 @@ export function TopHeader({
         columnGap: 8,
       }}
     >
-      {/* 左：sidebar toggle + theme toggle */}
+      {/* 左：layout + command menu */}
       <span className="flex items-center gap-1 shrink-0 min-w-0">
         <IconButton
           onClick={onToggleSidebar}
@@ -113,45 +198,85 @@ export function TopHeader({
           aria-label="侧栏开关"
           icon={<PanelLeft size={iconSizeMap.sm} />}
         />
-        <IconButton
-          onClick={onToggleTheme}
-          title={theme === "dark" ? "切到浅色" : "切到深色"}
-          aria-label="主题切换"
-          icon={
-            theme === "dark" ? (
-              <Sun size={iconSizeMap.sm} />
-            ) : (
-              <Moon size={iconSizeMap.sm} />
-            )
-          }
-        />
+        <span ref={commandRef} className="relative inline-flex">
+          <IconButton
+            onClick={() => setCommandOpen((v) => !v)}
+            title="打开动作菜单"
+            aria-label="动作菜单"
+            active={commandOpen || !hasAuthedProviders}
+            icon={<Plus size={iconSizeMap.sm} />}
+          />
+          {commandOpen ? (
+            <div
+              className="absolute left-0 top-[calc(100%+8px)] z-50 w-[320px] rounded-lg border bg-[color:var(--bg-panel)] p-2 shadow-xl"
+              style={{ borderColor: "var(--border)" }}
+            >
+              <div className="px-2 pb-1.5 pt-0.5 text-[11px] font-medium uppercase text-[color:var(--text-dim)]">
+                Session
+              </div>
+              <CommandMenuItem
+                icon={<GitBranch size={15} />}
+                label="Branches"
+                description="查看 / 切换分支"
+                disabled={!agentId}
+                onClick={() => runCommand(onOpenBranches)}
+              />
+              <CommandMenuItem
+                icon={<FileText size={15} />}
+                label="System prompt"
+                description="查看当前会话系统提示"
+                disabled={!agentId}
+                onClick={() => runCommand(onOpenSystemPrompt)}
+              />
+              <CommandMenuItem
+                icon={<History size={15} />}
+                label="Workflow history"
+                description="从 checkpoint / artifact 续跑"
+                disabled={!agentId}
+                onClick={() => runCommand(onOpenWorkflows)}
+              />
+              {electronApi && currentSessionFile ? (
+                <CommandMenuItem
+                  icon={<FolderOpen size={15} />}
+                  label="Reveal session file"
+                  description={currentSessionFile}
+                  onClick={() => runCommand(onRevealInFinder)}
+                />
+              ) : null}
+
+              <div className="my-1 h-px bg-[color:var(--border)]" />
+              <div className="px-2 pb-1.5 pt-1 text-[11px] font-medium uppercase text-[color:var(--text-dim)]">
+                Workspace
+              </div>
+              <CommandMenuItem
+                icon={<Sparkles size={15} />}
+                label="Provider / Models"
+                description={
+                  hasAuthedProviders ? "配置模型供应商" : "首次配置模型供应商"
+                }
+                onClick={() => runCommand(onOpenProviderSetup)}
+              />
+              <CommandMenuItem
+                icon={<KeyRound size={15} />}
+                label="Credentials"
+                description="管理 Provider 凭证"
+                onClick={() => runCommand(onOpenAuth)}
+              />
+              <CommandMenuItem
+                icon={
+                  theme === "dark" ? <Sun size={15} /> : <Moon size={15} />
+                }
+                label={theme === "dark" ? "Light theme" : "Dark theme"}
+                description="切换界面主题"
+                onClick={() => runCommand(onToggleTheme)}
+              />
+            </div>
+          ) : null}
+        </span>
       </span>
 
-      {/* 中：居中 Branches / System tabs */}
-      <span className="flex items-stretch h-full justify-center min-w-0">
-        <button
-          type="button"
-          disabled={!agentId}
-          onClick={() => agentId && onOpenBranches()}
-          className="inline-flex items-center gap-1.5 h-full px-3 text-[12px] hover:bg-[color:var(--bg-hover)] disabled:opacity-50"
-          style={{ color: "var(--text)" }}
-          title={agentId ? "查看 / 切换分支" : "需先发送一条消息"}
-        >
-          <GitBranch size={13} />
-          Branches
-        </button>
-        <button
-          type="button"
-          disabled={!agentId}
-          onClick={onOpenSystemPrompt}
-          className="inline-flex items-center gap-1.5 h-full px-3 text-[12px] hover:bg-[color:var(--bg-hover)] disabled:opacity-50"
-          style={{ color: "var(--text)" }}
-          title={agentId ? "查看 system prompt" : "需先发送一条消息"}
-        >
-          <FileText size={13} />
-          System
-        </button>
-      </span>
+      {/* 中：reserved calm space for current conversation context */}
+      <span className="min-w-0" />
 
       {/* 右：token meter + 辅助操作 + panel toggle */}
       <span className="flex items-center gap-2 justify-end min-w-0">
@@ -200,31 +325,6 @@ export function TopHeader({
             icon={<RefreshCw size={iconSizeMap.sm} />}
           />
         )}
-        {electronApi && currentSessionFile && (
-          <IconButton
-            onClick={onRevealInFinder}
-            title={`在 Finder 中显示: ${currentSessionFile}`}
-            aria-label="在 Finder 中显示"
-            icon={<FolderOpen size={iconSizeMap.sm} />}
-          />
-        )}
-        <IconButton
-          onClick={onOpenProviderSetup}
-          title={
-            hasAuthedProviders
-              ? "配置 Provider / 模型"
-              : "首次配置 Provider"
-          }
-          aria-label="Provider setup"
-          active={!hasAuthedProviders}
-          icon={<Sparkles size={iconSizeMap.sm} />}
-        />
-        <IconButton
-          onClick={onOpenAuth}
-          title="管理 Provider 凭证"
-          aria-label="管理凭证"
-          icon={<KeyRound size={iconSizeMap.sm} />}
-        />
         <IconButton
           onClick={onToggleTools}
           disabled={!agentId}
@@ -241,13 +341,12 @@ export function TopHeader({
         />
         <IconButton
           onClick={onToggleBrowser}
-          disabled={!agentId}
           title={
-            !agentId
-              ? "需先发送一条消息以建立 session"
-              : showBrowser
-                ? "关闭 Browser 面板"
-                : "打开 Browser 面板"
+            showBrowser
+              ? "关闭 Browser 面板"
+              : agentId
+                ? "打开 Browser 面板"
+                : "打开 Browser 面板（发送消息后可执行操作）"
           }
           aria-label="Browser 面板"
           active={showBrowser}

@@ -18,11 +18,19 @@
  */
 
 import type { Dispatch, ReactNode, SetStateAction } from "react";
-import { useSyncExternalStore } from "react";
-import { Plus, GitBranch, Settings, Brain, Pin, Search, X } from "lucide-react";
+import { useState, useSyncExternalStore } from "react";
+import {
+  Brain,
+  ChevronRight,
+  GitBranch,
+  Pin,
+  Plus,
+  Search,
+  Settings,
+  X,
+} from "lucide-react";
 import type { SessionInfoLite } from "@/lib/types";
 import { formatRelativeTime, shortCwd } from "@/lib/format";
-import type { SseStatus } from "@/lib/session-runner";
 import { BrandLogo } from "./BrandLogo";
 import SidebarExplorer from "./SidebarExplorer";
 
@@ -43,10 +51,6 @@ export interface SidebarProps {
   selectedId: string | null;
   setSelectedId: (id: string) => void;
   lastSeenMap: Record<string, string>;
-  sessionStatusMap?: Map<
-    string,
-    { sseStatus: SseStatus; streaming: boolean }
-  >;
 
   // ===== sidebar 临时态（renamingFor / menuFor / pendingDeleteId） =====
   renamingFor: string | null;
@@ -116,7 +120,6 @@ export function Sidebar(props: SidebarProps) {
     selectedId,
     setSelectedId,
     lastSeenMap,
-    sessionStatusMap,
     renamingFor,
     setRenamingFor,
     renameDraft,
@@ -153,8 +156,24 @@ export function Sidebar(props: SidebarProps) {
     getHydratedClient,
     getHydratedServer,
   );
+  const [expandedParents, setExpandedParents] = useState<Set<string>>(
+    () => new Set()
+  );
 
   const searchEnabled = onSearchQueryChange != null;
+  const selectedSession = selectedId
+    ? sessions.find((session) => session.id === selectedId)
+    : null;
+  const selectedParentPath = selectedSession?.parentSessionPath;
+
+  const toggleParentExpanded = (parentPath: string) => {
+    setExpandedParents((cur) => {
+      const next = new Set(cur);
+      if (next.has(parentPath)) next.delete(parentPath);
+      else next.add(parentPath);
+      return next;
+    });
+  };
 
   return (
     <aside
@@ -259,20 +278,24 @@ export function Sidebar(props: SidebarProps) {
           </div>
         )}
         {(() => {
-          const renderRow = (s: SessionInfoLite, depth: number) => {
+          const renderRow = (
+            s: SessionInfoLite,
+            depth: number,
+            childCount = 0
+          ) => {
             const active = selectedId === s.id;
             const isRenaming = renamingFor === s.id;
             const menuOpen = menuFor === s.id;
             const isPendingDelete = pendingDeleteId === s.id;
+            const hasChildren = depth === 0 && childCount > 0;
+            const childrenExpanded =
+              hasChildren &&
+              (expandedParents.has(s.path) || selectedParentPath === s.path);
             // 状态点：运行中（转圈） > 未读（蓝点） > 无
             // v2：未读判定不再因 active 自动忽略——active 也可能"用户没看到"
             // （主窗口失焦/被遮挡）。markSessionSeen 在用户真聚焦时已写
             // lastSeenMap，所以聚焦着的 active session 这里自然不会 unread。
             const isRunning = !!s.isRunning;
-            const runnerStatus = sessionStatusMap?.get(s.path);
-            const sseStatus = runnerStatus?.sseStatus ?? "idle";
-            const isLive = sseStatus === "active";
-            const isLost = sseStatus === "lost";
             const seenAt = lastSeenMap[s.id];
             // hydrated gate：SSR/首次 hydrate 时强制 false，避免 lastSeenMap
             // 在客户端注水前误判全部未读。
@@ -341,6 +364,31 @@ export function Sidebar(props: SidebarProps) {
                   }}
                   title={s.cwd}
                 >
+                  {hasChildren && (
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleParentExpanded(s.path);
+                      }}
+                      className="mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded hover:bg-[color:var(--bg-hover)]"
+                      title={childrenExpanded ? "收起子 agent" : "展开子 agent"}
+                      aria-label={
+                        childrenExpanded ? "收起子 agent" : "展开子 agent"
+                      }
+                      aria-expanded={childrenExpanded}
+                    >
+                      <ChevronRight
+                        size={13}
+                        className="transition-transform"
+                        style={{
+                          color: "var(--text-muted)",
+                          transform: childrenExpanded
+                            ? "rotate(90deg)"
+                            : "rotate(0deg)",
+                        }}
+                      />
+                    </span>
+                  )}
                   {depth > 0 && (
                     <GitBranch
                       size={12}
@@ -422,35 +470,6 @@ export function Sidebar(props: SidebarProps) {
                       className="text-[10px] truncate mt-0.5 flex items-center gap-1.5"
                       style={{ color: "var(--fg-faint)" }}
                     >
-                      {(isRunning || isLost || isLive) && (
-                        <>
-                          <span
-                            className="shrink-0 rounded px-1 py-px uppercase"
-                            style={{
-                              background: isLost
-                                ? "rgba(239,68,68,0.14)"
-                                : isRunning
-                                  ? "rgba(251,191,36,0.14)"
-                                  : "rgba(34,197,94,0.12)",
-                              color: isLost
-                                ? "#fca5a5"
-                                : isRunning
-                                  ? "#facc15"
-                                  : "#86efac",
-                            }}
-                            title={
-                              isLost
-                                ? "事件流已断开，可切入当前 session 后重连"
-                                : isRunning
-                                  ? "后台任务仍在运行"
-                                  : "事件流连接中"
-                            }
-                          >
-                            {isLost ? "lost" : isRunning ? "running" : "live"}
-                          </span>
-                          <span aria-hidden="true">·</span>
-                        </>
-                      )}
                       <span className="shrink-0">
                         {formatRelativeTime(s.modified)}
                       </span>
@@ -460,6 +479,15 @@ export function Sidebar(props: SidebarProps) {
                         <>
                           <span aria-hidden="true">·</span>
                           <span className="truncate">{shortCwd(s.cwd)}</span>
+                        </>
+                      )}
+                      {hasChildren && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="shrink-0">
+                            {childCount} subagent
+                            {childCount > 1 ? "s" : ""}
+                          </span>
                         </>
                       )}
                     </div>
@@ -543,9 +571,13 @@ export function Sidebar(props: SidebarProps) {
           };
           const out: React.ReactNode[] = [];
           for (const p of groupedSessions.parents) {
-            out.push(renderRow(p, 0));
             const kids = groupedSessions.childrenByParent.get(p.path);
-            if (kids) {
+            const childCount = kids?.length ?? 0;
+            out.push(renderRow(p, 0, childCount));
+            const expanded =
+              childCount > 0 &&
+              (expandedParents.has(p.path) || selectedParentPath === p.path);
+            if (kids && expanded) {
               for (const c of kids) out.push(renderRow(c, 1));
             }
           }

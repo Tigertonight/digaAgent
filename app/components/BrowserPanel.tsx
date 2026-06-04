@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Camera,
+  Copy,
   Globe,
   MousePointer2,
   Radio,
@@ -263,6 +264,19 @@ export function BrowserPanel({
         </form>
         <button
           type="button"
+          disabled={!displayUrl}
+          onClick={() => {
+            if (!displayUrl) return;
+            void navigator.clipboard?.writeText(displayUrl).catch(() => {});
+          }}
+          className="h-6 w-7 rounded border inline-flex items-center justify-center disabled:opacity-50"
+          style={{ borderColor: "var(--border)" }}
+          title="Copy current browser URL"
+        >
+          <Copy size={13} />
+        </button>
+        <button
+          type="button"
           disabled={!agentId || busy}
           onClick={() => void run("screenshot")}
           className="h-6 w-7 rounded border inline-flex items-center justify-center disabled:opacity-50"
@@ -318,6 +332,18 @@ export function BrowserPanel({
         {selectedStep && (
           <span className="rounded border px-1 py-0.5" style={{ borderColor: "var(--border)" }}>
             replay
+          </span>
+        )}
+        {snapshot.task && (
+          <span
+            className="rounded border px-1 py-0.5"
+            style={{
+              borderColor: "var(--border)",
+              color: statusColor(snapshot.task.status),
+            }}
+            title={snapshot.task.id}
+          >
+            task {shortTaskId(snapshot.task.id)} · {snapshot.task.status}
           </span>
         )}
       </div>
@@ -500,6 +526,17 @@ export function BrowserPanel({
                 <div className="flex items-center gap-2">
                   <span style={{ color: statusColor(log.status) }}>●</span>
                   <span className="font-medium">{log.action}</span>
+                  {log.taskId && (
+                    <span
+                      className="rounded border px-1 py-0.5 text-[10px]"
+                      style={{
+                        borderColor: "var(--border-soft)",
+                        color: "var(--text-muted)",
+                      }}
+                    >
+                      {shortTaskId(log.taskId)}
+                    </span>
+                  )}
                   <span className="truncate" style={{ color: "var(--text-muted)" }}>
                     {log.label}
                   </span>
@@ -552,8 +589,20 @@ export function BrowserPanel({
                   )}
                 </div>
                 <div className="truncate text-[11px] font-medium">{step.action}</div>
-                <div className="truncate text-[10px]" style={{ color: "var(--text-muted)" }}>
-                  {step.label}
+                <div className="flex items-center gap-1 min-w-0">
+                  <span
+                    className="shrink-0 text-[10px]"
+                    style={{ color: statusColor(step.status) }}
+                  >
+                    ●
+                  </span>
+                  <span
+                    className="truncate text-[10px]"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    {step.taskId ? `${shortTaskId(step.taskId)} · ` : ""}
+                    {step.label}
+                  </span>
                 </div>
               </button>
             ))}
@@ -646,6 +695,10 @@ function clamp(n: number) {
 
 function pct(n: number) {
   return `${Math.round(n * 100)}%`;
+}
+
+function shortTaskId(taskId: string) {
+  return taskId.replace(/^bt_/, "").slice(-6);
 }
 
 function statusColor(status: string) {

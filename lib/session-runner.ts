@@ -14,6 +14,8 @@
  *     delete("draft") + set(sessionFile, runner)，然后新建空草稿
  */
 import { EMPTY_BROWSER_SNAPSHOT, type BrowserSnapshot } from "./browser/types";
+import type { AgentGoal } from "./goal/types";
+import type { AgentProgress } from "./progress/types";
 import type {
   ForkableUserMessage,
   ImageContentLite,
@@ -115,6 +117,8 @@ export interface RunnerState {
   toolsCount: ToolsCountSnapshot | null;
   pendingMessages: PendingMessagesSnapshot;
   browser: BrowserSnapshot;
+  goal: AgentGoal | null;
+  progress: AgentProgress | null;
 
   // thinking 能力
   thinkingLevel: ThinkingLevel;
@@ -162,6 +166,8 @@ export function emptyRunner(): RunnerState {
     toolsCount: null,
     pendingMessages: { steering: [], followUp: [] },
     browser: { ...EMPTY_BROWSER_SNAPSHOT, logs: [] },
+    goal: null,
+    progress: null,
 
     thinkingLevel: "medium",
     availableThinkingLevels: [...THINKING_LEVELS],

@@ -19,6 +19,37 @@ async function activeAgentId(page: Page): Promise<string> {
   return (await handle.jsonValue()) as string;
 }
 
+async function pushAssistantMessage(
+  page: Page,
+  agentId: string,
+  text: string,
+  startSeq = 1
+) {
+  await pushSseEvent(page, agentId, { type: "agent_start" }, String(startSeq));
+  await pushSseEvent(
+    page,
+    agentId,
+    {
+      type: "message_start",
+      message: { role: "assistant", timestamp: Date.now() },
+    },
+    String(startSeq + 1)
+  );
+  await pushSseEvent(
+    page,
+    agentId,
+    {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text }],
+      },
+    },
+    String(startSeq + 2)
+  );
+  await pushSseEvent(page, agentId, { type: "agent_end" }, String(startSeq + 3));
+}
+
 test("browser panel: browser_state SSE 同步截图和操作日志", async ({
   bootedPage: page,
 }) => {
@@ -76,7 +107,7 @@ test("browser panel: browser_state SSE 同步截图和操作日志", async ({
   await expect(page.getByText("READY")).toBeVisible();
   await expect(page.getByText("· Settings")).toBeVisible();
   await expect(page.getByAltText("Browser screenshot")).toBeVisible();
-  await expect(page.getByText("Browser actions")).toBeVisible();
+  await expect(page.getByText("Browser actions", { exact: true })).toBeVisible();
   await expect(page.getByText("open").first()).toBeVisible();
   await expect(page.getByTitle("http://localhost:3000/settings").first()).toBeVisible();
   await expect(page.getByText("Step timeline")).toBeVisible();
@@ -191,4 +222,29 @@ test("browser panel: 外部站点需要显式 allow,本地站点自动允许", a
 
   await urlInput.fill("http://localhost:3000/settings");
   await expect(page.getByText("local", { exact: true })).toBeVisible();
+});
+
+test("browser panel: assistant 链接点击后在右侧打开而不是外跳", async ({
+  bootedPage: page,
+}) => {
+  const popupEvents: Page[] = [];
+  page.on("popup", (popup) => popupEvents.push(popup));
+
+  await editor(page).fill("return a browser link");
+  await sendBtn(page).click();
+  const agentId = await activeAgentId(page);
+  await pushAssistantMessage(
+    page,
+    agentId,
+    "这里是链接：[Fixture](http://localhost:3000/browser-task-fixture.html)",
+    30
+  );
+
+  await page.getByRole("link", { name: "Fixture" }).click();
+
+  await expect(page.getByLabel("Browser URL")).toHaveValue(
+    "http://localhost:3000/browser-task-fixture.html"
+  );
+  await expect(page.getByText("Browser actions", { exact: true })).toBeVisible();
+  expect(popupEvents).toHaveLength(0);
 });

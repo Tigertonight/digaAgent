@@ -38,6 +38,7 @@ export const SLASH_COMMANDS = [
   { name: "system", hint: "查看 system prompt" },
   { name: "models", hint: "Models 配置" },
   { name: "auth", hint: "凭证管理" },
+  { name: "goal", hint: "设置长期目标" },
   { name: "help", hint: "查看支持的命令" },
 ] as const;
 
@@ -224,6 +225,9 @@ export function useAutocomplete(
         case "auth":
           setShowAuth(true);
           break;
+        case "goal":
+          setInput("/goal ");
+          return;
         case "help":
           setInput(
             "支持命令：\n" +
