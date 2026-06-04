@@ -148,6 +148,12 @@ export type MessagePart =
       customText?: string;
       resolvedBy?: "user" | "abort";
       createdAt: number;
+      /**
+       * Cowork: when this clarification was raised by a child subagent and
+       * surfaced on the parent channel, these tag which task it came from.
+       */
+      originAgentId?: string;
+      taskTitle?: string;
     }
   | {
       /**

@@ -23,6 +23,19 @@ export const ClarificationCard = memo(function ClarificationCard({
     [part.options, part.selectedOptionId]
   );
 
+  const originBadge = part.taskTitle ? (
+    <span
+      className="rounded px-1.5 py-0.5 text-[10px] font-medium"
+      style={{
+        background: "color-mix(in srgb, var(--accent) 16%, var(--bg-panel))",
+        color: "var(--accent)",
+      }}
+      title={`来自子任务${part.originAgentId ? `（${part.originAgentId.slice(0, 8)}）` : ""}`}
+    >
+      来自子任务：{part.taskTitle}
+    </span>
+  ) : null;
+
   if (part.status === "resolved") {
     return (
       <div
@@ -33,8 +46,9 @@ export const ClarificationCard = memo(function ClarificationCard({
           borderLeft: "3px solid var(--accent)",
         }}
       >
-        <div className="inline-flex items-center gap-2">
+        <div className="inline-flex items-center gap-2 flex-wrap">
           <Check size={13} style={{ color: "var(--accent)" }} />
+          {originBadge}
           <span>
             已确认：
             {selected?.label ?? part.customText ?? "自定义回复"}
@@ -67,8 +81,11 @@ export const ClarificationCard = memo(function ClarificationCard({
           style={{ color: "var(--accent)" }}
         />
         <div className="min-w-0">
-          <div className="font-semibold" style={{ color: "var(--text)" }}>
-            {part.title}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold" style={{ color: "var(--text)" }}>
+              {part.title}
+            </span>
+            {originBadge}
           </div>
           <div
             className="mt-1 text-sm whitespace-pre-wrap"

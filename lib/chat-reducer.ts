@@ -105,6 +105,9 @@ interface AnyEvent {
     options?: ClarificationOption[];
     recommendedOptionId?: string;
     createdAt: number;
+    // cowork clarification attribution
+    originAgentId?: string;
+    taskTitle?: string;
   };
   // approval_resolved (RFC-2 Phase B3 自定义事件)
   id?: string;
@@ -980,6 +983,8 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
           recommendedOptionId: r.recommendedOptionId,
           status: "pending",
           createdAt: r.createdAt,
+          originAgentId: r.originAgentId,
+          taskTitle: r.taskTitle,
         });
         return { ...msg, parts };
       });

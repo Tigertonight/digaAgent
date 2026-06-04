@@ -33,6 +33,15 @@ export interface ClarificationRequest {
   options: ClarificationOption[];
   recommendedOptionId?: string;
   createdAt: number;
+  /**
+   * Multi-agent attribution (cowork). When a child subagent raises the
+   * clarification, the request is surfaced on the PARENT's channel (so the user
+   * sees it), but these fields record which child/task it actually came from.
+   * Undefined for a normal main-agent clarification.
+   */
+  originAgentId?: string;
+  taskId?: string;
+  taskTitle?: string;
 }
 
 export interface ClarificationOption {
