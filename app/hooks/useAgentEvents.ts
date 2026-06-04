@@ -351,6 +351,7 @@ export function useAgentEvents(
 
         // ===== RFC-6：Multi-subagent 协作状态卡（subagent 自定义事件） =====
         case "subagent_batch_start":
+        case "subagent_batch_detached":
         case "subagent_task_start":
         case "subagent_task_update":
         case "subagent_task_end":

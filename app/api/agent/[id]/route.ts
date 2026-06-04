@@ -31,10 +31,15 @@ import {
 import {
   clearGoal,
   getGoal,
+  listGoalEvidence,
+  listGoalTurns,
   normalizeObjective,
   setGoal,
   setGoalStatus,
 } from "@/lib/goal/server-store";
+import { applyGoalUpdate } from "@/lib/goal/update";
+import { listDefinitions } from "@/lib/subagents/registry";
+import { buildAgentMentionDirective } from "@/lib/subagents/router";
 import {
   clearProgress,
   getProgress,
@@ -149,6 +154,16 @@ export async function GET(
       );
     }
   }
+  if (action === "goal_timeline") {
+    // Goal timeline: goal (incl. structured blockedState) plus its persisted
+    // turn and evidence history. Survives restart (read from the goal store).
+    return NextResponse.json({
+      goal: getGoal(id),
+      turns: listGoalTurns(id),
+      evidence: listGoalEvidence(id),
+    });
+  }
+
   if (action === "stats") {
     // 实时 token/cost/context window 统计（pi-web 风格 HUD）
     try {
@@ -241,10 +256,18 @@ export async function POST(
             pushExternalEvent(rec, { type: "browser_state", snapshot });
           },
         });
-        const finalText = appendBrowserObservation(
-          text,
-          browserTask.observation
+        let finalText = appendBrowserObservation(text, browserTask.observation);
+        // Explicit @agent mentions: if the text references a registered
+        // specialist, prepend a directive telling the main agent to delegate to
+        // that specialist. No-op when no recognized mention is present.
+        const specialistIds = listDefinitions(rec.cwd).map((d) => d.id);
+        const mentionDirective = buildAgentMentionDirective(
+          finalText,
+          specialistIds
         );
+        if (mentionDirective) {
+          finalText = mentionDirective.directive;
+        }
         // 如果当前在 streaming，默认按 followUp 处理；否则正常 prompt
         if (rec.isStreaming) {
           await rec.session.prompt(finalText, {
@@ -254,7 +277,12 @@ export async function POST(
         } else {
           await rec.session.prompt(finalText, images ? { images } : undefined);
         }
-        return NextResponse.json({ ok: true });
+        return NextResponse.json({
+          ok: true,
+          ...(mentionDirective
+            ? { routedSpecialists: mentionDirective.agentIds }
+            : {}),
+        });
       }
 
       case "steer":
@@ -373,14 +401,24 @@ export async function POST(
             { status: 400 }
           );
         }
-        const goal = setGoalStatus(id, status, {
+        // Route through the stop-time verifier so a premature `complete` is
+        // rejected instead of silently closing the goal.
+        const result = applyGoalUpdate(id, {
+          status,
           blockedReason:
             typeof body.blockedReason === "string"
               ? body.blockedReason
               : undefined,
         });
-        pushGoalEvent(rec, goal);
-        return NextResponse.json({ ok: true, goal });
+        if (result.accepted) pushGoalEvent(rec, result.goal);
+        return NextResponse.json({
+          ok: true,
+          goal: result.goal,
+          accepted: result.accepted,
+          ...(result.rejectionNote
+            ? { rejectionNote: result.rejectionNote }
+            : {}),
+        });
       }
 
       case "abort": {
