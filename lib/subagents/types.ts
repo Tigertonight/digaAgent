@@ -18,6 +18,7 @@ export type SubagentTaskStatus =
 export type SubagentBatchStatus =
   | "pending"
   | "running"
+  | "detached"
   | "completed"
   | "failed"
   | "aborted";
@@ -27,6 +28,21 @@ export interface SubagentTask {
   title: string;
   prompt: string;
   role?: SubagentRole;
+  /**
+   * Optional registered specialist id (resolves to a SubagentDefinition). When
+   * present, the orchestrator merges the definition's prompt/tools/permission.
+   *
+   * Named `specialistId` (not `agentId`) to avoid colliding with
+   * SubagentTaskRuntime.agentId, which holds the spawned CHILD agent id.
+   * Independent from `role` (a closed enum); see plan 修正 2.
+   */
+  specialistId?: string;
+  /**
+   * Write isolation strategy (Sprint 3). "worktree" runs the child in an
+   * isolated git worktree and requires merge approval. Independent from the
+   * definition's isolation (task can request, definition can pin).
+   */
+  isolation?: "none" | "worktree";
   cwd?: string;
   allowedTools?: string[];
   /**
@@ -40,6 +56,12 @@ export interface SubagentTask {
 
 export interface DelegateSubagentsInput {
   reason: string;
+  /**
+   * Run the batch in the background (Sprint 4 background queue v1). When true,
+   * delegate returns immediately with the batchId and the batch keeps running;
+   * a `subagent_batch_end` event is pushed when it completes.
+   */
+  background?: boolean;
   tasks: SubagentTask[];
   concurrency?: number;
   synthesisInstructions?: string;
@@ -111,6 +133,13 @@ export interface SubagentTaskRuntime extends SubagentTask {
   usage?: SubagentResult["usage"];
   attempts?: SubagentTaskAttempt[];
   verification?: SubagentTaskVerification;
+  /** Worktree metadata when this task ran in isolation (Sprint 3). */
+  worktree?: {
+    id: string;
+    path: string;
+    branchName: string;
+    merged?: boolean;
+  };
 }
 
 export interface SubagentBatchVerification {
@@ -140,7 +169,15 @@ export interface SubagentBatchSynthesis {
 export type SubagentAuditEventType =
   | "batch_created"
   | "task_started"
+  | "agent_selected"
   | "write_boundary_applied"
+  | "worktree_created"
+  | "worktree_merged"
+  | "worktree_discarded"
+  | "hook_fired"
+  | "memory_updated"
+  | "subagent_started_hook"
+  | "batch_detached"
   | "task_completed"
   | "task_failed"
   | "task_retried"
@@ -176,6 +213,12 @@ export interface SubagentBatch {
 export interface SubagentBatchStartEvent {
   type: "subagent_batch_start";
   batch: SubagentBatch;
+}
+
+export interface SubagentBatchDetachedEvent {
+  type: "subagent_batch_detached";
+  batchId: string;
+  taskCount: number;
 }
 
 export interface SubagentTaskStartEvent {
@@ -225,6 +268,7 @@ export interface SubagentBatchEndEvent {
 
 export type SubagentEvent =
   | SubagentBatchStartEvent
+  | SubagentBatchDetachedEvent
   | SubagentTaskStartEvent
   | SubagentTaskUpdateEvent
   | SubagentTaskEndEvent
@@ -243,6 +287,8 @@ export interface CreateChildAgentOptions {
   childRole?: SubagentRole;
   hidden?: boolean;
   enableSubagents?: boolean;
+  /** MCP server scope for the child (Sprint 5). [] = no MCP tools. */
+  mcpServers?: string[];
 }
 
 export interface CreatedChildAgent {

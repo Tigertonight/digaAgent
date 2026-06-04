@@ -7,6 +7,12 @@ export interface SubagentPlannerTask {
   role?: SubagentRole;
 }
 
+export interface SubagentPlannerSpecialistHint {
+  id: string;
+  title: string;
+  description: string;
+}
+
 export interface SubagentPlannerInput {
   goal: string;
   candidateTasks?: Array<{
@@ -15,6 +21,8 @@ export interface SubagentPlannerInput {
     prompt?: string;
     role?: SubagentRole;
   }>;
+  /** Registered specialists discoverable for this request (Sprint 2 hints). */
+  availableSpecialists?: SubagentPlannerSpecialistHint[];
 }
 
 export interface SubagentPlannerRecommendation {
@@ -25,6 +33,8 @@ export interface SubagentPlannerRecommendation {
   taskCount: number;
   suggestedConcurrency: number;
   tasks: SubagentPlannerTask[];
+  /** Specialists the main agent may assign via task.specialistId. */
+  availableSpecialists: SubagentPlannerSpecialistHint[];
 }
 
 const EXPLICIT_MULTI_AGENT_PATTERN =
@@ -169,5 +179,6 @@ export function planSubagents(
     taskCount: tasks.length,
     suggestedConcurrency,
     tasks,
+    availableSpecialists: input.availableSpecialists ?? [],
   };
 }

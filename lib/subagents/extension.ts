@@ -34,6 +34,12 @@ const TaskSchema = Type.Object({
       "Complete standalone task prompt. Include all context the subagent needs.",
   }),
   role: Type.Optional(RoleSchema),
+  specialistId: Type.Optional(
+    Type.String({
+      description:
+        "Optional registered specialist id (from .agents/subagents/*.md) to run this task as. Merges that specialist's prompt, tools, and permission mode.",
+    })
+  ),
   cwd: Type.Optional(
     Type.String({ description: "Optional working directory override." })
   ),
@@ -63,6 +69,12 @@ const DelegateParams = Type.Object({
   }),
   concurrency: Type.Optional(
     Type.Number({ description: "Maximum parallel subagents. Defaults to 4." })
+  ),
+  background: Type.Optional(
+    Type.Boolean({
+      description:
+        "Run the batch in the background and return immediately. Results arrive via a later batch-end event. Use for long-running batches the user does not want to block on.",
+    })
   ),
   synthesisInstructions: Type.Optional(
     Type.String({
@@ -107,6 +119,7 @@ type DelegateParamsValue = {
     title: string;
     prompt: string;
     role?: unknown;
+    specialistId?: string;
     cwd?: string;
     allowedTools?: string[];
     writePaths?: string[];
@@ -115,6 +128,7 @@ type DelegateParamsValue = {
   }>;
   concurrency?: number;
   synthesisInstructions?: string;
+  background?: boolean;
 };
 
 type PlannerParamsValue = {
@@ -167,11 +181,13 @@ function normalizeInput(params: DelegateParamsValue): DelegateSubagentsInput {
     reason: params.reason,
     concurrency: params.concurrency,
     synthesisInstructions: params.synthesisInstructions,
+    background: params.background,
     tasks: (params.tasks ?? []).map((task, index) => ({
       id: task.id || `task-${index + 1}`,
       title: task.title,
       prompt: task.prompt,
       role: normalizeRole(task.role),
+      specialistId: task.specialistId,
       cwd: task.cwd,
       allowedTools: task.allowedTools,
       writePaths: task.writePaths,
@@ -256,6 +272,25 @@ export function createDelegateSubagentsTool(
         input,
         signal
       );
+      // Background batches return immediately with no results; tell the model
+      // it will be notified when the batch finishes.
+      if (input.background) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: [
+                `Subagent batch ${batchId} was detached to the background and is running.`,
+                "You will receive its results in a later batch-end update. Continue with other work; do not wait synchronously.",
+                "",
+                "## Planning policy",
+                planningSummary(planning),
+              ].join("\n"),
+            },
+          ],
+          details: { batchId, results, planning, synthesis, auditEvents },
+        };
+      }
       return {
         content: [
           {
@@ -297,15 +332,32 @@ function plannerSummary(plan: SubagentPlannerRecommendation): string {
           ),
         ].join("\n")
       : "",
+    plan.availableSpecialists.length
+      ? [
+          "",
+          "Available specialists (assign via task.specialistId):",
+          ...plan.availableSpecialists.map(
+            (s) => `- ${s.id}: ${s.description}`
+          ),
+        ].join("\n")
+      : "",
   ]
     .filter(Boolean)
     .join("\n");
 }
 
-export function createPlanSubagentsTool(): ToolDefinition<
-  typeof PlannerParams,
-  SubagentPlannerRecommendation
-> {
+export interface PlanSubagentsToolOptions {
+  /** Optional registry hint provider so the planner can surface specialists. */
+  getSpecialists?: () => Array<{
+    id: string;
+    title: string;
+    description: string;
+  }>;
+}
+
+export function createPlanSubagentsTool(
+  opts: PlanSubagentsToolOptions = {}
+): ToolDefinition<typeof PlannerParams, SubagentPlannerRecommendation> {
   return defineTool<typeof PlannerParams, SubagentPlannerRecommendation>({
     name: "plan_subagents",
     label: "Plan Subagents",
@@ -321,7 +373,11 @@ export function createPlanSubagentsTool(): ToolDefinition<
     parameters: PlannerParams,
     executionMode: "sequential",
     async execute(_toolCallId, params) {
-      const recommendation = planSubagents(normalizePlannerInput(params));
+      const availableSpecialists = opts.getSpecialists?.() ?? [];
+      const recommendation = planSubagents({
+        ...normalizePlannerInput(params),
+        availableSpecialists,
+      });
       return {
         content: [
           {
@@ -338,10 +394,12 @@ export function createPlanSubagentsTool(): ToolDefinition<
 }
 
 export function createSubagentsExtension(
-  opts: SubagentsExtensionOptions
+  opts: SubagentsExtensionOptions & PlanSubagentsToolOptions
 ): ExtensionFactory {
   return (pi) => {
-    pi.registerTool(createPlanSubagentsTool());
+    pi.registerTool(
+      createPlanSubagentsTool({ getSpecialists: opts.getSpecialists })
+    );
     pi.registerTool(createDelegateSubagentsTool(opts));
   };
 }
