@@ -850,6 +850,26 @@ describe("applyEvent — clarification_request / clarification_resolved (RFC-5)"
     expect(p.selectedOptionId).toBe("mvp");
     expect(p.resolvedBy).toBe("user");
   });
+
+  it("cowork: child clarification 携带 originAgentId/taskTitle 归属信息", () => {
+    let s = createInitialState();
+    s = applyEvent(s, { type: "message_start", message: { role: "assistant" } });
+    s = applyEvent(s, {
+      type: "clarification_request",
+      request: {
+        ...clarificationRequest("parent-1:child:child-9:q1"),
+        agentId: "parent-1",
+        originAgentId: "child-9",
+        taskTitle: "重构 auth 模块",
+      },
+    });
+    const parts = s.messages[s.activeAssistantIndex].parts as MessagePart[];
+    const p = parts[0];
+    if (p.kind !== "clarification") throw new Error("type narrow");
+    expect(p.originAgentId).toBe("child-9");
+    expect(p.taskTitle).toBe("重构 auth 模块");
+    expect(p.status).toBe("pending");
+  });
 });
 
 describe("applyEvent — subagent batch events (RFC-6)", () => {

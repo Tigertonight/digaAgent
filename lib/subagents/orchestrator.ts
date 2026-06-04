@@ -869,6 +869,10 @@ async function runOneTask(
       // MCP scope (Sprint 5): a child only sees its specialist's declared MCP
       // servers; non-specialist children get none.
       mcpServers: definition?.allowedMcpServers ?? [],
+      // Cowork: tag this child's ask_user clarifications so they surface on the
+      // parent channel attributed to this task.
+      taskId: task.id,
+      taskTitle: task.title,
     });
     controller.childAgentIds.add(child.id);
     updateTask(batchId, task.id, { agentId: child.id });

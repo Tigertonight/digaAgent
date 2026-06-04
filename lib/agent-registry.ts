@@ -415,6 +415,13 @@ export interface CreateOptions {
   parentSessionPath?: string;
   childRole?: SubagentRole;
   hidden?: boolean;
+  /**
+   * Multi-agent clarification attribution (cowork). When set on a child
+   * subagent, the child's ask_user requests are surfaced on the parent's
+   * channel tagged with this task id/title so the user sees who is asking.
+   */
+  taskId?: string;
+  taskTitle?: string;
   /** Main agents enable delegate_subagents; child subagents disable it to avoid recursion. */
   enableSubagents?: boolean;
   /**
@@ -925,6 +932,39 @@ export async function createAgent(opts: CreateOptions): Promise<{
   const clarificationExtension = createClarificationExtension({
     getAgentId: () => id,
     onClarificationNeeded: async (req) => {
+      // Cowork: a child subagent has no visible SSE channel of its own
+      // (hidden:true). Surface its clarification on the PARENT's channel so the
+      // user actually sees and answers it, tagged with the originating task.
+      const parentRec = opts.parentAgentId
+        ? getAgent(opts.parentAgentId)
+        : undefined;
+      if (parentRec) {
+        // Re-key the request onto the parent: pending + resolve must live under
+        // the parent agent id so the parent's /clarification endpoint resolves it.
+        const parentReq = {
+          ...req,
+          id: `${parentRec.id}:child:${id}:${req.requestId}`,
+          agentId: parentRec.id,
+          originAgentId: id,
+          taskId: opts.taskId,
+          taskTitle: opts.taskTitle,
+        };
+        pushExternalEvent(parentRec, {
+          type: "clarification_request",
+          request: parentReq,
+        });
+        const resp = await registerPendingClarification(parentReq);
+        pushExternalEvent(parentRec, {
+          type: "clarification_resolved",
+          id: parentReq.id,
+          requestId: parentReq.requestId,
+          selectedOptionId: resp.selectedOptionId,
+          customText: resp.customText,
+          resolvedBy: "user",
+        });
+        return resp;
+      }
+
       const rec = recordHolder.current;
       if (!rec) {
         console.error(

@@ -289,6 +289,12 @@ export interface CreateChildAgentOptions {
   enableSubagents?: boolean;
   /** MCP server scope for the child (Sprint 5). [] = no MCP tools. */
   mcpServers?: string[];
+  /**
+   * Clarification attribution (cowork): when this child raises ask_user, the
+   * request is surfaced on the parent channel tagged with this task id/title.
+   */
+  taskId?: string;
+  taskTitle?: string;
 }
 
 export interface CreatedChildAgent {
