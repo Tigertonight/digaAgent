@@ -37,6 +37,7 @@
     ".next/required-server-files.js",
     ".next/required-server-files.json",
     ".next/routes-manifest.json",
+    "lib/workflows/script-worker-child.cjs",
     "public/",
     "next.config.ts",
     "next.config.js",
@@ -51,6 +52,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "workflow:sandbox:check": "node scripts/check-workflow-sandbox.mjs",
     "electron:dev": "ELECTRON_DEV=1 electron electron/main.js",
     "electron:start": "electron electron/main.js",
     "clean": "rm -rf dist .next",
@@ -106,6 +108,7 @@
       ".next/standalone/node_modules/**/*",
       ".next/standalone/.next/**/*",
       ".next/static/**/*",
+      "lib/workflows/script-worker-child.cjs",
       "public/**/*",
       "package.json",
       "!**/.DS_Store"

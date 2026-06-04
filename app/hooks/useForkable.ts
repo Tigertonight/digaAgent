@@ -25,7 +25,9 @@
 import type React from "react";
 import { useCallback, useEffect, useState } from "react";
 import type { ForkableUserMessage, ThinkingLevel, SessionInfoLite } from "@/lib/types";
+import type { SubagentBatch } from "@/lib/subagents/types";
 import {
+  appendRestoredSubagentBatches,
   createInitialState,
   ctxToMessages,
 } from "@/lib/chat-reducer";
@@ -263,7 +265,14 @@ export function useForkable(params: UseForkableParams): UseForkableReturn {
           );
           if (!ctx.error) {
             updateRunner(newKey, {
-              chatState: createInitialState(ctxToMessages(ctx.messages ?? [])),
+              chatState: createInitialState(
+                appendRestoredSubagentBatches(
+                  ctxToMessages(ctx.messages ?? []),
+                  Array.isArray(ctx.subagentBatches)
+                    ? (ctx.subagentBatches as SubagentBatch[])
+                    : undefined
+                )
+              ),
               ...(Array.isArray(ctx.forkableUserMessages)
                 ? {
                     forkableUserMessages:
@@ -372,7 +381,12 @@ export function useForkable(params: UseForkableParams): UseForkableReturn {
             if (!ctx.error) {
               updateRunner(ownerKey, {
                 chatState: createInitialState(
-                  ctxToMessages(ctx.messages ?? [])
+                  appendRestoredSubagentBatches(
+                    ctxToMessages(ctx.messages ?? []),
+                    Array.isArray(ctx.subagentBatches)
+                      ? (ctx.subagentBatches as SubagentBatch[])
+                      : undefined
+                  )
                 ),
               });
             }

@@ -28,6 +28,8 @@ import { applyEvent } from "@/lib/chat-reducer";
 import type { ApprovalRequest } from "@/lib/collab/types";
 import type { ClarificationRequest } from "@/lib/clarification/types";
 import type { BrowserSnapshot } from "@/lib/browser/types";
+import type { AgentGoal } from "@/lib/goal/types";
+import type { AgentProgress } from "@/lib/progress/types";
 import type {
   AgentPhase,
   RunnerKey,
@@ -280,6 +282,23 @@ export function useAgentEvents(
           return;
         }
 
+        // ===== Goal mode：session 级长期目标状态 =====
+        case "goal_updated": {
+          updateRunner(ownerKey, {
+            goal: (ev as { goal?: AgentGoal | null }).goal ?? null,
+          });
+          return;
+        }
+
+        // ===== Goal progress：结构化计划节点 + evidence artifacts =====
+        case "progress_updated": {
+          updateRunner(ownerKey, {
+            progress:
+              (ev as { progress?: AgentProgress | null }).progress ?? null,
+          });
+          return;
+        }
+
         // ===== reducer 驱动事件（message_* / tool_execution_*） =====
         // 这些事件需要基于"当前 runner 的 chatState"做 reducer，所以走 patch-as-function 形式
         case "message_start":
@@ -325,6 +344,28 @@ export function useAgentEvents(
         // ===== RFC-5：主动追问 / 推荐下一步（clarification 自定义事件） =====
         case "clarification_request":
         case "clarification_resolved":
+          updateRunner(ownerKey, (s) => ({
+            chatState: applyEvent(s.chatState, ev),
+          }));
+          return;
+
+        // ===== RFC-6：Multi-subagent 协作状态卡（subagent 自定义事件） =====
+        case "subagent_batch_start":
+        case "subagent_task_start":
+        case "subagent_task_update":
+        case "subagent_task_end":
+        case "subagent_batch_end":
+          updateRunner(ownerKey, (s) => ({
+            chatState: applyEvent(s.chatState, ev),
+          }));
+          return;
+
+        // ===== Dynamic workflow script harness 状态卡 =====
+        case "workflow_start":
+        case "workflow_log":
+        case "workflow_checkpoint":
+        case "workflow_artifact":
+        case "workflow_end":
           updateRunner(ownerKey, (s) => ({
             chatState: applyEvent(s.chatState, ev),
           }));

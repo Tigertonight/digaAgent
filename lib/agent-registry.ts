@@ -12,6 +12,7 @@ import {
   createAgentSession,
   type AgentSession,
   type AgentSessionEvent,
+  type ToolDefinition,
   SessionManager,
   ModelRegistry,
   AuthStorage,
@@ -27,16 +28,42 @@ import { createClarificationExtension } from "./clarification/extension";
 import { createBrowserExtension } from "./browser/extension";
 import { disposeBrowser } from "./browser/runtime";
 import { createClipboardExtension } from "./clipboard/extension";
+import { createGoalExtension } from "./goal/extension";
+import { createProgressExtension } from "./progress/extension";
+import { createDelegateSubagentsTool } from "./subagents/extension";
+import { createSubagentWriteBoundaryExtension } from "./subagents/write-boundary-extension";
+import {
+  abortRunningSubagentBatches,
+  runSubagentBatch,
+} from "./subagents/orchestrator";
+import {
+  createDynamicWorkflowTool,
+  createWorkflowScriptTool,
+} from "./workflows/extension";
+import { runDynamicWorkflow } from "./workflows/orchestrator";
+import { runWorkflowScript } from "./workflows/script-runtime";
+import { abortRunningWorkflows } from "./workflows/server-store";
+import { createGitWorktreeManager } from "./workflows/git-worktree";
+import { getWorkflowNetworkPolicy } from "./workflows/network-policy";
 import { DEFAULT_RULES } from "./collab/rules";
 import {
   clearSessionRemember,
   hasSessionRemember,
+  listPendingApprovals,
   registerPendingApproval,
 } from "./collab/server-store";
 import {
   clearAgentClarifications,
+  listPendingClarifications,
   registerPendingClarification,
 } from "./clarification/server-store";
+import {
+  clearGoal,
+  getGoal,
+  noteGoalContinuation,
+  setGoalStatus,
+} from "./goal/server-store";
+import { updateProgress } from "./progress/server-store";
 import type {
   ApprovalRequestEvent,
   ApprovalResolvedEvent,
@@ -46,6 +73,25 @@ import type {
   ClarificationResolvedEvent,
 } from "./clarification/types";
 import type { BrowserStateEvent } from "./browser/types";
+import type { SubagentEvent, SubagentRole } from "./subagents/types";
+import type { WorkflowEvent } from "./workflows/types";
+import type { AgentGoal, GoalUpdatedEvent } from "./goal/types";
+import type {
+  AgentProgress,
+  ProgressUpdatedEvent,
+} from "./progress/types";
+
+function workflowFetchUrlRuleId(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl);
+    const host = parsed.hostname.toLowerCase();
+    if (!host) return "workflow-fetch-url";
+    const port = parsed.port ? `:${parsed.port}` : "";
+    return `workflow-fetch-url:${parsed.protocol}//${host}${port}`;
+  } catch {
+    return "workflow-fetch-url";
+  }
+}
 
 /**
  * Ring buffer 里允许的事件类型。
@@ -62,11 +108,19 @@ export type RingBufferEvent =
   | ApprovalResolvedEvent
   | ClarificationRequestEvent
   | ClarificationResolvedEvent
-  | BrowserStateEvent;
+  | BrowserStateEvent
+  | SubagentEvent
+  | WorkflowEvent
+  | GoalUpdatedEvent
+  | ProgressUpdatedEvent;
 
-interface AgentRecord {
+export interface AgentRecord {
   id: string;
   session: AgentSession;
+  cwd: string;
+  parentAgentId?: string;
+  childRole?: SubagentRole;
+  hidden?: boolean;
   /**
    * 事件 ring buffer:固定容量环形数组,避免每次满了 splice(O(n))。
    * - 写:events[head++ % MAX],覆盖最旧
@@ -88,6 +142,19 @@ interface AgentRecord {
 
 const MAX_EVENTS_PER_AGENT = 5000;
 const FINISH_WATCHDOG_MS = 1800;
+const DEFAULT_BROWSER_TOOL_NAMES = [
+  "browser_open",
+  "browser_screenshot",
+  "browser_click",
+  "browser_click_text",
+  "browser_fill",
+  "browser_type",
+  "browser_search",
+  "browser_wait",
+  "browser_extract",
+  "browser_verify",
+  "browser_close",
+];
 
 interface GlobalRegistry {
   agents: Map<string, AgentRecord>;
@@ -165,8 +232,69 @@ export function pushExternalEvent(
     | ClarificationRequestEvent
     | ClarificationResolvedEvent
     | BrowserStateEvent
+    | SubagentEvent
+    | WorkflowEvent
+    | GoalUpdatedEvent
+    | ProgressUpdatedEvent
 ): void {
   pushAgentEvent(rec, event);
+}
+
+export function pushGoalEvent(rec: AgentRecord, goal: AgentGoal | null): void {
+  pushExternalEvent(rec, { type: "goal_updated", goal });
+}
+
+export function pushProgressEvent(
+  rec: AgentRecord,
+  progress: AgentProgress
+): void {
+  pushExternalEvent(rec, { type: "progress_updated", progress });
+}
+
+function buildGoalContinuationPrompt(goal: AgentGoal): string {
+  return [
+    "Continue working toward the active goal:",
+    "",
+    goal.objective,
+    "",
+    "Do the next useful step. If the full goal is achieved, call goal_update with status=complete.",
+    "Keep the user-visible progress current with update_progress when steps start, finish, block, or produce evidence artifacts.",
+    "If you are truly blocked and cannot make meaningful progress without user input or an external change, call goal_update with status=blocked and include a short blockedReason.",
+    "Otherwise continue implementation, verification, or investigation. Keep the user informed with concise progress.",
+  ].join("\n");
+}
+
+function maybeContinueGoal(rec: AgentRecord): void {
+  const goal = getGoal(rec.id);
+  if (!goal || goal.status !== "active") return;
+
+  if (
+    listPendingApprovals(rec.id).length > 0 ||
+    listPendingClarifications(rec.id).length > 0
+  ) {
+    const paused = setGoalStatus(rec.id, "paused", {
+      pauseReason: "Waiting for user input.",
+    });
+    pushGoalEvent(rec, paused);
+    return;
+  }
+
+  const now = Date.now();
+  if (goal.lastRunAt && now - goal.lastRunAt < 1200) return;
+  const next = noteGoalContinuation(rec.id);
+  if (!next || next.status !== "active") return;
+  pushGoalEvent(rec, next);
+
+  setTimeout(() => {
+    const latest = getGoal(rec.id);
+    if (!latest || latest.status !== "active" || rec.isStreaming) return;
+    void rec.session.prompt(buildGoalContinuationPrompt(latest)).catch((e) => {
+      const paused = setGoalStatus(rec.id, "paused", {
+        pauseReason: e instanceof Error ? e.message : "Goal continuation failed.",
+      });
+      pushGoalEvent(rec, paused);
+    });
+  }, 200);
 }
 
 function pushAgentEvent(rec: AgentRecord, event: RingBufferEvent): void {
@@ -185,6 +313,18 @@ function messageHasStopReason(event: unknown): event is { message: unknown } {
   return msg?.role === "assistant" && typeof msg.stopReason === "string";
 }
 
+function messageContainsToolCall(message: unknown): boolean {
+  if (!message || typeof message !== "object") return false;
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) return false;
+  return content.some(
+    (part) =>
+      part &&
+      typeof part === "object" &&
+      (part as { type?: unknown }).type === "toolCall"
+  );
+}
+
 function clearFinishWatchdog(rec: AgentRecord) {
   if (rec.finishWatchdog) {
     clearTimeout(rec.finishWatchdog);
@@ -194,6 +334,13 @@ function clearFinishWatchdog(rec: AgentRecord) {
 }
 
 function scheduleFinishWatchdog(rec: AgentRecord, message: unknown) {
+  if (messageContainsToolCall(message)) {
+    // Tool-call turns are not complete at the first assistant message: the SDK
+    // still needs to execute the tool, append a tool result, and continue the
+    // conversation. Aborting here cuts off custom tools such as
+    // delegate_subagents before they can run.
+    return;
+  }
   rec.pendingFinishMessage = message;
   if (rec.finishWatchdog) clearTimeout(rec.finishWatchdog);
   rec.finishWatchdog = setTimeout(() => {
@@ -228,6 +375,19 @@ export interface CreateOptions {
   sessionPath?: string;
   /** thinking level，默认 medium */
   thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  /** Optional active tool allowlist. Used by read-only child subagents. */
+  tools?: string[];
+  /** Optional active tool denylist. */
+  excludeTools?: string[];
+  /** For hidden child subagents: file or directory paths this agent may write. */
+  writePaths?: string[];
+  /** Metadata for hidden child subagents. */
+  parentAgentId?: string;
+  parentSessionPath?: string;
+  childRole?: SubagentRole;
+  hidden?: boolean;
+  /** Main agents enable delegate_subagents; child subagents disable it to avoid recursion. */
+  enableSubagents?: boolean;
 }
 
 export async function createAgent(opts: CreateOptions): Promise<{
@@ -248,7 +408,11 @@ export async function createAgent(opts: CreateOptions): Promise<{
   if (opts.sessionPath) {
     sessionManager = SessionManager.open(opts.sessionPath);
   } else {
-    sessionManager = SessionManager.create(opts.cwd);
+    sessionManager = SessionManager.create(
+      opts.cwd,
+      undefined,
+      opts.parentSessionPath ? { parentSession: opts.parentSessionPath } : undefined
+    );
   }
 
   // 提前生成 agentId —— B2 的 CollabExtension 需要 id 闭包来标记审批归属。
@@ -307,6 +471,270 @@ export async function createAgent(opts: CreateOptions): Promise<{
     },
   });
 
+  async function requestWorkflowCapabilityApproval(params: {
+    workflowId: string;
+    capability: string;
+    objective: string;
+    rationale: string;
+    manifest: unknown;
+  }) {
+    const rec = recordHolder.current;
+    if (!rec) {
+      console.error(
+        "[workflow] capability approval called but record not ready; defaulting deny",
+        params.workflowId,
+        params.capability
+      );
+      return {
+        decision: "deny" as const,
+        denyReason: "No UI approval channel was available.",
+      };
+    }
+    const toolCallId = `workflow-capability:${params.workflowId}:${params.capability}`;
+    const req = {
+      id: `${id}:${toolCallId}`,
+      agentId: id,
+      toolCallId,
+      toolName: `workflow:${params.capability}`,
+      input: {
+        workflowId: params.workflowId,
+        capability: params.capability,
+        objective: params.objective,
+        rationale: params.rationale,
+        manifest: params.manifest,
+      },
+      reason: "manual" as const,
+      ruleId: `workflow-capability:${params.capability}`,
+      defaultDecision: "deny" as const,
+      createdAt: Date.now(),
+    };
+    pushExternalEvent(rec, { type: "approval_request", request: req });
+    const resp = await registerPendingApproval(req);
+    const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
+      resp.denyReason === undefined && resp.decision === req.defaultDecision
+        ? "timeout"
+        : "user";
+    pushExternalEvent(rec, {
+      type: "approval_resolved",
+      id: req.id,
+      toolCallId: req.toolCallId,
+      decision: resp.decision,
+      resolvedBy,
+      denyReason: resp.denyReason,
+    });
+    return resp;
+  }
+
+  async function requestWorkflowWorktreeMergeApproval(params: {
+    workflowId: string;
+    objective: string;
+    rationale: string;
+    manifest: unknown;
+    worktree: {
+      id: string;
+      path: string;
+      branchName: string;
+      baseRef: string;
+    };
+    diff: {
+      stat: string;
+      diff: string;
+      path: string;
+      branchName: string;
+      baseRef: string;
+    };
+  }) {
+    const rec = recordHolder.current;
+    if (!rec) {
+      console.error(
+        "[workflow] worktree merge approval called but record not ready; defaulting deny",
+        params.workflowId,
+        params.worktree.id
+      );
+      return {
+        decision: "deny" as const,
+        denyReason: "No UI approval channel was available.",
+      };
+    }
+    const toolCallId = `workflow-merge:${params.workflowId}:${params.worktree.id}`;
+    const req = {
+      id: `${id}:${toolCallId}`,
+      agentId: id,
+      toolCallId,
+      toolName: "workflow:merge_worktree",
+      input: {
+        workflowId: params.workflowId,
+        objective: params.objective,
+        rationale: params.rationale,
+        manifest: params.manifest,
+        worktree: params.worktree,
+        stat: params.diff.stat,
+        diffPreview: params.diff.diff.slice(0, 12000),
+        truncated: params.diff.diff.length > 12000,
+      },
+      reason: "manual" as const,
+      ruleId: "workflow-merge-worktree",
+      defaultDecision: "deny" as const,
+      createdAt: Date.now(),
+    };
+    pushExternalEvent(rec, { type: "approval_request", request: req });
+    const resp = await registerPendingApproval(req);
+    const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
+      resp.denyReason === undefined && resp.decision === req.defaultDecision
+        ? "timeout"
+        : "user";
+    pushExternalEvent(rec, {
+      type: "approval_resolved",
+      id: req.id,
+      toolCallId: req.toolCallId,
+      decision: resp.decision,
+      resolvedBy,
+      denyReason: resp.denyReason,
+    });
+    return resp;
+  }
+
+  async function requestWorkflowNetworkApproval(params: {
+    workflowId: string;
+    objective: string;
+    rationale: string;
+    manifest: unknown;
+    input: {
+      url: string;
+      method?: string;
+      headers?: Record<string, string>;
+      body?: string;
+      maxBytes?: number;
+    };
+  }) {
+    const rec = recordHolder.current;
+    if (!rec) {
+      console.error(
+        "[workflow] network approval called but record not ready; defaulting deny",
+        params.workflowId,
+        params.input.url
+      );
+      return {
+        decision: "deny" as const,
+        denyReason: "No UI approval channel was available.",
+      };
+    }
+    const safeUrl = params.input.url.slice(0, 500);
+    const ruleId = workflowFetchUrlRuleId(params.input.url);
+    if (hasSessionRemember(id, ruleId)) {
+      return { decision: "allow" as const };
+    }
+    const toolCallId = `workflow-fetch:${params.workflowId}:${Date.now()}`;
+    const req = {
+      id: `${id}:${toolCallId}`,
+      agentId: id,
+      toolCallId,
+      toolName: "workflow:fetch_url",
+      input: {
+        workflowId: params.workflowId,
+        objective: params.objective,
+        rationale: params.rationale,
+        manifest: params.manifest,
+        url: safeUrl,
+        method: params.input.method ?? "GET",
+        headerNames: Object.keys(params.input.headers ?? {}),
+        bodyPreview: params.input.body?.slice(0, 500),
+        bodyTruncated: Boolean(params.input.body && params.input.body.length > 500),
+        maxBytes: params.input.maxBytes,
+      },
+      reason: "manual" as const,
+      ruleId,
+      defaultDecision: "deny" as const,
+      createdAt: Date.now(),
+    };
+    pushExternalEvent(rec, { type: "approval_request", request: req });
+    const resp = await registerPendingApproval(req);
+    const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
+      resp.denyReason === undefined && resp.decision === req.defaultDecision
+        ? "timeout"
+        : "user";
+    pushExternalEvent(rec, {
+      type: "approval_resolved",
+      id: req.id,
+      toolCallId: req.toolCallId,
+      decision: resp.decision,
+      resolvedBy,
+      denyReason: resp.denyReason,
+    });
+    return resp;
+  }
+
+  async function requestWorkflowUserClarification(params: {
+    workflowId: string;
+    input: {
+      title?: string;
+      question: string;
+      context?: string;
+      options: Array<{
+        id?: string;
+        label: string;
+        description?: string;
+        value?: string;
+      }>;
+      recommendedOptionId?: string;
+    };
+  }) {
+    const rec = recordHolder.current;
+    if (!rec) {
+      console.error(
+        "[workflow] askUser called but record not ready; returning empty response",
+        params.workflowId
+      );
+      return {
+        requestId: `workflow-ask-user:${params.workflowId}`,
+        customText: "No UI channel was available.",
+        answer: "No UI channel was available.",
+      };
+    }
+    const requestId = `workflow-ask-user:${params.workflowId}:${Date.now()}`;
+    const options = params.input.options.map((option, index) => ({
+      id: option.id || `option-${index + 1}`,
+      label: option.label.slice(0, 48),
+      description: option.description?.slice(0, 160),
+      value: (option.value?.trim() || option.label).slice(0, 500),
+    }));
+    const req = {
+      id: `${id}:${requestId}`,
+      agentId: id,
+      requestId,
+      title: params.input.title?.slice(0, 80) || "需要你确认下一步",
+      question: params.input.question.slice(0, 500),
+      context: params.input.context?.slice(0, 500),
+      options,
+      recommendedOptionId:
+        params.input.recommendedOptionId &&
+        options.some((option) => option.id === params.input.recommendedOptionId)
+          ? params.input.recommendedOptionId
+          : options[0]?.id,
+      createdAt: Date.now(),
+    };
+    pushExternalEvent(rec, { type: "clarification_request", request: req });
+    const resp = await registerPendingClarification(req);
+    pushExternalEvent(rec, {
+      type: "clarification_resolved",
+      id: req.id,
+      requestId: req.requestId,
+      selectedOptionId: resp.selectedOptionId,
+      customText: resp.customText,
+      resolvedBy: "user",
+    });
+    const selected = resp.selectedOptionId
+      ? options.find((option) => option.id === resp.selectedOptionId)
+      : null;
+    const answer = resp.customText?.trim() || selected?.value || "";
+    return {
+      requestId,
+      selectedOptionId: resp.selectedOptionId,
+      customText: resp.customText,
+      answer,
+    };
+  }
+
   const clarificationExtension = createClarificationExtension({
     getAgentId: () => id,
     onClarificationNeeded: async (req) => {
@@ -334,6 +762,27 @@ export async function createAgent(opts: CreateOptions): Promise<{
       return resp;
     },
   });
+  const goalExtension = createGoalExtension({
+    getAgentId: () => id,
+    getGoal,
+    onGoalUpdate: (_agentId, input) => {
+      const goal = setGoalStatus(id, input.status, {
+        blockedReason: input.blockedReason,
+      });
+      const rec = recordHolder.current;
+      if (rec) pushGoalEvent(rec, goal);
+      return goal;
+    },
+  });
+  const progressExtension = createProgressExtension({
+    getAgentId: () => id,
+    onProgressUpdate: (_agentId, input) => {
+      const progress = updateProgress(id, input);
+      const rec = recordHolder.current;
+      if (rec) pushProgressEvent(rec, progress);
+      return progress;
+    },
+  });
 
   const browserExtension = createBrowserExtension({
     getAgentId: () => id,
@@ -344,31 +793,203 @@ export async function createAgent(opts: CreateOptions): Promise<{
     },
   });
   const clipboardExtension = createClipboardExtension();
+  const delegateSubagentsTool = createDelegateSubagentsTool({
+    onDelegate: async (input, signal) => {
+      const rec = recordHolder.current;
+      if (!rec) throw new Error("agent record not ready");
+      const model = rec.session.model;
+      if (!model) throw new Error("model not ready");
+      return runSubagentBatch(
+        {
+          parentAgentId: id,
+          parentSessionPath: rec.session.sessionFile,
+          provider: model.provider,
+          modelId: model.id,
+          cwd: opts.cwd,
+          thinkingLevel: rec.session.thinkingLevel,
+          createChild: createAgent,
+          getChild: getAgent,
+          disposeChild: disposeAgent,
+          pushParentEvent: (event) => pushExternalEvent(rec, event),
+        },
+        input,
+        signal
+      );
+    },
+  });
+  const dynamicWorkflowTool = createDynamicWorkflowTool({
+    onRunWorkflow: async (input, signal) => {
+      const rec = recordHolder.current;
+      if (!rec) throw new Error("agent record not ready");
+      const model = rec.session.model;
+      if (!model) throw new Error("model not ready");
+      return runDynamicWorkflow(
+        {
+          runSubagents: (subagentInput, subagentSignal) =>
+            runSubagentBatch(
+              {
+                parentAgentId: id,
+                parentSessionPath: rec.session.sessionFile,
+                provider: model.provider,
+                modelId: model.id,
+                cwd: opts.cwd,
+                thinkingLevel: rec.session.thinkingLevel,
+                createChild: createAgent,
+                getChild: getAgent,
+                disposeChild: disposeAgent,
+                pushParentEvent: (event) => pushExternalEvent(rec, event),
+              },
+              subagentInput,
+              subagentSignal
+            ),
+        },
+        input,
+        signal
+      );
+    },
+  });
+  const workflowScriptTool = createWorkflowScriptTool({
+    onRunWorkflow: async (input, signal) => {
+      const rec = recordHolder.current;
+      if (!rec) throw new Error("agent record not ready");
+      const model = rec.session.model;
+      if (!model) throw new Error("model not ready");
+      return runDynamicWorkflow(
+        {
+          runSubagents: (subagentInput, subagentSignal) =>
+            runSubagentBatch(
+              {
+                parentAgentId: id,
+                parentSessionPath: rec.session.sessionFile,
+                provider: model.provider,
+                modelId: model.id,
+                cwd: opts.cwd,
+                thinkingLevel: rec.session.thinkingLevel,
+                createChild: createAgent,
+                getChild: getAgent,
+                disposeChild: disposeAgent,
+                pushParentEvent: (event) => pushExternalEvent(rec, event),
+              },
+              subagentInput,
+              subagentSignal
+            ),
+        },
+        input,
+        signal
+      );
+    },
+    onRunWorkflowScript: async (input, signal) => {
+      const rec = recordHolder.current;
+      if (!rec) throw new Error("agent record not ready");
+      const model = rec.session.model;
+      if (!model) throw new Error("model not ready");
+      return runWorkflowScript(
+        {
+          parentAgentId: id,
+          onEvent: (event) => pushExternalEvent(rec, event),
+          approveCapability: (request) =>
+            requestWorkflowCapabilityApproval(request),
+          approveWorktreeMerge: (request) =>
+            requestWorkflowWorktreeMergeApproval(request),
+          approveNetworkRequest: (request) =>
+            requestWorkflowNetworkApproval(request),
+          askUser: (request) => requestWorkflowUserClarification(request),
+          worktrees: createGitWorktreeManager(opts.cwd),
+          networkPolicy: getWorkflowNetworkPolicy(),
+          runSubagents: (subagentInput, subagentSignal) =>
+            runSubagentBatch(
+              {
+                parentAgentId: id,
+                parentSessionPath: rec.session.sessionFile,
+                provider: model.provider,
+                modelId: model.id,
+                cwd: opts.cwd,
+                thinkingLevel: rec.session.thinkingLevel,
+                createChild: createAgent,
+                getChild: getAgent,
+                disposeChild: disposeAgent,
+                pushParentEvent: (event) => pushExternalEvent(rec, event),
+              },
+              subagentInput,
+              subagentSignal
+            ),
+        },
+        input,
+        signal
+      );
+    },
+  });
 
   const resourceLoader = new DefaultResourceLoader({
     cwd: opts.cwd,
     agentDir: getAgentDir(),
     settingsManager: getSettingsManager(opts.cwd),
+    appendSystemPromptOverride: (base) => [
+      ...base,
+      [
+        "Response depth guideline:",
+        "Be concise, but do not be terse. When a task involves analysis, tool results, implementation details, or user-facing decisions, provide enough substance for the user to understand the result without asking a follow-up. Prefer a short complete answer over a one-line answer.",
+      ].join("\n"),
+    ],
     extensionFactories: [
+      ...(opts.parentAgentId
+        ? [
+            createSubagentWriteBoundaryExtension({
+              cwd: opts.cwd,
+              writePaths: opts.writePaths,
+            }),
+          ]
+        : []),
       collabExtension,
       clarificationExtension,
+      goalExtension,
+      progressExtension,
       browserExtension,
       clipboardExtension,
     ],
   });
+  await resourceLoader.reload();
 
   const { session } = await createAgentSession({
     cwd: opts.cwd,
     model,
     thinkingLevel: opts.thinkingLevel ?? "medium",
+    tools: opts.tools,
+    excludeTools: opts.excludeTools,
     sessionManager,
     authStorage: getAuth(),
     modelRegistry: mr,
     resourceLoader,
+    customTools:
+      opts.enableSubagents === false
+        ? undefined
+        : [
+            delegateSubagentsTool as unknown as ToolDefinition,
+            dynamicWorkflowTool as unknown as ToolDefinition,
+            workflowScriptTool as unknown as ToolDefinition,
+          ],
   });
+
+  if (!opts.tools) {
+    const available = new Set(session.getAllTools().map((tool) => tool.name));
+    const active = new Set(session.getActiveToolNames());
+    let changed = false;
+    for (const name of DEFAULT_BROWSER_TOOL_NAMES) {
+      if (available.has(name) && !active.has(name)) {
+        active.add(name);
+        changed = true;
+      }
+    }
+    if (changed) session.setActiveToolsByName(Array.from(active));
+  }
+
   const record: AgentRecord = {
     id,
     session,
+    cwd: opts.cwd,
+    parentAgentId: opts.parentAgentId,
+    childRole: opts.childRole,
+    hidden: opts.hidden,
     events: new Array(MAX_EVENTS_PER_AGENT),
     nextSeq: 0,
     listeners: new Set(),
@@ -388,9 +1009,16 @@ export async function createAgent(opts: CreateOptions): Promise<{
       record.isStreaming = true;
     } else if (event.type === "message_end" || event.type === "agent_end") {
       clearFinishWatchdog(record);
-      if (event.type === "agent_end") record.isStreaming = false;
+      if (event.type === "agent_end") {
+        record.isStreaming = false;
+        maybeContinueGoal(record);
+      }
     } else if (messageHasStopReason(event)) {
-      scheduleFinishWatchdog(record, event.message);
+      // Do not synthesize completion from partial assistant messages. For
+      // OpenAI-compatible tool-call turns the SDK emits stopReason-bearing
+      // partials before tool execution; closing the turn here prevents custom
+      // tools from ever running. Providers that correctly send a final DONE
+      // event are handled by the normal message_end/agent_end path.
     }
     pushAgentEvent(record, event);
   });
@@ -415,6 +1043,7 @@ export function getAgent(id: string): AgentRecord | undefined {
 export function getRunningSessionFiles(): Set<string> {
   const out = new Set<string>();
   for (const rec of reg.agents.values()) {
+    if (rec.hidden) continue;
     if (!rec.isStreaming) continue;
     const f = rec.session.sessionFile;
     if (f) out.add(f);
@@ -422,9 +1051,21 @@ export function getRunningSessionFiles(): Set<string> {
   return out;
 }
 
+export async function abortSubagentsForParent(parentAgentId: string): Promise<void> {
+  await abortRunningSubagentBatches(parentAgentId, getAgent);
+}
+
+export async function abortWorkflowsForParent(parentAgentId: string): Promise<void> {
+  await abortRunningWorkflows(parentAgentId);
+}
+
 export function disposeAgent(id: string) {
   const rec = reg.agents.get(id);
   if (!rec) return;
+  if (!rec.hidden) {
+    void abortSubagentsForParent(id).catch(() => undefined);
+    void abortWorkflowsForParent(id).catch(() => undefined);
+  }
   clearFinishWatchdog(rec);
   rec.unsubscribe();
   rec.session.dispose();
@@ -432,6 +1073,7 @@ export function disposeAgent(id: string) {
   // B4：清理"本 session 不再问"记忆，避免悬挂（其他 agentId 复用同 globalThis store 不受影响）
   clearSessionRemember(id);
   clearAgentClarifications(id);
+  clearGoal(id);
   void disposeBrowser(id);
 }
 

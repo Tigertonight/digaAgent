@@ -8,6 +8,7 @@ export type BrowserRuntimeStatus =
 
 export interface BrowserActionLog {
   id: string;
+  taskId?: string;
   action: string;
   label: string;
   status: "running" | "done" | "error";
@@ -26,6 +27,7 @@ export interface BrowserPointerState {
 
 export interface BrowserStepSnapshot {
   id: string;
+  taskId?: string;
   action: string;
   label: string;
   status: "done" | "error";
@@ -37,6 +39,15 @@ export interface BrowserStepSnapshot {
   error?: string;
 }
 
+export interface BrowserTaskState {
+  id: string;
+  status: "running" | "passed" | "failed" | "blocked";
+  intent: string;
+  startedAt: number;
+  completedAt?: number;
+  error?: string;
+}
+
 export interface BrowserSnapshot {
   status: BrowserRuntimeStatus;
   url: string | null;
@@ -45,6 +56,7 @@ export interface BrowserSnapshot {
   updatedAt: number | null;
   error: string | null;
   pointer: BrowserPointerState | null;
+  task: BrowserTaskState | null;
   logs: BrowserActionLog[];
   steps: BrowserStepSnapshot[];
 }
@@ -60,6 +72,11 @@ export interface BrowserExtractResult {
   text: string;
   links: Array<{ text: string; href: string }>;
   inputs: Array<{ label: string; type: string; name: string; placeholder: string }>;
+  actions: Array<{
+    kind: "link" | "button" | "input";
+    text: string;
+    selectorHint: string;
+  }>;
 }
 
 export interface BrowserVerifyResult {
@@ -91,6 +108,7 @@ export const EMPTY_BROWSER_SNAPSHOT: BrowserSnapshot = {
   updatedAt: null,
   error: null,
   pointer: null,
+  task: null,
   logs: [],
   steps: [],
 };

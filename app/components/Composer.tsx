@@ -51,6 +51,8 @@ import type {
   RetryInfo,
   ToolsCountSnapshot,
 } from "@/lib/session-runner";
+import type { AgentGoal } from "@/lib/goal/types";
+import type { AgentProgress } from "@/lib/progress/types";
 import type {
   ProviderInfo,
   ImageContentLite,
@@ -62,6 +64,8 @@ import { InputAutocomplete } from "./InputAutocomplete";
 import type { AutocompleteItem } from "./InputAutocomplete";
 import { PillSelect } from "./PillSelect";
 import { ProviderIcon } from "./ProviderIcon";
+import { GoalBar } from "./GoalBar";
+import { ProgressPopover } from "./ProgressPopover";
 
 /** autocomplete 弹层模式：跟 useAutocomplete 一致 */
 type AcMode = "@" | "/" | null;
@@ -80,6 +84,8 @@ export interface ComposerProps {
   compacting: boolean;
   agentId: string | null;
   pendingMessages: PendingMessagesSnapshot;
+  goal: AgentGoal | null;
+  progress: AgentProgress | null;
 
   // ===== 附件 =====
   pendingImages: ImageContentLite[];
@@ -104,6 +110,10 @@ export interface ComposerProps {
   onAbort: () => Promise<void> | void;
   onCompact: () => Promise<void> | void;
   onAbortCompaction: () => Promise<void> | void;
+  onGoalPause: () => Promise<void> | void;
+  onGoalResume: () => Promise<void> | void;
+  onGoalClear: () => Promise<void> | void;
+  onOpenProgressUrl?: (url: string) => void;
 
   // ===== Retry / Compact 错误 =====
   retryInfo: RetryInfo | null;
@@ -141,6 +151,8 @@ export function Composer(props: ComposerProps) {
     compacting,
     agentId,
     pendingMessages,
+    goal,
+    progress,
     pendingImages,
     pendingFiles,
     removePendingImage,
@@ -159,6 +171,10 @@ export function Composer(props: ComposerProps) {
     onAbort,
     onCompact,
     onAbortCompaction,
+    onGoalPause,
+    onGoalResume,
+    onGoalClear,
+    onOpenProgressUrl,
     retryInfo,
     compactError,
     visibleProviders,
@@ -206,6 +222,14 @@ export function Composer(props: ComposerProps) {
             )}
           </div>
         )}
+        <GoalBar
+          goal={goal}
+          disabled={!agentId}
+          onPause={onGoalPause}
+          onResume={onGoalResume}
+          onClear={onGoalClear}
+        />
+        <ProgressPopover progress={progress} onOpenUrl={onOpenProgressUrl} />
         {pendingImages.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2">
             {pendingImages.map((img, i) => (

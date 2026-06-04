@@ -3,6 +3,7 @@ import {
   getSessionContext,
   getForkableUserMessages,
 } from "@/lib/sessions";
+import { listBatchesByParentSessionPath } from "@/lib/subagents/server-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,7 +20,11 @@ export async function GET(
     }
     // 顺带返回 fork 锚点：选中 session 后无需 agent 也能立刻 hover fork
     const forkableUserMessages = (await getForkableUserMessages(id)) ?? [];
-    return NextResponse.json({ ...ctx, forkableUserMessages });
+    return NextResponse.json({
+      ...ctx,
+      forkableUserMessages,
+      subagentBatches: listBatchesByParentSessionPath(id),
+    });
   } catch (e) {
     return NextResponse.json(
       { error: (e as Error).message },

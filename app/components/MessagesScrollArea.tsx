@@ -6,6 +6,7 @@ import { ChatMinimap } from "../ChatMinimap";
 import type { ChatMessage } from "@/lib/types";
 import type { AgentPhase } from "@/lib/session-runner";
 import type { ProviderInfo } from "@/lib/types";
+import type { WorkflowWorktreeAction } from "./MessageView";
 
 interface MessagesScrollAreaProps {
   // data
@@ -46,6 +47,20 @@ interface MessagesScrollAreaProps {
   onChooseClarification?: (requestId: string, optionId: string) => void;
   /** RFC-5：clarification 自定义回复 */
   onRespondClarification?: (requestId: string, customText: string) => void;
+  /** Dynamic workflow：从历史 workflow checkpoint/artifact 续跑 */
+  onResumeWorkflow?: (workflowId: string, objective: string) => void;
+  /** Dynamic workflow：重试 merge / 清理 workflow worktree */
+  onWorkflowWorktreeAction?: (
+    action: "retry_merge" | "cleanup",
+    workflowId: string,
+    worktree: WorkflowWorktreeAction
+  ) => Promise<void> | void;
+  /** Multi-agent：重试某个 subagent task */
+  onRetrySubagentTask?: (batchId: string, taskId: string) => Promise<void> | void;
+  /** Multi-agent：继续执行某个未完成 subagent batch */
+  onResumeSubagentBatch?: (batchId: string) => Promise<void> | void;
+  /** Multi-agent：打开某个 child subagent session 继续追问 */
+  onOpenSubagentSession?: (sessionFile: string) => void;
 }
 
 export function MessagesScrollArea({
@@ -76,6 +91,11 @@ export function MessagesScrollArea({
   onDenyCall,
   onChooseClarification,
   onRespondClarification,
+  onResumeWorkflow,
+  onWorkflowWorktreeAction,
+  onRetrySubagentTask,
+  onResumeSubagentBatch,
+  onOpenSubagentSession,
 }: MessagesScrollAreaProps) {
   return (
     <div className="relative flex flex-1 overflow-hidden">
@@ -157,6 +177,11 @@ export function MessagesScrollArea({
                   onDenyCall={onDenyCall}
                   onChooseClarification={onChooseClarification}
                   onRespondClarification={onRespondClarification}
+                  onResumeWorkflow={onResumeWorkflow}
+                  onWorkflowWorktreeAction={onWorkflowWorktreeAction}
+                  onRetrySubagentTask={onRetrySubagentTask}
+                  onResumeSubagentBatch={onResumeSubagentBatch}
+                  onOpenSubagentSession={onOpenSubagentSession}
                 />
               );
               if (!isVisible) return <div key={stableKey}>{view}</div>;

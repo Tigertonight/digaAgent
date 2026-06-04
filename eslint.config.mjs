@@ -6,6 +6,7 @@
  */
 import nextCoreWebVitals from "eslint-config-next/core-web-vitals";
 import nextTypescript from "eslint-config-next/typescript";
+import reactHooks from "eslint-plugin-react-hooks";
 
 const config = [
   {
@@ -18,11 +19,19 @@ const config = [
   {
     files: [
       "electron/**/*.js",
+      "lib/**/*.cjs",
       "scripts/**/*.{js,mjs}",
       "bin/**/*.js",
+      "server.js",
     ],
     rules: {
       "@typescript-eslint/no-require-imports": "off",
+    },
+  },
+  {
+    files: ["e2e/**/*.ts"],
+    rules: {
+      "react-hooks/rules-of-hooks": "off",
     },
   },
   // React 19 新增的 react-hooks 严格规则在我们老 pattern 下噪音过大：
@@ -33,9 +42,15 @@ const config = [
   //     以及对函数声明 hoisting 的合法用法报"Cannot access variable before it is declared"。
   // 暂降为 warning，保留可见性、不阻塞 CI；后续逐文件重构再升回 error。
   {
+    plugins: {
+      "react-hooks": reactHooks,
+    },
     rules: {
       "react-hooks/set-state-in-effect": "warn",
       "react-hooks/immutability": "warn",
+      "react-hooks/preserve-manual-memoization": "warn",
+      "react-hooks/refs": "warn",
+      "react-hooks/static-components": "warn",
     },
   },
 ];

@@ -12,6 +12,7 @@ import {
   type BrowserPointerState,
   type BrowserSnapshot,
   type BrowserStepSnapshot,
+  type BrowserTaskState,
   type BrowserVerifyResult,
 } from "./types";
 import { assertBrowserSiteAllowed } from "./policy";
@@ -23,6 +24,10 @@ interface BrowserRecord {
   context: BrowserContext | null;
   page: Page | null;
   snapshot: BrowserSnapshot;
+}
+
+interface BrowserActionOptions {
+  taskId?: string;
 }
 
 interface GlobalBrowserRegistry {
@@ -56,10 +61,12 @@ function getRecord(agentId: string): BrowserRecord {
 function pushLog(
   rec: BrowserRecord,
   action: string,
-  label: string
+  label: string,
+  opts: BrowserActionOptions = {}
 ): BrowserActionLog {
   const log: BrowserActionLog = {
     id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    taskId: opts.taskId,
     action,
     label,
     status: "running",
@@ -82,6 +89,7 @@ function pushStep(
 ) {
   const step: BrowserStepSnapshot = {
     id: log.id,
+    taskId: log.taskId,
     action: log.action,
     label: log.label,
     status: log.status === "error" ? "error" : "done",
@@ -156,10 +164,11 @@ async function runAction<T>(
   agentId: string,
   action: string,
   label: string,
-  fn: (page: Page, rec: BrowserRecord) => Promise<T>
+  fn: (page: Page, rec: BrowserRecord) => Promise<T>,
+  opts: BrowserActionOptions = {}
 ): Promise<{ result: T; snapshot: BrowserSnapshot }> {
   const { rec, page } = await ensurePage(agentId);
-  const log = pushLog(rec, action, label);
+  const log = pushLog(rec, action, label, opts);
   rec.snapshot.status = "busy";
   rec.snapshot.error = null;
   try {
@@ -201,6 +210,24 @@ async function pointerFromSelector(
   };
 }
 
+async function pointerFromLocator(
+  page: Page,
+  locator: Locator,
+  action: string,
+  label: string
+): Promise<BrowserPointerState | null> {
+  const box = await locator.boundingBox().catch(() => null);
+  const viewport = page.viewportSize();
+  if (!box || !viewport) return null;
+  return {
+    x: clamp01((box.x + box.width / 2) / viewport.width),
+    y: clamp01((box.y + box.height / 2) / viewport.height),
+    action,
+    label,
+    updatedAt: Date.now(),
+  };
+}
+
 function pointerFromPoint(
   page: Page,
   x: number,
@@ -228,6 +255,19 @@ export function getBrowserSnapshot(agentId: string): BrowserSnapshot {
   return rec?.snapshot ?? { ...EMPTY_BROWSER_SNAPSHOT, logs: [], steps: [] };
 }
 
+export function updateBrowserTask(
+  agentId: string,
+  task: BrowserTaskState | null
+): BrowserSnapshot {
+  const rec = getRecord(agentId);
+  rec.snapshot = {
+    ...rec.snapshot,
+    task,
+    updatedAt: Date.now(),
+  };
+  return rec.snapshot;
+}
+
 export async function browserRefresh(agentId: string): Promise<BrowserSnapshot> {
   const rec = reg.browsers.get(agentId);
   if (!rec?.page || rec.page.isClosed()) {
@@ -236,13 +276,42 @@ export async function browserRefresh(agentId: string): Promise<BrowserSnapshot> 
   return refreshSnapshot(rec, rec.page);
 }
 
-export async function browserOpen(agentId: string, url: string) {
+export async function browserRecordTaskNote(
+  agentId: string,
+  input: {
+    taskId: string;
+    action: string;
+    label: string;
+    error?: string;
+  }
+): Promise<BrowserSnapshot> {
+  const rec = getRecord(agentId);
+  const log = pushLog(rec, input.action, input.label, {
+    taskId: input.taskId,
+  });
+  finishLog(log, input.error);
+  const snapshot =
+    rec.page && !rec.page.isClosed()
+      ? await refreshSnapshot(rec, rec.page)
+      : {
+          ...rec.snapshot,
+          updatedAt: Date.now(),
+        };
+  pushStep(rec, log, snapshot);
+  return rec.snapshot;
+}
+
+export async function browserOpen(
+  agentId: string,
+  url: string,
+  opts: BrowserActionOptions = {}
+) {
   const normalized = await assertBrowserSiteAllowed(url);
   return runAction(agentId, "open", normalized, async (page, rec) => {
     rec.snapshot.pointer = null;
     await page.goto(normalized, { waitUntil: "domcontentloaded" });
     return { url: page.url() };
-  });
+  }, opts);
 }
 
 export async function browserScreenshot(agentId: string) {
@@ -288,6 +357,64 @@ export async function browserClick(
   );
 }
 
+export async function browserClickText(
+  agentId: string,
+  input: { text: string; exact?: boolean },
+  opts: BrowserActionOptions = {}
+) {
+  return runAction(agentId, "click_text", input.text, async (page, rec) => {
+    const locator = page.getByText(input.text, { exact: !!input.exact }).first();
+    const pointer = await pointerFromLocator(page, locator, "click", input.text);
+    await locator.click();
+    if (pointer) rec.snapshot.pointer = pointer;
+    return { url: page.url() };
+  }, opts);
+}
+
+async function firstVisibleEditable(page: Page): Promise<Locator> {
+  const locator = page
+    .locator(
+      [
+        "input:not([type=hidden]):not([disabled])",
+        "textarea:not([disabled])",
+        "[contenteditable='true']",
+        "[role='textbox']",
+        "[role='searchbox']",
+      ].join(", ")
+    )
+    .first();
+  await locator.waitFor({ state: "visible" });
+  return locator;
+}
+
+export async function browserFill(
+  agentId: string,
+  input: { text: string; selector?: string; pressEnter?: boolean },
+  opts: BrowserActionOptions = {}
+) {
+  return runAction(
+    agentId,
+    "fill",
+    input.selector ?? "first editable",
+    async (page, rec) => {
+      const locator = input.selector
+        ? targetLocator(page, input.selector)
+        : await firstVisibleEditable(page);
+      const pointer = await pointerFromLocator(
+        page,
+        locator,
+        "type",
+        input.selector ?? "first editable"
+      );
+      await locator.fill(input.text);
+      if (pointer) rec.snapshot.pointer = pointer;
+      if (input.pressEnter) await page.keyboard.press("Enter");
+      return { url: page.url() };
+    },
+    opts
+  );
+}
+
 export async function browserType(
   agentId: string,
   input: { text: string; selector?: string; pressEnter?: boolean }
@@ -310,6 +437,27 @@ export async function browserType(
   });
 }
 
+export async function browserSearch(
+  agentId: string,
+  input: { query: string; engine?: "baidu" | "google" | "bing" },
+  opts: BrowserActionOptions = {}
+) {
+  const engine = input.engine ?? "baidu";
+  const q = encodeURIComponent(input.query);
+  const url =
+    engine === "google"
+      ? `https://www.google.com/search?q=${q}`
+      : engine === "bing"
+        ? `https://www.bing.com/search?q=${q}`
+        : `https://www.baidu.com/s?wd=${q}`;
+  return runAction(agentId, "search", `${engine}: ${input.query}`, async (page, rec) => {
+    rec.snapshot.pointer = null;
+    await assertBrowserSiteAllowed(url);
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    return { url: page.url(), engine, query: input.query };
+  }, opts);
+}
+
 export async function browserWait(
   agentId: string,
   input: { selector?: string; ms?: number; text?: string }
@@ -322,7 +470,10 @@ export async function browserWait(
   });
 }
 
-export async function browserExtract(agentId: string) {
+export async function browserExtract(
+  agentId: string,
+  opts: BrowserActionOptions = {}
+) {
   return runAction(agentId, "extract", "page summary", async (page) => {
     const result = await page.evaluate(() => {
       const visibleText = (document.body?.innerText || "")
@@ -355,21 +506,66 @@ export async function browserExtract(agentId: string) {
             placeholder: input.placeholder || "",
           };
         });
+      const selectorFor = (el: Element, fallback: string) => {
+        const id = el.getAttribute("id");
+        if (id) return `#${CSS.escape(id)}`;
+        const name = el.getAttribute("name");
+        if (name) return `${el.tagName.toLowerCase()}[name="${CSS.escape(name)}"]`;
+        return fallback;
+      };
+      const actions = [
+        ...Array.from(document.querySelectorAll("a"))
+          .slice(0, 20)
+          .map((el, index) => ({
+            kind: "link" as const,
+            text: (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 120),
+            selectorHint: selectorFor(el, `a:nth-of-type(${index + 1})`),
+          })),
+        ...Array.from(document.querySelectorAll("button, [role='button']"))
+          .slice(0, 20)
+          .map((el, index) => ({
+            kind: "button" as const,
+            text:
+              (el.textContent || el.getAttribute("aria-label") || "")
+                .replace(/\s+/g, " ")
+                .trim()
+                .slice(0, 120),
+            selectorHint: selectorFor(el, `button:nth-of-type(${index + 1})`),
+          })),
+        ...Array.from(document.querySelectorAll("input, textarea, [role='textbox'], [role='searchbox']"))
+          .slice(0, 20)
+          .map((el, index) => ({
+            kind: "input" as const,
+            text:
+              (
+                el.getAttribute("aria-label") ||
+                el.getAttribute("placeholder") ||
+                el.getAttribute("name") ||
+                ""
+              )
+                .replace(/\s+/g, " ")
+                .trim()
+                .slice(0, 120),
+            selectorHint: selectorFor(el, `input:nth-of-type(${index + 1})`),
+          })),
+      ].filter((x) => x.text || x.selectorHint);
       return {
         url: location.href,
         title: document.title,
         text: visibleText,
         links,
         inputs,
+        actions,
       };
     });
     return result as BrowserExtractResult;
-  });
+  }, opts);
 }
 
 export async function browserVerify(
   agentId: string,
-  input: { expectation: string; selector?: string; text?: string }
+  input: { expectation: string; selector?: string; text?: string },
+  opts: BrowserActionOptions = {}
 ) {
   return runAction(agentId, "verify", input.expectation, async (page) => {
     const title = await page.title().catch(() => null);
@@ -388,6 +584,12 @@ export async function browserVerify(
       evidence = passed
         ? `Text is visible: ${input.text}`
         : `Text was not found: ${input.text}`;
+    } else if (input.expectation.startsWith("page opened at ")) {
+      const expectedUrl = input.expectation.slice("page opened at ".length);
+      passed = !!url && url.startsWith(expectedUrl);
+      evidence = passed
+        ? `Current URL matches expected page: ${url}`
+        : `Current URL ${url ?? "(none)"} did not match ${expectedUrl}`;
     } else {
       const bodyText = await page.locator("body").innerText().catch(() => "");
       passed = bodyText
@@ -404,7 +606,7 @@ export async function browserVerify(
       url,
       title,
     } satisfies BrowserVerifyResult;
-  });
+  }, opts);
 }
 
 export async function browserClose(agentId: string): Promise<BrowserSnapshot> {

@@ -111,6 +111,10 @@ export interface UseChatStreamReturn {
     aid: string,
     payload: Record<string, unknown>
   ) => Promise<unknown>;
+  ensureAgent: () => Promise<{
+    aid: string;
+    ownerKey: RunnerKey;
+  } | null>;
   send: () => Promise<void>;
   onAbort: () => Promise<void>;
   onCompact: () => Promise<void>;
@@ -118,6 +122,7 @@ export interface UseChatStreamReturn {
   onSteer: () => Promise<void>;
   onFollowUp: () => Promise<void>;
   onChangeThinking: (lv: ThinkingLevel) => Promise<void>;
+  startGoal: (objective: string) => Promise<void>;
 }
 
 export function useChatStream(
@@ -172,6 +177,114 @@ export function useChatStream(
     [setError]
   );
 
+  const upgradeDraftIfNeeded = useCallback(
+    (sessionFilePath: string | null): RunnerKey => {
+      const currentKey = activeKeyRef.current ?? DRAFT_KEY;
+      if (currentKey !== DRAFT_KEY || !sessionFilePath) return currentKey;
+      const newKey: RunnerKey = sessionFilePath;
+      if (runnersRef.current?.has(newKey)) {
+        switchTo(newKey);
+        const idFromPath = extractSessionIdFromPath(sessionFilePath);
+        if (idFromPath) setSelectedId(idFromPath);
+        return newKey;
+      }
+      const upgraded = runnersRef.current?.get(DRAFT_KEY);
+      if (!upgraded) return currentKey;
+      runnersRef.current?.set(newKey, upgraded);
+      runnersRef.current?.delete(DRAFT_KEY);
+      closeSseFor(DRAFT_KEY);
+      switchTo(newKey);
+      const idFromPath = extractSessionIdFromPath(sessionFilePath);
+      if (idFromPath) setSelectedId(idFromPath);
+      setRunner(DRAFT_KEY, emptyRunner());
+      const aid = upgraded.agentId;
+      if (aid) attachSseFor(newKey, aid);
+      return newKey;
+    },
+    [
+      activeKeyRef,
+      runnersRef,
+      switchTo,
+      setSelectedId,
+      closeSseFor,
+      setRunner,
+      attachSseFor,
+    ]
+  );
+
+  const ensureAgent = useCallback(async (): Promise<{
+    aid: string;
+    ownerKey: RunnerKey;
+  } | null> => {
+    if (agentId) {
+      return {
+        aid: agentId,
+        ownerKey: upgradeDraftIfNeeded(currentSessionFile),
+      };
+    }
+    if (!providerId || !modelId) {
+      setError("请先选择 provider 和 model");
+      return null;
+    }
+    const r = await fetch("/api/agent/new", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: providerId,
+        modelId,
+        cwd,
+        thinkingLevel,
+        sessionPath: selectedId
+          ? sessions.find((s) => s.id === selectedId)?.path
+          : undefined,
+      }),
+    });
+    const data = await r.json();
+    if (data.error) {
+      setError(data.error);
+      return null;
+    }
+    const ownerKey = activeKeyRef.current ?? DRAFT_KEY;
+    updateRunner(ownerKey, {
+      agentId: data.id,
+      agentSessionId: data.sessionId,
+      sessionFile: data.sessionFile ?? null,
+      ...(data.thinkingLevel
+        ? { thinkingLevel: data.thinkingLevel as ThinkingLevel }
+        : {}),
+      ...(data.availableThinkingLevels
+        ? {
+            availableThinkingLevels:
+              data.availableThinkingLevels as ThinkingLevel[],
+          }
+        : {}),
+      ...(typeof data.supportsThinking === "boolean"
+        ? { supportsThinking: data.supportsThinking }
+        : {}),
+    });
+    const upgradedKey = upgradeDraftIfNeeded(data.sessionFile ?? null);
+    attachSseFor(upgradedKey, data.id);
+    void refreshStats(data.id, upgradedKey);
+    void refreshToolsCount(data.id, upgradedKey);
+    return { aid: data.id, ownerKey: upgradedKey };
+  }, [
+    agentId,
+    currentSessionFile,
+    providerId,
+    modelId,
+    cwd,
+    thinkingLevel,
+    selectedId,
+    sessions,
+    activeKeyRef,
+    updateRunner,
+    upgradeDraftIfNeeded,
+    attachSseFor,
+    refreshStats,
+    refreshToolsCount,
+    setError,
+  ]);
+
   // 发送一条新 prompt
   // 两条分支：
   //   - 冷启动（agentId == null）：fetch /api/agent/new → 升级草稿 → attachSSE → 拉 stats
@@ -183,34 +296,8 @@ export function useChatStream(
       pendingFiles.length === 0
     )
       return;
-    // 草稿升级：把 DRAFT_KEY runner 重命名到 sessionFile，留一个空 draft 给下次 +New chat。
-    // 在 send() 两条分支（冷启 + startNewSession 已 eager create）都需要触发。
-    const upgradeDraftIfNeeded = (sessionFilePath: string | null) => {
-      if (activeKeyRef.current !== DRAFT_KEY || !sessionFilePath) return;
-      const newKey: RunnerKey = sessionFilePath;
-      if (runnersRef.current?.has(newKey)) return; // 已迁过
-      const upgraded = runnersRef.current?.get(DRAFT_KEY);
-      if (!upgraded) return;
-      // 注意顺序：先 set newKey + delete draft，再 switchTo（切到新 key 后再重建 draft，
-      // 否则 setRunner(newKey) 内部 LRU 触发时会把新建的 newKey 当作非活跃候选淘汰）。
-      // 这里没用 setRunner(newKey, upgraded) 是因为紧接着会重建 draft；
-      // 把 LRU 触发延后到最后一步的 setRunner(DRAFT_KEY, ...)，确保 map 终态再淘汰。
-      runnersRef.current?.set(newKey, upgraded);
-      runnersRef.current?.delete(DRAFT_KEY);
-      // SSE onmessage 闭包捕获了旧 key（DRAFT_KEY），必须 close + reattach 让后续事件写到新 key。
-      // 重连有几条 token 损耗，但 +New chat 的 eager SSE 通常还没真正推数据，代价可控。
-      closeSseFor(DRAFT_KEY);
-      // 草稿升级：从 DRAFT_KEY 切到 newKey；switchTo 会同步 setActiveKey + setActiveSnapshot
-      switchTo(newKey);
-      const idFromPath = extractSessionIdFromPath(sessionFilePath);
-      if (idFromPath) setSelectedId(idFromPath);
-      // 重建 draft —— 用 setRunner 让 LRU 在 map 终态（含新 newKey + 新 draft）下检查
-      setRunner(DRAFT_KEY, emptyRunner());
-      const aid = upgraded.agentId;
-      if (aid) attachSseFor(newKey, aid);
-    };
-
     let aid = agentId;
+    let ownerKeyForPrompt = activeKeyRef.current ?? DRAFT_KEY;
     if (!aid) {
       if (!providerId || !modelId) {
         setError("请先选择 provider 和 model");
@@ -255,16 +342,15 @@ export function useChatStream(
           : {}),
       });
 
-      upgradeDraftIfNeeded(data.sessionFile ?? null);
+      ownerKeyForPrompt = upgradeDraftIfNeeded(data.sessionFile ?? null);
 
-      const keyForSse = activeKeyRef.current ?? DRAFT_KEY;
-      attachSseFor(keyForSse, data.id);
-      void refreshStats(data.id, keyForSse);
-      void refreshToolsCount(data.id, keyForSse);
+      attachSseFor(ownerKeyForPrompt, data.id);
+      void refreshStats(data.id, ownerKeyForPrompt);
+      void refreshToolsCount(data.id, ownerKeyForPrompt);
     } else {
       // Fast path：agent 已被 startNewSession eager create。这里也要做 draft → sessionFile 升级，
       // 否则 +New chat 之后所有 session 都积压在 DRAFT_KEY 上，LRU/多 session 全失效。
-      upgradeDraftIfNeeded(currentSessionFile);
+      ownerKeyForPrompt = upgradeDraftIfNeeded(currentSessionFile);
     }
     const userText = input;
     const images = pendingImages;
@@ -316,6 +402,7 @@ export function useChatStream(
     setRunner,
     activeKeyRef,
     runnersRef,
+    upgradeDraftIfNeeded,
     switchTo,
     setInput,
     setPendingImages,
@@ -325,6 +412,25 @@ export function useChatStream(
     pendingPinUserCountRef,
     setPinSpacer,
   ]);
+
+  const startGoal = useCallback(
+    async (objective: string) => {
+      const text = objective.trim();
+      if (!text) return;
+      const ensured = await ensureAgent();
+      if (!ensured) return;
+      setError(null);
+      try {
+        await agentAction(ensured.aid, {
+          type: "goal_set",
+          objective: text,
+        });
+      } catch {
+        /* error 已被 agentAction 设置 */
+      }
+    },
+    [ensureAgent, agentAction, setError]
+  );
 
   // 中断当前 turn
   const onAbort = useCallback(async () => {
@@ -423,6 +529,7 @@ export function useChatStream(
 
   return {
     agentAction,
+    ensureAgent,
     send,
     onAbort,
     onCompact,
@@ -430,5 +537,6 @@ export function useChatStream(
     onSteer,
     onFollowUp,
     onChangeThinking,
+    startGoal,
   };
 }

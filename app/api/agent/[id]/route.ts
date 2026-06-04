@@ -18,7 +18,34 @@
  *   - navigate_tree       { targetId, summarize?, ... }       fork/分支跳转
  */
 import { NextResponse } from "next/server";
-import { getAgent, disposeAgent, getModelRegistry } from "@/lib/agent-registry";
+import {
+  getAgent,
+  disposeAgent,
+  getModelRegistry,
+  abortSubagentsForParent,
+  abortWorkflowsForParent,
+  pushExternalEvent,
+  pushGoalEvent,
+  pushProgressEvent,
+} from "@/lib/agent-registry";
+import {
+  clearGoal,
+  getGoal,
+  normalizeObjective,
+  setGoal,
+  setGoalStatus,
+} from "@/lib/goal/server-store";
+import {
+  clearProgress,
+  getProgress,
+  updateProgress,
+} from "@/lib/progress/server-store";
+import { parseBrowserIntent } from "@/lib/browser/intent";
+import {
+  appendBrowserObservation,
+  runBrowserTaskPreflight,
+} from "@/lib/browser/task-runtime";
+import type { ProgressUpdateInput } from "@/lib/progress/types";
 import type { ThinkingLevel, ImageContentLite } from "@/lib/types";
 
 /** 校验并清洗 body.images */
@@ -42,6 +69,19 @@ function parseImages(raw: unknown): ImageContentLite[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
+function parseProgressUpdate(body: Record<string, unknown>): ProgressUpdateInput {
+  return {
+    steps: Array.isArray(body.steps)
+      ? (body.steps as ProgressUpdateInput["steps"])
+      : undefined,
+    artifacts: Array.isArray(body.artifacts)
+      ? (body.artifacts as ProgressUpdateInput["artifacts"])
+      : undefined,
+    replaceSteps: body.replaceSteps === true,
+    replaceArtifacts: body.replaceArtifacts === true,
+  };
+}
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -62,10 +102,7 @@ export async function GET(
     try {
       const all = rec.session.getAllTools();
       const active = rec.session.getActiveToolNames();
-      return NextResponse.json({
-        tools: all,
-        active,
-      });
+      return NextResponse.json({ tools: all, active });
     } catch (e) {
       return NextResponse.json(
         { error: (e as Error).message, tools: [], active: [] },
@@ -154,6 +191,8 @@ export async function GET(
       : null,
     pendingMessageCount: rec.session.pendingMessageCount,
     nextSeq: rec.nextSeq,
+    goal: getGoal(id),
+    progress: getProgress(id),
   });
 }
 
@@ -195,14 +234,25 @@ export async function POST(
           );
         }
         const images = parseImages(body.images);
+        const browserTask = await runBrowserTaskPreflight({
+          agentId: id,
+          intent: parseBrowserIntent(text),
+          pushState: (snapshot) => {
+            pushExternalEvent(rec, { type: "browser_state", snapshot });
+          },
+        });
+        const finalText = appendBrowserObservation(
+          text,
+          browserTask.observation
+        );
         // 如果当前在 streaming，默认按 followUp 处理；否则正常 prompt
         if (rec.isStreaming) {
-          await rec.session.prompt(text, {
+          await rec.session.prompt(finalText, {
             streamingBehavior: "followUp",
             images,
           });
         } else {
-          await rec.session.prompt(text, images ? { images } : undefined);
+          await rec.session.prompt(finalText, images ? { images } : undefined);
         }
         return NextResponse.json({ ok: true });
       }
@@ -235,7 +285,107 @@ export async function POST(
         return NextResponse.json({ ok: true });
       }
 
+      case "goal_status": {
+        return NextResponse.json({
+          ok: true,
+          goal: getGoal(id),
+          progress: getProgress(id),
+        });
+      }
+
+      case "goal_set": {
+        const objective = normalizeObjective(body.objective);
+        if (!objective) {
+          return NextResponse.json(
+            { error: "objective required" },
+            { status: 400 }
+          );
+        }
+        const tokenBudget =
+          typeof body.tokenBudget === "number" ? body.tokenBudget : undefined;
+        const goal = setGoal(id, objective, tokenBudget);
+        pushGoalEvent(rec, goal);
+        const progress = clearProgress(id);
+        pushProgressEvent(rec, progress);
+
+        const prompt = [
+          "Start working toward this active goal:",
+          "",
+          objective,
+          "",
+          "The goal text is both the starting prompt and the completion criteria.",
+          "For multi-step work, call update_progress early with concrete progress nodes and keep it current as milestones finish.",
+          "Attach evidence artifacts with update_progress when you create files, URLs, screenshots, tests, diffs, logs, or browser observations.",
+          "If the full goal is achieved, call goal_update with status=complete.",
+          "If you are truly blocked and cannot make meaningful progress without user input or an external change, call goal_update with status=blocked and include a short blockedReason.",
+        ].join("\n");
+
+        if (rec.isStreaming) await rec.session.followUp(prompt);
+        else await rec.session.prompt(prompt);
+        return NextResponse.json({ ok: true, goal });
+      }
+
+      case "goal_pause": {
+        const goal = setGoalStatus(id, "paused", {
+          pauseReason:
+            typeof body.reason === "string" ? body.reason : "Paused by user.",
+        });
+        pushGoalEvent(rec, goal);
+        return NextResponse.json({ ok: true, goal });
+      }
+
+      case "goal_resume": {
+        const goal = setGoalStatus(id, "active");
+        pushGoalEvent(rec, goal);
+        if (goal && !rec.isStreaming) {
+          await rec.session.prompt(
+            [
+              "Resume working toward the active goal:",
+              "",
+              goal.objective,
+              "",
+              "Do the next useful step. Use goal_update when the goal is complete or truly blocked.",
+            ].join("\n")
+          );
+        }
+        return NextResponse.json({ ok: true, goal });
+      }
+
+      case "goal_clear": {
+        clearGoal(id);
+        const progress = clearProgress(id);
+        pushGoalEvent(rec, null);
+        pushProgressEvent(rec, progress);
+        return NextResponse.json({ ok: true, goal: null });
+      }
+
+      case "progress_update": {
+        const progress = updateProgress(id, parseProgressUpdate(body));
+        pushProgressEvent(rec, progress);
+        return NextResponse.json({ ok: true, progress });
+      }
+
+      case "goal_update": {
+        const status = body.status;
+        if (status !== "complete" && status !== "blocked") {
+          return NextResponse.json(
+            { error: "status must be complete or blocked" },
+            { status: 400 }
+          );
+        }
+        const goal = setGoalStatus(id, status, {
+          blockedReason:
+            typeof body.blockedReason === "string"
+              ? body.blockedReason
+              : undefined,
+        });
+        pushGoalEvent(rec, goal);
+        return NextResponse.json({ ok: true, goal });
+      }
+
       case "abort": {
+        await abortWorkflowsForParent(id);
+        await abortSubagentsForParent(id);
         await rec.session.abort();
         return NextResponse.json({ ok: true });
       }

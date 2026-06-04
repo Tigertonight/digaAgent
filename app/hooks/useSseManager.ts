@@ -120,7 +120,9 @@ export function useSseManager(
 
       const lastSeqRecord = lastSeqRef.current.get(key);
       const lastSeq =
-        lastSeqRecord?.agentId === agentId ? lastSeqRecord.seq : undefined;
+        lastSeqRecord && lastSeqRecord.agentId === agentId
+          ? lastSeqRecord.seq
+          : undefined;
       const since =
         typeof lastSeq === "number" && Number.isFinite(lastSeq)
           ? `?since=${encodeURIComponent(String(lastSeq))}`

@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { getElectronApi, type SettingsApi } from "@/lib/electron-bridge";
 import { ConfirmButton } from "@/app/components/ConfirmButton";
 import { BudgetSettingsSection } from "./BudgetSettingsSection";
 import { CollabSettingsSection } from "./CollabSettingsSection";
+import { WorkflowNetworkPolicySection } from "./WorkflowNetworkPolicySection";
 
 /* ===================== Web 模式 Settings（用 /api/auth） ===================== */
 
@@ -110,12 +112,12 @@ function WebSettingsPanel() {
           设置 · Provider Credentials (Web)
         </h1>
         <div className="flex items-center gap-2 text-xs">
-          <a
+          <Link
             href="/"
             className="px-2 py-1 border border-neutral-700 rounded hover:bg-neutral-900"
           >
             ← 返回
-          </a>
+          </Link>
           <button
             onClick={() => void load()}
             disabled={loading || busy !== null}
@@ -136,6 +138,8 @@ function WebSettingsPanel() {
         <BudgetSettingsSection />
 
         <CollabSettingsSection />
+
+        <WorkflowNetworkPolicySection />
 
         <section className="text-xs text-neutral-500 leading-relaxed">
           Web 模式下凭证写到{" "}
@@ -456,6 +460,8 @@ export default function SettingsPanel() {
         <BudgetSettingsSection />
 
         <CollabSettingsSection />
+
+        <WorkflowNetworkPolicySection />
 
         <section className="text-xs text-neutral-500 leading-relaxed">
           Key 保存在系统 keychain（macOS Keychain），不写明文文件。修改后点{" "}

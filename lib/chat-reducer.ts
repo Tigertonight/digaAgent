@@ -19,6 +19,25 @@ import type {
   MessagePart,
 } from "./types";
 import type { ClarificationOption } from "./clarification/types";
+import type {
+  SubagentAuditEvent,
+  SubagentBatch,
+  SubagentBatchPlan,
+  SubagentBatchSynthesis,
+  SubagentBatchVerification,
+  SubagentResult,
+  SubagentTaskAttempt,
+  SubagentTaskVerification,
+} from "./subagents/types";
+import type {
+  WorkflowArtifact,
+  WorkflowCheckpoint,
+  WorkflowManifest,
+  WorkflowRun,
+  WorkflowRunStatus,
+  WorkflowScriptLog,
+  WorkflowScriptResult,
+} from "./workflows/types";
 
 /* SDK 事件的最小化类型（用 any-ish 但 narrow 到必要字段） */
 interface AnyEvent {
@@ -96,6 +115,37 @@ interface AnyEvent {
   selectedOptionId?: string;
   customText?: string;
   requestId?: string;
+  // subagent_* (RFC-6 自定义事件)
+  batch?: SubagentBatch;
+  planning?: SubagentBatchPlan;
+  batchId?: string;
+  taskId?: string;
+  title?: string;
+  role?: string;
+  status?: string;
+  agentId?: string;
+  answer?: string;
+  answerPreview?: string;
+  error?: string;
+  sessionFile?: string;
+  usage?: SubagentResult["usage"];
+  attempts?: SubagentTaskAttempt[];
+  verification?: SubagentTaskVerification | SubagentBatchVerification;
+  synthesis?: SubagentBatchSynthesis;
+  auditEvents?: SubagentAuditEvent[];
+  startedAt?: number;
+  endedAt?: number;
+  results?: SubagentResult[];
+  // workflow_* custom events
+  run?: WorkflowRun;
+  workflowId?: string;
+  log?: WorkflowScriptLog;
+  checkpoint?: WorkflowCheckpoint;
+  artifact?: WorkflowArtifact;
+  artifacts?: WorkflowArtifact[];
+  checkpoints?: WorkflowCheckpoint[];
+  logs?: WorkflowScriptLog[];
+  returnValue?: unknown;
 }
 
 export interface ReducerState {
@@ -293,6 +343,323 @@ function findClarificationPartIndex(
     if (p.kind === "clarification" && p.id === id) return i;
   }
   return -1;
+}
+
+function findSubagentBatchPartIndex(
+  parts: MessagePart[],
+  id: string
+): number {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i];
+    if (p.kind === "subagent_batch" && p.id === id) return i;
+  }
+  return -1;
+}
+
+function findWorkflowRunPartIndex(
+  parts: MessagePart[],
+  id: string
+): number {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i];
+    if (p.kind === "workflow_run" && p.id === id) return i;
+  }
+  return -1;
+}
+
+function previewSubagentAnswer(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  return oneLine.length > 180 ? `${oneLine.slice(0, 177)}…` : oneLine;
+}
+
+function isSubagentStatus(status: unknown): status is SubagentResult["status"] {
+  return (
+    status === "completed" ||
+    status === "failed" ||
+    status === "aborted" ||
+    status === "timeout"
+  );
+}
+
+function resultsByTaskId(results: SubagentResult[] | undefined) {
+  const map = new Map<string, SubagentResult>();
+  for (const result of results ?? []) map.set(result.taskId, result);
+  return map;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asSubagentResults(value: unknown): SubagentResult[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: SubagentResult[] = [];
+  for (const item of value) {
+    const rec = asRecord(item);
+    if (!rec || typeof rec.taskId !== "string") continue;
+    if (!isSubagentStatus(rec.status)) continue;
+    out.push({
+      taskId: rec.taskId,
+      agentId: typeof rec.agentId === "string" ? rec.agentId : "",
+      sessionFile:
+        typeof rec.sessionFile === "string" ? rec.sessionFile : undefined,
+      status: rec.status,
+      answer: typeof rec.answer === "string" ? rec.answer : undefined,
+      error: typeof rec.error === "string" ? rec.error : undefined,
+      startedAt: typeof rec.startedAt === "number" ? rec.startedAt : Date.now(),
+      endedAt: typeof rec.endedAt === "number" ? rec.endedAt : undefined,
+      usage: asRecord(rec.usage) as SubagentResult["usage"],
+    });
+  }
+  return out.length ? out : undefined;
+}
+
+function subagentRole(value: unknown) {
+  return value === "general" ||
+    value === "rag" ||
+    value === "research" ||
+    value === "code-review" ||
+    value === "implementation"
+    ? value
+    : undefined;
+}
+
+function asSubagentSynthesis(value: unknown): SubagentBatchSynthesis | undefined {
+  const rec = asRecord(value);
+  if (!rec) return undefined;
+  if (
+    rec.status !== "ready" &&
+    rec.status !== "partial" &&
+    rec.status !== "blocked"
+  ) {
+    return undefined;
+  }
+  return {
+    status: rec.status,
+    generatedAt:
+      typeof rec.generatedAt === "number" ? rec.generatedAt : Date.now(),
+    summary: typeof rec.summary === "string" ? rec.summary : "",
+    usableTaskIds: Array.isArray(rec.usableTaskIds)
+      ? rec.usableTaskIds.filter((item): item is string => typeof item === "string")
+      : [],
+    cautionTaskIds: Array.isArray(rec.cautionTaskIds)
+      ? rec.cautionTaskIds.filter((item): item is string => typeof item === "string")
+      : [],
+    rejectedTaskIds: Array.isArray(rec.rejectedTaskIds)
+      ? rec.rejectedTaskIds.filter((item): item is string => typeof item === "string")
+      : [],
+    instructions:
+      typeof rec.instructions === "string" ? rec.instructions : undefined,
+  };
+}
+
+function asSubagentAuditEvents(value: unknown): SubagentAuditEvent[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const events = value
+    .map((item) => asRecord(item))
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .map((item) => ({
+      type:
+        typeof item.type === "string"
+          ? (item.type as SubagentAuditEvent["type"])
+          : "batch_completed",
+      at: typeof item.at === "number" ? item.at : Date.now(),
+      taskId: typeof item.taskId === "string" ? item.taskId : undefined,
+      message: typeof item.message === "string" ? item.message : "",
+      data:
+        item.data && typeof item.data === "object" && !Array.isArray(item.data)
+          ? (item.data as Record<string, unknown>)
+          : undefined,
+    }))
+    .filter((item) => item.message.length > 0);
+  return events.length > 0 ? events : undefined;
+}
+
+function subagentBatchPartFromToolResult(params: {
+  toolCallId: string;
+  args?: unknown;
+  details?: unknown;
+  result?: unknown;
+}): Extract<MessagePart, { kind: "subagent_batch" }> | null {
+  const details = asRecord(params.details) ?? asRecord(asRecord(params.result)?.details);
+  const results = asSubagentResults(details?.results);
+  const synthesis = asSubagentSynthesis(details?.synthesis);
+  const auditEvents = asSubagentAuditEvents(details?.auditEvents);
+  if (!results) return null;
+  const args = asRecord(params.args);
+  const inputTasks = Array.isArray(args?.tasks) ? args.tasks : [];
+  const taskSources = inputTasks.length ? inputTasks : results;
+  const resultMap = resultsByTaskId(results);
+  const createdAt = results.reduce(
+    (min, result) => Math.min(min, result.startedAt || min),
+    results[0]?.startedAt ?? Date.now()
+  );
+  const endedAt = results.reduce(
+    (max, result) => Math.max(max, result.endedAt ?? max),
+    0
+  );
+  return {
+    kind: "subagent_batch",
+    id:
+      typeof details?.batchId === "string"
+        ? details.batchId
+        : params.toolCallId,
+    reason:
+      typeof args?.reason === "string"
+        ? args.reason
+        : "Delegated subagent batch",
+    status: results.some((result) => result.status === "completed")
+      ? "completed"
+      : "failed",
+    synthesis,
+    auditEvents,
+    tasks: taskSources.map((raw, index) => {
+      const task = asRecord(raw);
+      const id =
+        typeof task?.id === "string"
+          ? task.id
+          : results[index]?.taskId ?? `task-${index + 1}`;
+      const result = resultMap.get(id) ?? results[index];
+      return {
+        id,
+        title:
+          typeof task?.title === "string"
+            ? task.title
+            : result?.taskId ?? `Task ${index + 1}`,
+        role: subagentRole(task?.role),
+        status: result?.status ?? "completed",
+        agentId: result?.agentId,
+        answer: result?.answer,
+        answerPreview: previewSubagentAnswer(result?.answer),
+        error: result?.error,
+        sessionFile: result?.sessionFile,
+        startedAt: result?.startedAt,
+        endedAt: result?.endedAt,
+        usage: result?.usage,
+      };
+    }),
+    createdAt,
+    endedAt: endedAt || undefined,
+  };
+}
+
+function subagentBatchPartFromPersistedBatch(
+  batch: SubagentBatch
+): Extract<MessagePart, { kind: "subagent_batch" }> {
+  return {
+    kind: "subagent_batch",
+    id: batch.id,
+    reason: batch.reason,
+    status: batch.status,
+    restored: true,
+    planning: batch.planning,
+    verification: batch.verification,
+    synthesis: batch.synthesis,
+    auditEvents: batch.auditEvents,
+    tasks: batch.tasks.map((task) => ({
+      id: task.id,
+      title: task.title,
+      role: task.role,
+      status: task.status,
+      agentId: task.agentId,
+      answer: task.answer,
+      answerPreview: task.answerPreview ?? previewSubagentAnswer(task.answer),
+      error: task.error,
+      sessionFile: task.sessionFile,
+      startedAt: task.startedAt,
+      endedAt: task.endedAt,
+      usage: task.usage,
+      verification: task.verification,
+      attempts: task.attempts,
+    })),
+    createdAt: batch.createdAt,
+    endedAt: batch.endedAt,
+  };
+}
+
+export function appendRestoredSubagentBatches(
+  messages: ChatMessage[],
+  batches: SubagentBatch[] | undefined
+): ChatMessage[] {
+  if (!batches?.length) return messages;
+  const existing = new Set<string>();
+  for (const message of messages) {
+    for (const part of message.parts ?? []) {
+      if (part.kind === "subagent_batch") existing.add(part.id);
+    }
+  }
+  const restored = batches
+    .filter((batch) => !existing.has(batch.id))
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .map(subagentBatchPartFromPersistedBatch);
+  if (restored.length === 0) return messages;
+  return [
+    ...messages,
+    {
+      role: "assistant",
+      parts: restored,
+      timestamp: restored[0]?.createdAt ?? Date.now(),
+    },
+  ];
+}
+
+function workflowStatus(value: unknown): WorkflowRunStatus | undefined {
+  return value === "pending" ||
+    value === "running" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "aborted"
+    ? value
+    : undefined;
+}
+
+function workflowRunPartFromToolResult(params: {
+  toolCallId: string;
+  args?: unknown;
+  details?: unknown;
+  result?: unknown;
+}): Extract<MessagePart, { kind: "workflow_run" }> | null {
+  const details = asRecord(params.details) ?? asRecord(asRecord(params.result)?.details);
+  if (!details || typeof details.workflowId !== "string") return null;
+  const args = asRecord(params.args);
+  const artifacts = Array.isArray(details.artifacts)
+    ? (details.artifacts as WorkflowArtifact[])
+    : [];
+  const checkpoints = Array.isArray(details.checkpoints)
+    ? (details.checkpoints as WorkflowCheckpoint[])
+    : [];
+  const logs = Array.isArray(details.logs)
+    ? (details.logs as WorkflowScriptLog[])
+    : [];
+  const manifest = asRecord(details.manifest) as WorkflowManifest | null;
+  return {
+    kind: "workflow_run",
+    id: details.workflowId,
+    objective:
+      typeof details.objective === "string"
+        ? details.objective
+        : typeof args?.objective === "string"
+          ? args.objective
+          : "Dynamic workflow",
+    rationale: typeof args?.rationale === "string" ? args.rationale : "",
+    status: workflowStatus(details.status) ?? "completed",
+    manifest: manifest ?? undefined,
+    resumedFromWorkflowId:
+      typeof details.resumedFromWorkflowId === "string"
+        ? details.resumedFromWorkflowId
+        : undefined,
+    checkpoints,
+    artifacts,
+    logs,
+    createdAt:
+      typeof details.startedAt === "number" ? details.startedAt : Date.now(),
+    endedAt: typeof details.endedAt === "number" ? details.endedAt : undefined,
+    returnValue: details.returnValue,
+    error: typeof details.error === "string" ? details.error : undefined,
+  };
 }
 
 /**
@@ -646,6 +1013,266 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
       return state;
     }
 
+    // ===== RFC-6：Multi-subagent 协作状态卡 =====
+    case "subagent_batch_start": {
+      const batch = ev.batch;
+      if (!batch) return state;
+      replaceActive((msg) => {
+        const parts = (msg.parts ?? []).slice();
+        if (findSubagentBatchPartIndex(parts, batch.id) >= 0) return msg;
+        sealLastThinkingIfOpen(parts);
+        parts.push({
+          kind: "subagent_batch",
+          id: batch.id,
+          reason: batch.reason,
+          status: batch.status,
+          planning: batch.planning,
+          verification: batch.verification,
+          synthesis: batch.synthesis,
+          auditEvents: batch.auditEvents,
+          tasks: batch.tasks.map((task) => ({
+            id: task.id,
+            title: task.title,
+            role: task.role,
+            status: task.status,
+            agentId: task.agentId,
+            answer: task.answer,
+            answerPreview: task.answerPreview,
+            error: task.error,
+            sessionFile: task.sessionFile,
+            startedAt: task.startedAt,
+            endedAt: task.endedAt,
+            usage: task.usage,
+            verification: task.verification,
+            attempts: task.attempts,
+          })),
+          createdAt: batch.createdAt,
+          endedAt: batch.endedAt,
+        });
+        return { ...msg, parts };
+      });
+      return state;
+    }
+
+    case "subagent_task_start":
+    case "subagent_task_update":
+    case "subagent_task_end": {
+      const batchId = ev.batchId;
+      const taskId = ev.taskId;
+      if (!batchId || !taskId) return state;
+      for (let mi = state.messages.length - 1; mi >= 0; mi--) {
+        const m = state.messages[mi];
+        if (m.role !== "assistant" || !m.parts) continue;
+        const pi = findSubagentBatchPartIndex(m.parts, batchId);
+        if (pi < 0) continue;
+        const parts = m.parts.slice();
+        const cur = parts[pi];
+        if (cur.kind !== "subagent_batch") break;
+        parts[pi] = {
+          ...cur,
+          tasks: cur.tasks.map((task) => {
+            if (task.id !== taskId) return task;
+            return {
+              ...task,
+              title: ev.title ?? task.title,
+              role:
+                ev.role === "general" ||
+                ev.role === "rag" ||
+                ev.role === "research" ||
+                ev.role === "code-review" ||
+                ev.role === "implementation"
+                  ? ev.role
+                  : task.role,
+              status:
+                ev.status === "completed" ||
+                ev.status === "failed" ||
+                ev.status === "aborted" ||
+                ev.status === "timeout"
+                  ? ev.status
+                  : ev.type === "subagent_task_start"
+                  ? "running"
+                  : task.status,
+              agentId: ev.agentId ?? task.agentId,
+              answer:
+                ev.type === "subagent_task_start"
+                  ? undefined
+                  : ev.answer ?? task.answer,
+              answerPreview:
+                ev.type === "subagent_task_start"
+                  ? undefined
+                  : ev.answerPreview ?? task.answerPreview,
+              error:
+                ev.type === "subagent_task_start"
+                  ? undefined
+                  : ev.error ?? task.error,
+              sessionFile:
+                ev.type === "subagent_task_start"
+                  ? undefined
+                  : ev.sessionFile ?? task.sessionFile,
+              startedAt: ev.startedAt ?? task.startedAt,
+              endedAt:
+                ev.type === "subagent_task_start"
+                  ? undefined
+                  : ev.endedAt ?? task.endedAt,
+              usage:
+                ev.type === "subagent_task_start"
+                  ? undefined
+                  : ev.usage ?? task.usage,
+              verification:
+                ev.type === "subagent_task_start"
+                  ? undefined
+                  : (ev.verification as SubagentTaskVerification | undefined) ??
+                    task.verification,
+              attempts: ev.attempts ?? task.attempts,
+            };
+          }),
+        };
+        state.messages[mi] = { ...m, parts };
+        break;
+      }
+      return state;
+    }
+
+    case "subagent_batch_end": {
+      const batchId = ev.batchId;
+      if (!batchId) return state;
+      for (let mi = state.messages.length - 1; mi >= 0; mi--) {
+        const m = state.messages[mi];
+        if (m.role !== "assistant" || !m.parts) continue;
+        const pi = findSubagentBatchPartIndex(m.parts, batchId);
+        if (pi < 0) continue;
+        const parts = m.parts.slice();
+        const cur = parts[pi];
+        if (cur.kind !== "subagent_batch") break;
+        const results = resultsByTaskId(ev.results);
+        parts[pi] = {
+          ...cur,
+          status:
+            ev.status === "completed" ||
+            ev.status === "failed" ||
+            ev.status === "aborted"
+              ? ev.status
+              : cur.status,
+          verification:
+            (ev.verification as SubagentBatchVerification | undefined) ??
+            cur.verification,
+          synthesis: ev.synthesis ?? cur.synthesis,
+          auditEvents: ev.auditEvents ?? cur.auditEvents,
+          tasks: cur.tasks.map((task) => {
+            const result = results.get(task.id);
+            if (!result) return task;
+            return {
+              ...task,
+              status: isSubagentStatus(result.status) ? result.status : task.status,
+              agentId: result.agentId || task.agentId,
+              answer: result.answer ?? task.answer,
+              answerPreview:
+                previewSubagentAnswer(result.answer) ?? task.answerPreview,
+              error: result.error ?? task.error,
+              sessionFile: result.sessionFile ?? task.sessionFile,
+              startedAt: result.startedAt ?? task.startedAt,
+              endedAt: result.endedAt ?? task.endedAt,
+              usage: result.usage ?? task.usage,
+            };
+          }),
+          endedAt: ev.endedAt,
+        };
+        state.messages[mi] = { ...m, parts };
+        break;
+      }
+      return state;
+    }
+
+    // ===== Dynamic workflow script harness 状态卡 =====
+    case "workflow_start": {
+      const run = ev.run;
+      if (!run) return state;
+      replaceActive((msg) => {
+        const parts = (msg.parts ?? []).slice();
+        if (findWorkflowRunPartIndex(parts, run.id) >= 0) return msg;
+        sealLastThinkingIfOpen(parts);
+        parts.push({
+          kind: "workflow_run",
+          id: run.id,
+          objective: run.objective,
+          rationale: run.rationale,
+          status: run.status,
+          manifest: run.manifest,
+          resumedFromWorkflowId: run.resumedFromWorkflowId,
+          checkpoints: run.checkpoints,
+          artifacts: run.artifacts,
+          logs: run.logs,
+          createdAt: run.createdAt,
+          endedAt: run.endedAt,
+          returnValue: run.returnValue,
+          error: run.error,
+        });
+        return { ...msg, parts };
+      });
+      return state;
+    }
+
+    case "workflow_log":
+    case "workflow_checkpoint":
+    case "workflow_artifact": {
+      const workflowId = ev.workflowId;
+      if (!workflowId) return state;
+      for (let mi = state.messages.length - 1; mi >= 0; mi--) {
+        const m = state.messages[mi];
+        if (m.role !== "assistant" || !m.parts) continue;
+        const pi = findWorkflowRunPartIndex(m.parts, workflowId);
+        if (pi < 0) continue;
+        const parts = m.parts.slice();
+        const cur = parts[pi];
+        if (cur.kind !== "workflow_run") break;
+        parts[pi] = {
+          ...cur,
+          logs: ev.log ? [...cur.logs, ev.log] : cur.logs,
+          checkpoints: ev.checkpoint
+            ? [...cur.checkpoints, ev.checkpoint]
+            : cur.checkpoints,
+          artifacts: ev.artifact
+            ? [
+                ...cur.artifacts.filter(
+                  (artifact) => artifact.name !== ev.artifact?.name
+                ),
+                ev.artifact,
+              ]
+            : cur.artifacts,
+        };
+        state.messages[mi] = { ...m, parts };
+        break;
+      }
+      return state;
+    }
+
+    case "workflow_end": {
+      const workflowId = ev.workflowId;
+      if (!workflowId) return state;
+      for (let mi = state.messages.length - 1; mi >= 0; mi--) {
+        const m = state.messages[mi];
+        if (m.role !== "assistant" || !m.parts) continue;
+        const pi = findWorkflowRunPartIndex(m.parts, workflowId);
+        if (pi < 0) continue;
+        const parts = m.parts.slice();
+        const cur = parts[pi];
+        if (cur.kind !== "workflow_run") break;
+        parts[pi] = {
+          ...cur,
+          status: workflowStatus(ev.status) ?? cur.status,
+          endedAt: ev.endedAt,
+          artifacts: ev.artifacts ?? cur.artifacts,
+          checkpoints: ev.checkpoints ?? cur.checkpoints,
+          logs: ev.logs ?? cur.logs,
+          returnValue: ev.returnValue,
+          error: ev.error,
+        };
+        state.messages[mi] = { ...m, parts };
+        break;
+      }
+      return state;
+    }
+
     case "tool_execution_end": {
       if (!ev.toolCallId) return state;
       replaceActive((msg) => {
@@ -680,6 +1307,10 @@ export function ctxToMessages(
     model?: string;
     api?: string;
     usage?: NonNullable<AnyEvent["message"]>["usage"];
+    toolCallId?: string;
+    toolName?: string;
+    details?: unknown;
+    isError?: boolean;
     content?: Array<{
       type: string;
       text?: string;
@@ -688,9 +1319,11 @@ export function ctxToMessages(
       id?: string;
       name?: string;
       input?: unknown;
+      arguments?: unknown;
       tool_use_id?: string;
       content?: unknown;
       is_error?: boolean;
+      details?: unknown;
       // image
       data?: string;
       mimeType?: string;
@@ -701,15 +1334,24 @@ export function ctxToMessages(
   // 把 tool_result 按 tool_use_id 索引，到 assistant 遇到 tool_use 时回填
   const toolResults = new Map<
     string,
-    { result: unknown; isError: boolean }
+    { result: unknown; isError: boolean; details?: unknown; toolName?: string }
   >();
   for (const m of ctxMessages) {
+    if (m.role === "toolResult" && m.toolCallId) {
+      toolResults.set(m.toolCallId, {
+        result: m.content,
+        isError: !!m.isError,
+        details: m.details,
+        toolName: m.toolName,
+      });
+    }
     if (m.role === "tool") {
       for (const c of m.content ?? []) {
         if (c.type === "tool_result" && c.tool_use_id) {
           toolResults.set(c.tool_use_id, {
             result: c.content,
             isError: !!c.is_error,
+            details: c.details,
           });
         }
       }
@@ -743,17 +1385,39 @@ export function ctxToMessages(
           parts.push({ kind: "thinking", text: c.thinking });
         } else if (c.type === "image" && c.data && c.mimeType) {
           parts.push({ kind: "image", data: c.data, mimeType: c.mimeType });
-        } else if (c.type === "tool_use" && c.id && c.name) {
+        } else if (
+          (c.type === "tool_use" || c.type === "toolCall") &&
+          c.id &&
+          c.name
+        ) {
           const tr = toolResults.get(c.id);
+          const args = c.input ?? c.arguments;
           parts.push({
             kind: "tool",
             toolCallId: c.id,
             toolName: c.name,
-            args: c.input,
+            args,
             result: tr?.result,
             isError: tr?.isError ?? false,
             status: tr ? (tr.isError ? "error" : "done") : "running",
           });
+          if (c.name === "delegate_subagents" && tr) {
+            const subagentPart = subagentBatchPartFromToolResult({
+              toolCallId: c.id,
+              args,
+              details: tr.details,
+              result: tr.result,
+            });
+            if (subagentPart) parts.push(subagentPart);
+          } else if (c.name === "run_workflow_script" && tr) {
+            const workflowPart = workflowRunPartFromToolResult({
+              toolCallId: c.id,
+              args,
+              details: tr.details,
+              result: tr.result,
+            });
+            if (workflowPart) parts.push(workflowPart);
+          }
         }
       }
       out.push({

@@ -22,7 +22,7 @@
  */
 
 import { memo, useEffect, useState } from "react";
-import { Check, ShieldAlert, X } from "lucide-react";
+import { Check, GitMerge, ShieldAlert, X } from "lucide-react";
 import type { MessagePart } from "@/lib/types";
 
 type ApprovalPart = Extract<MessagePart, { kind: "approval" }>;
@@ -55,12 +55,114 @@ function previewInput(
   if (toolName === "edit" && typeof input.path === "string") {
     return String(input.path);
   }
+  if (toolName === "workflow:merge_worktree") {
+    const stat = typeof input.stat === "string" ? input.stat.trim() : "";
+    const diffPreview =
+      typeof input.diffPreview === "string" ? input.diffPreview.trim() : "";
+    const truncated = input.truncated ? "\n\n[diff preview truncated]" : "";
+    return [stat, diffPreview].filter(Boolean).join("\n\n") + truncated;
+  }
+  if (toolName === "workflow:fetch_url") {
+    const lines = [
+      `${String(input.method ?? "GET")} ${String(input.url ?? "")}`,
+      Array.isArray(input.headerNames) && input.headerNames.length
+        ? `Headers: ${input.headerNames.join(", ")}`
+        : "",
+      input.maxBytes ? `Max bytes: ${String(input.maxBytes)}` : "",
+      input.bodyPreview ? `Body preview:\n${String(input.bodyPreview)}` : "",
+      input.bodyTruncated ? "[body preview truncated]" : "",
+    ].filter(Boolean);
+    return lines.join("\n");
+  }
   try {
     const s = JSON.stringify(input);
     return s.length > 200 ? s.slice(0, 200) + "…" : s;
   } catch {
     return "[unserializable input]";
   }
+}
+
+function textValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function MergeWorktreePreview({ input }: { input: Record<string, unknown> }) {
+  const worktree =
+    input.worktree && typeof input.worktree === "object"
+      ? (input.worktree as Record<string, unknown>)
+      : {};
+  const stat = textValue(input.stat).trim();
+  const diffPreview = textValue(input.diffPreview).trim();
+  return (
+    <div className="space-y-2">
+      <div
+        className="rounded border px-2 py-1.5 text-[11px]"
+        style={{
+          borderColor: "var(--border)",
+          background: "var(--bg-panel)",
+          color: "var(--text-muted)",
+        }}
+      >
+        <div className="flex items-center gap-1.5 font-medium" style={{ color: "var(--text)" }}>
+          <GitMerge size={12} />
+          Apply isolated worktree patch
+        </div>
+        <div className="mt-1 grid gap-1">
+          {textValue(worktree.branchName) ? (
+            <div className="truncate">Branch: {textValue(worktree.branchName)}</div>
+          ) : null}
+          {textValue(worktree.baseRef) ? (
+            <div className="truncate">Base: {textValue(worktree.baseRef)}</div>
+          ) : null}
+          {textValue(worktree.path) ? (
+            <div className="truncate" title={textValue(worktree.path)}>
+              Path: {textValue(worktree.path)}
+            </div>
+          ) : null}
+        </div>
+      </div>
+      {stat ? (
+        <pre
+          className="text-xs px-2 py-1.5 rounded whitespace-pre-wrap"
+          style={{
+            background: "var(--bg-panel)",
+            color: "var(--text)",
+            fontFamily:
+              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            maxHeight: 100,
+            overflow: "auto",
+          }}
+        >
+          {stat}
+        </pre>
+      ) : null}
+      {diffPreview ? (
+        <details>
+          <summary
+            className="cursor-pointer text-[11px]"
+            style={{ color: "var(--text-muted)" }}
+          >
+            Diff preview
+            {input.truncated ? " (truncated)" : ""}
+          </summary>
+          <pre
+            className="mt-1 text-xs px-2 py-1.5 rounded whitespace-pre-wrap break-all"
+            style={{
+              background: "var(--bg-panel)",
+              color: "var(--text)",
+              fontFamily:
+                "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+              maxHeight: 220,
+              overflow: "auto",
+            }}
+          >
+            {diffPreview}
+            {input.truncated ? "\n\n[diff preview truncated]" : ""}
+          </pre>
+        </details>
+      ) : null}
+    </div>
+  );
 }
 
 /** 5 分钟倒计时，pending 时展示。到 0 不强行隐藏（server 那边会自动 timeout 推 resolved）。 */
@@ -177,19 +279,23 @@ export const ApprovalBubble = memo(function ApprovalBubble({
           {countdown}
         </span>
       </div>
-      <pre
-        className="text-xs px-2 py-1.5 rounded whitespace-pre-wrap break-all"
-        style={{
-          background: "var(--bg-panel)",
-          color: "var(--text)",
-          fontFamily:
-            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-          maxHeight: 160,
-          overflow: "auto",
-        }}
-      >
-        {preview}
-      </pre>
+      {part.toolName === "workflow:merge_worktree" ? (
+        <MergeWorktreePreview input={part.input} />
+      ) : (
+        <pre
+          className="text-xs px-2 py-1.5 rounded whitespace-pre-wrap break-all"
+          style={{
+            background: "var(--bg-panel)",
+            color: "var(--text)",
+            fontFamily:
+              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            maxHeight: 160,
+            overflow: "auto",
+          }}
+        >
+          {preview}
+        </pre>
+      )}
       <div className="flex items-center justify-between gap-2">
         {part.ruleId ? (
           <label
