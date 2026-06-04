@@ -2,7 +2,8 @@
 
 Self-hosted UI for [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent).
 A mini fork of `pi-web` that runs as a standalone web server (or Electron app),
-talks to the SDK directly, and keeps all configuration in `~/.pi/`.
+talks to the SDK directly, and keeps configuration in `~/.pi/` (shared with the
+`pi` CLI) plus mini-pi-web-only state in `~/.mini-pi/`.
 
 ## Quick Start
 
@@ -61,16 +62,21 @@ for the full architecture roadmap.
 
 ## Configuration
 
-mini-pi-web reads from `~/.pi/` (shared with `pi` CLI) and `~/.mini-pi-web/`
-(mini-pi-web-only):
+mini-pi-web reads from `~/.pi/` (shared with the `pi` CLI) and `~/.mini-pi/`
+(mini-pi-web-only state):
 
-| File | Purpose |
+| Path | Purpose |
 |---|---|
 | `~/.pi/auth.json` | API keys and OAuth credentials (per provider) |
 | `~/.pi/models.json` | Custom providers and per-model overrides |
 | `~/.pi/agent/skills/` | Installed agent skills |
-| `~/.mini-pi-web/meta/<sessionId>.json` | Per-session metadata (title, pinned, lastSeenAt) |
-| `~/.mini-pi-web/settings.json` | Global Budget defaults, approval rules, UI prefs |
+| `~/.pi/agent/browser-sites.json` | Browser-use site allow/deny policy |
+| `~/.mini-pi/sessions/<sessionId>.meta.json` | Per-session metadata (title, pinned, lastSeenAt) |
+| `~/.mini-pi/settings.json` | Global Budget defaults, approval rules, UI prefs |
+| `~/.mini-pi/goals/<agentId>.json` | Durable goal runtime: goal + turn + evidence history |
+| `~/.mini-pi/subagents/` | Subagent batches, memory, and user-level `*.md` definitions |
+| `~/.mini-pi/mcp/servers.json` | Configured MCP (stdio) servers |
+| `~/.mini-pi/workflows/runs/<workflowId>.json` | Dynamic workflow run history |
 
 The `~/.pi/` files are interchangeable with the upstream `pi` CLI and `pi-web`.
 
@@ -152,11 +158,11 @@ npm run electron:build
 └──────────────────────────────┬─────────────────────────────┘
                                │
 ┌──────────────────────────────▼─────────────────────────────┐
-│ ~/.pi/  (shared with pi CLI and upstream pi-web)           │
+│ ~/.pi/  (shared with pi CLI)  +  ~/.mini-pi/  (app state)  │
 └────────────────────────────────────────────────────────────┘
 ```
 
-No backend database. No external service. Just `~/.pi/`.
+No backend database. No external service. Just `~/.pi/` and `~/.mini-pi/`.
 
 ## License
 
