@@ -29,6 +29,16 @@ import type {
   SubagentTaskRuntime,
 } from "./types";
 import type { ThinkingLevel } from "@/lib/types";
+import type { SubagentDefinition } from "./definition";
+import { resolveSubagentModel, resolveSubagentPermission } from "./policy";
+import {
+  getSubagentMemory,
+  renderMemoryForPrompt,
+} from "./memory";
+import { resolveIsolationBaseRef, resolveIsolationMode } from "./isolation";
+import { runSubagentStartHook, runSubagentStopHook } from "./hooks";
+import type { WorkflowWorktree, WorkflowWorktreeManager } from "@/lib/workflows/types";
+import type { ApprovalResponse } from "@/lib/collab/types";
 
 const DEFAULT_MAX_TASKS = 8;
 const EXPLICIT_MAX_TASKS = 32;
@@ -69,6 +79,27 @@ export interface RunSubagentBatchDeps {
   getChild: (agentId: string) => ChildAgentRecord | undefined;
   disposeChild?: (agentId: string) => void;
   pushParentEvent: (event: SubagentEvent) => void;
+  /**
+   * Resolve a registered specialist definition by id (Sprint 2). Optional: when
+   * absent or returning null, tasks run with the legacy role-based behavior so
+   * existing delegations are unaffected (修正 5).
+   */
+  resolveDefinition?: (id: string) => SubagentDefinition | null;
+  /**
+   * Git worktree manager for isolated implementation subagents (Sprint 3).
+   * Optional: without it, isolation requests fall back to non-isolated runs.
+   */
+  worktrees?: WorkflowWorktreeManager;
+  /**
+   * Request user approval before merging an isolated worktree's diff (Sprint 3).
+   * Without it, isolated diffs are NOT merged (discarded) for safety.
+   */
+  approveSubagentMerge?: (params: {
+    taskId: string;
+    title: string;
+    worktree: WorkflowWorktree;
+    diff: { stat: string; diff: string };
+  }) => Promise<ApprovalResponse>;
 }
 
 interface RunningBatchController {
@@ -131,11 +162,13 @@ function sanitizeTask(raw: SubagentTask, index: number): SubagentTaskRuntime {
     requestedTools && writePaths?.length
       ? requestedTools
       : requestedTools?.filter((tool) => !isWriteCapableTool(tool));
+  const specialistId = raw.specialistId?.trim().slice(0, 80) || undefined;
   return {
     id: id.slice(0, 80),
     title: (raw.title?.trim() || id || `Task ${index + 1}`).slice(0, 120),
     prompt: raw.prompt.trim().slice(0, 12000),
     role: normalizeRole(raw.role),
+    specialistId,
     cwd: raw.cwd,
     allowedTools,
     writePaths,
@@ -223,7 +256,11 @@ export function validateDelegateInput(input: DelegateSubagentsInput): {
   };
 }
 
-function makeSubagentPrompt(task: SubagentTaskRuntime): string {
+function makeSubagentPrompt(
+  task: SubagentTaskRuntime,
+  specialistPrompt?: string,
+  memoryBlock?: string
+): string {
   const writeScope =
     task.writePaths && task.writePaths.length > 0
       ? [
@@ -234,6 +271,17 @@ function makeSubagentPrompt(task: SubagentTaskRuntime): string {
           "如果需要修改文件，只能修改上述路径；不要修改边界外的文件。",
         ]
       : [];
+  // Specialist system prompt is injected after the generic rules and before the
+  // task body, acting as the role setup (修正 3: caller truncates length).
+  const specialistScope =
+    specialistPrompt && specialistPrompt.trim()
+      ? ["", "你的角色设定：", specialistPrompt.trim()]
+      : [];
+  // Compact long-term memory for this specialist (Sprint 2 memory v1).
+  const memoryScope =
+    memoryBlock && memoryBlock.trim()
+      ? ["", "你的长期记忆（供参考，不要照搬）：", memoryBlock.trim()]
+      : [];
   return [
     "你是一个 subagent，只负责当前被委派的一个子任务。",
     "",
@@ -242,6 +290,8 @@ function makeSubagentPrompt(task: SubagentTaskRuntime): string {
     "- 优先给出可核验依据；如果依据不足，明确说明缺口。",
     "- 不要向用户追问；信息不足时直接写明无法确认的部分。",
     "- 最终输出包含：结论、依据、注意事项。",
+    ...specialistScope,
+    ...memoryScope,
     "",
     `子任务标题：${task.title}`,
     `子任务角色：${task.role ?? "general"}`,
@@ -737,9 +787,34 @@ async function runOneTask(
   task: SubagentTaskRuntime,
   controller: RunningBatchController
 ): Promise<SubagentResult> {
-  const role = normalizeRole(task.role);
+  // Resolve a registered specialist (Sprint 2). When none, behavior is the
+  // legacy role-based path (修正 5).
+  const definition: SubagentDefinition | null = task.specialistId
+    ? deps.resolveDefinition?.(task.specialistId) ?? null
+    : null;
+  const role = normalizeRole(definition?.role ?? task.role);
   const startedAt = Date.now();
   updateTask(batchId, task.id, { status: "running", startedAt });
+
+  // Merge permission: definition is the ceiling; runtime cannot escalate (修正 4).
+  const permission = resolveSubagentPermission(
+    definition,
+    { requestedTools: task.allowedTools, writePaths: task.writePaths },
+    defaultToolsForRole(role)
+  );
+  // Per-agent model policy: a specialist may pin its own model (safe fallback to
+  // the parent model when the definition's model spec is incomplete).
+  const model = resolveSubagentModel(definition, {
+    provider: deps.provider,
+    modelId: deps.modelId,
+  });
+
+  // Isolation (Sprint 3): implementation specialists may run in a dedicated git
+  // worktree so writes never touch the parent working tree until merged.
+  const isolationMode = resolveIsolationMode(definition, task);
+  let worktree: WorkflowWorktree | null = null;
+  let childCwd = task.cwd || deps.cwd;
+  let childWritePaths = permission.writePaths;
 
   let child: CreatedChildAgent | null = null;
   const subscription: { unsubscribe?: () => void } = {};
@@ -748,30 +823,106 @@ async function runOneTask(
   let timeout: ReturnType<typeof setTimeout> | null = null;
 
   try {
+    if (isolationMode === "worktree" && deps.worktrees) {
+      worktree = await deps.worktrees.create({
+        workflowId: `subagent-${batchId.slice(0, 8)}`,
+        name: task.id,
+        baseRef: resolveIsolationBaseRef(definition),
+      });
+      childCwd = worktree.path;
+      // Inside the worktree the child may write freely (the worktree IS the
+      // boundary); merge back to the parent requires approval.
+      childWritePaths = [worktree.path];
+      updateTask(batchId, task.id, {
+        worktree: {
+          id: worktree.id,
+          path: worktree.path,
+          branchName: worktree.branchName,
+        },
+      });
+      appendAuditEvent(
+        batchId,
+        auditEvent(
+          "worktree_created",
+          `Created isolated worktree for task ${task.title}.`,
+          {
+            at: startedAt,
+            taskId: task.id,
+            data: { worktreeId: worktree.id, path: worktree.path },
+          }
+        )
+      );
+    }
+
     child = await deps.createChild({
-      provider: deps.provider,
-      modelId: deps.modelId,
-      cwd: task.cwd || deps.cwd,
+      provider: model.provider,
+      modelId: model.modelId,
+      cwd: childCwd,
       parentSessionPath: deps.parentSessionPath,
       thinkingLevel: deps.thinkingLevel,
-      tools: task.allowedTools?.length ? task.allowedTools : defaultToolsForRole(role),
-      writePaths: task.writePaths,
+      tools: permission.allowedTools,
+      writePaths: childWritePaths,
       parentAgentId: deps.parentAgentId,
       childRole: role,
       hidden: true,
       enableSubagents: false,
+      // MCP scope (Sprint 5): a child only sees its specialist's declared MCP
+      // servers; non-specialist children get none.
+      mcpServers: definition?.allowedMcpServers ?? [],
     });
     controller.childAgentIds.add(child.id);
     updateTask(batchId, task.id, { agentId: child.id });
+    if (definition) {
+      appendAuditEvent(
+        batchId,
+        auditEvent(
+          "agent_selected",
+          `Task ${task.title} resolved to specialist "${definition.id}".`,
+          {
+            at: startedAt,
+            taskId: task.id,
+            data: {
+              specialistId: definition.id,
+              source: definition.source,
+              appliedMode: permission.appliedMode,
+              notes: permission.notes,
+              model: model.overridden
+                ? `${model.provider}/${model.modelId}`
+                : undefined,
+            },
+          }
+        )
+      );
+    }
     appendAuditEvent(
       batchId,
       auditEvent("task_started", `Started subagent task ${task.title}.`, {
         at: startedAt,
         taskId: task.id,
-        data: { agentId: child.id, role },
+        data: { agentId: child.id, role, specialistId: definition?.id },
       })
     );
-    if (task.writePaths?.length) {
+    // SubagentStart hook (Sprint 4): informational, recorded for audit.
+    const startHook = runSubagentStartHook(definition, {
+      taskId: task.id,
+      agentId: child.id,
+      role,
+    });
+    if (startHook.fired) {
+      appendAuditEvent(
+        batchId,
+        auditEvent(
+          "subagent_started_hook",
+          startHook.notes.join(" ") || `SubagentStart hooks fired.`,
+          {
+            at: startedAt,
+            taskId: task.id,
+            data: { hooks: startHook.hooks },
+          }
+        )
+      );
+    }
+    if (permission.writePaths?.length) {
       appendAuditEvent(
         batchId,
         auditEvent(
@@ -780,7 +931,7 @@ async function runOneTask(
           {
             at: startedAt,
             taskId: task.id,
-            data: { writePaths: task.writePaths },
+            data: { writePaths: permission.writePaths },
           }
         )
       );
@@ -841,7 +992,14 @@ async function runOneTask(
     try {
       await Promise.race([
         (async () => {
-          await rec.session.prompt(makeSubagentPrompt(task));
+          const memoryBlock = definition
+            ? renderMemoryForPrompt(
+                getSubagentMemory(definition.id, "project")
+              )
+            : "";
+          await rec.session.prompt(
+            makeSubagentPrompt(task, definition?.prompt, memoryBlock)
+          );
           await taskDone;
         })(),
         timedOut,
@@ -874,6 +1032,25 @@ async function runOneTask(
         : undefined,
     };
     const verification = verifyTaskResult(task, result);
+
+    // Isolated worktree: diff -> approval -> merge or discard (修正 2/3/6).
+    if (worktree && deps.worktrees && result.status === "completed") {
+      await mergeIsolatedWorktree(deps, batchId, task, worktree);
+    }
+
+    // SubagentStop hook (Sprint 3): update specialist memory from the result.
+    const stop = runSubagentStopHook(definition, task, result, verification);
+    if (stop.updatedMemory) {
+      appendAuditEvent(
+        batchId,
+        auditEvent("memory_updated", `Updated memory for ${definition?.id}.`, {
+          at: endedAt,
+          taskId: task.id,
+          data: { addedRisks: stop.addedRisks },
+        })
+      );
+    }
+
     updateTask(batchId, task.id, {
       status: result.status,
       endedAt,
@@ -981,6 +1158,104 @@ async function runOneTask(
       controller.childAgentIds.delete(child.id);
       deps.disposeChild?.(child.id);
     }
+    // Always clean up the isolated worktree (修正 6): merged changes are already
+    // applied to the parent; unmerged/discarded changes are dropped here.
+    if (worktree && deps.worktrees?.remove) {
+      await deps.worktrees.remove(worktree).catch(() => undefined);
+    }
+  }
+}
+
+/**
+ * Diff an isolated worktree, request merge approval, and merge or discard
+ * accordingly (Sprint 3). Failures are caught and recorded as discarded so a
+ * half-applied change never leaks into the parent working tree.
+ */
+async function mergeIsolatedWorktree(
+  deps: RunSubagentBatchDeps,
+  batchId: string,
+  task: SubagentTaskRuntime,
+  worktree: WorkflowWorktree
+): Promise<void> {
+  if (!deps.worktrees?.diff || !deps.worktrees?.merge) return;
+  try {
+    const diff = await deps.worktrees.diff(worktree);
+    if (!diff.diff.trim()) {
+      appendAuditEvent(
+        batchId,
+        auditEvent("worktree_discarded", `No changes in worktree for ${task.title}.`, {
+          taskId: task.id,
+          data: { worktreeId: worktree.id, reason: "empty-diff" },
+        })
+      );
+      return;
+    }
+    // Without an approval channel, never auto-merge.
+    if (!deps.approveSubagentMerge) {
+      appendAuditEvent(
+        batchId,
+        auditEvent(
+          "worktree_discarded",
+          `Worktree changes for ${task.title} discarded (no approval channel).`,
+          {
+            taskId: task.id,
+            data: { worktreeId: worktree.id, reason: "no-approval-channel" },
+          }
+        )
+      );
+      return;
+    }
+    const approval = await deps.approveSubagentMerge({
+      taskId: task.id,
+      title: task.title,
+      worktree,
+      diff: { stat: diff.stat, diff: diff.diff },
+    });
+    if (approval.decision !== "allow") {
+      appendAuditEvent(
+        batchId,
+        auditEvent(
+          "worktree_discarded",
+          `Merge denied for ${task.title}; changes discarded.`,
+          {
+            taskId: task.id,
+            data: { worktreeId: worktree.id, denyReason: approval.denyReason },
+          }
+        )
+      );
+      return;
+    }
+    const merged = await deps.worktrees.merge(worktree);
+    updateTask(batchId, task.id, {
+      worktree: {
+        id: worktree.id,
+        path: worktree.path,
+        branchName: worktree.branchName,
+        merged: merged.applied,
+      },
+    });
+    appendAuditEvent(
+      batchId,
+      auditEvent("worktree_merged", `Merged worktree for ${task.title}.`, {
+        taskId: task.id,
+        data: { worktreeId: worktree.id, applied: merged.applied, summary: merged.summary },
+      })
+    );
+  } catch (e) {
+    appendAuditEvent(
+      batchId,
+      auditEvent(
+        "worktree_discarded",
+        `Worktree merge failed for ${task.title}; changes discarded.`,
+        {
+          taskId: task.id,
+          data: {
+            worktreeId: worktree.id,
+            error: e instanceof Error ? e.message : String(e),
+          },
+        }
+      )
+    );
   }
 }
 
@@ -1021,81 +1296,121 @@ export async function runSubagentBatch(
   deps.pushParentEvent({ type: "subagent_batch_start", batch });
 
   const controller = registerRunningBatch(deps.parentAgentId, batchId);
-  const externalAbort = () => controller.abortController.abort();
-  signal?.addEventListener("abort", externalAbort, { once: true });
 
-  const queue = normalized.tasks.slice();
-  const results: SubagentResult[] = [];
-  let nextIndex = 0;
+  // Core execution: worker loop -> finalize -> push batch_end. Shared by
+  // foreground (awaited) and background (detached) modes.
+  const executeBatch = async (): Promise<SubagentResult[]> => {
+    const externalAbort = () => controller.abortController.abort();
+    signal?.addEventListener("abort", externalAbort, { once: true });
 
-  const worker = async () => {
-    while (!controller.abortController.signal.aborted) {
-      const task = queue[nextIndex++];
-      if (!task) return;
-      const result = await runOneTask(deps, batchId, task, controller);
-      results.push(result);
+    const queue = normalized.tasks.slice();
+    const results: SubagentResult[] = [];
+    let nextIndex = 0;
+
+    const worker = async () => {
+      while (!controller.abortController.signal.aborted) {
+        const task = queue[nextIndex++];
+        if (!task) return;
+        const result = await runOneTask(deps, batchId, task, controller);
+        results.push(result);
+      }
+    };
+
+    try {
+      await Promise.all(
+        Array.from({ length: normalized.concurrency }, () => worker())
+      );
+    } finally {
+      signal?.removeEventListener("abort", externalAbort);
     }
+
+    const endedAt = Date.now();
+    const hasCompleted = results.some((result) => result.status === "completed");
+    const finalStatus = controller.abortController.signal.aborted
+      ? "aborted"
+      : hasCompleted
+        ? "completed"
+        : "failed";
+    updateBatchStatus(batchId, finalStatus, endedAt);
+    unregisterRunningBatch(deps.parentAgentId, batchId);
+
+    for (const task of normalized.tasks) {
+      if (getTaskStatus(batchId, task.id) === "pending") {
+        const result: SubagentResult = {
+          taskId: task.id,
+          agentId: "",
+          status: "aborted",
+          error: "Batch ended before this task started.",
+          startedAt: endedAt,
+          endedAt,
+        };
+        updateTask(batchId, task.id, {
+          status: "aborted",
+          endedAt,
+          error: result.error,
+          verification: verifyTaskResult(task, result, endedAt),
+        });
+      }
+    }
+
+    const { verification, synthesis } = finalizeBatchArtifacts(batchId, endedAt);
+    appendAuditEvent(
+      batchId,
+      auditEvent("batch_completed", `Subagent batch ended as ${finalStatus}.`, {
+        at: endedAt,
+        data: { status: finalStatus, resultCount: results.length },
+      })
+    );
+    const auditEvents = getBatch(batchId)?.auditEvents;
+
+    deps.pushParentEvent({
+      type: "subagent_batch_end",
+      batchId,
+      status: finalStatus,
+      results,
+      endedAt,
+      verification,
+      synthesis,
+      auditEvents,
+    });
+
+    return results;
   };
 
-  try {
-    await Promise.all(
-      Array.from({ length: normalized.concurrency }, () => worker())
+  // Background queue v1 (Sprint 4): return immediately, keep running, push
+  // batch_end when done. Errors in the detached run are swallowed (the
+  // batch_end event and persisted status carry the outcome).
+  if (input.background) {
+    updateBatchStatus(batchId, "detached");
+    appendAuditEvent(
+      batchId,
+      auditEvent("batch_detached", `Batch detached to background queue.`, {
+        data: { taskCount: normalized.tasks.length },
+      })
     );
-  } finally {
-    signal?.removeEventListener("abort", externalAbort);
+    deps.pushParentEvent({
+      type: "subagent_batch_detached",
+      batchId,
+      taskCount: normalized.tasks.length,
+    });
+    void executeBatch().catch(() => undefined);
+    return {
+      batchId,
+      results: [],
+      planning: normalized.planning,
+      auditEvents: getBatch(batchId)?.auditEvents,
+    };
   }
 
-  const endedAt = Date.now();
-  const hasCompleted = results.some((result) => result.status === "completed");
-  const finalStatus = controller.abortController.signal.aborted
-    ? "aborted"
-    : hasCompleted
-      ? "completed"
-      : "failed";
-  updateBatchStatus(batchId, finalStatus, endedAt);
-  unregisterRunningBatch(deps.parentAgentId, batchId);
-
-  for (const task of normalized.tasks) {
-    if (getTaskStatus(batchId, task.id) === "pending") {
-      const result: SubagentResult = {
-        taskId: task.id,
-        agentId: "",
-        status: "aborted",
-        error: "Batch ended before this task started.",
-        startedAt: endedAt,
-        endedAt,
-      };
-      updateTask(batchId, task.id, {
-        status: "aborted",
-        endedAt,
-        error: result.error,
-        verification: verifyTaskResult(task, result, endedAt),
-      });
-    }
-  }
-
-  const { verification, synthesis } = finalizeBatchArtifacts(batchId, endedAt);
-  appendAuditEvent(
+  const results = await executeBatch();
+  const finalBatch = getBatch(batchId);
+  return {
     batchId,
-    auditEvent("batch_completed", `Subagent batch ended as ${finalStatus}.`, {
-      at: endedAt,
-      data: { status: finalStatus, resultCount: results.length },
-    })
-  );
-  const auditEvents = getBatch(batchId)?.auditEvents;
-
-  deps.pushParentEvent({
-    type: "subagent_batch_end",
-    batchId,
-    status: finalStatus,
     results,
-    endedAt,
-    verification,
-    synthesis,
-    auditEvents,
-  });
-
-  return { batchId, results, planning: normalized.planning, synthesis, auditEvents };
+    planning: normalized.planning,
+    synthesis: finalBatch?.synthesis,
+    auditEvents: finalBatch?.auditEvents,
+  };
 }
 
 export async function retrySubagentTask(
