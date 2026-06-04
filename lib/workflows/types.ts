@@ -194,6 +194,26 @@ export interface WorkflowFetchUrlInput {
   maxBytes?: number;
 }
 
+export interface WorkflowMcpToolDescriptor {
+  serverId: string;
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+}
+
+export interface WorkflowCallToolInput {
+  server: string;
+  tool: string;
+  input?: Record<string, unknown>;
+}
+
+export interface WorkflowCallToolResult {
+  server: string;
+  tool: string;
+  text: string;
+  isError: boolean;
+}
+
 export interface WorkflowFetchUrlResult {
   url: string;
   status: number;
@@ -249,11 +269,20 @@ export interface RunWorkflowScriptDeps {
   approveCapability?: (request: WorkflowCapabilityApprovalRequest) => Promise<ApprovalResponse>;
   approveWorktreeMerge?: (request: WorkflowWorktreeMergeApprovalRequest) => Promise<ApprovalResponse>;
   approveNetworkRequest?: (request: WorkflowNetworkApprovalRequest) => Promise<ApprovalResponse>;
+  approveMcpTool?: (request: WorkflowMcpToolApprovalRequest) => Promise<ApprovalResponse>;
   askUser?: (request: WorkflowAskUserRequest) => Promise<WorkflowAskUserResult>;
   fetchUrl?: (input: WorkflowFetchUrlInput, signal: AbortSignal) => Promise<WorkflowFetchUrlResult>;
   resolveFetchHost?: (host: string) => Promise<string[]>;
   networkPolicy?: WorkflowNetworkPolicy;
   worktrees?: WorkflowWorktreeManager;
+  /** List MCP tools available to a workflow (optionally scoped to a server). */
+  listMcpTools?: (serverId?: string) => Promise<WorkflowMcpToolDescriptor[]>;
+  /** Invoke an MCP tool through the parent runtime (never from the worker). */
+  callMcpTool?: (
+    input: WorkflowCallToolInput
+  ) => Promise<WorkflowCallToolResult>;
+  /** Server ids the workflow is allowed to use; undefined means all enabled. */
+  allowedMcpServers?: string[];
 }
 
 export type WorkflowRunStatus = "pending" | "running" | "completed" | "failed" | "aborted";
@@ -266,7 +295,8 @@ export type WorkflowCapability =
   | "browser"
   | "network"
   | "worktree"
-  | "ask_user";
+  | "ask_user"
+  | "mcp";
 
 export interface WorkflowManifest {
   capabilities: WorkflowCapability[];
@@ -299,6 +329,14 @@ export interface WorkflowNetworkApprovalRequest {
   objective: string;
   rationale: string;
   input: WorkflowFetchUrlInput;
+}
+
+export interface WorkflowMcpToolApprovalRequest {
+  workflowId: string;
+  manifest: WorkflowManifest;
+  objective: string;
+  rationale: string;
+  input: WorkflowCallToolInput;
 }
 
 export interface WorkflowAskUserRequest {

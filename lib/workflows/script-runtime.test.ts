@@ -1270,4 +1270,161 @@ describe("runWorkflowScript", () => {
       )
     ).rejects.toThrow("does not belong to this agent");
   });
+
+  it("lists and calls MCP tools under the mcp capability", async () => {
+    const approvals: string[] = [];
+    const mcpApprovals: string[] = [];
+    const calledTools: string[] = [];
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-mcp",
+        approveCapability: async (request) => {
+          approvals.push(request.capability);
+          return { decision: "allow" };
+        },
+        approveMcpTool: async (request) => {
+          mcpApprovals.push(`${request.input.server}/${request.input.tool}`);
+          return { decision: "allow" };
+        },
+        listMcpTools: async (serverId) => {
+          const all = [
+            { serverId: "fs", name: "read_file", description: "read a file" },
+            { serverId: "gh", name: "create_issue" },
+          ];
+          return serverId ? all.filter((t) => t.serverId === serverId) : all;
+        },
+        callMcpTool: async (input) => {
+          calledTools.push(`${input.server}/${input.tool}`);
+          return {
+            server: input.server,
+            tool: input.tool,
+            text: `called ${input.tool}`,
+            isError: false,
+          };
+        },
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Use MCP tools from a workflow.",
+        rationale: "Verify mcp capability runtime.",
+        capabilities: ["spawn_agent", "read_files", "mcp"],
+        script: `
+          const tools = await workflow.listTools();
+          workflow.artifact("tools", tools);
+          const res = await workflow.callTool({
+            server: "fs",
+            tool: "read_file",
+            input: { path: "/tmp/x" }
+          });
+          return res;
+        `,
+      }
+    );
+
+    expect(result.status).toBe("completed");
+    expect(approvals).toEqual(["mcp"]);
+    expect(mcpApprovals).toEqual(["fs/read_file"]);
+    expect(calledTools).toEqual(["fs/read_file"]);
+    expect(result.returnValue).toMatchObject({
+      server: "fs",
+      tool: "read_file",
+      text: "called read_file",
+      isError: false,
+    });
+    const toolsArtifact = result.artifacts.find((a) => a.name === "tools");
+    expect(Array.isArray(toolsArtifact?.value)).toBe(true);
+    expect((toolsArtifact?.value as unknown[]).length).toBe(2);
+    expect(
+      result.logs.some((log) => log.message.includes("[mcp] called: fs/read_file"))
+    ).toBe(true);
+  });
+
+  it("blocks workflow.callTool until mcp is declared", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-mcp-block",
+        listMcpTools: async () => [],
+        callMcpTool: async (input) => ({
+          server: input.server,
+          tool: input.tool,
+          text: "unreachable",
+          isError: false,
+        }),
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Call MCP without capability.",
+        rationale: "Verify mcp boundary.",
+        script: `
+          await workflow.callTool({ server: "fs", tool: "read_file" });
+        `,
+      }
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("workflow capability required: mcp");
+  });
+
+  it("rejects a denied workflow.callTool approval", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-mcp-deny",
+        approveCapability: async () => ({ decision: "allow" }),
+        approveMcpTool: async () => ({
+          decision: "deny",
+          denyReason: "not allowed",
+        }),
+        listMcpTools: async () => [{ serverId: "fs", name: "read_file" }],
+        callMcpTool: async (input) => ({
+          server: input.server,
+          tool: input.tool,
+          text: "unreachable",
+          isError: false,
+        }),
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Call MCP but get denied.",
+        rationale: "Verify mcp approval gate.",
+        capabilities: ["spawn_agent", "read_files", "mcp"],
+        script: `
+          await workflow.callTool({ server: "fs", tool: "read_file" });
+        `,
+      }
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("not allowed");
+  });
+
+  it("denies an MCP server outside the workflow scope", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-mcp-scope",
+        approveCapability: async () => ({ decision: "allow" }),
+        approveMcpTool: async () => ({ decision: "allow" }),
+        allowedMcpServers: ["fs"],
+        listMcpTools: async () => [{ serverId: "fs", name: "read_file" }],
+        callMcpTool: async (input) => ({
+          server: input.server,
+          tool: input.tool,
+          text: "unreachable",
+          isError: false,
+        }),
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Call an out-of-scope MCP server.",
+        rationale: "Verify mcp scope enforcement.",
+        capabilities: ["spawn_agent", "read_files", "mcp"],
+        script: `
+          await workflow.callTool({ server: "gh", tool: "create_issue" });
+        `,
+      }
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain('MCP server "gh" is not in this workflow');
+    expect(result.error).toContain("scope");
+  });
 });
