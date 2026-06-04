@@ -25,6 +25,9 @@ import type {
   WorkflowFetchUrlInput,
   WorkflowFetchUrlResult,
   WorkflowNetworkPolicy,
+  WorkflowMcpToolDescriptor,
+  WorkflowCallToolInput,
+  WorkflowCallToolResult,
 } from "./types";
 import {
   appendWorkflowCheckpoint,
@@ -70,6 +73,7 @@ const IMPLEMENTED_CAPABILITIES = new Set<WorkflowCapability>([
   "network",
   "worktree",
   "ask_user",
+  "mcp",
 ]);
 const APPROVAL_REQUIRED_CAPABILITIES = new Set<WorkflowCapability>([
   "write_files",
@@ -78,6 +82,7 @@ const APPROVAL_REQUIRED_CAPABILITIES = new Set<WorkflowCapability>([
   "network",
   "worktree",
   "ask_user",
+  "mcp",
 ]);
 
 type WorkflowSdk = {
@@ -98,6 +103,8 @@ type WorkflowSdk = {
   removeWorktree(worktree: WorkflowWorktree): Promise<void>;
   askUser(input: WorkflowAskUserInput): Promise<WorkflowAskUserResult>;
   fetchUrl(input: WorkflowFetchUrlInput): Promise<WorkflowFetchUrlResult>;
+  listTools(serverId?: string): Promise<WorkflowMcpToolDescriptor[]>;
+  callTool(input: WorkflowCallToolInput): Promise<WorkflowCallToolResult>;
   spawnAgent(input: WorkflowSpawnAgentInput): Promise<unknown>;
   parallel<T>(items: Array<Promise<T> | (() => Promise<T> | T)>): Promise<T[]>;
   stage<T>(title: string, fn: () => Promise<T> | T): Promise<T>;
@@ -155,7 +162,8 @@ function normalizeCapabilities(raw: WorkflowCapability[] | undefined): WorkflowC
       capability === "browser" ||
       capability === "network" ||
       capability === "worktree" ||
-      capability === "ask_user"
+      capability === "ask_user" ||
+      capability === "mcp"
     ) {
       if (!out.includes(capability)) out.push(capability);
     }
@@ -230,6 +238,18 @@ function requireCapability(manifest: WorkflowManifest, capability: WorkflowCapab
   if (!hasCapability(manifest, capability)) {
     throw new Error(`workflow capability required: ${capability}`);
   }
+}
+
+/**
+ * Whether an MCP server is usable by this workflow. `undefined` allowedMcpServers
+ * means "all enabled servers" (parent decides). An explicit list restricts to it.
+ */
+function isServerInScope(
+  allowedMcpServers: string[] | undefined,
+  serverId: string
+): boolean {
+  if (allowedMcpServers === undefined) return true;
+  return allowedMcpServers.includes(serverId);
 }
 
 function safeAllowedTools(
@@ -832,6 +852,77 @@ function createSdk(
       }
     },
 
+    async listTools(serverId?: string): Promise<WorkflowMcpToolDescriptor[]> {
+      if (signal.aborted) throw new Error("Workflow script aborted");
+      requireCapability(manifest, "mcp");
+      if (!deps.listMcpTools) {
+        throw new Error("workflow.listTools requires an MCP runtime");
+      }
+      const requested = cleanText(serverId, 120) || undefined;
+      if (requested && !isServerInScope(deps.allowedMcpServers, requested)) {
+        throw new Error(
+          `workflow.listTools: MCP server "${requested}" is not in this workflow's scope`
+        );
+      }
+      const tools = await deps.listMcpTools(requested);
+      // Defense-in-depth: even when no serverId was given, the broker already
+      // scopes to allowedMcpServers; filter again so a scope leak can't slip a
+      // tool through.
+      return tools.filter((tool) =>
+        isServerInScope(deps.allowedMcpServers, tool.serverId)
+      );
+    },
+
+    async callTool(toolInput: WorkflowCallToolInput): Promise<WorkflowCallToolResult> {
+      if (signal.aborted) throw new Error("Workflow script aborted");
+      requireCapability(manifest, "mcp");
+      if (!deps.callMcpTool) {
+        throw new Error("workflow.callTool requires an MCP runtime");
+      }
+      const server = cleanText(toolInput?.server, 120);
+      const tool = cleanText(toolInput?.tool, 200);
+      if (!server) throw new Error("workflow.callTool requires a server id");
+      if (!tool) throw new Error("workflow.callTool requires a tool name");
+      if (!isServerInScope(deps.allowedMcpServers, server)) {
+        throw new Error(
+          `workflow.callTool: MCP server "${server}" is not in this workflow's scope`
+        );
+      }
+      const callRequest: WorkflowCallToolInput = {
+        server,
+        tool,
+        input:
+          toolInput?.input && typeof toolInput.input === "object"
+            ? (toolInput.input as Record<string, unknown>)
+            : {},
+      };
+      // Every MCP call surfaces an approval, mirroring fetchUrl: the worker can
+      // never call an MCP tool without an explicit user (or policy) decision.
+      if (!deps.approveMcpTool) {
+        throw new Error("workflow.callTool requires per-call MCP approval");
+      }
+      const resp = await deps.approveMcpTool({
+        workflowId,
+        manifest,
+        objective: input.objective,
+        rationale: input.rationale,
+        input: callRequest,
+      });
+      if (resp.decision !== "allow") {
+        pushLog(
+          "warn",
+          `[mcp] denied by user: ${server}/${tool} (${resp.denyReason ?? "no reason"})`
+        );
+        throw new Error(resp.denyReason ?? "Workflow MCP tool call denied");
+      }
+      const result = await deps.callMcpTool(callRequest);
+      pushLog(
+        "info",
+        `[mcp] called: ${server}/${tool} -> ${result.isError ? "error" : "ok"}`
+      );
+      return result;
+    },
+
     async spawnAgent(agentInput: WorkflowSpawnAgentInput) {
       if (signal.aborted) throw new Error("Workflow script aborted");
       requireCapability(manifest, "spawn_agent");
@@ -1101,6 +1192,12 @@ async function executeScriptInWorker(args: {
           result = await args.sdk.askUser(requestArgs[0] as WorkflowAskUserInput);
         } else if (method === "fetchUrl") {
           result = await args.sdk.fetchUrl(requestArgs[0] as WorkflowFetchUrlInput);
+        } else if (method === "listTools") {
+          result = await args.sdk.listTools(
+            requestArgs[0] as string | undefined
+          );
+        } else if (method === "callTool") {
+          result = await args.sdk.callTool(requestArgs[0] as WorkflowCallToolInput);
         } else if (method === "spawnAgent") {
           result = await args.sdk.spawnAgent(requestArgs[0] as WorkflowSpawnAgentInput);
         } else {

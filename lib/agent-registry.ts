@@ -71,6 +71,11 @@ import { shouldStopRetrying } from "./goal/blocked-state";
 import { bridgeProgressEvidence } from "./goal/evidence-bridge";
 import { getDefinition } from "./subagents/registry";
 import { loadMcpToolDefinitions } from "./mcp/loader";
+import {
+  listMcpTools as listMcpToolsRuntime,
+  callMcpTool as callMcpToolRuntime,
+} from "./mcp/runtime";
+import { listEnabledMcpServers } from "./mcp/registry";
 import { updateProgress } from "./progress/server-store";
 import type {
   ApprovalRequestEvent,
@@ -721,6 +726,61 @@ export async function createAgent(opts: CreateOptions): Promise<{
     return resp;
   }
 
+  async function requestWorkflowMcpToolApproval(params: {
+    workflowId: string;
+    objective: string;
+    rationale: string;
+    manifest: unknown;
+    input: { server: string; tool: string; input?: Record<string, unknown> };
+  }) {
+    const rec = recordHolder.current;
+    if (!rec) {
+      return {
+        decision: "deny" as const,
+        denyReason: "No UI approval channel was available.",
+      };
+    }
+    const ruleId = `mcp:${params.input.server}:${params.input.tool}`;
+    if (hasSessionRemember(id, ruleId)) {
+      return { decision: "allow" as const };
+    }
+    const toolCallId = `workflow-mcp:${params.workflowId}:${params.input.server}:${params.input.tool}:${Date.now()}`;
+    const req = {
+      id: `${id}:${toolCallId}`,
+      agentId: id,
+      toolCallId,
+      toolName: `workflow:mcp:${params.input.server}/${params.input.tool}`,
+      input: {
+        workflowId: params.workflowId,
+        objective: params.objective,
+        rationale: params.rationale,
+        manifest: params.manifest,
+        server: params.input.server,
+        tool: params.input.tool,
+        argsPreview: JSON.stringify(params.input.input ?? {}).slice(0, 800),
+      },
+      reason: "manual" as const,
+      ruleId,
+      defaultDecision: "deny" as const,
+      createdAt: Date.now(),
+    };
+    pushExternalEvent(rec, { type: "approval_request", request: req });
+    const resp = await registerPendingApproval(req);
+    const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
+      resp.denyReason === undefined && resp.decision === req.defaultDecision
+        ? "timeout"
+        : "user";
+    pushExternalEvent(rec, {
+      type: "approval_resolved",
+      id: req.id,
+      toolCallId: req.toolCallId,
+      decision: resp.decision,
+      resolvedBy,
+      denyReason: resp.denyReason,
+    });
+    return resp;
+  }
+
   async function requestWorkflowNetworkApproval(params: {
     workflowId: string;
     objective: string;
@@ -1034,9 +1094,55 @@ export async function createAgent(opts: CreateOptions): Promise<{
             requestWorkflowWorktreeMergeApproval(request),
           approveNetworkRequest: (request) =>
             requestWorkflowNetworkApproval(request),
+          approveMcpTool: (request) =>
+            requestWorkflowMcpToolApproval(request),
           askUser: (request) => requestWorkflowUserClarification(request),
           worktrees: createGitWorktreeManager(opts.cwd),
           networkPolicy: getWorkflowNetworkPolicy(),
+          // MCP for workflow scripts (workflow.listTools / callTool). The
+          // workflow tool belongs to the main agent, so it may use all enabled
+          // servers; the worker still goes through per-call approval above.
+          allowedMcpServers: undefined,
+          listMcpTools: async (serverId) => {
+            const ids = serverId
+              ? [serverId]
+              : listEnabledMcpServers().map((s) => s.id);
+            const out: Array<{
+              serverId: string;
+              name: string;
+              description?: string;
+              inputSchema?: Record<string, unknown>;
+            }> = [];
+            for (const sid of ids) {
+              try {
+                const tools = await listMcpToolsRuntime(sid);
+                for (const t of tools) {
+                  out.push({
+                    serverId: t.serverId,
+                    name: t.name,
+                    description: t.description,
+                    inputSchema: t.inputSchema,
+                  });
+                }
+              } catch {
+                // skip a broken server (best-effort, never throw into worker)
+              }
+            }
+            return out;
+          },
+          callMcpTool: async (callInput) => {
+            const result = await callMcpToolRuntime(
+              callInput.server,
+              callInput.tool,
+              callInput.input ?? {}
+            );
+            return {
+              server: callInput.server,
+              tool: callInput.tool,
+              text: result.text,
+              isError: result.isError,
+            };
+          },
           runSubagents: (subagentInput, subagentSignal) =>
             runSubagentBatch(
               {
