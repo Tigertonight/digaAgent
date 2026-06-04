@@ -15,6 +15,9 @@ tsconfig.tsbuildinfo
 # agent 工作产物（imagegen 输出 / debug dump 等）,不入仓
 output/
 
+# Codewiz 工具工作目录,不入仓
+.codewiz/
+
 # Playwright 测试产物
 test-results/
 playwright-report/
