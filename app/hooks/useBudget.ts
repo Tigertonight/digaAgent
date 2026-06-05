@@ -90,14 +90,14 @@ export function useBudget(opts: UseBudgetOptions): UseBudgetReturn {
     if (typeof window === "undefined") return DEFAULT_BUDGET;
     return resolveBudget(agentId);
     // 依赖 budgetVersion：setter 调用后 ++ 触发 re-resolve
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [agentId, budgetVersion]);
 
   const hasOverride = useMemo<boolean>(() => {
     if (typeof window === "undefined") return false;
     if (!agentId) return false;
     return loadSessionOverride(agentId) != null;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [agentId, budgetVersion]);
 
   // duration tick：仅 streaming 中才订阅 setInterval，省 CPU。

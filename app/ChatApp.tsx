@@ -1149,7 +1149,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         });
       })
       .catch((e) => setError(String(e)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [selectedId]);
 
   // 切完分支后从 session context 重建 chat state

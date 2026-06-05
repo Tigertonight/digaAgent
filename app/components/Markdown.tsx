@@ -326,7 +326,7 @@ export default function Markdown({
           img({ src, alt, node: _node, ...rest }) {
             const s = typeof src === "string" ? src : "";
             return (
-              // eslint-disable-next-line @next/next/no-img-element
+               
               <img
                 {...rest}
                 src={s}

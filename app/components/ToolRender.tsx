@@ -309,7 +309,7 @@ function ToolImages({ tool }: { tool: ToolPart }) {
             className="block rounded overflow-hidden border p-0"
             style={{ borderColor: "var(--border-soft)", background: "none", cursor: "zoom-in" }}
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
+            { }
             <img
               src={src}
               alt={`tool image ${i + 1}`}

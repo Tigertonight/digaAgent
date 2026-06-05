@@ -460,7 +460,7 @@ export function usePetPusher(params: UsePetPusherParams): void {
         petPushTimerRef.current = null;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [
     activeSnapshot,
     sessions,

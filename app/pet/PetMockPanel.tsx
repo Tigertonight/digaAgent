@@ -212,7 +212,7 @@ export default function PetMockPanel({ onInject }: Props) {
     setActive(initial);
     onInject(buildMockState(initial));
     // 仅 mount 一次
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, []);
 
   const handlePick = useCallback(

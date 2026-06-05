@@ -939,7 +939,7 @@ function ImagePreviewViewer({
         className="flex-1 min-h-0 overflow-auto flex items-center justify-center p-3"
         style={{ background: "var(--bg-app)" }}
       >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
+        { }
         <img
           src={src}
           alt=""
@@ -1114,7 +1114,7 @@ export default function FileBrowser({
   // picker 模式:首次挂载时把当前 cwd 进 recents,作为"回家"快捷入口
   useEffect(() => {
     if (isPicker && initialPath) pushRecentRoot(initialPath);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, []);
 
   // root 切换 → 清空搜索 filter,避免上一层的关键词把新层卡空

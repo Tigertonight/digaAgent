@@ -69,7 +69,7 @@ function BrandLogoComponent({ size, className }: BrandLogoProps) {
       onBlur={stopCycling}
       tabIndex={-1}
     >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
+      { }
       <img
         src={src}
         alt=""

@@ -143,7 +143,7 @@ export function OAuthLoginModal({
     return () => {
       ev.close();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [provider]);
 
   const submit = useCallback(
