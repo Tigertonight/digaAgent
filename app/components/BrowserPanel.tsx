@@ -31,6 +31,7 @@ import type {
 } from "@/lib/browser/types";
 import type { RuntimeIdentity } from "@/lib/runtime/identity";
 import { InAppBrowserSurface } from "./InAppBrowserSurface";
+import { RuntimeTimeline } from "./RuntimeTimeline";
 import { WebviewPocPanel } from "./WebviewPocPanel";
 
 /** [PoC] 是否在 Electron 桌面环境（webview PoC 仅此环境可用） */
@@ -1161,6 +1162,11 @@ export function BrowserPanel({
             className="max-h-72 overflow-auto border-t"
             style={{ borderColor: "var(--border-soft)" }}
           >
+            <RuntimeTimeline
+              agentId={agentId}
+              browserId={browserId}
+              enabled={showDetails}
+            />
             {steps.length === 0 ? (
               <div className="px-2.5 py-3 text-xs" style={{ color: "var(--fg-faint)" }}>
                 暂无浏览器操作。让 agent 使用浏览器，或在地址栏手动打开网页，每一步都会作为验收证据记录在这里。
