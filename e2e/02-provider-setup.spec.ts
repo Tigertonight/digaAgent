@@ -102,7 +102,8 @@ test("provider setup: 首次打开后可选择 OpenAI API Key 并 mock 保存验
   await page.reload();
   await page.waitForSelector("text=Diga Agent", { timeout: 10_000 });
 
-  await page.getByRole("button", { name: "Provider setup" }).click();
+  await page.getByRole("button", { name: "动作菜单" }).click();
+  await page.getByRole("button", { name: /Provider \/ Models/ }).click();
   await expect(page.getByText("Provider setup")).toBeVisible();
 
   await page.getByRole("button", { name: /OpenAI API Key/ }).click();

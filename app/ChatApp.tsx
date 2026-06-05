@@ -2116,7 +2116,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           onToggleBrowser={toggleBrowser}
         />
 
-        {messages.length === 0 && !error ? (
+        {messages.length === 0 && !error && !progress ? (
           <EmptyState />
         ) : (
           <MessagesScrollArea

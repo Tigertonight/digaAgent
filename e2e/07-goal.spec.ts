@@ -113,6 +113,7 @@ test("goal: slash command sets goal and renders goal bar updates", async ({
     "21"
   );
   await expect(page.getByTestId("progress-panel")).toBeVisible();
+  await page.getByTestId("progress-group-toggle").click();
   await expect(page.getByText("Inspect goal runtime")).toBeVisible();
   await expect(page.getByText("Ship progress panel")).toBeVisible();
   await expect(page.getByText("localhost:3000")).toBeVisible();
