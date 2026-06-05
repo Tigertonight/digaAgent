@@ -16,8 +16,25 @@ import {
   browserType,
   browserVerify,
   browserWait,
+  browserWaitFor,
+  listBrowserAnnotations,
+  setBrowserAnnotationStatus,
 } from "./runtime";
-import type { BrowserSnapshot } from "./types";
+import { agentBrowserId } from "./browser-id";
+import {
+  allowBrowserSite,
+  checkBrowserSite,
+  describeSensitiveAction,
+  detectSensitiveAction,
+  normalizeBrowserUrl,
+  type BrowserSensitiveAction,
+} from "./policy";
+import type {
+  BrowserExtractResult,
+  BrowserSnapshot,
+  BrowserToolEvidence,
+  BrowserVerifyResult,
+} from "./types";
 
 const OpenParams = Type.Object({
   url: Type.String({
@@ -93,17 +110,83 @@ const VerifyParams = Type.Object({
   ),
 });
 
+const WaitForParams = Type.Object({
+  url: Type.Optional(
+    Type.String({
+      description:
+        "Wait until the current URL contains this substring. Use this to confirm a navigation/redirect finished.",
+    })
+  ),
+  selector: Type.Optional(
+    Type.String({ description: "Wait until this CSS selector appears." })
+  ),
+  text: Type.Optional(
+    Type.String({ description: "Wait until this visible text appears." })
+  ),
+  timeoutMs: Type.Optional(
+    Type.Number({ description: "Max time to wait, in milliseconds (default 10000)." })
+  ),
+});
+
 const EmptyParams = Type.Object({});
+
+const ResolveAnnotationParams = Type.Object({
+  annotationId: Type.String({
+    description: "The id of the annotation to mark as resolved.",
+  }),
+});
 
 export interface BrowserExtensionOptions {
   getAgentId: () => string;
   onBrowserState: (snapshot: BrowserSnapshot) => void;
+  /**
+   * 阶段 E：外部站点首次访问审批。返回 true=允许（并会被落库为 allowed），false=拒绝。
+   * 由 agent-registry 注入，复用现有审批通道（approval_request/resolved + SSE）。
+   * 不注入时（如无 UI 通道的子 agent）默认拒绝外部站点，保证安全语义。
+   */
+  requestSiteApproval?: (input: {
+    origin: string;
+    url: string;
+  }) => Promise<boolean>;
+  /**
+   * 阶段 E：敏感动作（登录/付款/上传/提交）二次确认。返回 true=允许，false=拒绝。
+   */
+  requestActionApproval?: (input: {
+    action: BrowserSensitiveAction;
+    detail: string;
+    url: string | null;
+  }) => Promise<boolean>;
 }
 
-function textResult(text: string, snapshot: BrowserSnapshot, details?: unknown) {
+/** 所有 browser_* 工具统一的 details 形态（snapshot + 标准化 evidence）。 */
+type BrowserToolDetails = {
+  snapshot: BrowserSnapshot;
+  evidence: BrowserToolEvidence;
+};
+
+/**
+ * 阶段 B：把一次 browser tool 执行统一映射成 SDK 返回结构，并附带
+ * 标准化的、机器可读的 evidence。
+ *   - observation -> content[].text（给模型读）
+ *   - snapshot + evidence -> details（给前端「验收证据面板」/审计读）
+ *
+ * evidence 的 url/title/screenshotDataUrl 默认从 snapshot 自动补全，
+ * 调用方只需补充 tool 特有的字段（如 extractedText / passed）。
+ */
+function toolResult(
+  observation: string,
+  snapshot: BrowserSnapshot,
+  evidence: Partial<BrowserToolEvidence> & { tool: string }
+) {
+  const fullEvidence: BrowserToolEvidence = {
+    url: snapshot.url,
+    title: snapshot.title,
+    screenshotDataUrl: snapshot.screenshotDataUrl,
+    ...evidence,
+  };
   return {
-    content: [{ type: "text" as const, text }],
-    details: { snapshot, ...(details ? { result: details } : {}) },
+    content: [{ type: "text" as const, text: observation }],
+    details: { snapshot, evidence: fullEvidence },
   };
 }
 
@@ -115,8 +198,73 @@ async function runWithBrowserState<T>(
     const result = await fn();
     return result;
   } catch (error) {
-    opts.onBrowserState(getBrowserSnapshot(opts.getAgentId()));
+    opts.onBrowserState(getBrowserSnapshot(agentBrowserId(opts.getAgentId())));
     throw error;
+  }
+}
+
+/**
+ * 阶段 E：导航前的站点守卫。
+ * - local / allowed：放行。
+ * - blocked：直接抛错（agent 收到拒绝原因）。
+ * - unknown（外部首次）：弹审批；用户允许则落库为 allowed 后放行，否则抛错。
+ */
+async function guardSite(
+  opts: BrowserExtensionOptions,
+  url: string
+): Promise<void> {
+  let check;
+  try {
+    check = await checkBrowserSite(url);
+  } catch {
+    // URL 无法规范化时交给后续 runtime 抛更具体的错
+    return;
+  }
+  if (check.decision === "local" || check.decision === "allowed") return;
+  if (check.decision === "blocked") {
+    throw new Error(
+      `该站点已被屏蔽，无法访问：${check.origin}。如需访问请在浏览器面板里解除屏蔽。`
+    );
+  }
+  // unknown：外部站点首次访问，需用户审批
+  if (!opts.requestSiteApproval) {
+    throw new Error(
+      `外部站点未授权：${check.origin}。当前会话没有可用的审批通道，已拒绝访问。`
+    );
+  }
+  const approved = await opts.requestSiteApproval({
+    origin: check.origin,
+    url: normalizeBrowserUrl(url),
+  });
+  if (!approved) {
+    throw new Error(`用户拒绝访问外部站点：${check.origin}`);
+  }
+  // 用户批准 → 落库为 allowed，后续同源不再询问
+  await allowBrowserSite(check.origin).catch(() => {});
+}
+
+/**
+ * 阶段 E：敏感动作守卫（登录/付款/上传/提交）。
+ * 从给定文本里识别敏感动作，命中则二次确认；未命中或无审批通道则放行。
+ */
+async function guardAction(
+  opts: BrowserExtensionOptions,
+  texts: Array<string | null | undefined>
+): Promise<void> {
+  const action = detectSensitiveAction(...texts);
+  if (!action) return;
+  // 没有审批通道时不阻断普通输入（避免误伤），仅当有通道时确认
+  if (!opts.requestActionApproval) return;
+  const snapshot = getBrowserSnapshot(agentBrowserId(opts.getAgentId()));
+  const approved = await opts.requestActionApproval({
+    action,
+    detail: describeSensitiveAction(action),
+    url: snapshot.url,
+  });
+  if (!approved) {
+    throw new Error(
+      `用户拒绝执行${describeSensitiveAction(action)}（敏感动作需确认）。`
+    );
   }
 }
 
@@ -131,12 +279,30 @@ export function createBrowserExtension(
 
 You have access to a local browser through the browser_* tools. When the user asks you to open a web page, browse a website, search the web, click a browser link, inspect a page, verify a UI in a browser, or explicitly says to use browser/browser-use, you must operate the browser with these tools before answering.
 
-Do not merely describe browser steps when a browser action is requested. Use browser_open or browser_search first, then browser_extract/browser_screenshot/browser_verify to inspect the result, and report the observed evidence.
+Operate the browser step by step, observing between steps:
+1. browser_open / browser_search to navigate.
+2. browser_extract / browser_screenshot to observe the current page.
+3. browser_click / browser_click_text / browser_fill / browser_type to interact.
+4. browser_wait_for (url/selector/text) after any action that triggers navigation or async content, to confirm the page settled before observing again.
+5. browser_verify to produce an objective pass/fail result against an expectation, selector, or text.
+
+Do not merely describe browser steps when a browser action is requested. Actually call the tools, then report the observed evidence (URL, title, and pass/fail).
+
+## Page Annotations
+
+The user can draw a region on the browser page and leave a comment. These page annotations are visual tasks pointing at a specific area of a page. Call browser_annotations to read pending annotations (each has a region, the page URL, and the user's comment). After you address an annotation (e.g. fix the UI and re-verify with browser_verify), call browser_resolve_annotation with its id to mark it done.
+
+## Browser Safety
+
+- localhost / 127.0.0.1 / file URLs are always allowed.
+- Visiting an external site for the first time requires user approval. browser_open may pause for the user to approve; once approved that origin is remembered for the session.
+- Sensitive actions (login, payment, file upload, form submit) require an extra confirmation. Only attempt them when the user clearly asked for it, and never enter credentials, card numbers, or other secrets on your own initiative — let the user take over for those.
+- If a navigation or action is denied, report it to the user instead of retrying in a loop.
 `,
     }));
 
     pi.registerTool(
-      defineTool<typeof OpenParams, { snapshot: BrowserSnapshot }>({
+      defineTool<typeof OpenParams, BrowserToolDetails>({
         name: "browser_open",
         label: "Browser Open",
         description:
@@ -150,17 +316,20 @@ Do not merely describe browser steps when a browser action is requested. Use bro
         parameters: OpenParams,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
+          await guardSite(opts, params.url);
           const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserOpen(opts.getAgentId(), params.url)
+            browserOpen(agentBrowserId(opts.getAgentId()), params.url)
           );
           opts.onBrowserState(snapshot);
-          return textResult(`Opened ${result.url}`, snapshot);
+          return toolResult(`Opened ${result.url}`, snapshot, {
+            tool: "browser_open",
+          });
         },
       })
     );
 
     pi.registerTool(
-      defineTool<typeof EmptyParams, { snapshot: BrowserSnapshot }>({
+      defineTool<typeof EmptyParams, BrowserToolDetails>({
         name: "browser_screenshot",
         label: "Browser Screenshot",
         description: "Capture the current browser viewport screenshot.",
@@ -169,16 +338,20 @@ Do not merely describe browser steps when a browser action is requested. Use bro
         executionMode: "sequential",
         async execute() {
           const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserScreenshot(opts.getAgentId())
+            browserScreenshot(agentBrowserId(opts.getAgentId()))
           );
           opts.onBrowserState(snapshot);
-          return textResult(`Captured browser screenshot for ${result.url}`, snapshot);
+          return toolResult(
+            `Captured browser screenshot for ${result.url}`,
+            snapshot,
+            { tool: "browser_screenshot" }
+          );
         },
       })
     );
 
     pi.registerTool(
-      defineTool<typeof ClickParams, { snapshot: BrowserSnapshot }>({
+      defineTool<typeof ClickParams, BrowserToolDetails>({
         name: "browser_click",
         label: "Browser Click",
         description:
@@ -188,16 +361,20 @@ Do not merely describe browser steps when a browser action is requested. Use bro
         executionMode: "sequential",
         async execute(_toolCallId, params) {
           const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserClick(opts.getAgentId(), params)
+            browserClick(agentBrowserId(opts.getAgentId()), params)
           );
           opts.onBrowserState(snapshot);
-          return textResult(`Clicked browser target; current URL ${result.url}`, snapshot);
+          return toolResult(
+            `Clicked browser target; current URL ${result.url}`,
+            snapshot,
+            { tool: "browser_click" }
+          );
         },
       })
     );
 
     pi.registerTool(
-      defineTool<typeof ClickTextParams, { snapshot: BrowserSnapshot }>({
+      defineTool<typeof ClickTextParams, BrowserToolDetails>({
         name: "browser_click_text",
         label: "Browser Click Text",
         description:
@@ -210,17 +387,22 @@ Do not merely describe browser steps when a browser action is requested. Use bro
         parameters: ClickTextParams,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
+          await guardAction(opts, [params.text]);
           const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserClickText(opts.getAgentId(), params)
+            browserClickText(agentBrowserId(opts.getAgentId()), params)
           );
           opts.onBrowserState(snapshot);
-          return textResult(`Clicked text "${params.text}"; current URL ${result.url}`, snapshot);
+          return toolResult(
+            `Clicked text "${params.text}"; current URL ${result.url}`,
+            snapshot,
+            { tool: "browser_click_text" }
+          );
         },
       })
     );
 
     pi.registerTool(
-      defineTool<typeof FillParams, { snapshot: BrowserSnapshot }>({
+      defineTool<typeof FillParams, BrowserToolDetails>({
         name: "browser_fill",
         label: "Browser Fill",
         description:
@@ -233,17 +415,22 @@ Do not merely describe browser steps when a browser action is requested. Use bro
         parameters: FillParams,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
+          await guardAction(opts, [params.selector, params.text]);
           const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserFill(opts.getAgentId(), params)
+            browserFill(agentBrowserId(opts.getAgentId()), params)
           );
           opts.onBrowserState(snapshot);
-          return textResult(`Filled browser input; current URL ${result.url}`, snapshot);
+          return toolResult(
+            `Filled browser input; current URL ${result.url}`,
+            snapshot,
+            { tool: "browser_fill" }
+          );
         },
       })
     );
 
     pi.registerTool(
-      defineTool<typeof TypeParams, { snapshot: BrowserSnapshot }>({
+      defineTool<typeof TypeParams, BrowserToolDetails>({
         name: "browser_type",
         label: "Browser Type",
         description:
@@ -252,17 +439,22 @@ Do not merely describe browser steps when a browser action is requested. Use bro
         parameters: TypeParams,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
+          await guardAction(opts, [params.selector, params.text]);
           const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserType(opts.getAgentId(), params)
+            browserType(agentBrowserId(opts.getAgentId()), params)
           );
           opts.onBrowserState(snapshot);
-          return textResult(`Typed into browser; current URL ${result.url}`, snapshot);
+          return toolResult(
+            `Typed into browser; current URL ${result.url}`,
+            snapshot,
+            { tool: "browser_type" }
+          );
         },
       })
     );
 
     pi.registerTool(
-      defineTool<typeof SearchParams, { snapshot: BrowserSnapshot; result?: unknown }>({
+      defineTool<typeof SearchParams, BrowserToolDetails>({
         name: "browser_search",
         label: "Browser Search",
         description:
@@ -276,20 +468,20 @@ Do not merely describe browser steps when a browser action is requested. Use bro
         executionMode: "sequential",
         async execute(_toolCallId, params) {
           const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserSearch(opts.getAgentId(), params)
+            browserSearch(agentBrowserId(opts.getAgentId()), params)
           );
           opts.onBrowserState(snapshot);
-          return textResult(
+          return toolResult(
             `Searched ${params.engine ?? "baidu"} for "${params.query}"; current URL ${result.url}`,
             snapshot,
-            result
+            { tool: "browser_search" }
           );
         },
       })
     );
 
     pi.registerTool(
-      defineTool<typeof WaitParams, { snapshot: BrowserSnapshot }>({
+      defineTool<typeof WaitParams, BrowserToolDetails>({
         name: "browser_wait",
         label: "Browser Wait",
         description:
@@ -299,16 +491,56 @@ Do not merely describe browser steps when a browser action is requested. Use bro
         executionMode: "sequential",
         async execute(_toolCallId, params) {
           const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserWait(opts.getAgentId(), params)
+            browserWait(agentBrowserId(opts.getAgentId()), params)
           );
           opts.onBrowserState(snapshot);
-          return textResult(`Browser wait completed; current URL ${result.url}`, snapshot);
+          return toolResult(
+            `Browser wait completed; current URL ${result.url}`,
+            snapshot,
+            { tool: "browser_wait" }
+          );
         },
       })
     );
 
     pi.registerTool(
-      defineTool<typeof EmptyParams, { snapshot: BrowserSnapshot; result?: unknown }>({
+      defineTool<typeof WaitForParams, BrowserToolDetails>({
+        name: "browser_wait_for",
+        label: "Browser Wait For",
+        description:
+          "Wait until a condition is met in the local browser: the URL contains a substring (navigation/redirect finished), a CSS selector appears, or visible text appears. Prefer this over browser_wait after clicks/submits that trigger navigation or async content.",
+        promptSnippet: "Wait until a browser condition is met.",
+        promptGuidelines: [
+          "Use browser_wait_for with url=... to confirm a navigation finished before extracting/verifying.",
+          "Use selector or text to wait for async content to render.",
+          "This fails (error step) if the condition is not met within timeoutMs, which is useful evidence.",
+        ],
+        parameters: WaitForParams,
+        executionMode: "sequential",
+        async execute(_toolCallId, params) {
+          const { result, snapshot } = await runWithBrowserState(opts, () =>
+            browserWaitFor(agentBrowserId(opts.getAgentId()), params)
+          );
+          opts.onBrowserState(snapshot);
+          const condition =
+            params.url
+              ? `url contains "${params.url}"`
+              : params.selector
+                ? `selector "${params.selector}" appeared`
+                : params.text
+                  ? `text "${params.text}" appeared`
+                  : "condition met";
+          return toolResult(
+            `Wait condition met (${condition}); current URL ${result.url}`,
+            snapshot,
+            { tool: "browser_wait_for", passed: true }
+          );
+        },
+      })
+    );
+
+    pi.registerTool(
+      defineTool<typeof EmptyParams, BrowserToolDetails>({
         name: "browser_extract",
         label: "Browser Extract",
         description:
@@ -318,15 +550,16 @@ Do not merely describe browser steps when a browser action is requested. Use bro
         executionMode: "sequential",
         async execute() {
           const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserExtract(opts.getAgentId())
+            browserExtract(agentBrowserId(opts.getAgentId()))
           );
           opts.onBrowserState(snapshot);
-          return textResult(
+          const extracted: BrowserExtractResult = result;
+          return toolResult(
             [
-              `Title: ${result.title ?? "(untitled)"}`,
-              `URL: ${result.url ?? "(none)"}`,
-              result.actions.length
-                ? `Actions:\n${result.actions
+              `Title: ${extracted.title ?? "(untitled)"}`,
+              `URL: ${extracted.url ?? "(none)"}`,
+              extracted.actions.length
+                ? `Actions:\n${extracted.actions
                     .slice(0, 20)
                     .map(
                       (a, i) =>
@@ -335,17 +568,20 @@ Do not merely describe browser steps when a browser action is requested. Use bro
                     .join("\n")}`
                 : "Actions: (none)",
               "",
-              result.text || "(no visible text)",
+              extracted.text || "(no visible text)",
             ].join("\n"),
             snapshot,
-            result
+            {
+              tool: "browser_extract",
+              extractedText: extracted.text,
+            }
           );
         },
       })
     );
 
     pi.registerTool(
-      defineTool<typeof VerifyParams, { snapshot: BrowserSnapshot; result?: unknown }>({
+      defineTool<typeof VerifyParams, BrowserToolDetails>({
         name: "browser_verify",
         label: "Browser Verify",
         description:
@@ -360,20 +596,87 @@ Do not merely describe browser steps when a browser action is requested. Use bro
         executionMode: "sequential",
         async execute(_toolCallId, params) {
           const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserVerify(opts.getAgentId(), params)
+            browserVerify(agentBrowserId(opts.getAgentId()), params)
           );
           opts.onBrowserState(snapshot);
-          return textResult(
-            `${result.passed ? "PASS" : "FAIL"}: ${result.expectation}\n${result.evidence}`,
+          const verified: BrowserVerifyResult = result;
+          return toolResult(
+            `${verified.passed ? "PASS" : "FAIL"}: ${verified.expectation}\n${verified.evidence}`,
             snapshot,
-            result
+            { tool: "browser_verify", passed: verified.passed }
           );
         },
       })
     );
 
     pi.registerTool(
-      defineTool<typeof EmptyParams, { snapshot: BrowserSnapshot }>({
+      defineTool<typeof EmptyParams, { annotations: unknown }>({
+        name: "browser_annotations",
+        label: "Browser Annotations",
+        description:
+          "List the user's pending page annotations (region + URL + comment) for the current browser. Use this to discover visual tasks the user drew on the page.",
+        promptSnippet: "Read pending page annotations.",
+        promptGuidelines: [
+          "Call browser_annotations when the user asks you to handle their page comments/annotations.",
+          "Each annotation has an id, a region, the page URL, and the user's comment.",
+          "After addressing one, call browser_resolve_annotation with its id.",
+        ],
+        parameters: EmptyParams,
+        executionMode: "sequential",
+        async execute() {
+          const all = listBrowserAnnotations(agentBrowserId(opts.getAgentId()));
+          const open = all.filter((a) => a.status !== "resolved");
+          const pct = (n: number) => `${Math.round(n * 100)}%`;
+          const text =
+            open.length === 0
+              ? "No pending page annotations."
+              : open
+                  .map(
+                    (a, i) =>
+                      `${i + 1}. [id=${a.id}] @ ${a.url ?? "(no url)"}\n   region ${pct(
+                        a.rect.x
+                      )},${pct(a.rect.y)} ${pct(a.rect.w)}x${pct(a.rect.h)}\n   comment: ${a.comment}`
+                  )
+                  .join("\n");
+          return {
+            content: [{ type: "text" as const, text }],
+            details: { annotations: open },
+          };
+        },
+      })
+    );
+
+    pi.registerTool(
+      defineTool<typeof ResolveAnnotationParams, { ok: boolean }>({
+        name: "browser_resolve_annotation",
+        label: "Browser Resolve Annotation",
+        description:
+          "Mark a page annotation as resolved after you have addressed the user's comment.",
+        promptSnippet: "Mark a page annotation as resolved.",
+        parameters: ResolveAnnotationParams,
+        executionMode: "sequential",
+        async execute(_toolCallId, params) {
+          const snapshot = setBrowserAnnotationStatus(
+            agentBrowserId(opts.getAgentId()),
+            params.annotationId,
+            "resolved"
+          );
+          opts.onBrowserState(snapshot);
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Marked annotation ${params.annotationId} as resolved.`,
+              },
+            ],
+            details: { ok: true },
+          };
+        },
+      })
+    );
+
+    pi.registerTool(
+      defineTool<typeof EmptyParams, BrowserToolDetails>({
         name: "browser_close",
         label: "Browser Close",
         description: "Close the local browser session for this agent.",
@@ -382,10 +685,12 @@ Do not merely describe browser steps when a browser action is requested. Use bro
         executionMode: "sequential",
         async execute() {
           const snapshot = await runWithBrowserState(opts, () =>
-            browserClose(opts.getAgentId())
+            browserClose(agentBrowserId(opts.getAgentId()))
           );
           opts.onBrowserState(snapshot);
-          return textResult("Closed browser session.", snapshot);
+          return toolResult("Closed browser session.", snapshot, {
+            tool: "browser_close",
+          });
         },
       })
     );

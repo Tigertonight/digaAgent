@@ -133,3 +133,68 @@ export async function assertBrowserSiteAllowed(url: string): Promise<string> {
   }
   return normalized;
 }
+
+// ===========================================================================
+// 阶段 E：敏感动作检测
+// 表单提交、上传、登录、付款等动作风险更高，即使站点已 allowed 也需额外确认。
+// ===========================================================================
+
+export type BrowserSensitiveAction =
+  | "login"
+  | "payment"
+  | "upload"
+  | "submit";
+
+const SENSITIVE_PATTERNS: Array<{
+  action: BrowserSensitiveAction;
+  re: RegExp;
+}> = [
+  {
+    action: "payment",
+    re: /(支付|付款|结算|下单|购买|充值|绑卡|信用卡|银行卡|pay|checkout|purchase|billing|card\s*number|cvv)/i,
+  },
+  {
+    action: "login",
+    re: /(登录|登陆|注册|sign\s*in|sign\s*up|log\s*in|login|register|password|密码|验证码|otp|two[-\s]?factor|2fa)/i,
+  },
+  {
+    action: "upload",
+    re: /(上传|上传文件|upload|attach\s*file|choose\s*file|select\s*file)/i,
+  },
+  {
+    action: "submit",
+    re: /(提交|发送|确认提交|submit|确认订单|确认支付)/i,
+  },
+];
+
+/**
+ * 从一段文本（动作 label / 输入文本 / selector / 当前 URL）里识别敏感动作。
+ * 返回命中的最高风险动作；没命中返回 null。
+ * 风险序：payment > login > upload > submit（数组顺序即优先级）。
+ */
+export function detectSensitiveAction(
+  ...texts: Array<string | null | undefined>
+): BrowserSensitiveAction | null {
+  const haystack = texts.filter(Boolean).join(" ");
+  if (!haystack) return null;
+  for (const { action, re } of SENSITIVE_PATTERNS) {
+    if (re.test(haystack)) return action;
+  }
+  return null;
+}
+
+/** 敏感动作的中文说明（审批气泡展示用）。 */
+export function describeSensitiveAction(
+  action: BrowserSensitiveAction
+): string {
+  switch (action) {
+    case "payment":
+      return "付款 / 支付相关操作";
+    case "login":
+      return "登录 / 注册 / 凭据输入";
+    case "upload":
+      return "文件上传";
+    case "submit":
+      return "表单提交";
+  }
+}

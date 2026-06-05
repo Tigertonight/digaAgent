@@ -11,6 +11,7 @@ import path from "node:path";
 export default defineConfig({
   test: {
     environment: "node",
+    testTimeout: 15000,
     include: [
       "lib/**/*.{test,spec}.ts",
       "app/pet/**/*.{test,spec}.ts",

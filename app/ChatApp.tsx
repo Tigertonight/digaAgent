@@ -10,6 +10,7 @@ import type {
   ForkableUserMessage,
 } from "@/lib/types";
 import type { WorkflowResumeSnapshot } from "@/lib/workflows/types";
+import type { BrowserAnnotation } from "@/lib/browser/types";
 import { extractImagesFromClipboard } from "@/lib/image-utils";
 import { getElectronApi, type AppInfo } from "@/lib/electron-bridge";
 import { useAudio } from "@/lib/use-audio";
@@ -431,7 +432,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // 图片/文件附件相关 hook 调用挪到 setter wrappers 之后（依赖 setPendingImages/setPendingFiles）
 
   const {
-    providers,
     visibleProviders,
     currentProvider,
     providerId,
@@ -811,21 +811,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     [updateActive]
   );
   // setForkBusy 已下沉到 useForkable hook（C1：fork 流程内 updateRunner 直接写）
-  const setAgentId = useCallback(
-    (v: Updater<string | null>) =>
-      updateActive((s) => ({ agentId: resolve(s.agentId, v) })),
-    [updateActive]
-  );
-  const setAgentSessionId = useCallback(
-    (v: Updater<string | null>) =>
-      updateActive((s) => ({ agentSessionId: resolve(s.agentSessionId, v) })),
-    [updateActive]
-  );
-  const setCurrentSessionFile = useCallback(
-    (v: Updater<string | null>) =>
-      updateActive((s) => ({ sessionFile: resolve(s.sessionFile, v) })),
-    [updateActive]
-  );
   const setInput = useCallback(
     (v: Updater<string>) =>
       updateActive((s) => ({ input: resolve(s.input, v) })),
@@ -841,76 +826,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       updateActive((s) => ({ pendingFiles: resolve(s.pendingFiles, v) })),
     [updateActive]
   );
-  const setStreaming = useCallback(
-    (v: Updater<boolean>) =>
-      updateActive((s) => ({ streaming: resolve(s.streaming, v) })),
-    [updateActive]
-  );
-  const setAgentPhase = useCallback(
-    (v: Updater<AgentPhase>) =>
-      updateActive((s) => ({ agentPhase: resolve(s.agentPhase, v) })),
-    [updateActive]
-  );
-  const setCompacting = useCallback(
-    (v: Updater<boolean>) =>
-      updateActive((s) => ({ compacting: resolve(s.compacting, v) })),
-    [updateActive]
-  );
   const setCompactError = useCallback(
     (v: Updater<string | null>) =>
       updateActive((s) => ({ compactError: resolve(s.compactError, v) })),
-    [updateActive]
-  );
-  const setRetryInfo = useCallback(
-    (
-      v: Updater<{
-        attempt: number;
-        maxAttempts: number;
-        errorMessage?: string;
-      } | null>
-    ) => updateActive((s) => ({ retryInfo: resolve(s.retryInfo, v) })),
-    [updateActive]
-  );
-  const setStats = useCallback(
-    (
-      v: Updater<{
-        input: number;
-        output: number;
-        cacheRead: number;
-        total: number;
-        cost: number;
-        ctxTokens: number | null;
-        ctxPct: number | null;
-        ctxWindow: number | null;
-      } | null>
-    ) => updateActive((s) => ({ stats: resolve(s.stats, v) })),
-    [updateActive]
-  );
-  const setToolsCount = useCallback(
-    (v: Updater<{ active: number; total: number } | null>) =>
-      updateActive((s) => ({ toolsCount: resolve(s.toolsCount, v) })),
-    [updateActive]
-  );
-  const setThinkingLevelState = useCallback(
-    (v: Updater<ThinkingLevel>) =>
-      updateActive((s) => ({ thinkingLevel: resolve(s.thinkingLevel, v) })),
-    [updateActive]
-  );
-  const setAvailableThinkingLevels = useCallback(
-    (v: Updater<ThinkingLevel[]>) =>
-      updateActive((s) => ({
-        availableThinkingLevels: resolve(s.availableThinkingLevels, v),
-      })),
-    [updateActive]
-  );
-  const setSupportsThinking = useCallback(
-    (v: Updater<boolean>) =>
-      updateActive((s) => ({ supportsThinking: resolve(s.supportsThinking, v) })),
-    [updateActive]
-  );
-  const setSseStatus = useCallback(
-    (v: Updater<"idle" | "active" | "lost">) =>
-      updateActive((s) => ({ sseStatus: resolve(s.sseStatus, v) })),
     [updateActive]
   );
 
@@ -1149,7 +1067,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         });
       })
       .catch((e) => setError(String(e)));
-
+     
   }, [selectedId]);
 
   // 切完分支后从 session context 重建 chat state
@@ -1531,12 +1449,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     },
     [agentId, setSessionOverride]
   );
-
-  const headerLabel = useMemo(() => {
-    if (agentSessionId) return `agent · ${agentSessionId.slice(0, 8)}`;
-    if (selectedId) return `session · ${selectedId.slice(0, 8)}`;
-    return "no session";
-  }, [agentSessionId, selectedId]);
 
   const rememberComposerInput = useCallback((text: string) => {
     const value = text.trim();
@@ -1973,7 +1885,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // ===== Fork 模块（RFC-1 阶段 C1，已抽到 useForkable hook） =====
   const {
     forksCollapsed,
-    toggleForks,
     refreshForkList,
     startFork,
     cancelFork,
@@ -2249,7 +2160,18 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           width={rightPanelWidth}
           openRequest={browserOpenRequest}
           onClose={toggleBrowser}
-          onAnnotate={(text) => {
+          onAnnotate={(annotations: BrowserAnnotation[]) => {
+            if (annotations.length === 0) return;
+            // 把结构化批注组装成给 agent 的视觉任务文本（含定位区域、URL、留言）。
+            const text =
+              annotations.length === 1
+                ? formatBrowserAnnotation(annotations[0])
+                : [
+                    `请处理以下 ${annotations.length} 条页面批注：`,
+                    ...annotations.map(
+                      (a, i) => `\n${i + 1}. ${formatBrowserAnnotation(a)}`
+                    ),
+                  ].join("\n");
             setComposerInput((cur) => {
               const sep = cur.trim() ? "\n\n" : "";
               return `${cur}${sep}${text}`;
@@ -2321,4 +2243,24 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       />
     </div>
   );
+}
+
+/**
+ * 阶段 D：把一条结构化页面批注组装成给 agent 的视觉任务文本。
+ * 包含定位区域（归一化百分比）、页面 URL/标题和用户留言，
+ * 让 agent 能定位到“页面的哪个区域有什么问题”。
+ */
+function formatBrowserAnnotation(a: BrowserAnnotation): string {
+  const pct = (n: number) => `${Math.round(n * 100)}%`;
+  const area = `区域 ${pct(a.rect.x)},${pct(a.rect.y)} 起，宽${pct(
+    a.rect.w
+  )} 高${pct(a.rect.h)}`;
+  return [
+    `页面批注${a.url ? ` @ ${a.url}` : ""}`,
+    a.title ? `标题：${a.title}` : null,
+    area,
+    `留言：${a.comment}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }

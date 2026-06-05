@@ -356,13 +356,10 @@ export function useChatStream(
     const userText = input;
     const images = pendingImages;
     const attachments = pendingFiles;
-    // 拼最终 prompt：把所有 @path 顶在前面，后端按引用语法读文件/列文件夹
-    const refLine = attachments.map((a) => `@${a.path}`).join(" ");
-    const finalText = refLine
-      ? userText
-        ? `${refLine}\n${userText}`
-        : refLine
-      : userText;
+    // 展示文本 = 用户原话（不再把 @path 拼进去）。
+    // 附件引用单独通过 attachments 字段传给后端，由后端作为上下文 aside 喂给模型，
+    // 这样前台气泡只显示用户输入的原文。
+    const attachmentPaths = attachments.map((a) => a.path);
     setInput("");
     setPendingImages([]);
     setPendingFiles([]);
@@ -375,8 +372,9 @@ export function useChatStream(
     try {
       await agentAction(aid!, {
         type: "prompt",
-        text: finalText || "(image)",
+        text: userText || (attachmentPaths.length > 0 ? "(see attachments)" : "(image)"),
         images: images.length > 0 ? images : undefined,
+        attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined,
       });
     } catch {
       /* error 已被 agentAction 设置 */
