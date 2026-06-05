@@ -123,6 +123,7 @@ export interface UseChatStreamReturn {
   onFollowUp: () => Promise<void>;
   onChangeThinking: (lv: ThinkingLevel) => Promise<void>;
   startGoal: (objective: string) => Promise<void>;
+  startWorkflow: (objective: string) => Promise<void>;
 }
 
 export function useChatStream(
@@ -432,6 +433,53 @@ export function useChatStream(
     [ensureAgent, agentAction, setError]
   );
 
+  /**
+   * /workflow 命令入口：把一句目标描述转成「让 agent 用 dynamic workflow 执行」的
+   * 标准 prompt（要求它调用 run_workflow_script）。措辞与历史 workflow resume 卡片
+   * 对齐，确保模型稳定走 workflow harness 而不是普通对话。
+   */
+  const startWorkflow = useCallback(
+    async (objective: string) => {
+      const text = objective.trim();
+      if (!text) return;
+      const ensured = await ensureAgent();
+      if (!ensured) return;
+      setError(null);
+
+      const prompt = [
+        "请使用 dynamic workflow（run_workflow_script 工具）来完成下面这个目标，",
+        "不要直接在对话里手动一步步执行：",
+        "",
+        `objective: ${text}`,
+        "",
+        "请规划出一个 workflow script：先拆解步骤，在关键节点写 checkpoint 和 artifact，",
+        "执行完后综合给出最终结果。",
+      ].join("\n");
+
+      // 滚动锚定：让新出现的这条 user 消息滚到屏顶（与 send 一致）。
+      const currentUserCount = messages.filter((m) => m.role === "user").length;
+      pendingPinUserCountRef.current = currentUserCount + 1;
+      setPinSpacer(true);
+
+      try {
+        await agentAction(ensured.aid, {
+          type: "prompt",
+          text: prompt,
+        });
+      } catch {
+        /* error 已被 agentAction 设置 */
+      }
+    },
+    [
+      ensureAgent,
+      agentAction,
+      setError,
+      messages,
+      pendingPinUserCountRef,
+      setPinSpacer,
+    ]
+  );
+
   // 中断当前 turn
   const onAbort = useCallback(async () => {
     if (!agentId) return;
@@ -538,5 +586,6 @@ export function useChatStream(
     onFollowUp,
     onChangeThinking,
     startGoal,
+    startWorkflow,
   };
 }
