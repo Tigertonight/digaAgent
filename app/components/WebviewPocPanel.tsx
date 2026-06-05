@@ -200,7 +200,7 @@ export function WebviewPocPanel() {
           <div className="mb-1 text-[10px]" style={{ color: "var(--text-muted)" }}>
             CDP 截图结果（按需单帧）：
           </div>
-          {/* eslint-disable-next-line @next/next/no-img-element */}
+          { }
           <img src={shot} alt="cdp screenshot" className="max-h-32 rounded border" style={{ borderColor: "var(--border-soft)" }} />
         </div>
       )}

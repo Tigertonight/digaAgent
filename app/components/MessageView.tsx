@@ -176,7 +176,7 @@ export const MessageView = memo(function MessageView({
                     background: "var(--user-bg)",
                   }}
                 >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  { }
                   <img
                     src={src}
                     alt={`user-img-${i}`}
@@ -412,7 +412,7 @@ export const MessageView = memo(function MessageView({
             const src = `data:${p.mimeType};base64,${p.data}`;
             return (
               <div key={i} className="rounded-lg overflow-hidden inline-block">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
+                { }
                 <img
                   src={src}
                   alt=""

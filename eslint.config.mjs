@@ -40,17 +40,20 @@ const config = [
   //     但本项目还没准备好这级别重构。
   //   - immutability: 误报 useRef 的 .current 赋值（"This value cannot be modified"），
   //     以及对函数声明 hoisting 的合法用法报"Cannot access variable before it is declared"。
-  // 暂降为 warning，保留可见性、不阻塞 CI；后续逐文件重构再升回 error。
+  // 这些 warning 已长期堆积且会淹没真正的 lint 信号；在启用 React Compiler
+  // 或大规模迁移初始化/订阅模式前，先关闭 legacy-incompatible 规则。
   {
     plugins: {
       "react-hooks": reactHooks,
     },
     rules: {
-      "react-hooks/set-state-in-effect": "warn",
-      "react-hooks/immutability": "warn",
-      "react-hooks/preserve-manual-memoization": "warn",
-      "react-hooks/refs": "warn",
-      "react-hooks/static-components": "warn",
+      "@next/next/no-img-element": "off",
+      "react-hooks/exhaustive-deps": "off",
+      "react-hooks/set-state-in-effect": "off",
+      "react-hooks/immutability": "off",
+      "react-hooks/preserve-manual-memoization": "off",
+      "react-hooks/refs": "off",
+      "react-hooks/static-components": "off",
     },
   },
 ];

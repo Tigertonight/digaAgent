@@ -81,7 +81,7 @@ export async function installApiFixtures(
     const url = route.request().url();
     const method = route.request().method();
     if (process.env.E2E_DEBUG) {
-      // eslint-disable-next-line no-console
+       
       console.log("[mock]", method, url);
     }
 

@@ -164,7 +164,7 @@ export default function ImageLightbox() {
       </div>
 
       {/* 图片 */}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
+      { }
       <img
         src={state.src}
         alt={state.title ?? ""}

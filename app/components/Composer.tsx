@@ -236,7 +236,7 @@ export function Composer(props: ComposerProps) {
                 }}
                 title={`${img.mimeType} · ${formatBytes(approxBase64Bytes(img.data))}`}
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
+                { }
                 <img
                   src={`data:${img.mimeType};base64,${img.data}`}
                   alt={`pending-${i}`}

@@ -1,6 +1,6 @@
 "use client";
 
-/* eslint-disable react-hooks/refs -- Electron webview is a custom host element, not a React-managed DOM ref read. */
+ 
 import { createElement, useEffect, useRef, useState } from "react";
 import type { BrowserSnapshot } from "@/lib/browser/types";
 
@@ -470,7 +470,7 @@ export function InAppBrowserSurface({
       cancelled = true;
       clearInterval(interval);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [browserId, ready, wcId]);
 
   return (
