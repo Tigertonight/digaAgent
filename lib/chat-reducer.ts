@@ -36,7 +36,6 @@ import type {
   WorkflowRun,
   WorkflowRunStatus,
   WorkflowScriptLog,
-  WorkflowScriptResult,
 } from "./workflows/types";
 import { stripContextAside } from "./context-aside";
 

@@ -6,7 +6,6 @@ import { buildWorkflowWorkerSpawnConfig, runWorkflowScript } from "./script-runt
 import { __setWorkflowNetworkPolicyRootForTest } from "./network-policy";
 import {
   __clearWorkflowMemoryForTest,
-  __resetWorkflowStoreForTest,
   __setWorkflowStoreRootForTest,
   getWorkflowRun,
   listRunningWorkflowRuns,
