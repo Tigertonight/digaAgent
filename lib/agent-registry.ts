@@ -27,6 +27,7 @@ import { createCollabExtension } from "./collab/extension";
 import { createClarificationExtension } from "./clarification/extension";
 import { createBrowserExtension } from "./browser/extension";
 import { disposeBrowser } from "./browser/runtime";
+import { agentBrowserId } from "./browser/browser-id";
 import { createClipboardExtension } from "./clipboard/extension";
 import { createGoalExtension } from "./goal/extension";
 import { createProgressExtension } from "./progress/extension";
@@ -164,8 +165,11 @@ const DEFAULT_BROWSER_TOOL_NAMES = [
   "browser_type",
   "browser_search",
   "browser_wait",
+  "browser_wait_for",
   "browser_extract",
   "browser_verify",
+  "browser_annotations",
+  "browser_resolve_annotation",
   "browser_close",
 ];
 
@@ -733,6 +737,86 @@ export async function createAgent(opts: CreateOptions): Promise<{
     return resp;
   }
 
+  async function requestBrowserSiteApproval(params: {
+    origin: string;
+    url: string;
+  }): Promise<boolean> {
+    const rec = recordHolder.current;
+    if (!rec) return false;
+    const ruleId = `browser-site:${params.origin}`;
+    if (hasSessionRemember(id, ruleId)) return true;
+    const toolCallId = `browser-site:${params.origin}:${Date.now()}`;
+    const req = {
+      id: `${id}:${toolCallId}`,
+      agentId: id,
+      toolCallId,
+      toolName: "browser:open_external_site",
+      input: {
+        origin: params.origin,
+        url: params.url.slice(0, 500),
+      },
+      reason: "manual" as const,
+      ruleId,
+      defaultDecision: "deny" as const,
+      createdAt: Date.now(),
+    };
+    pushExternalEvent(rec, { type: "approval_request", request: req });
+    const resp = await registerPendingApproval(req);
+    const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
+      resp.denyReason === undefined && resp.decision === req.defaultDecision
+        ? "timeout"
+        : "user";
+    pushExternalEvent(rec, {
+      type: "approval_resolved",
+      id: req.id,
+      toolCallId: req.toolCallId,
+      decision: resp.decision,
+      resolvedBy,
+      denyReason: resp.denyReason,
+    });
+    return resp.decision === "allow";
+  }
+
+  async function requestBrowserActionApproval(params: {
+    action: string;
+    detail: string;
+    url: string | null;
+  }): Promise<boolean> {
+    const rec = recordHolder.current;
+    if (!rec) return false;
+    const toolCallId = `browser-action:${params.action}:${Date.now()}`;
+    const req = {
+      id: `${id}:${toolCallId}`,
+      agentId: id,
+      toolCallId,
+      toolName: `browser:sensitive_action`,
+      input: {
+        action: params.action,
+        detail: params.detail,
+        url: params.url ?? "(none)",
+      },
+      reason: "manual" as const,
+      ruleId: `browser-action:${params.action}`,
+      defaultDecision: "deny" as const,
+      createdAt: Date.now(),
+    };
+    pushExternalEvent(rec, { type: "approval_request", request: req });
+    const resp = await registerPendingApproval(req);
+    const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
+      resp.denyReason === undefined && resp.decision === req.defaultDecision
+        ? "timeout"
+        : "user";
+    pushExternalEvent(rec, {
+      type: "approval_resolved",
+      id: req.id,
+      toolCallId: req.toolCallId,
+      decision: resp.decision,
+      resolvedBy,
+      denyReason: resp.denyReason,
+    });
+    return resp.decision === "allow";
+  }
+
   async function requestWorkflowMcpToolApproval(params: {
     workflowId: string;
     objective: string;
@@ -1021,6 +1105,16 @@ export async function createAgent(opts: CreateOptions): Promise<{
       if (!rec) return;
       pushExternalEvent(rec, { type: "browser_state", snapshot });
     },
+    // 阶段 E：外部站点首次访问 / 敏感动作走现有审批通道。
+    // 子 agent（hidden、无可见 SSE 通道）不注入审批 → guardSite 默认拒绝外部站点，
+    // 与"子 agent 不能随意访问外部站点"的安全语义一致。
+    ...(opts.parentAgentId
+      ? {}
+      : {
+          requestSiteApproval: (input) => requestBrowserSiteApproval(input),
+          requestActionApproval: (input) =>
+            requestBrowserActionApproval(input),
+        }),
   });
   const clipboardExtension = createClipboardExtension();
   const delegateSubagentsTool = createDelegateSubagentsTool({
@@ -1403,7 +1497,7 @@ export function disposeAgent(id: string) {
   clearSessionRemember(id);
   clearAgentClarifications(id);
   clearGoal(id);
-  void disposeBrowser(id);
+  void disposeBrowser(agentBrowserId(id));
 }
 
 /** 给 SSE 用：拿从某个 seq 之后的所有事件（按 seq 升序） */

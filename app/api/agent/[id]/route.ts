@@ -24,7 +24,6 @@ import {
   getModelRegistry,
   abortSubagentsForParent,
   abortWorkflowsForParent,
-  pushExternalEvent,
   pushGoalEvent,
   pushProgressEvent,
 } from "@/lib/agent-registry";
@@ -39,17 +38,20 @@ import {
 } from "@/lib/goal/server-store";
 import { applyGoalUpdate } from "@/lib/goal/update";
 import { listDefinitions } from "@/lib/subagents/registry";
-import { buildAgentMentionDirective } from "@/lib/subagents/router";
+import {
+  buildAgentMentionDirective,
+  stripAgentMentions,
+} from "@/lib/subagents/router";
 import {
   clearProgress,
   getProgress,
   updateProgress,
 } from "@/lib/progress/server-store";
-import { parseBrowserIntent } from "@/lib/browser/intent";
 import {
-  appendBrowserObservation,
-  runBrowserTaskPreflight,
-} from "@/lib/browser/task-runtime";
+  CONTEXT_ASIDE_OPEN,
+  CONTEXT_ASIDE_CLOSE,
+  stripContextAside,
+} from "@/lib/context-aside";
 import type { ProgressUpdateInput } from "@/lib/progress/types";
 import type { ThinkingLevel, ImageContentLite } from "@/lib/types";
 
@@ -123,9 +125,12 @@ export async function GET(
     });
   }
   if (action === "user_messages_for_forking") {
-    return NextResponse.json({
-      messages: rec.session.getUserMessagesForForking(),
-    });
+    // 剥离「上下文 aside」，fork 列表只显示用户原话。
+    const messages = rec.session.getUserMessagesForForking().map((m) => ({
+      ...m,
+      text: typeof m.text === "string" ? stripContextAside(m.text) : m.text,
+    }));
+    return NextResponse.json({ messages });
   }
   if (action === "tree") {
     // 返回 SDK 的 session tree + 当前 leafId，用于 Branches 视图。
@@ -249,25 +254,53 @@ export async function POST(
           );
         }
         const images = parseImages(body.images);
-        const browserTask = await runBrowserTaskPreflight({
-          agentId: id,
-          intent: parseBrowserIntent(text),
-          pushState: (snapshot) => {
-            pushExternalEvent(rec, { type: "browser_state", snapshot });
-          },
-        });
-        let finalText = appendBrowserObservation(text, browserTask.observation);
-        // Explicit @agent mentions: if the text references a registered
-        // specialist, prepend a directive telling the main agent to delegate to
-        // that specialist. No-op when no recognized mention is present.
+        // 附件引用（@path）：前端单独传 attachments，不再拼进展示文本。
+        const attachments = Array.isArray(body.attachments)
+          ? (body.attachments as unknown[]).filter(
+              (a): a is string => typeof a === "string"
+            )
+          : [];
+
+        // 浏览器交互不再在 prompt 前「预执行」。
+        // agent 现在通过结构化 browser_* 工具自主多步操作浏览器
+        // （见 lib/browser/extension.ts），每步会通过 SSE 推 browser_state，
+        // 因此这里不再做基于正则的意图预跑（避免同一句话被执行两次）。
+
+        // 1) 解析显式 @agent 提及。展示给用户的气泡用「剥离 @ 后的干净原话」，
+        //    而把「委托专家」的指令放进独立上下文（aside），不污染 user 气泡。
         const specialistIds = listDefinitions(rec.cwd).map((d) => d.id);
-        const mentionDirective = buildAgentMentionDirective(
-          finalText,
-          specialistIds
-        );
-        if (mentionDirective) {
-          finalText = mentionDirective.directive;
+        const mentionDirective = buildAgentMentionDirective(text, specialistIds);
+        const displayText = mentionDirective
+          ? stripAgentMentions(text, specialistIds) || text
+          : text;
+
+        // 2) 汇总所有「优化用」的上下文片段。这些只喂给模型，不进 user 气泡：
+        //    - 文件附件引用（@path）
+        //    - @agent 委托指令（directive）
+        const asideSections: string[] = [];
+        if (attachments.length > 0) {
+          asideSections.push(
+            `Referenced files/folders (read or list as needed):\n${attachments
+              .map((p) => `@${p}`)
+              .join(" ")}`
+          );
         }
+        if (mentionDirective) {
+          asideSections.push(mentionDirective.directive);
+        }
+        const asideContext = asideSections.join("\n\n");
+
+        // 3) 组装发给模型的文本：用户原话 + 用分隔标记包裹的上下文。
+        //    为什么不用 sendCustomMessage(role:"custom") 注入？
+        //    —— 本项目用的 local shim 是非标准 OpenAI 兼容端，不认识 role:"custom"
+        //    的旁注消息，注入后模型会吐空（空气泡）。因此把上下文作为标准 user
+        //    message 文本的一部分发送，shim 完全认识。
+        //    前端渲染 user 气泡时会用同样的标记把这段上下文剥离，只显示原话，
+        //    从而做到「展示=原文，发送=带上下文」。
+        const finalText = asideContext
+          ? `${displayText}\n\n${CONTEXT_ASIDE_OPEN}\n${asideContext}\n${CONTEXT_ASIDE_CLOSE}`
+          : displayText;
+
         // 如果当前在 streaming，默认按 followUp 处理；否则正常 prompt
         if (rec.isStreaming) {
           await rec.session.prompt(finalText, {
