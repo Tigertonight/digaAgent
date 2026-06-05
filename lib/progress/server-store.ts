@@ -4,6 +4,7 @@ import type {
   AgentProgress,
   ProgressArtifact,
   ProgressArtifactUpdateInput,
+  ProgressGroup,
   ProgressStep,
   ProgressStepUpdateInput,
   ProgressUpdateInput,
@@ -27,7 +28,7 @@ function now() {
 }
 
 function emptyProgress(): AgentProgress {
-  return { steps: [], artifacts: [], updatedAt: now() };
+  return { steps: [], groups: [], artifacts: [], updatedAt: now() };
 }
 
 function cleanText(value: unknown, max: number): string {
@@ -91,17 +92,67 @@ export function updateProgress(
     .map(normalizeArtifact)
     .filter((artifact) => artifact.title);
 
-  const steps = input.replaceSteps
-    ? incomingSteps
-    : mergeById(current.steps, incomingSteps).slice(-MAX_STEPS);
+  // Hydrate groups for legacy progress objects that only have a flat `steps`
+  // list (persisted before grouping landed): treat them as group 1.
+  const groups: ProgressGroup[] =
+    current.groups && current.groups.length > 0
+      ? current.groups.map((g) => ({ ...g, steps: g.steps.slice() }))
+      : current.steps.length > 0
+        ? [
+            {
+              id: randomUUID(),
+              index: 1,
+              steps: current.steps.slice(),
+              startedAt: current.updatedAt,
+            },
+          ]
+        : [];
+
+  const t = now();
+  const currentGroup = groups[groups.length - 1];
+
+  // Open a new group when the agent replaces the step list and the current
+  // group already has steps. Each new group restarts its own 1-based numbering.
+  const shouldOpenNewGroup =
+    input.replaceSteps === true &&
+    currentGroup !== undefined &&
+    currentGroup.steps.length > 0;
+
+  if (shouldOpenNewGroup && currentGroup) {
+    currentGroup.endedAt = t;
+    groups.push({
+      id: randomUUID(),
+      index: currentGroup.index + 1,
+      steps: incomingSteps,
+      startedAt: t,
+    });
+  } else if (currentGroup) {
+    // Merge into (or replace within) the current group.
+    currentGroup.steps = input.replaceSteps
+      ? incomingSteps
+      : mergeById(currentGroup.steps, incomingSteps).slice(-MAX_STEPS);
+  } else if (incomingSteps.length > 0) {
+    // First ever group.
+    groups.push({
+      id: randomUUID(),
+      index: 1,
+      steps: incomingSteps,
+      startedAt: t,
+    });
+  }
+
+  const latestGroup = groups[groups.length - 1];
+  const steps = latestGroup ? latestGroup.steps : [];
+
   const artifacts = input.replaceArtifacts
     ? incomingArtifacts
     : mergeById(current.artifacts, incomingArtifacts).slice(-MAX_ARTIFACTS);
 
   const progress: AgentProgress = {
     steps,
+    groups,
     artifacts,
-    updatedAt: now(),
+    updatedAt: t,
   };
   store.progress.set(agentId, progress);
   return progress;

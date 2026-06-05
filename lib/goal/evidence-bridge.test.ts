@@ -15,7 +15,7 @@ import {
 } from "./evidence-bridge";
 
 function progress(artifacts: AgentProgress["artifacts"]): AgentProgress {
-  return { steps: [], artifacts, updatedAt: Date.now() };
+  return { steps: [], groups: [], artifacts, updatedAt: Date.now() };
 }
 
 describe("goal evidence bridge", () => {

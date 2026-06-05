@@ -3,9 +3,11 @@
 import type { RefObject } from "react";
 import { MessageView } from "./MessageView";
 import { ChatMinimap } from "../ChatMinimap";
+import { ProgressPopover } from "./ProgressPopover";
 import type { ChatMessage } from "@/lib/types";
 import type { AgentPhase } from "@/lib/session-runner";
 import type { ProviderInfo } from "@/lib/types";
+import type { AgentProgress } from "@/lib/progress/types";
 import type { WorkflowWorktreeAction } from "./MessageView";
 
 interface MessagesScrollAreaProps {
@@ -61,6 +63,9 @@ interface MessagesScrollAreaProps {
   onResumeSubagentBatch?: (batchId: string) => Promise<void> | void;
   /** Multi-agent：打开某个 child subagent session 继续追问 */
   onOpenSubagentSession?: (sessionFile: string) => void;
+  /** Goal/Progress：session 级进度，渲染在会话流末尾（而非固定在输入框上方） */
+  progress?: AgentProgress | null;
+  onOpenProgressUrl?: (href: string) => void;
 }
 
 export function MessagesScrollArea({
@@ -96,6 +101,8 @@ export function MessagesScrollArea({
   onRetrySubagentTask,
   onResumeSubagentBatch,
   onOpenSubagentSession,
+  progress,
+  onOpenProgressUrl,
 }: MessagesScrollAreaProps) {
   return (
     <div className="relative flex flex-1 overflow-hidden">
@@ -197,6 +204,10 @@ export function MessagesScrollArea({
               );
             });
           })()}
+          {/* Goal/Progress 卡片：放在会话流末尾，随消息滚动，不再固定遮挡输入框。 */}
+          {progress && (
+            <ProgressPopover progress={progress} onOpenUrl={onOpenProgressUrl} />
+          )}
           {/* 仅在"刚发送 → 锚定那条 user 到屏顶"的窗口期塞 60vh 占位;
               锚定完成或用户主动滚动后即移除,避免向下滚到无内容空白区。 */}
           {pinSpacer && <div aria-hidden style={{ minHeight: "60vh" }} />}
