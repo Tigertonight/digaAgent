@@ -164,6 +164,7 @@ export function useSseManager(
   // ===== 卸载时清理所有连接 =====
   useEffect(() => {
     const map = esMapRef.current;
+    const lastSeq = lastSeqRef.current;
     return () => {
       for (const es of map.values()) {
         try {
@@ -173,7 +174,7 @@ export function useSseManager(
         }
       }
       map.clear();
-      lastSeqRef.current.clear();
+      lastSeq.clear();
     };
   }, []);
 

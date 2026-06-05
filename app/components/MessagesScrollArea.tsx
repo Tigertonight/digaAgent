@@ -44,7 +44,7 @@ interface MessagesScrollAreaProps {
     opts?: { remember?: "this-session"; ruleId?: string }
   ) => void;
   /** RFC-2 Phase B3：approval part 点 Deny */
-  onDenyCall?: (toolCallId: string) => void;
+  onDenyCall?: (toolCallId: string, denyReason?: string) => void;
   /** RFC-5：clarification 推荐项点击 */
   onChooseClarification?: (requestId: string, optionId: string) => void;
   /** RFC-5：clarification 自定义回复 */

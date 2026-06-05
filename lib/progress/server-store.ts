@@ -80,6 +80,42 @@ export function clearProgress(agentId: string): AgentProgress {
   return progress;
 }
 
+export function failOpenProgress(
+  agentId: string,
+  summary = "已中止。"
+): AgentProgress {
+  const current = getProgress(agentId);
+  const t = now();
+  const closeStep = (step: ProgressStep): ProgressStep => {
+    if (step.status !== "running" && step.status !== "pending") return step;
+    return {
+      ...step,
+      status: "failed",
+      summary: step.summary ? `${step.summary}\n${summary}` : summary,
+      completedAt: t,
+    };
+  };
+  const groups = current.groups.map((group) => ({
+    ...group,
+    steps: group.steps.map(closeStep),
+    endedAt:
+      group.endedAt ??
+      (group.steps.some(
+        (step) => step.status === "running" || step.status === "pending"
+      )
+        ? t
+        : undefined),
+  }));
+  const progress: AgentProgress = {
+    ...current,
+    steps: current.steps.map(closeStep),
+    groups,
+    updatedAt: t,
+  };
+  store.progress.set(agentId, progress);
+  return progress;
+}
+
 export function updateProgress(
   agentId: string,
   input: ProgressUpdateInput

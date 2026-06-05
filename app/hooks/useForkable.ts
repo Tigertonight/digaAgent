@@ -23,7 +23,7 @@
  */
 
 import type React from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import type { ForkableUserMessage, ThinkingLevel, SessionInfoLite } from "@/lib/types";
 import type { SubagentBatch } from "@/lib/subagents/types";
 import {
@@ -135,12 +135,13 @@ export function useForkable(params: UseForkableParams): UseForkableReturn {
   } = params;
 
   // ===== forksCollapsed（UI 折叠状态，localStorage 持久化）=====
-  const [forksCollapsed, setForksCollapsed] = useState(false);
-  useEffect(() => {
+  const [forksCollapsed, setForksCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
     try {
-      setForksCollapsed(localStorage.getItem("pi-forks-collapsed") === "1");
+      return localStorage.getItem("pi-forks-collapsed") === "1";
     } catch {}
-  }, []);
+    return false;
+  });
   const toggleForks = useCallback(() => {
     setForksCollapsed((v) => {
       const nv = !v;

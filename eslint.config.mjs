@@ -34,22 +34,16 @@ const config = [
       "react-hooks/rules-of-hooks": "off",
     },
   },
-  // React 19 新增的 react-hooks 严格规则在我们老 pattern 下噪音过大：
-  //   - set-state-in-effect: useEffect 里调 load() 然后 setState 是常见
-  //     初始化 pattern，按 React 19 文档应迁到 Server Components 或 Suspense，
-  //     但本项目还没准备好这级别重构。
+  // React 19 新增的部分 react-hooks 严格规则在我们老 pattern 下噪音过大：
   //   - immutability: 误报 useRef 的 .current 赋值（"This value cannot be modified"），
   //     以及对函数声明 hoisting 的合法用法报"Cannot access variable before it is declared"。
-  // 这些 warning 已长期堆积且会淹没真正的 lint 信号；在启用 React Compiler
+  // 这些 warning 会淹没真正的 lint 信号；在启用 React Compiler
   // 或大规模迁移初始化/订阅模式前，先关闭 legacy-incompatible 规则。
   {
     plugins: {
       "react-hooks": reactHooks,
     },
     rules: {
-      "@next/next/no-img-element": "off",
-      "react-hooks/exhaustive-deps": "off",
-      "react-hooks/set-state-in-effect": "off",
       "react-hooks/immutability": "off",
       "react-hooks/preserve-manual-memoization": "off",
       "react-hooks/refs": "off",

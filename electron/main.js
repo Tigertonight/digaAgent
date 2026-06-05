@@ -20,6 +20,7 @@ const settingsModule = require("./settings");
 
 const DEV = process.env.ELECTRON_DEV === "1";
 const DEV_URL = process.env.ELECTRON_DEV_URL || "http://localhost:3000";
+const DISABLE_PET_WINDOW = process.env.ELECTRON_DISABLE_PET === "1";
 
 /**
  * 把 asar 路径转成 asar.unpacked 路径。
@@ -237,8 +238,17 @@ function registerWebviewPocIpc() {
   ipcMain.handle("webviewPoc:navigate", async (_e, webContentsId, url) => {
     const wc = getWebviewContents(webContentsId);
     ensureDebuggerAttached(wc);
-    await wc.debugger.sendCommand("Page.navigate", { url });
-    return { ok: true, url };
+    try {
+      await wc.debugger.sendCommand("Page.navigate", { url });
+      return { ok: true, url };
+    } catch (e) {
+      // Chromium may abort an in-flight same-target navigation when the webview
+      // receives a newer load request. Treat that as non-fatal for the PoC IPC.
+      if (e && (e.code === "ERR_ABORTED" || e.errno === -3)) {
+        return { ok: true, url, aborted: true };
+      }
+      throw e;
+    }
   });
 
   // 取页面标题/URL（验证 DOM/Runtime 读取链路）
@@ -263,13 +273,15 @@ function registerWebviewPocIpc() {
   // CDP 截图（验证画面采集；对比 screencast，这里是按需单帧）
   ipcMain.handle("webviewPoc:screenshot", async (_e, webContentsId) => {
     const wc = getWebviewContents(webContentsId);
-    ensureDebuggerAttached(wc);
-    const shot = await wc.debugger.sendCommand("Page.captureScreenshot", {
-      format: "png",
-    });
+    const image = await Promise.race([
+      wc.capturePage(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("webview screenshot timed out")), 8000)
+      ),
+    ]);
     return {
       ok: true,
-      dataUrl: shot?.data ? `data:image/png;base64,${shot.data}` : null,
+      dataUrl: image && typeof image.toDataURL === "function" ? image.toDataURL() : null,
     };
   });
 
@@ -619,7 +631,17 @@ async function createWindow() {
     }
   }
 
+  win.once("ready-to-show", () => {
+    win.show();
+    win.focus();
+  });
+
   await win.loadURL(url);
+  console.log(`[electron] main window loaded ${url}`);
+  if (!win.isVisible()) {
+    win.show();
+  }
+  win.focus();
   return win;
 }
 
@@ -806,12 +828,14 @@ app.whenReady().then(async () => {
     app.quit();
   }
 
-  // 启动宠物窗口
-  const petBase = apiBase || DEV_URL;
-  try {
-    await createPetWindow(petBase);
-  } catch (e) {
-    console.warn("[electron] pet window failed to start:", e.message);
+  // 启动宠物窗口；验收/自动化可通过 env 关闭，避免透明悬浮窗干扰可访问性遍历。
+  if (!DISABLE_PET_WINDOW) {
+    const petBase = apiBase || DEV_URL;
+    try {
+      await createPetWindow(petBase);
+    } catch (e) {
+      console.warn("[electron] pet window failed to start:", e.message);
+    }
   }
 
   app.on("activate", () => {

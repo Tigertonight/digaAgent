@@ -60,6 +60,7 @@ export function ProgressPopover({
         background: "var(--bg-panel)",
         borderColor: "var(--border)",
         color: "var(--text)",
+        overflowAnchor: "none",
       }}
       data-testid="progress-panel"
     >

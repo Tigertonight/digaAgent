@@ -37,8 +37,8 @@ export interface ApprovalBubbleProps {
   part: ApprovalPart;
   /** 用户点 Allow；外层 hook 负责 POST。opts.remember 传 "this-session" 表示本会话不再问。 */
   onApprove?: (toolCallId: string, opts?: ApproveCallOpts) => void;
-  /** 用户点 Deny；外层 hook 负责 POST；denyReason 暂留 undefined（Phase C 加输入框） */
-  onDeny?: (toolCallId: string) => void;
+  /** 用户点 Deny；外层 hook 负责 POST。 */
+  onDeny?: (toolCallId: string, denyReason?: string) => void;
 }
 
 /** 取出 input 里最值得展示给用户判断的"主体字段"。bash → command，其他 → 整体 JSON 截断。 */
@@ -316,7 +316,7 @@ export const ApprovalBubble = memo(function ApprovalBubble({
         <div className="flex gap-2">
           <button
             type="button"
-            onClick={() => onDeny?.(part.toolCallId)}
+            onClick={() => onDeny?.(part.toolCallId, "Denied by user.")}
             className="px-2.5 py-1 rounded text-xs border hover:opacity-80"
             style={{
               borderColor: "var(--border)",

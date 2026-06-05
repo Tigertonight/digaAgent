@@ -1251,6 +1251,7 @@ export function addBrowserAnnotation(
   }
 ): { annotation: BrowserAnnotation; snapshot: BrowserSnapshot } {
   const rec = getRecord(browserId);
+  const now = Date.now();
   const annotation: BrowserAnnotation = {
     id: `an_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
     browserId,
@@ -1261,13 +1262,14 @@ export function addBrowserAnnotation(
     // 优先用调用方传入的截图（批注时刻所见），否则退回当前 snapshot 截图
     screenshotDataUrl:
       input.screenshotDataUrl ?? rec.snapshot.screenshotDataUrl ?? null,
-    createdAt: Date.now(),
+    createdAt: now,
+    updatedAt: now,
     status: "open",
   };
   rec.snapshot = {
     ...rec.snapshot,
     annotations: [annotation, ...(rec.snapshot.annotations ?? [])].slice(0, 50),
-    updatedAt: Date.now(),
+    updatedAt: now,
   };
   return { annotation, snapshot: rec.snapshot };
 }
@@ -1297,12 +1299,20 @@ export function setBrowserAnnotationStatus(
 ): BrowserSnapshot {
   const rec = reg.browsers.get(browserId);
   if (!rec) return getBrowserSnapshot(browserId);
+  const now = Date.now();
   rec.snapshot = {
     ...rec.snapshot,
     annotations: (rec.snapshot.annotations ?? []).map((a) =>
-      a.id === annotationId ? { ...a, status } : a
+      a.id === annotationId
+        ? {
+            ...a,
+            status,
+            updatedAt: now,
+            resolvedAt: status === "resolved" ? now : undefined,
+          }
+        : a
     ),
-    updatedAt: Date.now(),
+    updatedAt: now,
   };
   return rec.snapshot;
 }

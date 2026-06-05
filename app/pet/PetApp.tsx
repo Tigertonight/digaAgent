@@ -16,10 +16,9 @@ import PetMockPanel from "./PetMockPanel";
  * 这样 Electron 中永远 false，浏览器 dev 中 mount 后变 true。
  */
 function useNeedMock(): boolean {
-  const [need, setNeed] = useState(false);
-  useEffect(() => {
-    setNeed(typeof window !== "undefined" && !window.miniPi);
-  }, []);
+  const [need] = useState(
+    () => typeof window !== "undefined" && !window.miniPi
+  );
   return need;
 }
 
@@ -69,7 +68,7 @@ export default function PetApp() {
         clearTimeout(closeTimerRef.current);
         closeTimerRef.current = null;
       }
-      setBubbleVisible(true);
+      queueMicrotask(() => setBubbleVisible(true));
     } else if (bubbleVisible) {
       // 离开后 300ms 才关闭，给鼠标"sprite ↔ 气泡"切换的缓冲
       closeTimerRef.current = setTimeout(() => {

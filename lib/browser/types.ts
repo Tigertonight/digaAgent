@@ -67,6 +67,8 @@ export interface BrowserAnnotation {
   /** 批注时刻的视口截图（data URL），作为该批注的视觉证据快照。 */
   screenshotDataUrl: string | null;
   createdAt: number;
+  updatedAt?: number;
+  resolvedAt?: number;
   /**
    * 状态：open=待处理；resolved=已处理（agent 修复或用户标记完成）。
    * 默认 open。

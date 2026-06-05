@@ -8,6 +8,7 @@
  * - 鼠标滚轮缩放、双击复位、拖拽平移
  * - 顶部工具栏：下载（data: URL 直链下载，http: 用 fetch+blob，本地 /api/files 直接 a[download]）
  */
+import Image from "next/image";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { imageLightboxStore } from "@/lib/preview-store";
 
@@ -25,10 +26,12 @@ export default function ImageLightbox() {
   // 每次打开新图都复位
   useEffect(() => {
     if (state) {
-      setScale(1);
-      setOffset({ x: 0, y: 0 });
+      queueMicrotask(() => {
+        setScale(1);
+        setOffset({ x: 0, y: 0 });
+      });
     }
-  }, [state?.src]);
+  }, [state]);
 
   const close = useCallback(() => imageLightboxStore.close(), []);
 
@@ -164,10 +167,12 @@ export default function ImageLightbox() {
       </div>
 
       {/* 图片 */}
-      { }
-      <img
+      <Image
         src={state.src}
         alt={state.title ?? ""}
+        width={1600}
+        height={1000}
+        unoptimized
         onClick={(e) => e.stopPropagation()}
         onDoubleClick={onDoubleClick}
         draggable={false}

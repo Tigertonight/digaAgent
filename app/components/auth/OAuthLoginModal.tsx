@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check } from "lucide-react";
 
 type OAuthEvent =
@@ -47,6 +47,7 @@ export function OAuthLoginModal({
   const [status, setStatus] = useState<
     "connecting" | "running" | "done" | "error" | "cancelled"
   >("connecting");
+  const statusRef = useRef(status);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const [pending, setPending] = useState<{
@@ -59,10 +60,15 @@ export function OAuthLoginModal({
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
+  useEffect(() => {
     const ev = new EventSource(
       `/api/auth/login/${encodeURIComponent(provider)}`
     );
-    setStatus("running");
+    queueMicrotask(() => setStatus("running"));
+    statusRef.current = "running";
 
     const push = (e: OAuthEvent) => setEvents((prev) => [...prev, e]);
 
@@ -117,6 +123,7 @@ export function OAuthLoginModal({
     ev.addEventListener("success", (m) => {
       push({ type: "success", ...JSON.parse((m as MessageEvent).data) });
       setStatus("done");
+      statusRef.current = "done";
       ev.close();
       setTimeout(() => onSuccess(), 600);
     });
@@ -125,17 +132,20 @@ export function OAuthLoginModal({
       push({ type: "error", ...data });
       setErrorMsg(data.message);
       setStatus("error");
+      statusRef.current = "error";
       ev.close();
     });
     ev.addEventListener("cancelled", (m) => {
       push({ type: "cancelled", ...JSON.parse((m as MessageEvent).data) });
       setStatus("cancelled");
+      statusRef.current = "cancelled";
       ev.close();
     });
     ev.onerror = () => {
-      if (status === "running") {
+      if (statusRef.current === "running") {
         setErrorMsg("连接中断");
         setStatus("error");
+        statusRef.current = "error";
       }
       ev.close();
     };
@@ -144,7 +154,7 @@ export function OAuthLoginModal({
       ev.close();
     };
      
-  }, [provider]);
+  }, [onSuccess, provider]);
 
   const submit = useCallback(
     async (response: string | undefined, cancel = false) => {

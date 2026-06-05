@@ -4,6 +4,7 @@
  * Markdown 渲染（带 GFM + code highlight）。
  * 用 light/dark 两套主题，根据 documentElement 上的 data-theme 切。
  */
+import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -326,10 +327,13 @@ export default function Markdown({
             const s = typeof src === "string" ? src : "";
             return (
                
-              <img
+              <Image
                 {...rest}
                 src={s}
                 alt={alt ?? ""}
+                width={960}
+                height={640}
+                unoptimized
                 onClick={() => {
                   if (s) previewStore.openImage(s, alt || "图片");
                 }}

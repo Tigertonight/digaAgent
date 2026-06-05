@@ -465,6 +465,8 @@ export function usePetPusher(params: UsePetPusherParams): void {
     activeSnapshot,
     sessions,
     selectedId,
+    lastSeenMapRef,
+    runnersRef,
     activeAgentId,
     budgetStatus,
     budgetPausedTrigger,

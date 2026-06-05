@@ -18,6 +18,7 @@
  *   - PendingAttachment 类型从 lib/session-runner 统一来源（去重）
  */
 
+import NextImage from "next/image";
 import type {
   ChangeEvent,
   KeyboardEvent,
@@ -79,6 +80,7 @@ export interface ComposerProps {
 
   // ===== 流式状态 =====
   streaming: boolean;
+  abortable: boolean;
   compacting: boolean;
   agentId: string | null;
   pendingMessages: PendingMessagesSnapshot;
@@ -144,6 +146,7 @@ export function Composer(props: ComposerProps) {
     onKeyDown,
     onPasteTextarea,
     streaming,
+    abortable,
     compacting,
     agentId,
     pendingMessages,
@@ -236,10 +239,12 @@ export function Composer(props: ComposerProps) {
                 }}
                 title={`${img.mimeType} · ${formatBytes(approxBase64Bytes(img.data))}`}
               >
-                { }
-                <img
+                <NextImage
                   src={`data:${img.mimeType};base64,${img.data}`}
                   alt={`pending-${i}`}
+                  width={64}
+                  height={64}
+                  unoptimized
                   className="block w-16 h-16 object-cover"
                 />
                 <button
@@ -299,7 +304,11 @@ export function Composer(props: ComposerProps) {
             onKeyDown={onKeyDown}
             onPaste={onPasteTextarea}
             placeholder={
-              streaming ? "Steer 立即注入 / Follow-up 排队…" : "Message…"
+              streaming
+                ? "Steer 立即注入 / Follow-up 排队…"
+                : abortable
+                  ? "当前进度仍在进行，可点击 Stop 中止…"
+                  : "Message…"
             }
             rows={3}
             className="w-full bg-transparent resize-none outline-none border-0 text-sm px-4 pt-3 pb-12"
@@ -329,12 +338,12 @@ export function Composer(props: ComposerProps) {
           />
           {/* 卡片底部内嵌：右下 Send */}
           <div className="absolute right-2.5 bottom-2.5 flex items-center gap-1.5">
-            {streaming ? (
+            {abortable ? (
               <>
                 <button
                   type="button"
                   onClick={() => void onSteer()}
-                  disabled={!input.trim() && pendingImages.length === 0 && pendingFiles.length === 0}
+                  disabled={!streaming || (!input.trim() && pendingImages.length === 0 && pendingFiles.length === 0)}
                   className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md text-xs hover:bg-[color:var(--bg-hover)] disabled:opacity-40"
                   style={{ color: "var(--text-muted)" }}
                   title="Steer：立即注入当前 turn（不打断）"
@@ -345,7 +354,7 @@ export function Composer(props: ComposerProps) {
                 <button
                   type="button"
                   onClick={() => void onFollowUp()}
-                  disabled={!input.trim() && pendingImages.length === 0 && pendingFiles.length === 0}
+                  disabled={!streaming || (!input.trim() && pendingImages.length === 0 && pendingFiles.length === 0)}
                   className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md text-xs hover:bg-[color:var(--bg-hover)] disabled:opacity-40"
                   style={{ color: "var(--text-muted)" }}
                   title="Follow-up：排队，当前 turn 结束后自动发送"

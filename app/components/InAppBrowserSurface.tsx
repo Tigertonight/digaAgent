@@ -1,7 +1,7 @@
 "use client";
 
  
-import { createElement, useEffect, useRef, useState } from "react";
+import { createElement, useCallback, useEffect, useRef, useState } from "react";
 import type { BrowserSnapshot } from "@/lib/browser/types";
 
 type Command = {
@@ -119,6 +119,21 @@ function isCurrentAppRootUrl(url: string): boolean {
   }
 }
 
+function isBlankUrl(value: unknown): boolean {
+  return typeof value === "string" && value === "about:blank";
+}
+
+function resolveWebContentsId(
+  el: EmbeddedBrowserElement,
+  fallback: number | null
+): number | null {
+  if ("getWebContentsId" in el) {
+    const id = el.getWebContentsId();
+    return Number.isFinite(id) && id > 0 ? id : fallback;
+  }
+  return fallback;
+}
+
 async function waitForCondition(
   run: <T>(script: string) => Promise<T>,
   input: { url?: unknown; selector?: unknown; text?: unknown; timeoutMs?: unknown }
@@ -176,7 +191,13 @@ export function InAppBrowserSurface({
           setWcId(id);
         }
         setReady(true);
-        const result = await runScriptOnElement(el, inspectScript);
+        const result = await runScriptOnElement<Record<string, unknown>>(
+          el,
+          inspectScript
+        );
+        if (isBlankUrl(result.url) && url !== "about:blank") {
+          return;
+        }
         const r = await fetch(`/api/browser/${browserId}`, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -207,7 +228,7 @@ export function InAppBrowserSurface({
         el.removeEventListener("did-navigate-in-page", sync as EventListener);
       }
     };
-  }, [browserId, isElectron, onError, onSnapshot]);
+  }, [browserId, isElectron, onError, onSnapshot, url]);
 
   useEffect(() => {
     let cancelled = false;
@@ -231,15 +252,18 @@ export function InAppBrowserSurface({
     };
   }, [browserId, onSnapshot]);
 
-  const runJs = async <T,>(script: string): Promise<T> => {
+  const runJs = useCallback(async <T,>(script: string): Promise<T> => {
     const el = embeddedRef.current;
     if (!el) throw new Error("in-app browser surface is not mounted");
     return runScriptOnElement<T>(el, script);
-  };
+  }, []);
 
-  const inspect = () => runJs<Record<string, unknown>>(inspectScript);
+  const inspect = useCallback(
+    () => runJs<Record<string, unknown>>(inspectScript),
+    [runJs]
+  );
 
-  async function executeInAppCommand(command: Command) {
+  const executeInAppCommand = useCallback(async (command: Command) => {
     const el = embeddedRef.current;
     if (!el) throw new Error("in-app browser surface is not mounted");
     const payload = command.payload ?? {};
@@ -258,8 +282,13 @@ export function InAppBrowserSurface({
       case "refresh":
         return inspect();
       case "screenshot": {
-        if (api?.webviewPoc?.screenshot && wcId != null) {
-          const shot = await api.webviewPoc.screenshot(wcId);
+        const currentWcId = resolveWebContentsId(el, wcId);
+        if (api?.webviewPoc?.screenshot && currentWcId != null) {
+          const shot = await withTimeout(
+            api.webviewPoc.screenshot(currentWcId),
+            10_000,
+            "in-app webview screenshot timed out"
+          );
           return { ...(await inspect()), screenshotDataUrl: shot.dataUrl ?? null };
         }
         return inspect();
@@ -407,7 +436,7 @@ export function InAppBrowserSurface({
       default:
         throw new Error(`unknown in-app browser command: ${command.action}`);
     }
-  }
+  }, [api?.webviewPoc, inspect, runJs, wcId]);
 
   useEffect(() => {
     if (!ready) return;
@@ -471,7 +500,7 @@ export function InAppBrowserSurface({
       clearInterval(interval);
     };
      
-  }, [browserId, ready, wcId]);
+  }, [browserId, executeInAppCommand, onSnapshot, ready, wcId]);
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-white">
@@ -528,6 +557,26 @@ function isNavigationAbort(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   const code = (error as { code?: unknown } | null)?.code;
   return code === "ERR_ABORTED" || message.includes("ERR_ABORTED") || message.includes("(-3)");
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
 }
 
 async function loadEmbeddedUrl(
