@@ -19,6 +19,7 @@
  * 这是实验代码，验证完成后应整理为正式方案或移除。
  */
 
+import Image from "next/image";
 import { createElement, useCallback, useEffect, useRef, useState } from "react";
 
 // window.miniPi.webviewPoc 的最小类型（仅 PoC 用）
@@ -200,8 +201,15 @@ export function WebviewPocPanel() {
           <div className="mb-1 text-[10px]" style={{ color: "var(--text-muted)" }}>
             CDP 截图结果（按需单帧）：
           </div>
-          { }
-          <img src={shot} alt="cdp screenshot" className="max-h-32 rounded border" style={{ borderColor: "var(--border-soft)" }} />
+          <Image
+            src={shot}
+            alt="cdp screenshot"
+            width={320}
+            height={180}
+            unoptimized
+            className="max-h-32 rounded border object-contain"
+            style={{ borderColor: "var(--border-soft)" }}
+          />
         </div>
       )}
 

@@ -44,6 +44,7 @@ import {
 } from "@/lib/subagents/router";
 import {
   clearProgress,
+  failOpenProgress,
   getProgress,
   updateProgress,
 } from "@/lib/progress/server-store";
@@ -455,10 +456,12 @@ export async function POST(
       }
 
       case "abort": {
+        const progress = failOpenProgress(id, "用户已中止当前任务。");
+        pushProgressEvent(rec, progress);
         await abortWorkflowsForParent(id);
         await abortSubagentsForParent(id);
         await rec.session.abort();
-        return NextResponse.json({ ok: true });
+        return NextResponse.json({ ok: true, progress });
       }
 
       case "abort_compaction":

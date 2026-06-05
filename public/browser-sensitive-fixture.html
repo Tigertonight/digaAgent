@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Browser Sensitive Fixture</title>
+  </head>
+  <body>
+    <main>
+      <h1>Browser Sensitive Fixture</h1>
+      <p id="status">Waiting for a confirmed sensitive action.</p>
+      <button
+        type="button"
+        onclick="document.getElementById('status').textContent='Sensitive action completed.'"
+      >
+        提交表单
+      </button>
+    </main>
+  </body>
+</html>

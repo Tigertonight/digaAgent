@@ -7,6 +7,7 @@
  * SDK 的 tool args/result 结构基于具体 tool，所以这里都按 unknown 处理，
  * 内部用宽松的取值。后续可以根据 ToolRegistry 类型严格化。
  */
+import Image from "next/image";
 import { useState } from "react";
 import type { MessagePart } from "@/lib/types";
 import { unifiedDiff, isNoChange, type DiffLine } from "@/lib/diff-utils";
@@ -309,11 +310,13 @@ function ToolImages({ tool }: { tool: ToolPart }) {
             className="block rounded overflow-hidden border p-0"
             style={{ borderColor: "var(--border-soft)", background: "none", cursor: "zoom-in" }}
           >
-            { }
-            <img
+            <Image
               src={src}
               alt={`tool image ${i + 1}`}
-              style={{ maxWidth: 320, maxHeight: 320, display: "block" }}
+              width={320}
+              height={320}
+              unoptimized
+              style={{ maxWidth: 320, maxHeight: 320, display: "block", objectFit: "contain" }}
             />
           </button>
         );

@@ -166,12 +166,14 @@ export function usePetToasts(petState: PetState | null) {
     }
     if (accepted.length === 0) return;
 
-    setToasts((cur) => {
-      const merged = [...cur, ...accepted];
-      // 超出上限 → 丢最旧（FIFO 满了）
-      return merged.length > MAX_QUEUE
-        ? merged.slice(merged.length - MAX_QUEUE)
-        : merged;
+    queueMicrotask(() => {
+      setToasts((cur) => {
+        const merged = [...cur, ...accepted];
+        // 超出上限 → 丢最旧（FIFO 满了）
+        return merged.length > MAX_QUEUE
+          ? merged.slice(merged.length - MAX_QUEUE)
+          : merged;
+      });
     });
 
     // 起出队定时器

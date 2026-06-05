@@ -17,6 +17,7 @@
  *   - AgentPhase 复用 lib/session-runner 的同形 type
  */
 
+import Image from "next/image";
 import { memo, useEffect, useRef, useState } from "react";
 import {
   CheckCircle2,
@@ -75,7 +76,7 @@ export interface MessageViewProps {
     opts?: { remember?: "this-session"; ruleId?: string }
   ) => void;
   /** RFC-2 Phase B3：approval part 点 Deny 时回调 */
-  onDenyCall?: (toolCallId: string) => void;
+  onDenyCall?: (toolCallId: string, denyReason?: string) => void;
   /** RFC-5：clarification 推荐项点击 */
   onChooseClarification?: (requestId: string, optionId: string) => void;
   /** RFC-5：clarification 自定义回复 */
@@ -176,10 +177,12 @@ export const MessageView = memo(function MessageView({
                     background: "var(--user-bg)",
                   }}
                 >
-                  { }
-                  <img
+                  <Image
                     src={src}
                     alt={`user-img-${i}`}
+                    width={640}
+                    height={480}
+                    unoptimized
                     onClick={() => previewStore.openImage(src, "我发送的图片")}
                     className="block max-w-full max-h-80 object-contain"
                     style={{ cursor: "zoom-in" }}
@@ -412,10 +415,12 @@ export const MessageView = memo(function MessageView({
             const src = `data:${p.mimeType};base64,${p.data}`;
             return (
               <div key={i} className="rounded-lg overflow-hidden inline-block">
-                { }
-                <img
+                <Image
                   src={src}
                   alt=""
+                  width={768}
+                  height={512}
+                  unoptimized
                   onClick={() => previewStore.openImage(src, "生成的图片")}
                   className="block max-w-full max-h-96 object-contain"
                   style={{ cursor: "zoom-in" }}

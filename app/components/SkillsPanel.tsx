@@ -249,8 +249,10 @@ function AddSkillPanel({
 
   useEffect(() => {
     if (defaultSpec) {
-      setTab("manual");
-      setManualSrc(defaultSpec);
+      queueMicrotask(() => {
+        setTab("manual");
+        setManualSrc(defaultSpec);
+      });
     }
   }, [defaultSpec]);
 
@@ -886,7 +888,13 @@ export default function SkillsPanel({ cwd, onClose }: Props) {
   }, [cwd]);
 
   useEffect(() => {
-    void load();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [load]);
 
   const grouped = useMemo(() => {

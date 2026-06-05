@@ -93,11 +93,27 @@ export function useProviderStatus(
   }, [reloadAuth, reloadProviders]);
 
   useEffect(() => {
-    if (autoLoadProviders) void reloadProviders();
+    let cancelled = false;
+    if (autoLoadProviders) {
+      queueMicrotask(() => {
+        if (!cancelled) void reloadProviders();
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
   }, [autoLoadProviders, reloadProviders]);
 
   useEffect(() => {
-    if (autoLoadAuth) void reloadAuth();
+    let cancelled = false;
+    if (autoLoadAuth) {
+      queueMicrotask(() => {
+        if (!cancelled) void reloadAuth();
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
   }, [autoLoadAuth, reloadAuth]);
 
   return {

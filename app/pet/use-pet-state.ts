@@ -365,7 +365,7 @@ export function usePetState() {
         nextState !== "budget_warning" &&
         nextState !== "budget_blocked"
       ) {
-        setAnimState("done");
+        queueMicrotask(() => setAnimState("done"));
         if (doneTimerRef.current) clearTimeout(doneTimerRef.current);
         doneTimerRef.current = setTimeout(() => {
           doneTimerRef.current = null;

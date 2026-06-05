@@ -27,7 +27,6 @@ import {
   emptyRunner,
   DRAFT_KEY,
   type RunnerKey,
-  type AgentPhase,
   type PendingAttachment,
 } from "@/lib/session-runner";
 import { useRunners } from "./hooks/useRunners";
@@ -61,6 +60,7 @@ import { RightPanelContainer } from "./components/RightPanelContainer";
 import { BrowserPanel } from "./components/BrowserPanel";
 import { ChatModals } from "./components/ChatModals";
 import { BudgetExceededModal } from "./components/BudgetExceededModal";
+import { resolveRuntimeIdentity } from "@/lib/runtime/identity";
 
 interface Props {
   initialSessions: SessionInfoLite[];
@@ -393,7 +393,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       runnerKeys: () => [...runnersRef.current.keys()],
       sseKeys: () => [...esMapRef.current.keys()],
     };
-  }, [runnersRef, activeKeyRef]);
+  }, [activeKeyRef, esMapRef, runnersRef]);
 
   // ===== Session 列表 + 已读追踪 + CRUD（RFC-1 阶段 B1） =====
   // 持有 sessions / selectedId / lastSeenMap（localStorage 持久化，lazy init 修复刷新已读丢失）；
@@ -445,12 +445,13 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // 已挪到 RunnerState。见下方 activeSnapshot 解构区。
 
   // theme（首屏由 layout 里的 inline script 设置）
-  const [theme, setTheme] = useState<Theme>("dark");
-  useEffect(() => {
-    const t =
-      (document.documentElement.getAttribute("data-theme") as Theme) ?? "dark";
-    setTheme(t);
-  }, []);
+  const [theme, setTheme] = useState<Theme>(() => {
+    if (typeof document === "undefined") return "dark";
+    return (
+      (document.documentElement.getAttribute("data-theme") as Theme | null) ??
+      "dark"
+    );
+  });
   const toggleTheme = () => {
     const next: Theme = theme === "dark" ? "light" : "dark";
     setTheme(next);
@@ -465,14 +466,33 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // 右侧抽屉：files | skills | tools | null（互斥，localStorage 持久化）
   const [rightPanel, setRightPanel] = useState<
     "files" | "skills" | "tools" | "browser" | null
-  >(null);
+  >(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const v = localStorage.getItem("pi-right-panel");
+      if (v === "files" || v === "skills" || v === "tools" || v === "browser")
+        return v;
+      if (localStorage.getItem("pi-show-files") === "1") return "files";
+    } catch {
+      /* noop */
+    }
+    return null;
+  });
   const [browserOpenRequest, setBrowserOpenRequest] = useState<{
     id: number;
     url: string;
   } | null>(null);
 
   // 右侧 panel 宽度（仅 files/tools 用 inline 形态需要，skills 是 modal）
-  const [rightPanelWidth, setRightPanelWidth] = useState(480);
+  const [rightPanelWidth, setRightPanelWidth] = useState(() => {
+    if (typeof window === "undefined") return 480;
+    try {
+      const stored = localStorage.getItem("rightPanelWidth");
+      const n = stored ? Number(stored) : NaN;
+      if (Number.isFinite(n) && n >= 320) return n;
+    } catch {}
+    return 480;
+  });
   /** FileBrowser 内部折叠状态:不再影响外层宽度,仅 56px 极窄态特殊处理
    *  (FileBrowser 内部用 flex:1 自适应,外层一直用 rightPanelWidth) */
   const [filesLayout, setFilesLayout] = useState<{
@@ -484,15 +504,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     filesLayout.viewerHidden && filesLayout.treeCollapsed
       ? 56
       : rightPanelWidth;
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem("rightPanelWidth");
-      if (stored) {
-        const n = Number(stored);
-        if (Number.isFinite(n) && n >= 320) setRightPanelWidth(n);
-      }
-    } catch {}
-  }, []);
   useEffect(() => {
     try {
       localStorage.setItem("rightPanelWidth", String(rightPanelWidth));
@@ -567,18 +578,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   >(null);
   const [workflowHistoryLoading, setWorkflowHistoryLoading] = useState(false);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
-  useEffect(() => {
-    try {
-      const v = localStorage.getItem("pi-right-panel");
-      if (v === "files" || v === "skills" || v === "tools" || v === "browser")
-        setRightPanel(v);
-      else if (localStorage.getItem("pi-show-files") === "1") {
-        setRightPanel("files");
-      }
-    } catch {
-      /* noop */
-    }
-  }, []);
   const persistRightPanel = (
     v: "files" | "skills" | "tools" | "browser" | null
   ) => {
@@ -767,69 +766,104 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     supportsThinking,
     sseStatus,
   } = activeSnapshot;
+  const selectedSession = useMemo(
+    () => sessions.find((session) => session.id === selectedId) ?? null,
+    [selectedId, sessions]
+  );
+  const runtimeIdentity = useMemo(
+    () =>
+      resolveRuntimeIdentity({
+        selectedSessionId: selectedSession?.id ?? agentSessionId ?? null,
+        selectedSessionPath:
+          selectedSession?.path ?? currentSessionFile ?? activeKey,
+        cwd,
+        activeRunnerKey: activeKey,
+        liveAgentId: agentId,
+      }),
+    [
+      activeKey,
+      agentId,
+      agentSessionId,
+      currentSessionFile,
+      cwd,
+      selectedSession?.id,
+      selectedSession?.path,
+    ]
+  );
+
+  const progressRunning = useMemo(() => {
+    const groups = progress?.groups ?? [];
+    const steps =
+      groups.length > 0
+        ? groups.flatMap((group) => group.steps)
+        : progress?.steps ?? [];
+    return steps.some(
+      (step) => step.status === "running" || step.status === "pending"
+    );
+  }, [progress]);
+  const abortable = streaming || progressRunning;
 
   const openUrlInBrowserPanel = useCallback(
     (url: string) => {
-      if (!agentId) {
-        previewStore.openUrl(url);
-        return;
-      }
       setRightPanel("browser");
       persistRightPanel("browser");
       setBrowserOpenRequest({ id: Date.now(), url });
     },
-    [agentId]
+    []
   );
 
   // ===== Setter wrappers(同名,所有调用点不动)=====
   // 通用 helper:把 React 风格的 setter (value | (prev) => value) 路由到 updateActive。
   // 为每个字段写一个 useCallback,保持稳定的函数 identity,避免下游误触发。
   type Updater<T> = T | ((prev: T) => T);
-  const resolve = <T,>(prev: T, v: Updater<T>): T =>
-    typeof v === "function" ? (v as (p: T) => T)(prev) : v;
+  const resolve = useCallback(
+    <T,>(prev: T, v: Updater<T>): T =>
+      typeof v === "function" ? (v as (p: T) => T)(prev) : v,
+    []
+  );
 
   const setChatState = useCallback(
     (v: Updater<ReducerState>) =>
       updateActive((s) => ({ chatState: resolve(s.chatState, v) })),
-    [updateActive]
+    [resolve, updateActive]
   );
   const setForkableUserMessages = useCallback(
     (v: Updater<ForkableUserMessage[]>) =>
       updateActive((s) => ({
         forkableUserMessages: resolve(s.forkableUserMessages, v),
       })),
-    [updateActive]
+    [resolve, updateActive]
   );
   const setForkingIndex = useCallback(
     (v: Updater<number | null>) =>
       updateActive((s) => ({ forkingIndex: resolve(s.forkingIndex, v) })),
-    [updateActive]
+    [resolve, updateActive]
   );
   const setForkText = useCallback(
     (v: Updater<string>) =>
       updateActive((s) => ({ forkText: resolve(s.forkText, v) })),
-    [updateActive]
+    [resolve, updateActive]
   );
   // setForkBusy 已下沉到 useForkable hook（C1：fork 流程内 updateRunner 直接写）
   const setInput = useCallback(
     (v: Updater<string>) =>
       updateActive((s) => ({ input: resolve(s.input, v) })),
-    [updateActive]
+    [resolve, updateActive]
   );
   const setPendingImages = useCallback(
     (v: Updater<ImageContentLite[]>) =>
       updateActive((s) => ({ pendingImages: resolve(s.pendingImages, v) })),
-    [updateActive]
+    [resolve, updateActive]
   );
   const setPendingFiles = useCallback(
     (v: Updater<PendingAttachment[]>) =>
       updateActive((s) => ({ pendingFiles: resolve(s.pendingFiles, v) })),
-    [updateActive]
+    [resolve, updateActive]
   );
   const setCompactError = useCallback(
     (v: Updater<string | null>) =>
       updateActive((s) => ({ compactError: resolve(s.compactError, v) })),
-    [updateActive]
+    [resolve, updateActive]
   );
 
   // ===== Composer 附件子模块（RFC-1 阶段 B2-b，已抽到 useComposerAttachments） =====
@@ -924,7 +958,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       if (target) setSelectedId(sessionId);
     });
     return unsub;
-  }, [sessions]);
+  }, [sessions, setSelectedId]);
 
   /**
    * 把 forkableUserMessages 按顺序回填到 chatState.messages 里的 user message 上。
@@ -959,6 +993,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   // 用户是否"贴底"：贴底时新内容自动跟随，往上滚一旦离开底部 64px 就停止跟随。
   const stickToBottomRef = useRef(true);
+  const scrollRafRef = useRef<number | null>(null);
   // send 后锚定到刚发的 user 消息:记 send 时的 user 消息总数,
   // 等新 user 消息从 SSE 回来后扫到对应那条,把它滚到屏顶。
   // null = 不锚定(普通贴底跟随);number = 期望"这条 user 一出现就锚"
@@ -966,6 +1001,19 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // 锚定阶段:仅此期间渲染 60vh 底部占位,让最后一条 user 能被 scroll-to-top
   // 一旦锚定完成或被取消,移除占位,避免列表底部一大片空白可滚。
   const [pinSpacer, setPinSpacer] = useState(false);
+
+  const scrollMessagesToBottom = useCallback(() => {
+    if (scrollRafRef.current != null) {
+      cancelAnimationFrame(scrollRafRef.current);
+    }
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      const el = messagesScrollRef.current;
+      if (!el) return;
+      el.scrollTop = el.scrollHeight;
+      stickToBottomRef.current = true;
+    });
+  }, []);
 
   function handleMessagesScroll() {
     const el = messagesScrollRef.current;
@@ -1016,8 +1064,21 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     }
     // 优先级 2:贴底时跟随新内容
     if (!stickToBottomRef.current) return;
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streaming, messageRefs]);
+    scrollMessagesToBottom();
+  }, [messages, streaming, messageRefs, scrollMessagesToBottom]);
+
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current != null) {
+        cancelAnimationFrame(scrollRafRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!stickToBottomRef.current) return;
+    scrollMessagesToBottom();
+  }, [progress?.updatedAt, scrollMessagesToBottom]);
 
   // 选已有 session(P1-8):
   //  - runnersRef 已有该 session 的 runner → 直接 switchTo(不动 SSE,后台流式继续)
@@ -1025,7 +1086,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   //          (不立即 attachSse;用户发送时 send() 会走 create-with-sessionPath 路径)
   useEffect(() => {
     if (!selectedId) return;
-    setError(null);
+    queueMicrotask(() => setError(null));
     const sel = sessions.find((s) => s.id === selectedId);
     if (!sel) return;
     const key: RunnerKey = sel.path;
@@ -1068,42 +1129,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       })
       .catch((e) => setError(String(e)));
      
-  }, [selectedId]);
-
-  // 切完分支后从 session context 重建 chat state
-  const reloadFromCurrentSession = useCallback(async () => {
-    const sid = agentSessionId ?? selectedId;
-    if (!sid) return;
-    try {
-      const r = await fetch(`/api/sessions/${sid}/context`);
-      const ctx = await r.json();
-      if (ctx.error) {
-        setError(ctx.error);
-        return;
-      }
-      setChatState(
-        createInitialState(
-          appendRestoredSubagentBatches(
-            ctxToMessages(ctx.messages ?? []),
-            Array.isArray(ctx.subagentBatches)
-              ? (ctx.subagentBatches as SubagentBatch[])
-              : undefined
-          )
-        )
-      );
-      if (Array.isArray(ctx.forkableUserMessages)) {
-        setForkableUserMessages(
-          ctx.forkableUserMessages as ForkableUserMessage[]
-        );
-      }
-      if (agentId) {
-        void refreshStats(agentId);
-        void refreshToolsCount(agentId);
-      }
-    } catch (e) {
-      setError(String(e));
-    }
-  }, [agentSessionId, selectedId, agentId]);
+  }, [runnersRef, selectedId, sessions, setRunner, switchTo, updateRunner]);
 
   // refreshForkList 已挪到 useForkable hook（C1）
   // refreshStats / refreshToolsCount 写到指定 runner；ownerKey 缺省 = 当前活跃 runner。
@@ -1147,7 +1173,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         console.warn("refreshStats failed", e);
       }
     },
-    [updateRunner]
+    [activeKeyRef, updateRunner]
   );
 
   // 拉工具启用计数（Tools pill 用）
@@ -1170,8 +1196,51 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         console.warn("refreshToolsCount failed", e);
       }
     },
-    [updateRunner]
+    [activeKeyRef, updateRunner]
   );
+
+  // 切完分支后从 session context 重建 chat state
+  const reloadFromCurrentSession = useCallback(async () => {
+    const sid = agentSessionId ?? selectedId;
+    if (!sid) return;
+    try {
+      const r = await fetch(`/api/sessions/${sid}/context`);
+      const ctx = await r.json();
+      if (ctx.error) {
+        setError(ctx.error);
+        return;
+      }
+      setChatState(
+        createInitialState(
+          appendRestoredSubagentBatches(
+            ctxToMessages(ctx.messages ?? []),
+            Array.isArray(ctx.subagentBatches)
+              ? (ctx.subagentBatches as SubagentBatch[])
+              : undefined
+          )
+        )
+      );
+      if (Array.isArray(ctx.forkableUserMessages)) {
+        setForkableUserMessages(
+          ctx.forkableUserMessages as ForkableUserMessage[]
+        );
+      }
+      if (agentId) {
+        void refreshStats(agentId);
+        void refreshToolsCount(agentId);
+      }
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [
+    agentId,
+    agentSessionId,
+    refreshStats,
+    refreshToolsCount,
+    selectedId,
+    setChatState,
+    setForkableUserMessages,
+  ]);
 
   // 把 handleAgentEvent 绑到 ref，供 useSseManager 的 onEvent 回调使用。
   // handleAgentEvent 是函数声明（hoisted），每次 render 重建；通过 ref 转发避免
@@ -1211,7 +1280,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       attachSseFor(key, aid);
     });
     return unsub;
-  }, [sessions, attachSseFor]);
+  }, [activeKeyRef, attachSseFor, runnersRef, sessions]);
 
   const reconnectActiveSession = useCallback(() => {
     if (!agentId) return;
@@ -1293,6 +1362,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     refreshToolsCount,
     switchTo,
     setRunner,
+    setSelectedId,
+    runnersRef,
     closeSseFor,
     attachSseFor,
     updateRunner,
@@ -1879,7 +1950,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         } catch {}
       }
     },
-    [agentId, agentAction, updateRunner]
+    [activeKeyRef, agentId, agentAction, setModelId, setProviderId, updateRunner]
   );
 
   // ===== Fork 模块（RFC-1 阶段 C1，已抽到 useForkable hook） =====
@@ -2094,6 +2165,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           onKeyDown={onKeyDown}
           onPasteTextarea={onPasteTextarea}
           streaming={streaming}
+          abortable={abortable}
           compacting={compacting}
           agentId={agentId}
           pendingMessages={activeSnapshot.pendingMessages}
@@ -2156,6 +2228,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       {showBrowser && (
         <BrowserPanel
           agentId={agentId}
+          runtimeIdentity={runtimeIdentity}
           snapshot={activeSnapshot.browser}
           width={rightPanelWidth}
           openRequest={browserOpenRequest}

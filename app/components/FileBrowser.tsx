@@ -10,6 +10,7 @@
  * - 点击文件 → 下半部分显示内容（Markdown 高亮）
  * - 文本文件可编辑保存（PUT /api/files）
  */
+import Image from "next/image";
 import { CornerDownRight, File, FileText, Folder, Link2, WrapText } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "./Markdown";
@@ -180,13 +181,19 @@ function DirNode({
 
   useEffect(() => {
     if (open && entries === null && !loading) {
-      void load();
+      let cancelled = false;
+      queueMicrotask(() => {
+        if (!cancelled) void load();
+      });
+      return () => {
+        cancelled = true;
+      };
     }
   }, [open, entries, loading, load]);
 
   // 父路径变化（例如根 path 改了）时重置
   useEffect(() => {
-    setEntries(null);
+    queueMicrotask(() => setEntries(null));
   }, [path]);
 
   const indent = { paddingLeft: level * 12 };
@@ -449,7 +456,13 @@ function FileViewer({
   }, [path]);
 
   useEffect(() => {
-    void load();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [load]);
 
   const save = useCallback(async () => {
@@ -612,9 +625,12 @@ function FileViewer({
               className="p-3 flex items-center justify-center"
               style={{ minHeight: "100%", background: "var(--bg-app)" }}
             >
-              <img
+              <Image
                 src={`data:${file.mime};base64,${file.dataBase64}`}
                 alt={basename(file.path)}
+                width={1200}
+                height={800}
+                unoptimized
                 onError={(e) => {
                   (e.currentTarget as HTMLImageElement).replaceWith(
                     document.createTextNode("Failed to load image")
@@ -794,8 +810,10 @@ function UrlPreviewViewer({
   // X-Frame-Options/CSP 拒绝时,iframe load 不会触发 error,但不会成功;
   // 用 8s 超时兜底:仍 loading 视作可能被拒绝
   useEffect(() => {
-    setLoading(true);
-    setLoadFailed(false);
+    queueMicrotask(() => {
+      setLoading(true);
+      setLoadFailed(false);
+    });
     const t = setTimeout(() => {
       setLoading((cur) => {
         if (cur) setLoadFailed(true);
@@ -939,10 +957,12 @@ function ImagePreviewViewer({
         className="flex-1 min-h-0 overflow-auto flex items-center justify-center p-3"
         style={{ background: "var(--bg-app)" }}
       >
-        { }
-        <img
+        <Image
           src={src}
           alt=""
+          width={1200}
+          height={800}
+          unoptimized
           style={{
             maxWidth: "100%",
             maxHeight: "100%",
@@ -1114,8 +1134,7 @@ export default function FileBrowser({
   // picker 模式:首次挂载时把当前 cwd 进 recents,作为"回家"快捷入口
   useEffect(() => {
     if (isPicker && initialPath) pushRecentRoot(initialPath);
-     
-  }, []);
+  }, [initialPath, isPicker, pushRecentRoot]);
 
   // root 切换 → 清空搜索 filter,避免上一层的关键词把新层卡空
   useEffect(() => {

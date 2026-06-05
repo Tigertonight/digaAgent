@@ -40,8 +40,42 @@ import {
   type RunnerPatch,
   type RunnerState,
 } from "@/lib/session-runner";
+import type { AgentProgress, ProgressStep } from "@/lib/progress/types";
 
 type Updater<T> = T | ((prev: T) => T);
+
+function failOpenProgressSteps(progress: AgentProgress | null): AgentProgress | null {
+  if (!progress) return progress;
+  const now = Date.now();
+  const closeStep = (step: ProgressStep): ProgressStep => {
+    if (step.status !== "running" && step.status !== "pending") return step;
+    return {
+      ...step,
+      status: "failed",
+      summary: step.summary
+        ? `${step.summary}\n用户已中止当前任务。`
+        : "用户已中止当前任务。",
+      completedAt: now,
+    };
+  };
+  const groups = progress.groups.map((group) => ({
+    ...group,
+    steps: group.steps.map(closeStep),
+    endedAt:
+      group.endedAt ??
+      (group.steps.some(
+        (step) => step.status === "running" || step.status === "pending"
+      )
+        ? now
+        : undefined),
+  }));
+  return {
+    ...progress,
+    steps: progress.steps.map(closeStep),
+    groups,
+    updatedAt: now,
+  };
+}
 
 /**
  * 从 sessionFile 路径里解出 sessionId（UUID）。
@@ -393,21 +427,16 @@ export function useChatStream(
     thinkingLevel,
     currentSessionFile,
     attachSseFor,
-    closeSseFor,
     agentAction,
     refreshStats,
     refreshToolsCount,
     updateRunner,
-    setRunner,
     activeKeyRef,
-    runnersRef,
     upgradeDraftIfNeeded,
-    switchTo,
     setInput,
     setPendingImages,
     setPendingFiles,
     setError,
-    setSelectedId,
     pendingPinUserCountRef,
     setPinSpacer,
   ]);
@@ -481,10 +510,16 @@ export function useChatStream(
   // 中断当前 turn
   const onAbort = useCallback(async () => {
     if (!agentId) return;
+    const ownerKey = activeKeyRef.current ?? DRAFT_KEY;
+    updateRunner(ownerKey, (state) => ({
+      streaming: false,
+      agentPhase: null,
+      progress: failOpenProgressSteps(state.progress),
+    }));
     try {
       await agentAction(agentId, { type: "abort" });
     } catch {}
-  }, [agentId, agentAction]);
+  }, [activeKeyRef, agentId, agentAction, updateRunner]);
 
   // 触发 history compaction
   const onCompact = useCallback(async () => {

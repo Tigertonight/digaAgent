@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 
 const MAIN_LOGO = "/brand/diga-logo-main.webp";
@@ -69,12 +70,12 @@ function BrandLogoComponent({ size, className }: BrandLogoProps) {
       onBlur={stopCycling}
       tabIndex={-1}
     >
-      { }
-      <img
+      <Image
         src={src}
         alt=""
         width={size}
         height={size}
+        unoptimized
         draggable={false}
         style={{
           display: "block",

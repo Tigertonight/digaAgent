@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Camera,
   Check,
@@ -28,6 +29,7 @@ import type {
   BrowserSnapshot,
   BrowserStepSnapshot,
 } from "@/lib/browser/types";
+import type { RuntimeIdentity } from "@/lib/runtime/identity";
 import { InAppBrowserSurface } from "./InAppBrowserSurface";
 import { WebviewPocPanel } from "./WebviewPocPanel";
 
@@ -67,6 +69,7 @@ function browserDisplayUrl(url: string | null | undefined): string {
 
 interface BrowserPanelProps {
   agentId: string | null;
+  runtimeIdentity?: RuntimeIdentity;
   snapshot: BrowserSnapshot;
   width: number;
   openRequest?: { id: number; url: string } | null;
@@ -80,19 +83,26 @@ interface BrowserPanelProps {
 
 export function BrowserPanel({
   agentId,
+  runtimeIdentity,
   snapshot,
   width,
   openRequest,
   onClose,
   onAnnotate,
 }: BrowserPanelProps) {
-  // browserId 解耦 agentId：agent 域用 agent:<id>，无 agent 时用 standalone 域。
-  // 与后端 lib/browser/browser-id.ts 规范一致。
-  const browserId = agentId ? `agent:${agentId}` : "standalone:default";
+  // browserId 由 RuntimeIdentity 统一派生，避免历史会话/草稿态误绑到 agent。
+  const browserId =
+    runtimeIdentity?.browserId ??
+    (agentId ? `agent:${agentId}` : "standalone:default");
   const [localSnapshot, setLocalSnapshot] = useState<BrowserSnapshot | null>(
     null
   );
-  const effectiveSnapshot = agentId ? snapshot : (localSnapshot ?? snapshot);
+  const effectiveSnapshot = useMemo(() => {
+    if (!localSnapshot) return snapshot;
+    const localUpdatedAt = localSnapshot.updatedAt ?? 0;
+    const propUpdatedAt = snapshot.updatedAt ?? 0;
+    return localUpdatedAt >= propUpdatedAt ? localSnapshot : snapshot;
+  }, [localSnapshot, snapshot]);
   const initialBrowserUrl = browserDisplayUrl(effectiveSnapshot.url);
   const [addressDraft, setAddressDraft] = useState(initialBrowserUrl);
   const [surfaceUrl, setSurfaceUrl] = useState(initialBrowserUrl);
@@ -110,11 +120,6 @@ export function BrowserPanel({
   const [headless, setHeadless] = useState(false);
   // 接管模式（仅 headless 兜底用）：显示实时画面并把输入回放过去
   const [takeover, setTakeover] = useState(false);
-  const [frame, setFrame] = useState<{ dataUrl: string; seq: number } | null>(
-    null
-  );
-  const frameSeqRef = useRef(-1);
-  const surfaceRef = useRef<HTMLDivElement | null>(null);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   // 底部详情抽屉（actions + timeline）默认折叠，把高度留给画面
   const [showDetails, setShowDetails] = useState(false);
@@ -122,6 +127,7 @@ export function BrowserPanel({
   const [showAnnotations, setShowAnnotations] = useState(true);
   const [dragRect, setDragRect] = useState<Rect | null>(null);
   const [draftComment, setDraftComment] = useState("");
+  const [screenshotReview, setScreenshotReview] = useState(false);
   // 当前高亮的批注（在截图上突出显示对应框）
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(
     null
@@ -129,7 +135,17 @@ export function BrowserPanel({
   const [pointerTrail, setPointerTrail] = useState<PointerTrail | null>(null);
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const previousPointerRef = useRef<BrowserPointerState | null>(null);
-  const steps = effectiveSnapshot.steps ?? [];
+  useEffect(() => {
+    queueMicrotask(() => {
+      setLocalSnapshot(null);
+      setScreenshotReview(false);
+      setSelectedStepId(null);
+    });
+  }, [browserId]);
+  const steps = useMemo(
+    () => effectiveSnapshot.steps ?? [],
+    [effectiveSnapshot.steps]
+  );
 
   const selectedStep = useMemo(
     () => steps.find((step) => step.id === selectedStepId) ?? null,
@@ -155,18 +171,16 @@ export function BrowserPanel({
   const displayTitle = selectedStep?.title ?? effectiveSnapshot.title;
   const displayPointer =
     selectedStep?.pointer ?? effectiveSnapshot.pointer ?? null;
-  const snapshotUpdatedAt = effectiveSnapshot.updatedAt;
-
   useEffect(() => {
     if (effectiveSnapshot.url && !isCurrentAppRootUrl(effectiveSnapshot.url)) {
       if (pendingOpenUrlRef.current) return;
+      const snapshotUrl = effectiveSnapshot.url;
       const nextSnapshotUrl = browserDisplayUrl(effectiveSnapshot.url);
       if (nextSnapshotUrl === "about:blank" && surfaceUrl !== "about:blank") {
         return;
       }
-      setSurfaceUrl(effectiveSnapshot.url);
       if (!isEditingAddress && !addressDirty) {
-        setAddressDraft(effectiveSnapshot.url);
+        queueMicrotask(() => setAddressDraft(snapshotUrl));
       }
     }
   }, [effectiveSnapshot.url, addressDirty, isEditingAddress, surfaceUrl]);
@@ -174,20 +188,22 @@ export function BrowserPanel({
   useEffect(() => {
     if (!selectedStepId) return;
     if (!steps.some((step) => step.id === selectedStepId)) {
-      setSelectedStepId(null);
+      queueMicrotask(() => setSelectedStepId(null));
     }
   }, [selectedStepId, steps]);
 
   useEffect(() => {
     if (!displayPointer) {
-      setPointerTrail(null);
+      queueMicrotask(() => setPointerTrail(null));
       previousPointerRef.current = null;
       return;
     }
     const prev = previousPointerRef.current;
-    setPointerTrail({
-      from: prev ? { x: prev.x, y: prev.y } : null,
-      to: { x: displayPointer.x, y: displayPointer.y },
+    queueMicrotask(() => {
+      setPointerTrail({
+        from: prev ? { x: prev.x, y: prev.y } : null,
+        to: { x: displayPointer.x, y: displayPointer.y },
+      });
     });
     previousPointerRef.current = displayPointer;
   }, [displayPointer]);
@@ -195,7 +211,7 @@ export function BrowserPanel({
   useEffect(() => {
     const trimmed = addressDraft.trim();
     if (!trimmed) {
-      setSite(null);
+      queueMicrotask(() => setSite(null));
       return;
     }
     let cancelled = false;
@@ -247,7 +263,16 @@ export function BrowserPanel({
     }
   };
 
-  const run = async (
+  const ensureInAppHost = useCallback(async () => {
+    if (!electronEnv) return;
+    await fetch(`/api/browser/${browserId}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: "host_register" }),
+    }).catch(() => null);
+  }, [browserId, electronEnv]);
+
+  const run = useCallback(async (
     type: "open" | "screenshot" | "close",
     targetUrl?: string
   ) => {
@@ -261,6 +286,8 @@ export function BrowserPanel({
         setBusy(false);
         return;
       }
+      setScreenshotReview(false);
+      setSelectedStepId(null);
       setAddressDraft(openUrl);
       setSurfaceUrl(openUrl);
       setIsEditingAddress(false);
@@ -268,6 +295,7 @@ export function BrowserPanel({
       pendingOpenUrlRef.current = openUrl;
     }
     try {
+      await ensureInAppHost();
       const r = await fetch(`/api/browser/${browserId}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -282,25 +310,34 @@ export function BrowserPanel({
       if (!r.ok) throw new Error(data.error ?? r.statusText);
       pendingOpenUrlRef.current = null;
       if (data.snapshot) setLocalSnapshot(data.snapshot);
+      if (type === "screenshot") setScreenshotReview(true);
     } catch (e) {
       pendingOpenUrlRef.current = null;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  };
+  }, [addressDraft, browserId, ensureInAppHost]);
 
   useEffect(() => {
     if (!openRequest?.url) return;
     const nextUrl = normalizeAddressInput(openRequest.url);
-    setAddressDraft(nextUrl);
-    setSurfaceUrl(nextUrl);
-    setIsEditingAddress(false);
-    setAddressDirty(false);
+    queueMicrotask(() => {
+      setAddressDraft(nextUrl);
+      setSurfaceUrl(nextUrl);
+      setIsEditingAddress(false);
+      setAddressDirty(false);
+    });
     pendingOpenUrlRef.current = nextUrl;
-    void run("open", nextUrl);
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void run("open", nextUrl);
+    });
+    return () => {
+      cancelled = true;
+    };
      
-  }, [openRequest?.id]);
+  }, [openRequest?.id, openRequest?.url, run]);
 
   useEffect(() => {
     if (!live) return;
@@ -312,166 +349,16 @@ export function BrowserPanel({
       })
         .then((r) => (r.ok ? r.json() : null))
         .then((d: { snapshot?: BrowserSnapshot } | null) => {
-          if (!agentId && d?.snapshot) setLocalSnapshot(d.snapshot);
+          if (d?.snapshot) setLocalSnapshot(d.snapshot);
         })
         .catch(() => {});
     }, 2000);
     return () => clearInterval(t);
   }, [agentId, browserId, live]);
 
-  // 开启 screencast 并高频轮询最新帧。
-  // headed（方案 A）：作为只读实时预览，让你在面板里看到 agent 在干嘛；
-  // headless：作为可接管的交互画面（takeover）。
-  const previewOn = takeover || !headless;
-  useEffect(() => {
-    if (!previewOn) {
-      setFrame(null);
-      frameSeqRef.current = -1;
-      return;
-    }
-    let cancelled = false;
-    let inFlight = false;
-    // 先发一次 start，确保后端推流已开启
-    void fetch(`/api/browser/${browserId}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ type: "screencast_start" }),
-    }).catch(() => {});
-
-    const tick = async () => {
-      if (cancelled || inFlight) return;
-      inFlight = true;
-      try {
-        const r = await fetch(`/api/browser/${browserId}`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            type: "screencast_frame",
-            seq: frameSeqRef.current,
-          }),
-        });
-        const d = (await r.json().catch(() => ({}))) as {
-          frame?: { dataUrl: string; seq: number } | null;
-          unchanged?: boolean;
-        };
-        if (!cancelled && d.frame) {
-          frameSeqRef.current = d.frame.seq;
-          setFrame({ dataUrl: d.frame.dataUrl, seq: d.frame.seq });
-        }
-      } catch {
-        /* ignore single poll failure */
-      } finally {
-        inFlight = false;
-      }
-    };
-    const interval = setInterval(() => void tick(), 100);
-    void tick();
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [browserId, previewOn, snapshotUpdatedAt]);
-
-  // 把画面上的事件按归一化坐标发给后端，回放到 agent 的同一个 page
-  const sendInput = (action: Record<string, unknown>) => {
-    void fetch(`/api/browser/${browserId}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ type: "input", action }),
-    }).catch(() => {});
-  };
-
-  const normPoint = (e: React.MouseEvent | React.WheelEvent) => {
-    const el = surfaceRef.current;
-    if (!el) return null;
-    const box = el.getBoundingClientRect();
-    return {
-      x: clamp((e.clientX - box.left) / box.width),
-      y: clamp((e.clientY - box.top) / box.height),
-    };
-  };
-
-  const onSurfaceClick = (e: React.MouseEvent) => {
-    if (!takeover) return;
-    const p = normPoint(e);
-    if (p) sendInput({ kind: "click", x: p.x, y: p.y });
-  };
-
-  // 滚轮：用原生 non-passive 监听，才能 preventDefault 阻止容器自身滚动（消除"阻力感"）。
-  // 累加 delta，并在「上一次请求完成后」才发下一次累计值（in-flight 背压），
-  // 避免请求堆积导致滚动量错乱、画面回跳（抖动）。
-  const wheelAccumRef = useRef({ x: 0, y: 0, px: 0.5, py: 0.5, inFlight: false });
-  useEffect(() => {
-    const el = surfaceRef.current;
-    if (!el || !takeover) return;
-
-    const pump = () => {
-      const acc = wheelAccumRef.current;
-      if (acc.inFlight) return;
-      const dx = acc.x;
-      const dy = acc.y;
-      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
-      acc.x = 0;
-      acc.y = 0;
-      acc.inFlight = true;
-      void fetch(`/api/browser/${browserId}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          type: "input",
-          action: {
-            kind: "scroll",
-            x: acc.px,
-            y: acc.py,
-            deltaX: dx,
-            deltaY: dy,
-          },
-        }),
-      })
-        .catch(() => {})
-        .finally(() => {
-          acc.inFlight = false;
-          // 期间若又攒了 delta，继续发，保证连续滚动不丢
-          pump();
-        });
-    };
-
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const box = el.getBoundingClientRect();
-      const acc = wheelAccumRef.current;
-      acc.px = clamp((e.clientX - box.left) / box.width);
-      acc.py = clamp((e.clientY - box.top) / box.height);
-      acc.x += e.deltaX;
-      acc.y += e.deltaY;
-      pump();
-    };
-
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => {
-      el.removeEventListener("wheel", onWheel);
-      const acc = wheelAccumRef.current;
-      acc.x = 0;
-      acc.y = 0;
-      acc.inFlight = false;
-    };
-  }, [takeover, browserId]);
-
-  const onSurfaceKeyDown = (e: React.KeyboardEvent) => {
-    if (!takeover) return;
-    // 单字符走 text（保留大小写/符号），其余功能键走 key
-    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      e.preventDefault();
-      sendInput({ kind: "text", text: e.key });
-    } else if (
-      ["Enter", "Backspace", "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Delete", "Home", "End"].includes(
-        e.key
-      )
-    ) {
-      e.preventDefault();
-      sendInput({ kind: "key", key: e.key });
-    }
-  };
+  const showScreenshotSurface = Boolean(
+    displayShot && (screenshotReview || selectedStep)
+  );
 
   const updateSitePolicy = async (type: "allow" | "block" | "remove") => {
     if (!site) return;
@@ -548,8 +435,7 @@ export function BrowserPanel({
         snapshot?: BrowserSnapshot;
       };
       if (!r.ok) throw new Error(data.error ?? r.statusText);
-      // standalone 模式没有 SSE，用返回的 snapshot 更新本地状态
-      if (!agentId && data.snapshot) setLocalSnapshot(data.snapshot);
+      if (data.snapshot) setLocalSnapshot(data.snapshot);
       setDraftComment("");
       setDragRect(null);
       setShowAnnotations(true);
@@ -571,7 +457,7 @@ export function BrowserPanel({
       const data = (await r.json().catch(() => ({}))) as {
         snapshot?: BrowserSnapshot;
       };
-      if (!agentId && data.snapshot) setLocalSnapshot(data.snapshot);
+      if (data.snapshot) setLocalSnapshot(data.snapshot);
     } catch {
       /* ignore */
     }
@@ -595,7 +481,7 @@ export function BrowserPanel({
       const data = (await r.json().catch(() => ({}))) as {
         snapshot?: BrowserSnapshot;
       };
-      if (!agentId && data.snapshot) setLocalSnapshot(data.snapshot);
+      if (data.snapshot) setLocalSnapshot(data.snapshot);
     } catch {
       /* ignore */
     }
@@ -915,69 +801,7 @@ export function BrowserPanel({
         className="flex-1 min-h-0 overflow-hidden"
         style={{ background: "var(--bg)" }}
       >
-        {true ? (
-          <InAppBrowserSurface
-            browserId={browserId}
-            url={browserDisplayUrl(surfaceUrl)}
-            onSnapshot={(next) => {
-              if (!agentId) setLocalSnapshot(next);
-            }}
-            onError={setError}
-          />
-        ) : takeover || (!headless && (frame || previewOn)) ? (
-          // takeover：headless 兜底，截图流可直接点击/滚动/输入回放。
-          // headed：只读实时预览（真正操作请点"接管窗口"在真实窗口里做）。
-          <div
-            ref={surfaceRef}
-            tabIndex={takeover ? 0 : -1}
-            role="application"
-            aria-label="Live browser surface"
-            className="relative h-full w-full overflow-hidden outline-none"
-            style={{
-              background: "#0b0b0c",
-              cursor: takeover ? "crosshair" : "default",
-            }}
-            onClick={takeover ? onSurfaceClick : undefined}
-            onKeyDown={takeover ? onSurfaceKeyDown : undefined}
-          >
-            {frame ? (
-              <img
-                src={frame!.dataUrl}
-                alt="Live browser"
-                className="h-full w-full object-contain select-none"
-                draggable={false}
-              />
-            ) : (
-              <div
-                className="flex h-full items-center justify-center text-xs"
-                style={{ color: "var(--text-muted)" }}
-              >
-                正在连接实时画面…
-              </div>
-            )}
-            {takeover ? (
-              <div
-                className="pointer-events-none absolute left-2 top-2 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium shadow"
-                style={{ background: "rgba(59,130,246,0.92)", color: "#fff" }}
-              >
-                <Hand size={10} />
-                接管中 · 点击画面后可键盘输入
-              </div>
-            ) : (
-              // headed 预览：提示用户在真实窗口里操作
-              <button
-                type="button"
-                onClick={() => void bringBrowserToFront()}
-                className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-medium shadow hover:opacity-90"
-                style={{ background: "rgba(59,130,246,0.92)", color: "#fff" }}
-                title="把真实浏览器窗口带到前台，直接操作"
-              >
-                <Hand size={11} />
-                实时预览 · 点此接管真实窗口
-              </button>
-            )}
-          </div>
-        ) : displayShot ? (
+        {showScreenshotSurface ? (
           <div
             className="relative h-full w-full overflow-hidden"
             style={{ background: "#0b0b0c" }}
@@ -987,9 +811,12 @@ export function BrowserPanel({
             onMouseLeave={finishAnnotation}
             title="拖拽框选可对画面区域做标注"
           >
-            <img
+            <Image
               src={displayShot!}
               alt="Browser screenshot"
+              width={1280}
+              height={720}
+              unoptimized
               className="h-full w-full object-contain select-none"
               draggable={false}
             />
@@ -1020,41 +847,53 @@ export function BrowserPanel({
                 ? "rgba(34,197,94,0.85)"
                 : "rgba(245,158,11,0.95)";
               return (
-                <div
+                <button
                   key={a.id}
-                  className="pointer-events-none absolute"
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActiveAnnotationId(a.id);
+                  }}
+                  className="absolute text-left"
                   style={{
                     left: `${a.rect.x * 100}%`,
                     top: `${a.rect.y * 100}%`,
                     width: `${a.rect.w * 100}%`,
                     height: `${a.rect.h * 100}%`,
-                    border: `2px ${active ? "solid" : "dashed"} ${stroke}`,
+                    border: `2px solid ${stroke}`,
                     background: active
-                      ? "rgba(245,158,11,0.12)"
-                      : "transparent",
-                    boxShadow: active ? "0 0 0 2px rgba(245,158,11,0.35)" : "none",
+                      ? resolved
+                        ? "rgba(34,197,94,0.22)"
+                        : "rgba(245,158,11,0.24)"
+                      : resolved
+                        ? "rgba(34,197,94,0.10)"
+                        : "rgba(245,158,11,0.12)",
+                    boxShadow: active ? `0 0 0 2px ${stroke}` : "none",
                   }}
+                  title={a.comment}
                 >
                   <span
-                    className="absolute -left-1 -top-3 inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-bold"
-                    style={{ background: stroke, color: "#0b0b0c" }}
+                    className="absolute -left-2 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-bold shadow"
+                    style={{
+                      background: resolved ? "#22c55e" : "#f59e0b",
+                      color: "#111827",
+                    }}
                   >
                     {i + 1}
                   </span>
-                </div>
+                </button>
               );
             })}
           </div>
         ) : (
-          <div
-            className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-xs"
-            style={{ color: "var(--text-muted)" }}
-          >
-            <Globe size={22} style={{ opacity: 0.4 }} />
-            {agentId
-              ? "在地址栏输入 URL 打开网页，或让 agent 使用浏览器。"
-              : "在地址栏输入 URL 手动打开网页。"}
-          </div>
+          <InAppBrowserSurface
+            browserId={browserId}
+            url={browserDisplayUrl(surfaceUrl)}
+            onSnapshot={(next) => {
+              setLocalSnapshot(next);
+            }}
+            onError={setError}
+          />
         )}
       </div>
 
@@ -1134,7 +973,7 @@ export function BrowserPanel({
                 {openAnnotationCount > 0 ? ` · ${openAnnotationCount} 待处理` : ""}
               </span>
             </button>
-            {agentId && openAnnotationCount > 0 && (
+            {openAnnotationCount > 0 && (
               <button
                 type="button"
                 onClick={() => sendAnnotations()}
@@ -1159,7 +998,7 @@ export function BrowserPanel({
                 })
                   .then((r) => (r.ok ? r.json() : null))
                   .then((d: { snapshot?: BrowserSnapshot } | null) => {
-                    if (!agentId && d?.snapshot) setLocalSnapshot(d.snapshot);
+                    if (d?.snapshot) setLocalSnapshot(d.snapshot);
                   })
                   .catch(() => {});
               }}
@@ -1226,17 +1065,15 @@ export function BrowserPanel({
                         )}
                       </div>
                       <div className="flex shrink-0 items-center gap-0.5">
-                        {agentId && (
-                          <button
-                            type="button"
-                            onClick={() => sendAnnotations(a)}
-                            className="inline-flex h-5 w-5 items-center justify-center rounded hover:bg-[color:var(--bg-hover)]"
-                            style={{ color: "var(--accent)" }}
-                            title="把这条批注喂给 agent"
-                          >
-                            <Send size={11} />
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => sendAnnotations(a)}
+                          className="inline-flex h-5 w-5 items-center justify-center rounded hover:bg-[color:var(--bg-hover)]"
+                          style={{ color: "var(--accent)" }}
+                          title="把这条批注喂给 agent"
+                        >
+                          <Send size={11} />
+                        </button>
                         <button
                           type="button"
                           onClick={() =>
@@ -1349,7 +1186,10 @@ export function BrowserPanel({
                       </span>
                       <button
                         type="button"
-                        onClick={() => setSelectedStepId(null)}
+                        onClick={() => {
+                          setSelectedStepId(null);
+                          setScreenshotReview(false);
+                        }}
                         className="ml-auto rounded border px-1.5 py-0.5 text-[10px]"
                         style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}
                         title="取消选中，回到实时画面"
@@ -1416,9 +1256,12 @@ export function BrowserPanel({
                           style={{ borderColor: "var(--border-soft)", background: "#fff" }}
                         >
                           {step.screenshotDataUrl && (
-                            <img
+                            <Image
                               src={step.screenshotDataUrl}
                               alt=""
+                              width={48}
+                              height={36}
+                              unoptimized
                               className="h-full w-full object-cover"
                             />
                           )}

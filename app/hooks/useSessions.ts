@@ -197,7 +197,7 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
     if (document.visibilityState !== "visible") return;
     if (!document.hasFocus()) return;
     if (!selectedId) return;
-    markSessionSeen(selectedId, sessions);
+    queueMicrotask(() => markSessionSeen(selectedId, sessions));
   }, [sessions, selectedId, markSessionSeen]);
 
   /**

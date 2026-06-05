@@ -20,7 +20,7 @@ import {
   listBrowserAnnotations,
   setBrowserAnnotationStatus,
 } from "./runtime";
-import { agentBrowserId } from "./browser-id";
+import { agentBrowserId, standaloneBrowserId } from "./browser-id";
 import {
   allowBrowserSite,
   checkBrowserSite,
@@ -129,6 +129,32 @@ const WaitForParams = Type.Object({
 });
 
 const EmptyParams = Type.Object({});
+const DEFAULT_STANDALONE_BROWSER_ID = standaloneBrowserId("default");
+
+function annotationBrowserIds(agentId: string): string[] {
+  return [agentBrowserId(agentId), DEFAULT_STANDALONE_BROWSER_ID];
+}
+
+function listOpenAnnotationsForAgent(agentId: string) {
+  const seen = new Set<string>();
+  return annotationBrowserIds(agentId)
+    .flatMap((browserId) =>
+      listBrowserAnnotations(browserId).filter((a) => a.status !== "resolved")
+    )
+    .filter((a) => {
+      if (seen.has(a.id)) return false;
+      seen.add(a.id);
+      return true;
+    });
+}
+
+function findAnnotationBrowserId(agentId: string, annotationId: string): string {
+  return (
+    annotationBrowserIds(agentId).find((browserId) =>
+      listBrowserAnnotations(browserId).some((a) => a.id === annotationId)
+    ) ?? agentBrowserId(agentId)
+  );
+}
 
 const ResolveAnnotationParams = Type.Object({
   annotationId: Type.String({
@@ -624,8 +650,7 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: EmptyParams,
         executionMode: "sequential",
         async execute() {
-          const all = listBrowserAnnotations(agentBrowserId(opts.getAgentId()));
-          const open = all.filter((a) => a.status !== "resolved");
+          const open = listOpenAnnotationsForAgent(opts.getAgentId());
           const pct = (n: number) => `${Math.round(n * 100)}%`;
           const text =
             open.length === 0
@@ -656,8 +681,12 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: ResolveAnnotationParams,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
+          const browserId = findAnnotationBrowserId(
+            opts.getAgentId(),
+            params.annotationId
+          );
           const snapshot = setBrowserAnnotationStatus(
-            agentBrowserId(opts.getAgentId()),
+            browserId,
             params.annotationId,
             "resolved"
           );

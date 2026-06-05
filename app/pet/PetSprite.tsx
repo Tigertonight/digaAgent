@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import type { PetAnimState } from "./use-pet-state";
 
 interface Props {
@@ -207,11 +208,12 @@ export default function PetSprite({ animState, size = 80 }: Props) {
           "filter 200ms ease, transform 200ms ease, opacity 250ms ease",
       }}
     >
-      <img
+      <Image
         src="/brand/diga-logo-main.webp"
         alt="Diga"
         width={size}
         height={size}
+        unoptimized
         style={{
           display: "block",
           width: size,

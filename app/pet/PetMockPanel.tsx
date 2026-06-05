@@ -199,21 +199,20 @@ const KINDS: { kind: MockKind; label: string; color: string }[] = [
 ];
 
 export default function PetMockPanel({ onInject }: Props) {
-  const [active, setActive] = useState<MockKind>("idle");
+  const [active, setActive] = useState<MockKind>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY) as MockKind | null;
+      if (saved && KINDS.some((k) => k.kind === saved)) return saved;
+    } catch {}
+    return "idle";
+  });
   const [collapsed, setCollapsed] = useState(false);
 
   // 挂载时恢复上次选择 + 立即注入，避免初始为空
   useEffect(() => {
-    let initial: MockKind = "idle";
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY) as MockKind | null;
-      if (saved && KINDS.some((k) => k.kind === saved)) initial = saved;
-    } catch {}
-    setActive(initial);
-    onInject(buildMockState(initial));
+    onInject(buildMockState(active));
     // 仅 mount 一次
-     
-  }, []);
+  }, [active, onInject]);
 
   const handlePick = useCallback(
     (kind: MockKind) => {

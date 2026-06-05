@@ -155,7 +155,6 @@ export interface AgentRecord {
 }
 
 const MAX_EVENTS_PER_AGENT = 5000;
-const FINISH_WATCHDOG_MS = 1800;
 const DEFAULT_BROWSER_TOOL_NAMES = [
   "browser_open",
   "browser_screenshot",
@@ -346,58 +345,12 @@ function messageHasStopReason(event: unknown): event is { message: unknown } {
   return msg?.role === "assistant" && typeof msg.stopReason === "string";
 }
 
-function messageContainsToolCall(message: unknown): boolean {
-  if (!message || typeof message !== "object") return false;
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) return false;
-  return content.some(
-    (part) =>
-      part &&
-      typeof part === "object" &&
-      (part as { type?: unknown }).type === "toolCall"
-  );
-}
-
 function clearFinishWatchdog(rec: AgentRecord) {
   if (rec.finishWatchdog) {
     clearTimeout(rec.finishWatchdog);
     rec.finishWatchdog = null;
   }
   rec.pendingFinishMessage = null;
-}
-
-function scheduleFinishWatchdog(rec: AgentRecord, message: unknown) {
-  if (messageContainsToolCall(message)) {
-    // Tool-call turns are not complete at the first assistant message: the SDK
-    // still needs to execute the tool, append a tool result, and continue the
-    // conversation. Aborting here cuts off custom tools such as
-    // delegate_subagents before they can run.
-    return;
-  }
-  rec.pendingFinishMessage = message;
-  if (rec.finishWatchdog) clearTimeout(rec.finishWatchdog);
-  rec.finishWatchdog = setTimeout(() => {
-    rec.finishWatchdog = null;
-    const finalMessage = rec.pendingFinishMessage;
-    rec.pendingFinishMessage = null;
-    if (!rec.isStreaming || !finalMessage) return;
-
-    // Some OpenAI-compatible local shims return a full assistant message with
-    // stopReason but never emit the provider's final done event. The SDK then
-    // stays streaming forever. Close the UI turn and abort the dangling run.
-    void rec.session.abort().catch(() => {});
-    pushAgentEvent(rec, {
-      type: "message_end",
-      message: finalMessage,
-    } as AgentSessionEvent);
-    pushAgentEvent(rec, {
-      type: "queue_update",
-      steering: [],
-      followUp: [],
-    } as AgentSessionEvent);
-    rec.isStreaming = false;
-    pushAgentEvent(rec, { type: "agent_end" } as AgentSessionEvent);
-  }, FINISH_WATCHDOG_MS);
 }
 
 export interface CreateOptions {

@@ -78,7 +78,13 @@ export default function SidebarExplorer({
 
   useEffect(() => {
     if (collapsed) return;
-    void load();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [collapsed, load, refreshKey]);
 
   return (
@@ -245,7 +251,15 @@ function DirNode({
   }, [path]);
 
   useEffect(() => {
-    if (open && entries === null) void load();
+    if (open && entries === null) {
+      let cancelled = false;
+      queueMicrotask(() => {
+        if (!cancelled) void load();
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
   }, [open, entries, load]);
 
   const name = path.split("/").filter(Boolean).pop() || path;

@@ -87,6 +87,7 @@ export function useBudget(opts: UseBudgetOptions): UseBudgetReturn {
   const [budgetVersion, setBudgetVersion] = useState(0);
 
   const budget = useMemo<SessionBudget>(() => {
+    void budgetVersion;
     if (typeof window === "undefined") return DEFAULT_BUDGET;
     return resolveBudget(agentId);
     // 依赖 budgetVersion：setter 调用后 ++ 触发 re-resolve
@@ -94,6 +95,7 @@ export function useBudget(opts: UseBudgetOptions): UseBudgetReturn {
   }, [agentId, budgetVersion]);
 
   const hasOverride = useMemo<boolean>(() => {
+    void budgetVersion;
     if (typeof window === "undefined") return false;
     if (!agentId) return false;
     return loadSessionOverride(agentId) != null;

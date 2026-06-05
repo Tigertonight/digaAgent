@@ -55,7 +55,13 @@ function WebSettingsPanel() {
   }, []);
 
   useEffect(() => {
-    void load();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [load]);
 
   const saveKey = async (provider: string, apiKey: string) => {
@@ -316,10 +322,10 @@ export default function SettingsPanel() {
   useEffect(() => {
     const ea = getElectronApi();
     if (!ea) {
-      setLoading(false);
+      queueMicrotask(() => setLoading(false));
       return;
     }
-    setApi(ea.settings);
+    queueMicrotask(() => setApi(ea.settings));
   }, []);
 
   const refresh = useCallback(async () => {
@@ -350,7 +356,13 @@ export default function SettingsPanel() {
   }, [api]);
 
   useEffect(() => {
-    void refresh();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void refresh();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [refresh]);
 
   const saveKey = async (provider: string, value: string) => {

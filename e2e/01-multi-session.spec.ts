@@ -55,21 +55,6 @@ async function runnerKeys(page: Page): Promise<string[]> {
   });
 }
 
-/** 切换活跃 runner(模拟 sidebar 点击,但不依赖 sidebar 渲染) */
-async function switchToKey(page: Page, key: string) {
-  await page.evaluate((k) => {
-    const w = window as unknown as {
-      __chatAppDiag?: { runners: { current: Map<string, unknown> } };
-    };
-    if (!w.__chatAppDiag!.runners.current.has(k)) {
-      throw new Error(`runner not found: ${k}`);
-    }
-    // 直接派发 click 事件不行(没有按钮);用 history + 导航也不行。
-    // 我们直接 mutate React state 也不安全。最稳妥:暴露 switchTo 函数。
-    throw new Error("use diag.switchTo helper");
-  }, key);
-}
-
 /** 推一个 agent_start + message_start(assistant) */
 async function pushAssistantStart(
   page: Page,
