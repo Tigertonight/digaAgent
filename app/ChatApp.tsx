@@ -2147,6 +2147,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             onRetrySubagentTask={retrySubagentTaskFromCard}
             onResumeSubagentBatch={resumeSubagentBatchFromCard}
             onOpenSubagentSession={openSubagentSessionFromCard}
+            progress={progress}
+            onOpenProgressUrl={openUrlInBrowserPanel}
           />
         )}
 
@@ -2162,7 +2164,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           agentId={agentId}
           pendingMessages={activeSnapshot.pendingMessages}
           goal={goal}
-          progress={progress}
           pendingImages={pendingImages}
           pendingFiles={pendingFiles}
           removePendingImage={removePendingImage}
@@ -2184,7 +2185,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           onGoalPause={handleGoalPause}
           onGoalResume={handleGoalResume}
           onGoalClear={handleGoalClear}
-          onOpenProgressUrl={openUrlInBrowserPanel}
           retryInfo={retryInfo}
           compactError={compactError}
           visibleProviders={visibleProviders}

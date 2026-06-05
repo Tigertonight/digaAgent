@@ -1,7 +1,10 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import {
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Circle,
   ExternalLink,
   FileText,
@@ -14,6 +17,7 @@ import {
 import type {
   AgentProgress,
   ProgressArtifact,
+  ProgressGroup,
   ProgressStep,
 } from "@/lib/progress/types";
 
@@ -26,7 +30,26 @@ export function ProgressPopover({
   progress,
   onOpenUrl,
 }: ProgressPopoverProps) {
-  if (!progress || (progress.steps.length === 0 && progress.artifacts.length === 0)) {
+  // 归一化为分组列表：优先使用 progress.groups；旧数据只有扁平 steps 时，兜底成单个分组。
+  const groups = useMemo<ProgressGroup[]>(() => {
+    if (!progress) return [];
+    if (progress.groups && progress.groups.length > 0) return progress.groups;
+    if (progress.steps.length > 0) {
+      return [
+        {
+          id: "legacy",
+          index: 1,
+          steps: progress.steps,
+          startedAt: progress.updatedAt,
+        },
+      ];
+    }
+    return [];
+  }, [progress]);
+
+  const hasArtifacts = Boolean(progress && progress.artifacts.length > 0);
+
+  if (!progress || (groups.length === 0 && !hasArtifacts)) {
     return null;
   }
 
@@ -40,24 +63,21 @@ export function ProgressPopover({
       }}
       data-testid="progress-panel"
     >
-      <div className="mb-2 flex items-center gap-2">
-        <ListChecks size={14} style={{ color: "var(--accent)" }} />
-        <span className="font-medium">进度</span>
-        <span className="ml-auto text-[11px]" style={{ color: "var(--text-muted)" }}>
-          {progress.steps.filter((step) => step.status === "completed").length}/
-          {progress.steps.length}
-        </span>
-      </div>
-
-      {progress.steps.length > 0 && (
-        <div className="space-y-1.5">
-          {progress.steps.map((step) => (
-            <ProgressStepRow key={step.id} step={step} />
+      {groups.length > 0 && (
+        <div className="space-y-2">
+          {groups.map((group) => (
+            <ProgressGroupBlock
+              key={group.id}
+              group={group}
+              // 默认全部收起，由用户按需点击展开。
+              defaultExpanded={false}
+              showLabel={groups.length > 1}
+            />
           ))}
         </div>
       )}
 
-      {progress.artifacts.length > 0 && (
+      {hasArtifacts && (
         <>
           <div
             className="my-2 h-px"
@@ -81,11 +101,63 @@ export function ProgressPopover({
   );
 }
 
-function ProgressStepRow({ step }: { step: ProgressStep }) {
+function ProgressGroupBlock({
+  group,
+  defaultExpanded,
+  showLabel,
+}: {
+  group: ProgressGroup;
+  defaultExpanded: boolean;
+  showLabel: boolean;
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const completed = group.steps.filter(
+    (step) => step.status === "completed"
+  ).length;
+  const Chevron = expanded ? ChevronDown : ChevronRight;
+
+  return (
+    <div>
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 rounded px-1 py-0.5 hover:bg-[color:var(--bg-hover)]"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        data-testid="progress-group-toggle"
+      >
+        <Chevron size={13} className="shrink-0" style={{ color: "var(--text-muted)" }} />
+        <ListChecks size={14} className="shrink-0" style={{ color: "var(--accent)" }} />
+        <span className="font-medium">
+          {showLabel ? `任务组 ${group.index}` : "进度"}
+        </span>
+        <span className="ml-auto text-[11px]" style={{ color: "var(--text-muted)" }}>
+          {completed}/{group.steps.length}
+        </span>
+      </button>
+
+      {expanded && group.steps.length > 0 && (
+        <div className="mt-1.5 space-y-1.5 pl-1">
+          {group.steps.map((step, idx) => (
+            // 每组序号从 1 重新开始，不跨组累加。
+            <ProgressStepRow key={step.id} step={step} order={idx + 1} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProgressStepRow({ step, order }: { step: ProgressStep; order: number }) {
   const Icon = stepIcon(step.status);
   const tone = stepTone(step.status);
   return (
     <div className="flex min-w-0 items-start gap-2">
+      <span
+        className="mt-0.5 w-4 shrink-0 text-right text-[11px] tabular-nums"
+        style={{ color: "var(--text-muted)" }}
+      >
+        {order}.
+      </span>
       <Icon
         size={14}
         className={step.status === "running" ? "mt-0.5 shrink-0 animate-spin" : "mt-0.5 shrink-0"}
