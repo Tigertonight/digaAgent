@@ -40,6 +40,28 @@ contextBridge.exposeInMainWorld("miniPi", {
   /** 用系统默认浏览器打开 URL（用于外链） */
   openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
 
+  /* ---- [PoC] webview 容器方案验证：CDP 控制 <webview> ---- */
+  webviewPoc: {
+    /** attach debugger 到 webview（传 webview.getWebContentsId()） */
+    attach: (webContentsId) =>
+      ipcRenderer.invoke("webviewPoc:attach", webContentsId),
+    /** 通过 CDP 导航 */
+    navigate: (webContentsId, url) =>
+      ipcRenderer.invoke("webviewPoc:navigate", webContentsId, url),
+    /** 取标题/URL */
+    inspect: (webContentsId) =>
+      ipcRenderer.invoke("webviewPoc:inspect", webContentsId),
+    /** CDP 截图，返回 dataUrl */
+    screenshot: (webContentsId) =>
+      ipcRenderer.invoke("webviewPoc:screenshot", webContentsId),
+    /** CDP 坐标点击 */
+    click: (webContentsId, x, y) =>
+      ipcRenderer.invoke("webviewPoc:click", webContentsId, x, y),
+    /** detach 清理 */
+    detach: (webContentsId) =>
+      ipcRenderer.invoke("webviewPoc:detach", webContentsId),
+  },
+
   /* ---- D3：设置 / keytar ---- */
   settings: {
     /** 列出已存的 provider 名（不返回 key 原文） */
