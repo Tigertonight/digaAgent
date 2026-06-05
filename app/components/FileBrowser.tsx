@@ -788,7 +788,7 @@ function UrlPreviewViewer({
   onClose: () => void;
 }) {
   const [loadFailed, setLoadFailed] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
   const [bumpKey, setBumpKey] = useState(0);
 
   // X-Frame-Options/CSP 拒绝时,iframe load 不会触发 error,但不会成功;
@@ -1193,7 +1193,8 @@ export default function FileBrowser({
       });
       setTabTitles((m) => {
         if (!(p in m)) return m;
-        const { [p]: _, ...rest } = m;
+        const { [p]: removedTitle, ...rest } = m;
+        void removedTitle;
         return rest;
       });
     },

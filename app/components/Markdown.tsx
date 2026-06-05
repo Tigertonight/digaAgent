@@ -220,7 +220,6 @@ function inlineLocalImages(input: string, cwd?: string): string {
 export default function Markdown({
   text,
   size = "normal",
-  streaming = false,
   cwd,
   onOpenUrl,
 }: Props) {

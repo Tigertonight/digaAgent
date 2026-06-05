@@ -920,7 +920,7 @@ function WorkflowRunCard({
         >
           <div className="mb-1 text-[11px] font-semibold">Worktrees</div>
           <div className="space-y-1.5">
-            {worktreeStates.map(({ artifact, kind, worktree, lastError }) => {
+            {worktreeStates.map(({ kind, worktree, lastError }) => {
               return (
                 <div
                   key={worktree.id}

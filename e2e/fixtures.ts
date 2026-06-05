@@ -10,14 +10,6 @@
  */
 import { test as base, type Page, type Route } from "@playwright/test";
 
-/** 一个伪 agent 的内存账本 */
-interface FakeAgent {
-  id: string;
-  sessionId: string;
-  sessionFile: string;
-  // 测试通过 page.evaluate 推事件用的 SSE 控制器；实际由 install-sse-mock 在 page 内创建
-}
-
 interface ApiFixtureOptions {
   providersResponse?: unknown;
   authResponse?: unknown;
