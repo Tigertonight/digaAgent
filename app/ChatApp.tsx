@@ -1458,6 +1458,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     onFollowUp,
     onChangeThinking,
     startGoal,
+    startWorkflow,
   } = useChatStream({
     agentId,
     input,
@@ -1643,6 +1644,27 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     ]
   );
 
+  /**
+   * /workflow 命令拦截：把 `/workflow <目标>` 转成 dynamic workflow 执行。
+   * 无参数时给出用法提示；有参数时清空输入并调 startWorkflow。
+   */
+  const runWorkflowCommand = useCallback(
+    async (raw: string): Promise<boolean> => {
+      const trimmed = raw.trim();
+      if (!trimmed.startsWith("/workflow")) return false;
+      const rest = trimmed.slice("/workflow".length).trim();
+      if (!rest) {
+        setError("用法：/workflow <目标描述>，将用 dynamic workflow 执行该目标");
+        return true;
+      }
+      rememberComposerInput(raw);
+      setInput("");
+      await startWorkflow(rest);
+      return true;
+    },
+    [rememberComposerInput, setError, setInput, startWorkflow]
+  );
+
   const handleGoalPause = useCallback(async () => {
     if (!agentId) return;
     await agentAction(agentId, { type: "goal_pause" }).catch(() => {});
@@ -1660,9 +1682,10 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
   const sendWithHistory = useCallback(async () => {
     if (await runGoalCommand(input)) return;
+    if (await runWorkflowCommand(input)) return;
     rememberComposerInput(input);
     await send();
-  }, [input, rememberComposerInput, runGoalCommand, send]);
+  }, [input, rememberComposerInput, runGoalCommand, runWorkflowCommand, send]);
 
   const steerWithHistory = useCallback(async () => {
     rememberComposerInput(input);
