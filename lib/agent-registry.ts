@@ -78,6 +78,9 @@ import {
 } from "./mcp/runtime";
 import { listEnabledMcpServers } from "./mcp/registry";
 import { updateProgress } from "./progress/server-store";
+import { appendEvidenceMany } from "./evidence/server-store";
+import { appendRuntimeEvent } from "./runtime/event-store";
+import { bridgeAgentEventToRuntime } from "./runtime/agent-event-bridge";
 import type {
   ApprovalRequestEvent,
   ApprovalResolvedEvent,
@@ -332,7 +335,34 @@ function maybeContinueGoal(rec: AgentRecord): void {
 function pushAgentEvent(rec: AgentRecord, event: RingBufferEvent): void {
   const seq = rec.nextSeq++;
   rec.events[seq % MAX_EVENTS_PER_AGENT] = { seq, event };
+  mirrorRuntimeEvent(rec, seq, event);
   for (const l of rec.listeners) l();
+}
+
+function mirrorRuntimeEvent(
+  rec: AgentRecord,
+  seq: number,
+  event: RingBufferEvent
+): void {
+  try {
+    const bridged = bridgeAgentEventToRuntime(
+      {
+        agentId: rec.id,
+        sessionId: rec.session.sessionId,
+        sessionPath: rec.session.sessionFile ?? null,
+        cwd: rec.cwd,
+        seq,
+      },
+      event
+    );
+    if (!bridged) return;
+    const evidence = appendEvidenceMany(bridged.evidence);
+    appendRuntimeEvent(
+      evidence.length > 0 ? { ...bridged.event, evidence } : bridged.event
+    );
+  } catch (err) {
+    console.error("[runtime-event-bridge] mirror failed:", err);
+  }
 }
 
 function messageHasStopReason(event: unknown): event is { message: unknown } {

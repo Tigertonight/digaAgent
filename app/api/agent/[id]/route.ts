@@ -48,6 +48,13 @@ import {
   getProgress,
   updateProgress,
 } from "@/lib/progress/server-store";
+import { listEvidence } from "@/lib/evidence/server-store";
+import type { EvidenceKind } from "@/lib/evidence/types";
+import { listRuntimeEvents } from "@/lib/runtime/event-store";
+import type {
+  RuntimeEventSource,
+  RuntimeEventStatus,
+} from "@/lib/runtime/events";
 import {
   CONTEXT_ASIDE_OPEN,
   CONTEXT_ASIDE_CLOSE,
@@ -170,6 +177,32 @@ export async function GET(
     });
   }
 
+  if (action === "runtime_events") {
+    return NextResponse.json({
+      events: listRuntimeEvents({
+        agentId: id,
+        source: parseRuntimeEventSource(url.searchParams.get("source")),
+        status: parseRuntimeEventStatus(url.searchParams.get("status")),
+        browserId: url.searchParams.get("browserId") ?? undefined,
+        taskId: url.searchParams.get("taskId") ?? undefined,
+        workflowId: url.searchParams.get("workflowId") ?? undefined,
+        parentId: url.searchParams.get("parentId") ?? undefined,
+      }),
+    });
+  }
+
+  if (action === "evidence") {
+    return NextResponse.json({
+      evidence: listEvidence({
+        agentId: id,
+        kind: parseEvidenceKind(url.searchParams.get("kind")),
+        browserId: url.searchParams.get("browserId") ?? undefined,
+        taskId: url.searchParams.get("taskId") ?? undefined,
+        workflowId: url.searchParams.get("workflowId") ?? undefined,
+      }),
+    });
+  }
+
   if (action === "stats") {
     // 实时 token/cost/context window 统计（pi-web 风格 HUD）
     try {
@@ -215,6 +248,47 @@ export async function GET(
     goal: getGoal(id),
     progress: getProgress(id),
   });
+}
+
+function parseRuntimeEventSource(
+  value: string | null
+): RuntimeEventSource | undefined {
+  return value === "agent" ||
+    value === "browser" ||
+    value === "workflow" ||
+    value === "subagent" ||
+    value === "goal" ||
+    value === "approval" ||
+    value === "progress"
+    ? value
+    : undefined;
+}
+
+function parseRuntimeEventStatus(
+  value: string | null
+): RuntimeEventStatus | undefined {
+  return value === "queued" ||
+    value === "running" ||
+    value === "done" ||
+    value === "error" ||
+    value === "blocked" ||
+    value === "aborted"
+    ? value
+    : undefined;
+}
+
+function parseEvidenceKind(value: string | null): EvidenceKind | undefined {
+  return value === "browser_snapshot" ||
+    value === "browser_step" ||
+    value === "browser_annotation" ||
+    value === "workflow_artifact" ||
+    value === "subagent_result" ||
+    value === "goal_turn" ||
+    value === "approval_decision" ||
+    value === "progress_artifact" ||
+    value === "log"
+    ? value
+    : undefined;
 }
 
 /** POST: 多 action 派发 */
