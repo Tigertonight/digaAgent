@@ -13,6 +13,7 @@ import {
   type SessionHeader,
   type SessionContext,
 } from "@earendil-works/pi-coding-agent";
+import { stripContextAside } from "./context-aside";
 import { batchReadMeta } from "./meta/store";
 import type { SessionMeta } from "./meta/types";
 
@@ -122,7 +123,7 @@ export async function getForkableUserMessages(
         }
       }
     }
-    out.push({ entryId: e.id, text });
+    out.push({ entryId: e.id, text: stripContextAside(text) });
   }
   return out;
 }

@@ -38,6 +38,7 @@ import type {
   WorkflowScriptLog,
   WorkflowScriptResult,
 } from "./workflows/types";
+import { stripContextAside } from "./context-aside";
 
 /* SDK 事件的最小化类型（用 any-ish 但 narrow 到必要字段） */
 interface AnyEvent {
@@ -690,13 +691,17 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
       const m = ev.message;
       if (!m) return state;
       if (m.role === "user") {
-        // 把 user message 拼成 parts（text + image 按顺序）
+        // 把 user message 拼成 parts（text + image 按顺序）。
+        // text 部分要剥离「上下文 aside」标记，确保气泡只显示用户原话。
         const parts: MessagePart[] = [];
         let textJoined = "";
         for (const c of m.content ?? []) {
           if (c.type === "text" && c.text) {
-            parts.push({ kind: "text", text: c.text });
-            textJoined += c.text;
+            const visible = stripContextAside(c.text);
+            if (visible) {
+              parts.push({ kind: "text", text: visible });
+              textJoined += visible;
+            }
           } else if (c.type === "image" && c.data && c.mimeType) {
             parts.push({ kind: "image", data: c.data, mimeType: c.mimeType });
           }
@@ -1369,8 +1374,12 @@ export function ctxToMessages(
       let textJoined = "";
       for (const c of m.content ?? []) {
         if (c.type === "text" && c.text) {
-          parts.push({ kind: "text", text: c.text });
-          textJoined += c.text;
+          // 历史还原同样剥离「上下文 aside」标记，只显示用户原话。
+          const visible = stripContextAside(c.text);
+          if (visible) {
+            parts.push({ kind: "text", text: visible });
+            textJoined += visible;
+          }
         } else if (c.type === "image" && c.data && c.mimeType) {
           parts.push({ kind: "image", data: c.data, mimeType: c.mimeType });
         }
