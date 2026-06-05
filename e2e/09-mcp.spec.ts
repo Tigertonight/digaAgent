@@ -116,7 +116,9 @@ test("mcp settings: lists configured servers", async ({ page }) => {
 
   await expect(page.getByText("filesystem", { exact: true })).toBeVisible();
   await expect(page.getByText("Filesystem", { exact: true })).toBeVisible();
-  await expect(page.getByText("enabled", { exact: true })).toBeVisible();
+  await expect(
+    page.locator("span.text-emerald-300").filter({ hasText: "enabled" })
+  ).toBeVisible();
 });
 
 test("mcp settings: add a new server refreshes the list", async ({ page }) => {
@@ -126,9 +128,11 @@ test("mcp settings: add a new server refreshes the list", async ({ page }) => {
 
   await expect(page.getByText("还没有配置 MCP server。")).toBeVisible();
 
-  await page.getByPlaceholder("filesystem").fill("github");
-  await page.getByPlaceholder("Filesystem").fill("GitHub");
-  await page.getByPlaceholder("npx").fill("gh-mcp");
+  await page.getByRole("textbox", { name: "id", exact: true }).fill("github");
+  await page
+    .getByRole("textbox", { name: "title (可选)" })
+    .fill("GitHub");
+  await page.getByRole("textbox", { name: "command" }).fill("gh-mcp");
   await page.getByRole("button", { name: "保存 server" }).click();
 
   await expect(page.getByText("github", { exact: true })).toBeVisible();
