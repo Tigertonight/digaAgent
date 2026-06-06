@@ -55,6 +55,7 @@ function isCurrentAppRootUrl(url: string | null | undefined): boolean {
 function normalizeAddressInput(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) return "";
+  if (/^about:blank$/i.test(trimmed)) return "about:blank";
   if (/^https?:\/\//i.test(trimmed) || /^file:\/\//i.test(trimmed)) {
     return trimmed;
   }
@@ -110,6 +111,7 @@ export function BrowserPanel({
   const [isEditingAddress, setIsEditingAddress] = useState(false);
   const [addressDirty, setAddressDirty] = useState(false);
   const pendingOpenUrlRef = useRef<string | null>(null);
+  const processedOpenRequestIdRef = useRef<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // [PoC] webview 容器实验模式（仅 Electron 环境可见可用）
@@ -174,17 +176,22 @@ export function BrowserPanel({
     selectedStep?.pointer ?? effectiveSnapshot.pointer ?? null;
   useEffect(() => {
     if (effectiveSnapshot.url && !isCurrentAppRootUrl(effectiveSnapshot.url)) {
-      if (pendingOpenUrlRef.current) return;
+      if (
+        pendingOpenUrlRef.current &&
+        pendingOpenUrlRef.current !== "about:blank"
+      ) {
+        return;
+      }
       const snapshotUrl = effectiveSnapshot.url;
       const nextSnapshotUrl = browserDisplayUrl(effectiveSnapshot.url);
       if (nextSnapshotUrl === "about:blank" && surfaceUrl !== "about:blank") {
         return;
       }
-      if (!isEditingAddress && !addressDirty) {
+      if (!isEditingAddress && (!addressDirty || addressDraft === "about:blank")) {
         queueMicrotask(() => setAddressDraft(snapshotUrl));
       }
     }
-  }, [effectiveSnapshot.url, addressDirty, isEditingAddress, surfaceUrl]);
+  }, [addressDraft, effectiveSnapshot.url, addressDirty, isEditingAddress, surfaceUrl]);
 
   useEffect(() => {
     if (!selectedStepId) return;
@@ -322,6 +329,8 @@ export function BrowserPanel({
 
   useEffect(() => {
     if (!openRequest?.url) return;
+    if (processedOpenRequestIdRef.current === openRequest.id) return;
+    processedOpenRequestIdRef.current = openRequest.id;
     const nextUrl = normalizeAddressInput(openRequest.url);
     queueMicrotask(() => {
       setAddressDraft(nextUrl);
