@@ -63,7 +63,9 @@ test("browser panel: browser_state SSE 同步截图和操作日志", async ({
   await sendBtn(page).click();
   const agentId = await activeAgentId(page);
 
-  await page.getByLabel("Browser 面板").click();
+  await page.getByLabel("Workbench 面板").click();
+  await expect(page.getByTestId("workbench-overview")).toBeVisible();
+  await page.getByTestId("workbench-section-browser-action").click();
   await expect(page.getByLabel("Browser URL")).toHaveValue("about:blank");
 
   await pushSseEvent(
@@ -190,7 +192,7 @@ test("browser panel: browser_state SSE 同步截图和操作日志", async ({
   await page.unroute("**/api/browser/**");
 });
 
-test("browser panel: browser_state 自动展开并显示虚拟鼠标", async ({
+test("browser panel: browser_state 更新 Overview 并可进入浏览器", async ({
   bootedPage: page,
 }) => {
   await editor(page).fill("search with browser");
@@ -254,6 +256,11 @@ test("browser panel: browser_state 自动展开并显示虚拟鼠标", async ({
     "20"
   );
 
+  await expect(page.getByLabel("Browser URL")).toBeHidden();
+  await page.getByLabel("Workbench 面板").click();
+  await expect(page.getByTestId("workbench-overview")).toBeVisible();
+  await expect(page.getByTestId("workbench-section-browser")).toContainText("百度搜索");
+  await page.getByTestId("workbench-section-browser-action").click();
   await expect(page.getByLabel("Browser URL")).toHaveValue(
     "https://www.baidu.com/s?wd=%E8%BF%AA%E8%BF%A6"
   );
@@ -298,7 +305,8 @@ test("browser panel: 外部站点需要显式 allow,本地站点自动允许", a
   await editor(page).fill("open browser");
   await sendBtn(page).click();
   await activeAgentId(page);
-  await page.getByLabel("Browser 面板").click();
+  await page.getByLabel("Workbench 面板").click();
+  await page.getByTestId("workbench-section-browser-action").click();
 
   const urlInput = page.getByLabel("Browser URL");
   await urlInput.fill("https://example.com/docs");
