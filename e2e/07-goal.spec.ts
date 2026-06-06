@@ -112,6 +112,11 @@ test("goal: slash command sets goal and renders goal bar updates", async ({
     },
     "21"
   );
+  await expect(page.getByTestId("progress-panel")).toHaveCount(0);
+  await page.getByLabel("Workbench 面板").click();
+  await expect(page.getByTestId("workbench-overview")).toBeVisible();
+  await expect(page.getByTestId("workbench-section-progress")).toContainText("1/2");
+  await page.getByTestId("workbench-section-progress-action").click();
   await expect(page.getByTestId("progress-panel")).toBeVisible();
   await page.getByTestId("progress-group-toggle").click();
   await expect(page.getByText("Inspect goal runtime")).toBeVisible();
