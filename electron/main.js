@@ -88,6 +88,8 @@ async function waitForHttp(url, timeoutMs = 15000) {
 let serverChild = null;
 /** standalone server 的 base URL，IPC getApiBase 返回 */
 let apiBase = null;
+/** 主窗口必须保留强引用，否则加载完成后可能被 GC 回收成无窗口进程。 */
+let mainWin = null;
 
 async function startStandaloneServer() {
   const port = await getFreePort();
@@ -589,7 +591,7 @@ function registerIpc() {
 }
 
 async function createWindow() {
-  const win = new BrowserWindow({
+  mainWin = new BrowserWindow({
     width: 1280,
     height: 800,
     // 实测算法:sidebar 260 + main 360(min) + splitter 4 + files 200(min) ≈ 824
@@ -615,6 +617,8 @@ async function createWindow() {
   });
 
   // 外链用系统浏览器打开，不要在 Electron 内导航
+  const win = mainWin;
+
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: "deny" };
@@ -641,7 +645,23 @@ async function createWindow() {
   if (!win.isVisible()) {
     win.show();
   }
+  // Desktop automation and fullscreen Spaces can leave a visible Electron window
+  // outside the active Space. Bring the main window onto the current desktop
+  // before focusing so Computer Use and normal users can actually reach it.
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.center();
+  win.show();
+  win.moveTop();
+  app.focus({ steal: true });
   win.focus();
+  setTimeout(() => {
+    if (!win.isDestroyed()) {
+      win.setVisibleOnAllWorkspaces(false);
+    }
+  }, 2000).unref();
+  win.on("closed", () => {
+    if (mainWin === win) mainWin = null;
+  });
   return win;
 }
 
