@@ -123,6 +123,8 @@ export interface ComposerProps {
   modelId: string;
   currentProvider: ProviderInfo | null | undefined;
   onChangeModel: (providerId: string, modelId: string) => void;
+  onOpenAuth: (provider?: string) => void;
+  onOpenModelsConfig: () => void;
   supportsThinking: boolean;
   thinkingLevel: ThinkingLevel;
   availableThinkingLevels: ThinkingLevel[];
@@ -179,6 +181,8 @@ export function Composer(props: ComposerProps) {
     modelId,
     currentProvider,
     onChangeModel,
+    onOpenAuth,
+    onOpenModelsConfig,
     supportsThinking,
     thinkingLevel,
     availableThinkingLevels,
@@ -188,6 +192,18 @@ export function Composer(props: ComposerProps) {
     soundEnabled,
     onSoundToggle,
   } = props;
+
+  const composerBlocker = getComposerBlocker({
+    agentId,
+    providerId,
+    modelId,
+    currentProvider,
+    visibleProviders,
+  });
+  const hasDraft =
+    input.trim().length > 0 || pendingImages.length > 0 || pendingFiles.length > 0;
+  const sendDisabled =
+    !hasDraft || (!agentId && Boolean(composerBlocker?.blocking));
 
   return (
     <div className="px-4 pb-4 pt-2">
@@ -280,6 +296,13 @@ export function Composer(props: ComposerProps) {
           </div>
         )}
         <QueuedMessagesBar pendingMessages={pendingMessages} />
+        {composerBlocker?.blocking && !streaming && !abortable && (
+          <ComposerReadinessBar
+            blocker={composerBlocker}
+            onOpenAuth={onOpenAuth}
+            onOpenModelsConfig={onOpenModelsConfig}
+          />
+        )}
         {/* 卡片：textarea + 内嵌 Send */}
         <div
           className="relative rounded-xl border transition-colors focus-within:border-[color:var(--accent)]"
@@ -375,13 +398,10 @@ export function Composer(props: ComposerProps) {
             ) : (
               <button
                 onClick={() => void send()}
-                disabled={
-                  (!input.trim() && pendingImages.length === 0 && pendingFiles.length === 0) ||
-                  (!agentId && (!providerId || !modelId))
-                }
+                disabled={sendDisabled}
                 className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-[13px] font-medium text-white disabled:opacity-40 transition-opacity"
                 style={{ background: "var(--accent)" }}
-                title="Send"
+                title={composerBlocker?.blocking ? composerBlocker.title : "Send"}
               >
                 <span aria-hidden="true">→</span>
                 Send
@@ -703,5 +723,154 @@ function QueuedMessagesBar({
         ))}
       </div>
     </details>
+  );
+}
+
+type ComposerBlocker =
+  | {
+      kind: "no-provider";
+      blocking: true;
+      title: string;
+      detail: string;
+      action: "models";
+      actionLabel: string;
+    }
+  | {
+      kind: "no-model";
+      blocking: true;
+      title: string;
+      detail: string;
+      action: "models";
+      actionLabel: string;
+    }
+  | {
+      kind: "no-auth";
+      blocking: true;
+      provider: string;
+      title: string;
+      detail: string;
+      action: "auth";
+      actionLabel: string;
+    }
+  | {
+      kind: "ready";
+      blocking: false;
+      title: string;
+      detail: string;
+      action: null;
+      actionLabel: null;
+    };
+
+function getComposerBlocker({
+  agentId,
+  providerId,
+  modelId,
+  currentProvider,
+  visibleProviders,
+}: {
+  agentId: string | null;
+  providerId: string;
+  modelId: string;
+  currentProvider: ProviderInfo | null | undefined;
+  visibleProviders: ProviderInfo[];
+}): ComposerBlocker | null {
+  if (agentId) {
+    return {
+      kind: "ready",
+      blocking: false,
+      title: "当前 session 已就绪",
+      detail: "可以继续发消息、追加附件，或在右侧 Workbench 查看进度与产物。",
+      action: null,
+      actionLabel: null,
+    };
+  }
+  if (visibleProviders.length === 0 || !providerId || !currentProvider) {
+    return {
+      kind: "no-provider",
+      blocking: true,
+      title: "还不能开始：没有可用模型",
+      detail: "需要先配置 provider 和默认模型，Send 才会启用。",
+      action: "models",
+      actionLabel: "配置 Models",
+    };
+  }
+  if (!currentProvider.hasAuth) {
+    return {
+      kind: "no-auth",
+      blocking: true,
+      provider: currentProvider.provider,
+      title: "还不能开始：当前 provider 未授权",
+      detail: `${currentProvider.displayName} 需要先完成授权或填写 key。`,
+      action: "auth",
+      actionLabel: "打开 Auth",
+    };
+  }
+  if (!modelId) {
+    return {
+      kind: "no-model",
+      blocking: true,
+      title: "还不能开始：没有选择模型",
+      detail: "请为当前 provider 选择一个模型。",
+      action: "models",
+      actionLabel: "选择模型",
+    };
+  }
+  return {
+    kind: "ready",
+    blocking: false,
+    title: "准备就绪",
+    detail: "输入任务后发送，agent 会把进度、输出和浏览器状态同步到 Workbench。",
+    action: null,
+    actionLabel: null,
+  };
+}
+
+function ComposerReadinessBar({
+  blocker,
+  onOpenAuth,
+  onOpenModelsConfig,
+}: {
+  blocker: ComposerBlocker;
+  onOpenAuth: (provider?: string) => void;
+  onOpenModelsConfig: () => void;
+}) {
+  const tone = blocker.blocking ? "#f59e0b" : "#22c55e";
+  return (
+    <div
+      className="mb-2 flex items-center gap-2 rounded-md border px-3 py-2 text-xs"
+      style={{
+        background: blocker.blocking
+          ? "rgba(245,158,11,0.08)"
+          : "rgba(34,197,94,0.08)",
+        borderColor: blocker.blocking
+          ? "rgba(245,158,11,0.35)"
+          : "rgba(34,197,94,0.30)",
+        color: "var(--text)",
+      }}
+      data-testid="composer-readiness"
+      role={blocker.blocking ? "alert" : "status"}
+    >
+      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: tone }} />
+      <span className="min-w-0 flex-1">
+        <span className="block font-medium">{blocker.title}</span>
+        <span className="block truncate text-[11px]" style={{ color: "var(--text-muted)" }}>
+          {blocker.detail}
+        </span>
+      </span>
+      {blocker.action ? (
+        <button
+          type="button"
+          onClick={() =>
+            blocker.action === "auth"
+              ? onOpenAuth(blocker.kind === "no-auth" ? blocker.provider : undefined)
+              : onOpenModelsConfig()
+          }
+          className="shrink-0 rounded border px-2 py-1 text-[11px] hover:bg-[color:var(--bg-hover)]"
+          style={{ borderColor: "var(--border)", color: "var(--text)" }}
+        >
+          {blocker.actionLabel}
+        </button>
+      ) : null}
+    </div>
   );
 }

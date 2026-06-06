@@ -18,6 +18,7 @@
  */
 
 import Image from "next/image";
+import type { ReactNode } from "react";
 import { memo, useEffect, useRef, useState } from "react";
 import {
   CheckCircle2,
@@ -342,7 +343,8 @@ export const MessageView = memo(function MessageView({
               if (parts[j].kind === "text") { tailTextIdx = j; break; }
             }
           }
-          return parts.map((p, i) => {
+          const finalTextIdx = findFinalTextPartIndex(parts);
+          const renderPart = (p: MessagePart, i: number) => {
           if (p.kind === "thinking") {
             return (
               <ThinkingBlock
@@ -429,7 +431,30 @@ export const MessageView = memo(function MessageView({
             );
           }
           return null;
-        });
+          };
+          const rendered: ReactNode[] = [];
+          let i = 0;
+          while (i < parts.length) {
+            if (
+              finalTextIdx > 0 &&
+              i < finalTextIdx &&
+              isProcessPart(parts[i])
+            ) {
+              const group: MessagePart[] = [];
+              const start = i;
+              while (i < finalTextIdx && isProcessPart(parts[i])) {
+                group.push(parts[i]);
+                i += 1;
+              }
+              rendered.push(
+                <CollapsedPartProcessGroup key={`process-${start}`} parts={group} />
+              );
+              continue;
+            }
+            rendered.push(renderPart(parts[i], i));
+            i += 1;
+          }
+          return rendered;
         })()}
       </div>
       <div
@@ -589,6 +614,132 @@ function CopyButton({ text }: { text: string }) {
       {copied ? "Copied" : "Copy"}
     </button>
   );
+}
+
+function CollapsedPartProcessGroup({ parts }: { parts: MessagePart[] }) {
+  const [open, setOpen] = useState(false);
+  const summary = summarizeProcessParts(parts);
+  return (
+    <div
+      className="group rounded-lg border text-xs"
+      style={{
+        borderColor: "var(--border-soft)",
+        background: "var(--bg)",
+      }}
+      data-testid="assistant-process-group"
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-[color:var(--bg-hover)]"
+        aria-expanded={open}
+        data-testid="assistant-process-toggle"
+      >
+        <CheckCircle2
+          size={13}
+          className="shrink-0"
+          style={{ color: "var(--text-dim)" }}
+          aria-hidden
+        />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-medium" style={{ color: "var(--text)" }}>
+            {summary.title}
+          </span>
+          <span className="block truncate text-[11px]" style={{ color: "var(--text-muted)" }}>
+            {summary.detail}
+          </span>
+        </span>
+        <span
+          className="shrink-0 text-[11px] opacity-0 transition-opacity group-hover:opacity-100"
+          style={{ color: "var(--text-muted)" }}
+        >
+          {open ? "收起 ▾" : "展开细节 ▸"}
+        </span>
+      </button>
+      {open ? (
+        <div
+          className="space-y-2 border-t px-3 py-3"
+          style={{ borderColor: "var(--border-soft)" }}
+        >
+          {parts.map((part, index) => (
+            <ProcessPartDetail key={index} part={part} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ProcessPartDetail({ part }: { part: MessagePart }) {
+  if (part.kind === "tool") return <ToolRender tool={part} />;
+  if (part.kind === "thinking") {
+    return (
+      <ThinkingBlock
+        text={part.text}
+        startedAt={part.startedAt}
+        endedAt={part.endedAt}
+      />
+    );
+  }
+  if (part.kind === "approval") {
+    return (
+      <div className="rounded border px-2 py-1.5" style={{ borderColor: "var(--border-soft)" }}>
+        工具确认 · {part.toolName} · {part.status}
+      </div>
+    );
+  }
+  return (
+    <div className="rounded border px-2 py-1.5" style={{ borderColor: "var(--border-soft)" }}>
+      {part.kind}
+    </div>
+  );
+}
+
+function findFinalTextPartIndex(parts: MessagePart[]): number {
+  for (let i = parts.length - 1; i >= 0; i -= 1) {
+    const part = parts[i];
+    if (part.kind === "text" && part.text.trim().length > 0) return i;
+  }
+  return -1;
+}
+
+function isProcessPart(part: MessagePart): boolean {
+  return part.kind === "tool" || part.kind === "thinking" || part.kind === "approval";
+}
+
+function summarizeProcessParts(parts: MessagePart[]): {
+  title: string;
+  detail: string;
+} {
+  let errorCount = 0;
+  let thinking = 0;
+  let approvals = 0;
+  const tools = new Map<string, number>();
+  for (const part of parts) {
+    if (part.kind === "tool") {
+      tools.set(part.toolName, (tools.get(part.toolName) ?? 0) + 1);
+      if (part.status === "error" || part.isError) errorCount += 1;
+    } else if (part.kind === "thinking") {
+      thinking += 1;
+    } else if (part.kind === "approval") {
+      approvals += 1;
+    }
+  }
+  const toolSummary = [...tools.entries()]
+    .slice(0, 3)
+    .map(([name, count]) => (count > 1 ? `${name}×${count}` : name));
+  const fallback = [
+    thinking > 0 ? `思考×${thinking}` : "",
+    approvals > 0 ? `确认×${approvals}` : "",
+  ].filter(Boolean);
+  const stepCount = parts.length;
+  return {
+    title:
+      errorCount > 0
+        ? `已处理 ${stepCount} 个步骤，期间遇到 ${errorCount} 个问题并已恢复`
+        : `已处理 ${stepCount} 个步骤`,
+    detail: toolSummary.join(" / ") || fallback.join(" / ") || "过程记录",
+  };
 }
 
 function extractPlainText(parts: MessagePart[]): string {
