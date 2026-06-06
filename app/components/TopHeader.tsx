@@ -14,7 +14,6 @@ import {
   Wrench,
   PanelRight,
   RefreshCw,
-  Globe,
   Plus,
   ChevronRight,
 } from "lucide-react";
@@ -38,8 +37,7 @@ interface TopHeaderProps {
   electronApi: ElectronApi | null;
   currentSessionFile: string | null;
   showTools: boolean;
-  showFiles: boolean;
-  showBrowser: boolean;
+  showWorkbench: boolean;
   /** RFC-2 Phase A：Budget 当前生效配置 + 实时状态（来自 useBudget） */
   budget: SessionBudget;
   budgetSpent: BudgetSpent;
@@ -56,8 +54,7 @@ interface TopHeaderProps {
   onOpenAuth: () => void;
   onReconnectSession: () => void;
   onToggleTools: () => void;
-  onToggleFiles: () => void;
-  onToggleBrowser: () => void;
+  onToggleWorkbench: () => void;
 }
 
 interface CommandMenuItemProps {
@@ -120,8 +117,7 @@ export function TopHeader({
   electronApi,
   currentSessionFile,
   showTools,
-  showFiles,
-  showBrowser,
+  showWorkbench,
   budget,
   budgetSpent,
   budgetStatus,
@@ -137,8 +133,7 @@ export function TopHeader({
   onOpenAuth,
   onReconnectSession,
   onToggleTools,
-  onToggleFiles,
-  onToggleBrowser,
+  onToggleWorkbench,
 }: TopHeaderProps) {
   const [commandOpen, setCommandOpen] = useState(false);
   const commandRef = useRef<HTMLDivElement | null>(null);
@@ -340,23 +335,10 @@ export function TopHeader({
           icon={<Wrench size={iconSizeMap.sm} />}
         />
         <IconButton
-          onClick={onToggleBrowser}
-          title={
-            showBrowser
-              ? "关闭 Browser 面板"
-              : agentId
-                ? "打开 Browser 面板"
-                : "打开 Browser 面板（发送消息后可执行操作）"
-          }
-          aria-label="Browser 面板"
-          active={showBrowser}
-          icon={<Globe size={iconSizeMap.sm} />}
-        />
-        <IconButton
-          onClick={onToggleFiles}
-          title={showFiles ? "关闭右侧面板" : "打开文件浏览器"}
-          aria-label="右侧面板"
-          active={showFiles}
+          onClick={onToggleWorkbench}
+          title={showWorkbench ? "关闭 Workbench" : "打开 Workbench"}
+          aria-label="Workbench 面板"
+          active={showWorkbench}
           icon={<PanelRight size={iconSizeMap.sm} />}
         />
       </span>
