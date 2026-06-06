@@ -22,6 +22,8 @@ import {
 
 interface Props {
   initialPath: string;
+  /** 外部指定要立即打开的文件绝对路径。 */
+  initialFile?: string;
   onClose: () => void;
   /** 若提供，文件/目录条目会显示一个 ↪ 按钮，点击后把绝对路径传给回调（用于"插入到对话"） */
   onPickPath?: (absPath: string) => void;
@@ -977,6 +979,7 @@ function ImagePreviewViewer({
 /** ============ 主面板（tree 左 + viewer 右，viewer 顶部 tab 多开） ============ */
 export default function FileBrowser({
   initialPath,
+  initialFile,
   onClose,
   onPickPath,
   onPickDir,
@@ -1130,6 +1133,19 @@ export default function FileBrowser({
       setFilter("");
     }
   }, [initialPath]);
+
+  const prevInitialFile = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!initialFile || prevInitialFile.current === initialFile) return;
+    prevInitialFile.current = initialFile;
+    const nextRoot = dirname(initialFile);
+    setRoot(nextRoot);
+    setPathDraft(nextRoot);
+    setTabs((cur) => (cur.includes(initialFile) ? cur : [...cur, initialFile]));
+    setActiveTab(initialFile);
+    setViewerHidden(false);
+    setTreeCollapsed(false);
+  }, [initialFile]);
 
   // picker 模式:首次挂载时把当前 cwd 进 recents,作为"回家"快捷入口
   useEffect(() => {

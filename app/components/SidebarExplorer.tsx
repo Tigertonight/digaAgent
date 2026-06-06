@@ -54,7 +54,7 @@ export default function SidebarExplorer({
   onOpenFilePicker,
   refreshKey,
 }: Props) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -100,6 +100,7 @@ export default function SidebarExplorer({
           type="button"
           onClick={() => setCollapsed((v) => !v)}
           className="inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide hover:text-[color:var(--text)]"
+          aria-expanded={!collapsed}
         >
           {collapsed ? (
             <ChevronRight size={12} />
