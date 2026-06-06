@@ -11,6 +11,9 @@ import type { AgentPhase } from "@/lib/session-runner";
 import type { ProviderInfo } from "@/lib/types";
 import type { WorkflowWorktreeAction } from "./MessageView";
 
+const INITIAL_RENDER_ITEM_WINDOW = 120;
+const RENDER_ITEM_WINDOW_STEP = 120;
+
 interface MessagesScrollAreaProps {
   // data
   messages: ChatMessage[];
@@ -100,6 +103,9 @@ export function MessagesScrollArea({
   onResumeSubagentBatch,
   onOpenSubagentSession,
 }: MessagesScrollAreaProps) {
+  const [visibleItemLimit, setVisibleItemLimit] = useState(
+    INITIAL_RENDER_ITEM_WINDOW
+  );
   const renderItems = useMemo(
     () =>
       buildCollapsedProcessItems({
@@ -107,6 +113,13 @@ export function MessagesScrollArea({
       }),
     [messages]
   );
+  const visibleOrdinalByMessageIndex = useMemo(
+    () => buildVisibleOrdinalByMessageIndex(messages),
+    [messages]
+  );
+  const hiddenItemCount = Math.max(0, renderItems.length - visibleItemLimit);
+  const visibleRenderItems =
+    hiddenItemCount > 0 ? renderItems.slice(hiddenItemCount) : renderItems;
 
   return (
     <div className="relative flex flex-1 overflow-hidden">
@@ -125,11 +138,13 @@ export function MessagesScrollArea({
             const modelLabel = currentProvider?.models.find(
               (mm) => mm.id === modelId
             )?.name;
-            let refIdx = 0;
             const renderMessage = (m: ChatMessage, i: number, refMode: "normal" | "none") => {
               const isVisible =
                 m.role === "user" || m.role === "assistant";
-              const currentRefIdx = isVisible && refMode === "normal" ? refIdx++ : -1;
+              const currentRefIdx =
+                isVisible && refMode === "normal"
+                  ? visibleOrdinalByMessageIndex[i] ?? -1
+                  : -1;
               const isActiveAssistant =
                 m.role === "assistant" && i === activeAssistantIndex;
               const usage = m.meta?.usage;
@@ -207,30 +222,56 @@ export function MessagesScrollArea({
                 </div>
               );
             };
-            return renderItems.map((item) => {
-              if (item.kind === "message") {
-                return renderMessage(item.message, item.index, "normal");
-              }
-              const stableKey = `process:${item.messages[0]?.index ?? "x"}:${
-                item.messages.at(-1)?.index ?? "x"
-              }`;
-              const refSlot = refIdx++;
-              return (
-                <div
-                  key={stableKey}
-                  ref={(el) => {
-                    messageRefs.current[refSlot] = el;
-                  }}
-                >
-                  <CollapsedProcessGroup
-                    items={item.messages}
-                    renderMessage={(message, index) =>
-                      renderMessage(message, index, "none")
-                    }
-                  />
-                </div>
-              );
-            });
+            return (
+              <>
+                {hiddenItemCount > 0 && (
+                  <div className="flex justify-center">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setVisibleItemLimit(
+                          (limit) => limit + RENDER_ITEM_WINDOW_STEP
+                        )
+                      }
+                      className="rounded border px-3 py-1.5 text-xs hover:bg-[color:var(--bg-hover)]"
+                      style={{
+                        borderColor: "var(--border-soft)",
+                        color: "var(--text-muted)",
+                        background: "var(--bg)",
+                      }}
+                    >
+                      显示更早的 {Math.min(hiddenItemCount, RENDER_ITEM_WINDOW_STEP)} 条
+                    </button>
+                  </div>
+                )}
+                {visibleRenderItems.map((item) => {
+                  if (item.kind === "message") {
+                    return renderMessage(item.message, item.index, "normal");
+                  }
+                  const stableKey = `process:${item.messages[0]?.index ?? "x"}:${
+                    item.messages.at(-1)?.index ?? "x"
+                  }`;
+                  const refSlot =
+                    visibleOrdinalByMessageIndex[item.messages[0]?.index ?? -1] ??
+                    -1;
+                  return (
+                    <div
+                      key={stableKey}
+                      ref={(el) => {
+                        if (refSlot >= 0) messageRefs.current[refSlot] = el;
+                      }}
+                    >
+                      <CollapsedProcessGroup
+                        items={item.messages}
+                        renderMessage={(message, index) =>
+                          renderMessage(message, index, "none")
+                        }
+                      />
+                    </div>
+                  );
+                })}
+              </>
+            );
           })()}
           {/* 仅在"刚发送 → 锚定那条 user 到屏顶"的窗口期塞 60vh 占位;
               锚定完成或用户主动滚动后即移除,避免向下滚到无内容空白区。 */}
@@ -255,6 +296,19 @@ type RenderItem =
       kind: "process_group";
       messages: Array<{ message: ChatMessage; index: number }>;
     };
+
+function buildVisibleOrdinalByMessageIndex(messages: ChatMessage[]): number[] {
+  const ordinals: number[] = [];
+  let ordinal = 0;
+  for (let i = 0; i < messages.length; i += 1) {
+    const role = messages[i].role;
+    if (role === "user" || role === "assistant") {
+      ordinals[i] = ordinal;
+      ordinal += 1;
+    }
+  }
+  return ordinals;
+}
 
 function buildCollapsedProcessItems({
   messages,

@@ -221,17 +221,16 @@ function inlineLocalImages(input: string, cwd?: string): string {
 export default function Markdown({
   text,
   size = "normal",
+  streaming = false,
   cwd,
   onOpenUrl,
 }: Props) {
   const isLight = useIsLight();
   const codeStyle = isLight ? oneLight : oneDark;
   const proseSize = size === "small" ? "prose-xs" : "prose-sm";
-  // 流式期也跑完整 markdown,让标题/加粗/列表实时显示;
-  // inlineLocalImages 在流式中也跑(几次全文 regex,长文本可接受 — 比起重新设计分段更简单)
   const processedText = useMemo(
-    () => inlineLocalImages(text, cwd),
-    [text, cwd]
+    () => (streaming ? text : inlineLocalImages(text, cwd)),
+    [text, cwd, streaming]
   );
 
   return (
@@ -241,6 +240,22 @@ export default function Markdown({
         prose-code:before:hidden prose-code:after:hidden
         ${isLight ? "prose-neutral" : "prose-invert"}`}
     >
+      {streaming ? (
+        <pre
+          style={{
+            margin: 0,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            overflowWrap: "anywhere",
+            fontFamily: "inherit",
+            fontSize: size === "small" ? 12 : 14,
+            lineHeight: 1.65,
+            color: "var(--text)",
+          }}
+        >
+          {processedText}
+        </pre>
+      ) : (
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -351,6 +366,7 @@ export default function Markdown({
       >
         {processedText}
       </ReactMarkdown>
+      )}
     </div>
   );
 }
