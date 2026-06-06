@@ -251,11 +251,12 @@ export default function Markdown({
           }) {
             const match = /language-(\w+)/.exec(className || "");
             const codeText = String(children ?? "").replace(/\n$/, "");
-            if (!inline && match) {
+            const isBlockCode = Boolean(match) || codeText.includes("\n");
+            if (!inline && isBlockCode) {
               return (
                 <CodeBlockWithHeader
                   code={codeText}
-                  lang={match[1]}
+                  lang={match?.[1] ?? "text"}
                   style={codeStyle}
                   fontSize={size === "small" ? 11 : 12.5}
                 />
