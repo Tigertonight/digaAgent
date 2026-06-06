@@ -641,9 +641,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     setWorkbenchOpen((prev) => {
       const next = !prev;
       if (next) {
-        const overview: WorkbenchView = { type: "overview" };
-        setWorkbenchView(overview);
-        persistWorkbench(true, overview);
+        persistWorkbench(true, workbenchView);
       } else {
         persistWorkbench(false, workbenchView);
       }
@@ -2221,6 +2219,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           modelId={modelId}
           currentProvider={currentProvider ?? null}
           onChangeModel={onChangeModel}
+          onOpenAuth={openAuth}
+          onOpenModelsConfig={() => setShowModelsConfig(true)}
           supportsThinking={supportsThinking}
           thinkingLevel={thinkingLevel}
           availableThinkingLevels={availableThinkingLevels}
