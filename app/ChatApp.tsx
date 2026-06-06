@@ -56,8 +56,11 @@ import { SidebarSearch } from "./components/SidebarSearch";
 import { TopHeader } from "./components/TopHeader";
 import { MessagesScrollArea } from "./components/MessagesScrollArea";
 import type { WorkflowWorktreeAction } from "./components/MessageView";
-import { RightPanelContainer } from "./components/RightPanelContainer";
-import { BrowserPanel } from "./components/BrowserPanel";
+import {
+  WorkbenchSidebar,
+  type WorkbenchView,
+} from "./components/WorkbenchSidebar";
+import type { FilesLayout } from "./components/RightPanelContainer";
 import { ChatModals } from "./components/ChatModals";
 import { BudgetExceededModal } from "./components/BudgetExceededModal";
 import { resolveRuntimeIdentity } from "@/lib/runtime/identity";
@@ -463,21 +466,53 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     }
   };
 
-  // 右侧抽屉：files | skills | tools | null（互斥，localStorage 持久化）
-  const [rightPanel, setRightPanel] = useState<
-    "files" | "skills" | "tools" | "browser" | null
-  >(() => {
-    if (typeof window === "undefined") return null;
+  const initialWorkbenchView = (): WorkbenchView => {
+    if (typeof window === "undefined") return { type: "overview" };
+    if (window.location.search.includes("e2e=1")) return { type: "overview" };
     try {
-      const v = localStorage.getItem("pi-right-panel");
-      if (v === "files" || v === "skills" || v === "tools" || v === "browser")
-        return v;
-      if (localStorage.getItem("pi-show-files") === "1") return "files";
+      const stored = localStorage.getItem("pi-workbench-view");
+      if (
+        stored === "overview" ||
+        stored === "progress" ||
+        stored === "outputs" ||
+        stored === "files" ||
+        stored === "context" ||
+        stored === "browser"
+      ) {
+        return { type: stored };
+      }
+      const legacy = localStorage.getItem("pi-right-panel");
+      if (legacy === "files" || localStorage.getItem("pi-show-files") === "1") {
+        return { type: "files" };
+      }
+      if (legacy === "browser") return { type: "browser" };
     } catch {
       /* noop */
     }
-    return null;
-  });
+    return { type: "overview" };
+  };
+  const initialWorkbenchOpen = (): boolean => {
+    if (typeof window === "undefined") return false;
+    if (window.location.search.includes("e2e=1")) return false;
+    try {
+      const stored = localStorage.getItem("pi-workbench-open");
+      if (stored === "1") return true;
+      if (stored === "0") return false;
+      const legacy = localStorage.getItem("pi-right-panel");
+      return (
+        legacy === "files" ||
+        legacy === "browser" ||
+        localStorage.getItem("pi-show-files") === "1"
+      );
+    } catch {
+      return false;
+    }
+  };
+  const [workbenchOpen, setWorkbenchOpen] = useState(initialWorkbenchOpen);
+  const [workbenchView, setWorkbenchView] =
+    useState<WorkbenchView>(initialWorkbenchView);
+  const [showSkills, setShowSkills] = useState(false);
+  const [showTools, setShowTools] = useState(false);
   const [browserOpenRequest, setBrowserOpenRequest] = useState<{
     id: number;
     url: string;
@@ -495,10 +530,10 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   });
   /** FileBrowser 内部折叠状态:不再影响外层宽度,仅 56px 极窄态特殊处理
    *  (FileBrowser 内部用 flex:1 自适应,外层一直用 rightPanelWidth) */
-  const [filesLayout, setFilesLayout] = useState<{
-    treeCollapsed: boolean;
-    viewerHidden: boolean;
-  }>({ treeCollapsed: false, viewerHidden: false });
+  const [filesLayout, setFilesLayout] = useState<FilesLayout>({
+    treeCollapsed: false,
+    viewerHidden: false,
+  });
   /** 两侧都收起时容器收成 56px 窄条,其它情况都用 rightPanelWidth */
   const filesContainerWidth =
     filesLayout.viewerHidden && filesLayout.treeCollapsed
@@ -578,63 +613,58 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   >(null);
   const [workflowHistoryLoading, setWorkflowHistoryLoading] = useState(false);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
-  const persistRightPanel = (
-    v: "files" | "skills" | "tools" | "browser" | null
-  ) => {
+  const persistWorkbench = useCallback((open: boolean, view: WorkbenchView) => {
     try {
-      if (v) localStorage.setItem("pi-right-panel", v);
-      else localStorage.removeItem("pi-right-panel");
+      localStorage.setItem("pi-workbench-open", open ? "1" : "0");
+      localStorage.setItem("pi-workbench-view", view.type);
     } catch {
       /* noop */
     }
-  };
-  const toggleFiles = () => {
-    setRightPanel((prev) => {
-      const next = prev === "files" ? null : "files";
-      persistRightPanel(next);
+  }, []);
+  const openWorkbench = useCallback((view: WorkbenchView) => {
+    setWorkbenchView(view);
+    setWorkbenchOpen(true);
+    persistWorkbench(true, view);
+    if (view.type === "browser" && view.url) {
+      setBrowserOpenRequest({ id: Date.now(), url: view.url });
+    }
+  }, [persistWorkbench]);
+  const selectSessionAndCloseWorkbench = useCallback(
+    (id: string) => {
+      setSelectedId(id);
+      setWorkbenchOpen(false);
+      persistWorkbench(false, { type: "overview" });
+    },
+    [persistWorkbench, setSelectedId]
+  );
+  const toggleWorkbench = useCallback(() => {
+    setWorkbenchOpen((prev) => {
+      const next = !prev;
+      if (next) {
+        const overview: WorkbenchView = { type: "overview" };
+        setWorkbenchView(overview);
+        persistWorkbench(true, overview);
+      } else {
+        persistWorkbench(false, workbenchView);
+      }
       return next;
     });
-  };
-  const toggleSkills = () => {
-    setRightPanel((prev) => {
-      const next = prev === "skills" ? null : "skills";
-      persistRightPanel(next);
-      return next;
-    });
-  };
+  }, [persistWorkbench, workbenchView]);
+  const toggleSkills = () => setShowSkills((prev) => !prev);
   const toggleTools = () => {
-    setRightPanel((prev) => {
-      const next = prev === "tools" ? null : "tools";
-      persistRightPanel(next);
-      // 关闭时刷新计数（用户可能改了启用集合）
-      if (prev === "tools" && agentId) void refreshToolsCount(agentId);
+    setShowTools((prev) => {
+      const next = !prev;
+      if (prev && agentId) void refreshToolsCount(agentId);
       return next;
     });
   };
-  const toggleBrowser = () => {
-    setRightPanel((prev) => {
-      const next = prev === "browser" ? null : "browser";
-      persistRightPanel(next);
-      return next;
-    });
-  };
-  const showFiles = rightPanel === "files";
-  const showSkills = rightPanel === "skills";
-  const showTools = rightPanel === "tools";
-  const showBrowser = rightPanel === "browser";
 
-  // 任何 previewStore 触发(html/url/image)时,确保右侧 FileBrowser 展开
+  // 任何 previewStore 触发(html/url/image)时,确保右侧 Workbench 进入 Files。
   useEffect(() => {
     return previewStore.onOpen(() => {
-      setRightPanel((prev) => {
-        if (prev === "files") return prev;
-        try {
-          localStorage.setItem("pi-right-panel", "files");
-        } catch {}
-        return "files";
-      });
+      openWorkbench({ type: "files" });
     });
-  }, []);
+  }, [openWorkbench]);
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
@@ -805,11 +835,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
   const openUrlInBrowserPanel = useCallback(
     (url: string) => {
-      setRightPanel("browser");
-      persistRightPanel("browser");
-      setBrowserOpenRequest({ id: Date.now(), url });
+      openWorkbench({ type: "browser", url });
     },
-    []
+    [openWorkbench]
   );
 
   // ===== Setter wrappers(同名,所有调用点不动)=====
@@ -1306,6 +1334,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     if (!runnersRef.current.has(DRAFT_KEY)) {
       setRunner(DRAFT_KEY, emptyRunner());
     }
+    setWorkbenchOpen(false);
+    persistWorkbench(false, { type: "overview" });
     setSelectedId(null);
     switchTo(DRAFT_KEY);
     // draft 已经有上一次留下的 agent? 关掉它再起新的 —— +New chat 语义就是"重置"
@@ -1367,6 +1397,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     closeSseFor,
     attachSseFor,
     updateRunner,
+    persistWorkbench,
   ]);
 
   // ===== SSE agent 事件分发器（RFC-1 阶段 A3，已抽到 useAgentEvents） =====
@@ -1389,11 +1420,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     isCollabEnabled: () => loadCollabSettings().enabled,
     onBrowserState: (_snapshot, _aid, ownerKey) => {
       if (ownerKey !== activeKey) return;
-      setRightPanel((prev) => {
-        if (prev === "browser") return prev;
-        persistRightPanel("browser");
-        return "browser";
-      });
+      // 右侧 Workbench 不因浏览器状态自动弹开；已打开时 Overview/Browser 摘要自然更新。
     },
     autoApprove: (aid, toolCallId) => {
       // 注意：autoApprove 用的是 SSE 携带的 aid（可能 ≠ activeKey），
@@ -2012,7 +2039,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         sessions={sessions}
         groupedSessions={groupedSessions}
         selectedId={selectedId}
-        setSelectedId={setSelectedId}
+        setSelectedId={selectSessionAndCloseWorkbench}
         lastSeenMap={lastSeenMap}
         renamingFor={renamingFor}
         setRenamingFor={setRenamingFor}
@@ -2047,7 +2074,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
               onRetry={searchHook.retry}
               onSelect={(id) => {
                 searchHook.clear();
-                setSelectedId(id);
+                selectSessionAndCloseWorkbench(id);
               }}
               selectedId={selectedId}
               sessionLookup={sessionLookup}
@@ -2075,8 +2102,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           electronApi={electronApi}
           currentSessionFile={currentSessionFile}
           showTools={showTools}
-          showFiles={showFiles}
-          showBrowser={showBrowser}
+          showWorkbench={workbenchOpen}
           budget={budget}
           budgetSpent={budgetSpent}
           budgetStatus={budgetStatus}
@@ -2112,8 +2138,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           }}
           onReconnectSession={reconnectActiveSession}
           onToggleTools={toggleTools}
-          onToggleFiles={toggleFiles}
-          onToggleBrowser={toggleBrowser}
+          onToggleWorkbench={toggleWorkbench}
         />
 
         {messages.length === 0 && !error && !progress ? (
@@ -2152,8 +2177,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             onRetrySubagentTask={retrySubagentTaskFromCard}
             onResumeSubagentBatch={resumeSubagentBatchFromCard}
             onOpenSubagentSession={openSubagentSessionFromCard}
-            progress={progress}
-            onOpenProgressUrl={openUrlInBrowserPanel}
           />
         )}
 
@@ -2209,13 +2232,27 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         />
       </main>
 
-      <RightPanelContainer
-        show={showFiles}
+      <WorkbenchSidebar
+        open={workbenchOpen}
+        view={workbenchView}
         cwd={cwd}
-        filesContainerWidth={filesContainerWidth}
+        width={filesContainerWidth}
+        agentId={agentId}
+        runtimeIdentity={runtimeIdentity}
+        progress={progress}
+        browserSnapshot={activeSnapshot.browser}
+        browserOpenRequest={browserOpenRequest}
+        stats={stats}
+        budgetStatus={budgetStatus}
+        providerLabel={currentProvider?.provider ?? providerId}
+        modelLabel={modelId}
+        thinkingLabel={thinkingLevel}
+        toolsCount={toolsCount?.active ?? 0}
+        pendingFileCount={pendingFiles.length}
+        pendingImageCount={pendingImages.length}
         filesLayout={filesLayout}
         onSplitterMouseDown={onSplitterMouseDown}
-        onClose={toggleFiles}
+        onOpenView={openWorkbench}
         onPickPath={(absPath) => {
           // 把路径加到输入框末尾（用 @ 前缀，pi-coding-agent 约定的引用语法）
           setInput((cur) => {
@@ -2223,36 +2260,27 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             return `${cur}${sep}@${absPath} `;
           });
         }}
-        onLayoutChange={setFilesLayout}
+        onFilesLayoutChange={setFilesLayout}
+        onOpenProgressUrl={openUrlInBrowserPanel}
+        onAnnotate={(annotations: BrowserAnnotation[]) => {
+          if (annotations.length === 0) return;
+          // 把结构化批注组装成给 agent 的视觉任务文本（含定位区域、URL、留言）。
+          const text =
+            annotations.length === 1
+              ? formatBrowserAnnotation(annotations[0])
+              : [
+                  `请处理以下 ${annotations.length} 条页面批注：`,
+                  ...annotations.map(
+                    (a, i) => `\n${i + 1}. ${formatBrowserAnnotation(a)}`
+                  ),
+                ].join("\n");
+          setComposerInput((cur) => {
+            const sep = cur.trim() ? "\n\n" : "";
+            return `${cur}${sep}${text}`;
+          });
+          requestAnimationFrame(() => inputRef.current?.focus());
+        }}
       />
-      {showBrowser && (
-        <BrowserPanel
-          agentId={agentId}
-          runtimeIdentity={runtimeIdentity}
-          snapshot={activeSnapshot.browser}
-          width={rightPanelWidth}
-          openRequest={browserOpenRequest}
-          onClose={toggleBrowser}
-          onAnnotate={(annotations: BrowserAnnotation[]) => {
-            if (annotations.length === 0) return;
-            // 把结构化批注组装成给 agent 的视觉任务文本（含定位区域、URL、留言）。
-            const text =
-              annotations.length === 1
-                ? formatBrowserAnnotation(annotations[0])
-                : [
-                    `请处理以下 ${annotations.length} 条页面批注：`,
-                    ...annotations.map(
-                      (a, i) => `\n${i + 1}. ${formatBrowserAnnotation(a)}`
-                    ),
-                  ].join("\n");
-            setComposerInput((cur) => {
-              const sep = cur.trim() ? "\n\n" : "";
-              return `${cur}${sep}${text}`;
-            });
-            requestAnimationFrame(() => inputRef.current?.focus());
-          }}
-        />
-      )}
       {showWorkflowHistory && (
         <WorkflowHistoryPanel
           items={workflowHistory}

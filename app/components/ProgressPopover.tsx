@@ -33,13 +33,15 @@ export function ProgressPopover({
   // 归一化为分组列表：优先使用 progress.groups；旧数据只有扁平 steps 时，兜底成单个分组。
   const groups = useMemo<ProgressGroup[]>(() => {
     if (!progress) return [];
-    if (progress.groups && progress.groups.length > 0) return progress.groups;
-    if (progress.steps.length > 0) {
+    const progressGroups = progress.groups ?? [];
+    const progressSteps = progress.steps ?? [];
+    if (progressGroups.length > 0) return progressGroups;
+    if (progressSteps.length > 0) {
       return [
         {
           id: "legacy",
           index: 1,
-          steps: progress.steps,
+          steps: progressSteps,
           startedAt: progress.updatedAt,
         },
       ];
@@ -47,7 +49,8 @@ export function ProgressPopover({
     return [];
   }, [progress]);
 
-  const hasArtifacts = Boolean(progress && progress.artifacts.length > 0);
+  const artifacts = progress?.artifacts ?? [];
+  const hasArtifacts = artifacts.length > 0;
 
   if (!progress || (groups.length === 0 && !hasArtifacts)) {
     return null;
@@ -88,7 +91,7 @@ export function ProgressPopover({
             输出
           </div>
           <div className="flex flex-wrap gap-1.5">
-            {progress.artifacts.map((artifact) => (
+            {artifacts.map((artifact) => (
               <ArtifactChip
                 key={artifact.id}
                 artifact={artifact}
