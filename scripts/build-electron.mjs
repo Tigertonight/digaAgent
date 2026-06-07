@@ -36,6 +36,11 @@ const backupLockPath = join(root, ".package-lock.json.backup");
 // 哪些包是 "Electron 主进程真实运行时根级依赖"——
 // 这里只有 keytar（native binding），所以白名单只 1 个。
 const RUNTIME_DEPS = new Set(["keytar"]);
+const STANDALONE_TRANSITIVE_DEPS = new Set([
+  // @earendil-works/pi-ai exports TypeBox helpers from its public ESM entry,
+  // but Next standalone tracing can miss this transitive package.
+  "typebox",
+]);
 
 function readJson(p) {
   return JSON.parse(readFileSync(p, "utf8"));
@@ -265,6 +270,7 @@ function patchNextPackage() {
   const allDeps = new Set([
     ...Object.keys(nextDeps),
     ...Object.keys(backupDeps).filter((k) => !RUNTIME_DEPS.has(k)),
+    ...STANDALONE_TRANSITIVE_DEPS,
   ]);
 
   let copied = 0;
