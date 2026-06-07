@@ -17,6 +17,7 @@ const os = require("node:os");
 const net = require("node:net");
 const http = require("node:http");
 const settingsModule = require("./settings");
+const updaterModule = require("./updater");
 
 const DEV = process.env.ELECTRON_DEV === "1";
 const DEV_URL = process.env.ELECTRON_DEV_URL || "http://localhost:3000";
@@ -319,6 +320,12 @@ function registerWebviewPocIpc() {
  */
 function registerIpc() {
   registerWebviewPocIpc();
+  updaterModule.registerUpdateIpc({
+    app,
+    ipcMain,
+    shell,
+    getWindow: () => mainWin,
+  });
 
   ipcMain.handle("app:getInfo", () => ({
     name: app.getName(),
@@ -642,6 +649,9 @@ async function createWindow() {
 
   await win.loadURL(url);
   console.log(`[electron] main window loaded ${url}`);
+  if (!DEV) {
+    updaterModule.checkOnStartup();
+  }
   if (!win.isVisible()) {
     win.show();
   }

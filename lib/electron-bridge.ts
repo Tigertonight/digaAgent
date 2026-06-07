@@ -102,6 +102,39 @@ export interface AppInfo {
   isDev: boolean;
 }
 
+export type UpdateStatus =
+  | "idle"
+  | "checking"
+  | "available"
+  | "not-available"
+  | "skipped"
+  | "error";
+
+export interface UpdateState {
+  status: UpdateStatus;
+  currentVersion: string;
+  latestVersion?: string | null;
+  releaseName?: string | null;
+  releaseNotes?: string;
+  releaseUrl?: string;
+  downloadUrl?: string;
+  publishedAt?: string | null;
+  checkedAt?: number | null;
+  error?: string | null;
+  autoCheckEnabled: boolean;
+  skippedVersion?: string | null;
+}
+
+export interface UpdaterApi {
+  getState(): Promise<UpdateState>;
+  check(opts?: { manual?: boolean }): Promise<UpdateState>;
+  openDownload(): Promise<boolean>;
+  skipVersion(version?: string): Promise<UpdateState>;
+  remindLater(): Promise<UpdateState>;
+  setAutoCheck(enabled: boolean): Promise<UpdateState>;
+  onState(cb: (state: UpdateState) => void): () => void;
+}
+
 export interface SelectDirectoryOptions {
   title?: string;
   defaultPath?: string;
@@ -128,6 +161,7 @@ export interface SettingsApi {
 export interface ElectronApi {
   getAppInfo(): Promise<AppInfo>;
   getApiBase(): Promise<string>;
+  updater: UpdaterApi;
   selectDirectory(opts?: SelectDirectoryOptions): Promise<string | null>;
   revealInFinder(path: string): Promise<boolean>;
   openExternal(url: string): Promise<boolean>;
