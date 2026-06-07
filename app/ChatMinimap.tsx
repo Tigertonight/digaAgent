@@ -28,6 +28,7 @@ interface Props {
 }
 
 const MINIMAP_WIDTH = 36;
+const MAX_MEASURED_MESSAGES = 240;
 
 function getMessagePreview(msg: ChatMessage): string {
   const parts = msg.parts ?? [];
@@ -91,14 +92,27 @@ export function ChatMinimap({
   const [mouseYRatio, setMouseYRatio] = useState<number | null>(null);
   const draggingRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const visibleMessages = useMemo(
+    () =>
+      messages.filter(
+        (msg) => msg.role === "user" || msg.role === "assistant"
+      ),
+    [messages]
+  );
 
-  const messagesRef = useRef(messages);
-  messagesRef.current = messages;
+  const visibleMessagesRef = useRef(visibleMessages);
+  visibleMessagesRef.current = visibleMessages;
 
   const updatePositionsRef = useRef<() => void>(() => {});
   updatePositionsRef.current = () => {
     const scrollEl = scrollContainer.current;
     if (!scrollEl) return;
+    const all = visibleMessagesRef.current;
+    if (all.length > MAX_MEASURED_MESSAGES) {
+      setVisible(false);
+      setNodes([]);
+      return;
+    }
 
     const totalH = scrollEl.scrollHeight;
     const clientH = scrollEl.clientHeight;
@@ -115,13 +129,9 @@ export function ChatMinimap({
 
     const refs = messageRefs.current;
     const newNodes: NodeInfo[] = [];
-    let refIndex = 0;
-    const all = messagesRef.current;
     for (let i = 0; i < all.length; i++) {
       const msg = all[i];
-      if (msg.role !== "user" && msg.role !== "assistant") continue;
-      const el = refs?.[refIndex];
-      refIndex++;
+      const el = refs?.[i];
       if (!hasRenderableContent(msg)) continue;
       if (el && totalH > 0) {
         const elRect = el.getBoundingClientRect();
@@ -159,7 +169,7 @@ export function ChatMinimap({
   useEffect(() => {
     const t = setTimeout(updatePositions, 50);
     return () => clearTimeout(t);
-  }, [messages.length, updatePositions]);
+  }, [visibleMessages.length, updatePositions]);
 
   const scrollToMinimapRatio = useCallback(
     (viewportTopRatio: number) => {

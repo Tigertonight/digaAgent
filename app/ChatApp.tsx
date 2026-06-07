@@ -986,33 +986,41 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     return unsub;
   }, [sessions, setSelectedId]);
 
-  /**
-   * 把 forkableUserMessages 按顺序回填到 chatState.messages 里的 user message 上。
-   * 假设：SDK 返回的列表顺序 == 前端展示的 user message 顺序。
-   * 若数量不一致（比如刚发完一条但还没收到 agent_end 时拉的旧列表），多余的 user 不挂 entryId。
-   */
-  const messages = useMemo<ChatMessage[]>(() => {
-    if (forkableUserMessages.length === 0) return chatState.messages;
-    const out: ChatMessage[] = [];
-    let cursor = 0;
+  const messageRenderState = useMemo(() => {
+    const shouldAttachForkIds = forkableUserMessages.length > 0;
+    const renderedMessages: ChatMessage[] = shouldAttachForkIds ? [] : chatState.messages;
+    let forkCursor = 0;
+    let visibleMessageCount = 0;
+    let userMessageCount = 0;
+    let lastUserVisibleIndex = -1;
+
     for (const m of chatState.messages) {
-      if (m.role === "user" && cursor < forkableUserMessages.length) {
-        out.push({ ...m, entryId: forkableUserMessages[cursor].entryId });
-        cursor++;
-      } else {
-        out.push(m);
+      let next = m;
+      if (shouldAttachForkIds && m.role === "user" && forkCursor < forkableUserMessages.length) {
+        next = { ...m, entryId: forkableUserMessages[forkCursor].entryId };
+        forkCursor++;
+      }
+      if (shouldAttachForkIds) renderedMessages.push(next);
+
+      if (m.role === "user" || m.role === "assistant") {
+        if (m.role === "user") {
+          userMessageCount++;
+          lastUserVisibleIndex = visibleMessageCount;
+        }
+        visibleMessageCount++;
       }
     }
-    return out;
+
+    return {
+      messages: renderedMessages,
+      visibleMessageCount,
+      userMessageCount,
+      lastUserVisibleIndex,
+    };
   }, [chatState.messages, forkableUserMessages]);
 
-  // 给 minimap 用：按 visible(user/assistant) 数量准备 ref 数组
-  const visibleMessageCount = useMemo(
-    () =>
-      messages.filter((m) => m.role === "user" || m.role === "assistant")
-        .length,
-    [messages]
-  );
+  const messages = messageRenderState.messages;
+  const visibleMessageCount = messageRenderState.visibleMessageCount;
   const messageRefs = useMessageRefs(visibleMessageCount);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1057,31 +1065,21 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     // 兜底:streaming 已结束还留着锚定/占位的话清掉,避免占位永久滞留
     if (!streaming && pendingPinUserCountRef.current !== null) {
       pendingPinUserCountRef.current = null;
-      setPinSpacer(false);
+      queueMicrotask(() => setPinSpacer(false));
     }
     // 优先级 1:有锚定目标 → 等那条 user 消息从 SSE 回来后锚到屏顶,只锚一次
     const targetCount = pendingPinUserCountRef.current;
     if (targetCount !== null) {
-      // 走 visible(user/assistant) 顺序计算 user 在 refs 里的下标
-      let visibleIdx = -1;
-      let lastUserVisibleIdx = -1;
-      let userCount = 0;
-      for (const m of messages) {
-        if (m.role === "user" || m.role === "assistant") {
-          visibleIdx++;
-          if (m.role === "user") {
-            userCount++;
-            lastUserVisibleIdx = visibleIdx;
-          }
-        }
-      }
-      if (userCount >= targetCount && lastUserVisibleIdx >= 0) {
-        const el = messageRefs.current?.[lastUserVisibleIdx];
+      if (
+        messageRenderState.userMessageCount >= targetCount &&
+        messageRenderState.lastUserVisibleIndex >= 0
+      ) {
+        const el = messageRefs.current?.[messageRenderState.lastUserVisibleIndex];
         if (el) {
           el.scrollIntoView({ behavior: "smooth", block: "start" });
           // 锚定完成 → 清意图 + 移除占位,列表底部回到"最后一条 + padding"
           pendingPinUserCountRef.current = null;
-          setPinSpacer(false);
+          queueMicrotask(() => setPinSpacer(false));
           return;
         }
       }
@@ -1091,7 +1089,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     // 优先级 2:贴底时跟随新内容
     if (!stickToBottomRef.current) return;
     scrollMessagesToBottom();
-  }, [messages, streaming, messageRefs, scrollMessagesToBottom]);
+  }, [messageRenderState, streaming, messageRefs, scrollMessagesToBottom]);
 
   useEffect(() => {
     return () => {

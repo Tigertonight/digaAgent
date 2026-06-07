@@ -112,7 +112,15 @@
       "lib/workflows/script-worker-child.cjs",
       "public/**/*",
       "package.json",
-      "!**/.DS_Store"
+      "!**/.DS_Store",
+      "!**/*.map",
+      "!**/docs/**",
+      "!**/examples/**",
+      "!**/test/**",
+      "!**/tests/**",
+      "!**/__tests__/**",
+      "!**/*.md",
+      "!**/*.tsbuildinfo"
     ],
     "asarUnpack": [
       "**/*.node",
