@@ -1,14 +1,6 @@
 import type { Metadata } from "next";
-import { Noto_Sans_Mono } from "next/font/google";
 import Script from "next/script";
 import "./globals.css";
-
-const notoMono = Noto_Sans_Mono({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  variable: "--font-noto-mono",
-  display: "swap",
-});
 
 export const metadata: Metadata = {
   title: "Diga Agent",
@@ -40,7 +32,6 @@ export default function RootLayout({
     <html
       lang="zh-CN"
       data-theme="light"
-      className={notoMono.variable}
       suppressHydrationWarning
     >
       <head>

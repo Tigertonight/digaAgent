@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, RotateCcw, X } from "lucide-react";
+import { Download, Loader2, RotateCcw, X } from "lucide-react";
 import type {
   SessionInfoLite,
   ChatMessage,
@@ -12,7 +12,11 @@ import type {
 import type { WorkflowResumeSnapshot } from "@/lib/workflows/types";
 import type { BrowserAnnotation } from "@/lib/browser/types";
 import { extractImagesFromClipboard } from "@/lib/image-utils";
-import { getElectronApi, type AppInfo } from "@/lib/electron-bridge";
+import {
+  getElectronApi,
+  type AppInfo,
+  type UpdateState,
+} from "@/lib/electron-bridge";
 import { useAudio } from "@/lib/use-audio";
 import { useDragDrop } from "@/lib/use-drag-drop";
 import { previewStore } from "@/lib/preview-store";
@@ -88,6 +92,74 @@ function formatWorkflowTime(ms: number | undefined): string {
   } catch {
     return "";
   }
+}
+
+function UpdateNotice({
+  state,
+  onView,
+  onClose,
+}: {
+  state: UpdateState;
+  onView: () => void;
+  onClose: () => void;
+}) {
+  const latest = state.latestVersion ?? state.releaseName ?? "新版本";
+  return (
+    <div
+      className="absolute right-4 top-12 z-40 w-[300px] rounded-lg border p-2.5 shadow-xl"
+      style={{
+        borderColor: "var(--border)",
+        background: "var(--bg-panel)",
+        color: "var(--text)",
+      }}
+    >
+      <div className="flex items-start gap-3">
+        <span
+          className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border"
+          style={{
+            borderColor: "rgba(37,99,235,0.35)",
+            background: "rgba(37,99,235,0.12)",
+            color: "#60a5fa",
+          }}
+        >
+          <Download size={15} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-semibold">
+            Diga Agent {latest} 可安装
+          </div>
+          <div className="mt-0.5 text-[12px]" style={{ color: "var(--text-muted)" }}>
+            当前版本 {state.currentVersion}
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onView}
+              className="inline-flex h-7 items-center gap-1.5 rounded border px-2.5 text-[12px] font-medium"
+              style={{
+                borderColor: "rgba(37,99,235,0.45)",
+                background: "rgba(37,99,235,0.12)",
+                color: "#60a5fa",
+              }}
+            >
+              <Download size={13} />
+              查看
+            </button>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-[color:var(--bg-hover)]"
+          title="关闭"
+          aria-label="关闭更新提醒"
+          style={{ color: "var(--text-muted)" }}
+        >
+          <X size={14} />
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function formatWorkflowResumeSummaries(
@@ -672,6 +744,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     () => (appInfo ? getElectronApi() : null),
     [appInfo]
   );
+  const [updateState, setUpdateState] = useState<UpdateState | null>(null);
+  const [updateNoticeHidden, setUpdateNoticeHidden] = useState(false);
+  const [openCommandMenuRequest, setOpenCommandMenuRequest] = useState(0);
   useEffect(() => {
     const api = getElectronApi();
     if (!api) return;
@@ -680,6 +755,62 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       .then(setAppInfo)
       .catch((e) => console.warn("getAppInfo failed", e));
   }, []);
+  useEffect(() => {
+    if (!electronApi?.updater) return;
+    let cancelled = false;
+    void electronApi.updater
+      .getState()
+      .then((state) => {
+        if (!cancelled) setUpdateState(state);
+      })
+      .catch((e) => console.warn("updater:getState failed", e));
+    const unsub = electronApi.updater.onState((state) => {
+      setUpdateState(state);
+      if (state.status === "available") setUpdateNoticeHidden(false);
+    });
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [electronApi]);
+  useEffect(() => {
+    if (updateState?.status !== "available" || updateNoticeHidden) return;
+    const id = window.setTimeout(() => setUpdateNoticeHidden(true), 8000);
+    return () => window.clearTimeout(id);
+  }, [updateNoticeHidden, updateState?.status, updateState?.latestVersion]);
+  const checkForUpdates = useCallback(() => {
+    if (!electronApi?.updater) return;
+    setUpdateNoticeHidden(false);
+    void electronApi.updater
+      .check({ manual: true })
+      .then(setUpdateState)
+      .catch((e) =>
+        setUpdateState((prev) => ({
+          ...(prev ?? {
+            currentVersion: appInfo?.version ?? "0.0.0",
+            autoCheckEnabled: true,
+          }),
+          status: "error",
+          error: String(e),
+        }))
+      );
+  }, [appInfo?.version, electronApi]);
+  const openUpdateDownload = useCallback(() => {
+    if (!electronApi?.updater) return;
+    void electronApi.updater.openDownload().catch((e) => setError(String(e)));
+  }, [electronApi]);
+  const viewUpdateDetails = useCallback(() => {
+    setUpdateNoticeHidden(true);
+    setOpenCommandMenuRequest((value) => value + 1);
+  }, []);
+  const skipUpdateVersion = useCallback(() => {
+    setUpdateNoticeHidden(true);
+    if (!electronApi?.updater) return;
+    void electronApi.updater
+      .skipVersion(updateState?.latestVersion ?? undefined)
+      .then(setUpdateState)
+      .catch(() => {});
+  }, [electronApi, updateState?.latestVersion]);
 
   // currentSessionFile 已挪到 RunnerState.sessionFile(下方解构提供同名别名)。
 
@@ -2099,6 +2230,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           currentSessionFile={currentSessionFile}
           showTools={showTools}
           showWorkbench={workbenchOpen}
+          updateStatus={updateState?.status}
+          updateLatestVersion={updateState?.latestVersion}
+          openCommandMenuRequest={openCommandMenuRequest}
           budget={budget}
           budgetSpent={budgetSpent}
           budgetStatus={budgetStatus}
@@ -2135,7 +2269,17 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           onReconnectSession={reconnectActiveSession}
           onToggleTools={toggleTools}
           onToggleWorkbench={toggleWorkbench}
+          onCheckForUpdates={checkForUpdates}
+          onDownloadUpdate={openUpdateDownload}
+          onSkipUpdateVersion={skipUpdateVersion}
         />
+        {updateState?.status === "available" && !updateNoticeHidden ? (
+          <UpdateNotice
+            state={updateState}
+            onView={viewUpdateDetails}
+            onClose={() => setUpdateNoticeHidden(true)}
+          />
+        ) : null}
 
         {messages.length === 0 && !error && !progress ? (
           <EmptyState />

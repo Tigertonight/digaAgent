@@ -31,6 +31,22 @@ contextBridge.exposeInMainWorld("miniPi", {
   /** standalone server 的真实 URL（留作未来给 main 进程内部用，renderer 不需要） */
   getApiBase: () => ipcRenderer.invoke("app:getApiBase"),
 
+  updater: {
+    getState: () => ipcRenderer.invoke("updater:getState"),
+    check: (opts) => ipcRenderer.invoke("updater:check", opts ?? {}),
+    openDownload: () => ipcRenderer.invoke("updater:openDownload"),
+    skipVersion: (version) =>
+      ipcRenderer.invoke("updater:skipVersion", version),
+    remindLater: () => ipcRenderer.invoke("updater:remindLater"),
+    setAutoCheck: (enabled) =>
+      ipcRenderer.invoke("updater:setAutoCheck", enabled),
+    onState: (cb) => {
+      const handler = (_event, state) => cb(state);
+      ipcRenderer.on("updater:state", handler);
+      return () => ipcRenderer.removeListener("updater:state", handler);
+    },
+  },
+
   /** 弹原生目录选择器，返回绝对路径或 null */
   selectDirectory: (opts) => ipcRenderer.invoke("dialog:selectDirectory", opts),
 

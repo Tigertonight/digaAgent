@@ -16,6 +16,8 @@ import {
   RefreshCw,
   Plus,
   ChevronRight,
+  Download,
+  X,
 } from "lucide-react";
 import { IconButton, iconSizeMap } from "./IconButton";
 import { HudMeter } from "./HudMeter";
@@ -38,6 +40,9 @@ interface TopHeaderProps {
   currentSessionFile: string | null;
   showTools: boolean;
   showWorkbench: boolean;
+  updateStatus?: "idle" | "checking" | "available" | "not-available" | "skipped" | "error";
+  updateLatestVersion?: string | null;
+  openCommandMenuRequest?: number;
   /** RFC-2 Phase A：Budget 当前生效配置 + 实时状态（来自 useBudget） */
   budget: SessionBudget;
   budgetSpent: BudgetSpent;
@@ -55,6 +60,9 @@ interface TopHeaderProps {
   onReconnectSession: () => void;
   onToggleTools: () => void;
   onToggleWorkbench: () => void;
+  onCheckForUpdates?: () => void;
+  onDownloadUpdate?: () => void;
+  onSkipUpdateVersion?: () => void;
 }
 
 interface CommandMenuItemProps {
@@ -118,6 +126,9 @@ export function TopHeader({
   currentSessionFile,
   showTools,
   showWorkbench,
+  updateStatus,
+  updateLatestVersion,
+  openCommandMenuRequest,
   budget,
   budgetSpent,
   budgetStatus,
@@ -134,9 +145,13 @@ export function TopHeader({
   onReconnectSession,
   onToggleTools,
   onToggleWorkbench,
+  onCheckForUpdates,
+  onDownloadUpdate,
+  onSkipUpdateVersion,
 }: TopHeaderProps) {
   const [commandOpen, setCommandOpen] = useState(false);
   const commandRef = useRef<HTMLDivElement | null>(null);
+  const hasUpdate = updateStatus === "available";
   const sseLabel =
     sseStatus === "active"
       ? "Live"
@@ -164,6 +179,11 @@ export function TopHeader({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [commandOpen]);
+
+  useEffect(() => {
+    if (!openCommandMenuRequest) return;
+    queueMicrotask(() => setCommandOpen(true));
+  }, [openCommandMenuRequest]);
 
   const runCommand = (fn: () => void) => {
     setCommandOpen(false);
@@ -198,9 +218,16 @@ export function TopHeader({
             onClick={() => setCommandOpen((v) => !v)}
             title="打开动作菜单"
             aria-label="动作菜单"
-            active={commandOpen || !hasAuthedProviders}
+            active={commandOpen || !hasAuthedProviders || hasUpdate}
             icon={<Plus size={iconSizeMap.sm} />}
           />
+          {hasUpdate ? (
+            <span
+              className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full ring-2 ring-[color:var(--bg-app)]"
+              style={{ background: "#3b82f6" }}
+              aria-hidden
+            />
+          ) : null}
           {commandOpen ? (
             <div
               className="absolute left-0 top-[calc(100%+8px)] z-50 w-[320px] rounded-lg border bg-[color:var(--bg-panel)] p-2 shadow-xl"
@@ -257,6 +284,46 @@ export function TopHeader({
                 description="管理 Provider 凭证"
                 onClick={() => runCommand(onOpenAuth)}
               />
+              {electronApi && onCheckForUpdates ? (
+                <CommandMenuItem
+                  icon={<Download size={15} />}
+                  label={
+                    updateStatus === "checking"
+                      ? "Checking updates"
+                      : updateStatus === "available"
+                        ? "Update available"
+                        : "Check updates"
+                  }
+                  description={
+                    updateStatus === "available" && updateLatestVersion
+                      ? `Diga Agent ${updateLatestVersion} 可安装`
+                      : "检查 Diga Agent 新版本"
+                  }
+                  shortcut={
+                    updateStatus === "available" && updateLatestVersion
+                      ? updateLatestVersion
+                      : undefined
+                  }
+                  disabled={updateStatus === "checking"}
+                  onClick={() => runCommand(onCheckForUpdates)}
+                />
+              ) : null}
+              {electronApi && hasUpdate && onDownloadUpdate ? (
+                <CommandMenuItem
+                  icon={<Download size={15} />}
+                  label="Download DMG"
+                  description="打开新版本下载页"
+                  onClick={() => runCommand(onDownloadUpdate)}
+                />
+              ) : null}
+              {electronApi && hasUpdate && onSkipUpdateVersion ? (
+                <CommandMenuItem
+                  icon={<X size={15} />}
+                  label="Ignore this version"
+                  description="这个版本不再提醒"
+                  onClick={() => runCommand(onSkipUpdateVersion)}
+                />
+              ) : null}
               <CommandMenuItem
                 icon={
                   theme === "dark" ? <Sun size={15} /> : <Moon size={15} />
