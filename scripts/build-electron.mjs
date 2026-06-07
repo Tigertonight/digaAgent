@@ -36,10 +36,11 @@ const backupLockPath = join(root, ".package-lock.json.backup");
 // 哪些包是 "Electron 主进程真实运行时根级依赖"——
 // 这里只有 keytar（native binding），所以白名单只 1 个。
 const RUNTIME_DEPS = new Set(["keytar"]);
-const STANDALONE_TRANSITIVE_DEPS = new Set([
-  // @earendil-works/pi-ai exports TypeBox helpers from its public ESM entry,
-  // but Next standalone tracing can miss this transitive package.
-  "typebox",
+const STANDALONE_CLOSURE_ROOTS = new Set([
+  // The Pi SDKs are used by Next API routes from standalone. Next tracing can
+  // miss their ESM dependency graph, so copy their runtime closure explicitly.
+  "@earendil-works/pi-coding-agent",
+  "@earendil-works/pi-ai",
 ]);
 
 function readJson(p) {
@@ -270,8 +271,37 @@ function patchNextPackage() {
   const allDeps = new Set([
     ...Object.keys(nextDeps),
     ...Object.keys(backupDeps).filter((k) => !RUNTIME_DEPS.has(k)),
-    ...STANDALONE_TRANSITIVE_DEPS,
   ]);
+  function collectRuntimeClosure(pkgName, seen = new Set()) {
+    if (seen.has(pkgName)) return;
+    seen.add(pkgName);
+    const pkgJsonPath = join(root, "node_modules", pkgName, "package.json");
+    if (!existsSync(pkgJsonPath)) return;
+
+    let pkgJson = {};
+    try {
+      pkgJson = JSON.parse(readFileSync(pkgJsonPath, "utf8"));
+    } catch (e) {
+      console.warn(
+        `[build-electron] WARN read dependency package.json failed (${pkgName}): ${e.message}`
+      );
+      return;
+    }
+
+    const deps = {
+      ...(pkgJson.dependencies || {}),
+      ...(pkgJson.optionalDependencies || {}),
+    };
+    for (const depName of Object.keys(deps)) {
+      if (RUNTIME_DEPS.has(depName)) continue;
+      allDeps.add(depName);
+      collectRuntimeClosure(depName, seen);
+    }
+  }
+
+  for (const depName of STANDALONE_CLOSURE_ROOTS) {
+    collectRuntimeClosure(depName);
+  }
 
   let copied = 0;
   for (const dep of allDeps) {
