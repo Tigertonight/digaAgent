@@ -71,6 +71,31 @@ function writeLastSeenToStorage(map: Record<string, string>): void {
   }
 }
 
+function sameSessionList(a: SessionInfoLite[], b: SessionInfoLite[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    const left = a[i];
+    const right = b[i];
+    if (
+      left.id !== right.id ||
+      left.path !== right.path ||
+      left.cwd !== right.cwd ||
+      left.name !== right.name ||
+      left.parentSessionPath !== right.parentSessionPath ||
+      left.created !== right.created ||
+      left.modified !== right.modified ||
+      left.messageCount !== right.messageCount ||
+      left.firstMessage !== right.firstMessage ||
+      left.isRunning !== right.isRunning ||
+      left.meta?.title !== right.meta?.title ||
+      left.meta?.pinned !== right.meta?.pinned
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export interface UseSessionsOptions {
   initialSessions: SessionInfoLite[];
   /** LRU / 删 session 时关 SSE */
@@ -227,9 +252,10 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
   const refreshSessions = useCallback(() => {
     void fetch("/api/sessions")
       .then((r) => r.json())
-      .then((d: { sessions?: SessionInfoLite[] }) =>
-        setSessions(d.sessions ?? [])
-      )
+      .then((d: { sessions?: SessionInfoLite[] }) => {
+        const next = d.sessions ?? [];
+        setSessions((prev) => (sameSessionList(prev, next) ? prev : next));
+      })
       .catch(() => {});
   }, []);
 
