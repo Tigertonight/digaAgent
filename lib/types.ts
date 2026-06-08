@@ -18,6 +18,7 @@ import type {
   WorkflowManifest,
   WorkflowRunStatus,
   WorkflowScriptLog,
+  WorkflowTraceEvent,
 } from "./workflows/types";
 
 export interface SessionInfoLite {
@@ -228,6 +229,7 @@ export type MessagePart =
       checkpoints: WorkflowCheckpoint[];
       artifacts: WorkflowArtifact[];
       logs: WorkflowScriptLog[];
+      traceEvents?: WorkflowTraceEvent[];
       createdAt: number;
       endedAt?: number;
       returnValue?: unknown;

@@ -6,6 +6,7 @@ import {
   abortWorkflowsForParent,
   getAgent,
 } from "@/lib/agent-registry";
+import { buildWorkflowDebugBundle } from "@/lib/workflows/debug-bundle";
 import { createGitWorktreeManager } from "@/lib/workflows/git-worktree";
 import {
   getWorkflowRun,
@@ -27,10 +28,16 @@ export async function GET(
   if (!rec) return NextResponse.json({ error: "agent not found" }, { status: 404 });
   const url = new URL(req.url);
   const workflowId = url.searchParams.get("id") ?? url.searchParams.get("workflowId");
+  const debug = url.searchParams.get("debug") === "1";
   if (workflowId) {
     const workflow = getWorkflowRun(workflowId);
     if (!workflow || workflow.parentAgentId !== id) {
       return NextResponse.json({ error: "workflow not found" }, { status: 404 });
+    }
+    if (debug) {
+      return NextResponse.json({
+        debugBundle: buildWorkflowDebugBundle(workflow),
+      });
     }
     return NextResponse.json({
       workflow,

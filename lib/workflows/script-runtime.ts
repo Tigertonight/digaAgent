@@ -28,16 +28,22 @@ import type {
   WorkflowMcpToolDescriptor,
   WorkflowCallToolInput,
   WorkflowCallToolResult,
+  WorkflowAgentInput,
+  WorkflowAgentResult,
+  WorkflowAgentType,
+  WorkflowTraceEvent,
 } from "./types";
 import {
   appendWorkflowCheckpoint,
   appendWorkflowLog,
+  appendWorkflowTraceEvent,
   finishWorkflowRun,
   getWorkflowRun,
   putWorkflowArtifact,
   putWorkflowRun,
 } from "./server-store";
 import { appendWorkflowNetworkAudit } from "./network-policy";
+import { schemaInstruction, validateJsonSchema } from "./json-schema";
 
 const DEFAULT_SCRIPT_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_MAX_AGENTS = 8;
@@ -105,6 +111,10 @@ type WorkflowSdk = {
   fetchUrl(input: WorkflowFetchUrlInput): Promise<WorkflowFetchUrlResult>;
   listTools(serverId?: string): Promise<WorkflowMcpToolDescriptor[]>;
   callTool(input: WorkflowCallToolInput): Promise<WorkflowCallToolResult>;
+  agent<T = unknown>(
+    prompt: string,
+    input?: Omit<WorkflowAgentInput, "prompt">
+  ): Promise<WorkflowAgentResult<T>>;
   spawnAgent(input: WorkflowSpawnAgentInput): Promise<unknown>;
   parallel<T>(items: Array<Promise<T> | (() => Promise<T> | T)>): Promise<T[]>;
   stage<T>(title: string, fn: () => Promise<T> | T): Promise<T>;
@@ -192,7 +202,8 @@ async function approveManifestCapabilities(
   deps: RunWorkflowScriptDeps,
   input: RunWorkflowScriptInput,
   workflowId: string,
-  manifest: WorkflowManifest
+  manifest: WorkflowManifest,
+  onTrace?: (trace: WorkflowTraceEvent) => void
 ): Promise<void> {
   const approvalRequired = manifest.capabilities.filter((capability) =>
     APPROVAL_REQUIRED_CAPABILITIES.has(capability)
@@ -210,6 +221,13 @@ async function approveManifestCapabilities(
       manifest,
       objective: input.objective,
       rationale: input.rationale,
+    });
+    onTrace?.({
+      type: "approval",
+      workflowId,
+      capability,
+      decision: resp.decision,
+      createdAt: now(),
     });
     if (resp.decision !== "allow") {
       throw new Error(
@@ -237,6 +255,41 @@ function hasCapability(manifest: WorkflowManifest, capability: WorkflowCapabilit
 function requireCapability(manifest: WorkflowManifest, capability: WorkflowCapability) {
   if (!hasCapability(manifest, capability)) {
     throw new Error(`workflow capability required: ${capability}`);
+  }
+}
+
+function roleForAgentType(agentType: WorkflowAgentType | undefined): WorkflowSpawnAgentInput["role"] {
+  switch (agentType) {
+    case "classifier":
+    case "researcher":
+      return "research";
+    case "implementer":
+      return "implementation";
+    case "reviewer":
+    case "verifier":
+      return "code-review";
+    case "general":
+    default:
+      return "general";
+  }
+}
+
+function extractJsonValue(raw: string): unknown {
+  const text = raw.trim();
+  if (!text) throw new Error("schema output was empty");
+  try {
+    return JSON.parse(text);
+  } catch {
+    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fenced?.[1]) return JSON.parse(fenced[1].trim());
+    const start = Math.min(
+      ...[text.indexOf("{"), text.indexOf("[")].filter((index) => index >= 0)
+    );
+    if (Number.isFinite(start)) {
+      const end = Math.max(text.lastIndexOf("}"), text.lastIndexOf("]"));
+      if (end > start) return JSON.parse(text.slice(start, end + 1));
+    }
+    throw new Error("schema output was not valid JSON");
   }
 }
 
@@ -515,6 +568,7 @@ function createSdk(
   artifacts: Map<string, WorkflowArtifact>,
   checkpoints: WorkflowCheckpoint[],
   logs: WorkflowScriptLog[],
+  traceEvents: WorkflowTraceEvent[],
   resumeState?: WorkflowResumeState
 ): WorkflowSdk {
   let spawnedAgents = 0;
@@ -529,6 +583,52 @@ function createSdk(
     logs.push(log);
     appendWorkflowLog(workflowId, log);
     deps.onEvent?.({ type: "workflow_log", workflowId, log });
+  }
+
+  function pushTrace(trace: WorkflowTraceEvent) {
+    traceEvents.push(trace);
+    appendWorkflowTraceEvent(workflowId, trace);
+    deps.onEvent?.({ type: "workflow_trace", workflowId, trace });
+  }
+
+  async function runSpawnAgent(agentInput: WorkflowSpawnAgentInput) {
+    if (signal.aborted) throw new Error("Workflow script aborted");
+    requireCapability(manifest, "spawn_agent");
+    spawnedAgents += 1;
+    if (spawnedAgents > manifest.maxAgents) {
+      throw new Error(
+        `workflow.spawnAgent exceeded manifest maxAgents=${manifest.maxAgents}`
+      );
+    }
+    const title = cleanText(agentInput.title, 120);
+    const prompt = cleanText(agentInput.prompt, 12000);
+    if (!title) throw new Error("workflow.spawnAgent requires a title");
+    if (!prompt) throw new Error("workflow.spawnAgent requires a prompt");
+    const { results } = await deps.runSubagents(
+      {
+        reason: [
+          input.rationale,
+          `Workflow ${workflowId} spawned agent: ${title}`,
+        ].join("\n"),
+        concurrency: 1,
+        tasks: [
+          {
+            id: cleanText(agentInput.id, 80) || title,
+            title,
+            prompt: [`Workflow objective: ${input.objective}`, prompt].join("\n\n"),
+            role: agentInput.role,
+            cwd: agentInput.cwd,
+            allowedTools: safeAllowedTools(manifest, agentInput.allowedTools),
+            maxTurns: agentInput.maxTurns,
+            timeoutMs: agentInput.timeoutMs,
+          },
+        ],
+      },
+      signal
+    );
+    const result = results[0];
+    if (!result) throw new Error(`No subagent result returned for ${title}`);
+    return result;
   }
 
   return Object.freeze({
@@ -923,44 +1023,125 @@ function createSdk(
       return result;
     },
 
-    async spawnAgent(agentInput: WorkflowSpawnAgentInput) {
+    async agent<T = unknown>(
+      prompt: string,
+      agentInput?: Omit<WorkflowAgentInput, "prompt">
+    ): Promise<WorkflowAgentResult<T>> {
       if (signal.aborted) throw new Error("Workflow script aborted");
-      requireCapability(manifest, "spawn_agent");
-      spawnedAgents += 1;
-      if (spawnedAgents > manifest.maxAgents) {
-        throw new Error(
-          `workflow.spawnAgent exceeded manifest maxAgents=${manifest.maxAgents}`
-        );
+      const title = cleanText(agentInput?.title, 120) || "Workflow agent";
+      const agentRunId = cleanText(agentInput?.id, 80) || `${title}-${spawnedAgents + 1}`;
+      const agentType = agentInput?.agentType;
+      const role = roleForAgentType(agentType);
+      const isolation = agentInput?.isolation ?? "none";
+      if (agentInput?.model) {
+        throw new Error("workflow.agent model routing is not implemented yet");
       }
-      const title = cleanText(agentInput.title, 120);
-      const prompt = cleanText(agentInput.prompt, 12000);
-      if (!title) throw new Error("workflow.spawnAgent requires a title");
-      if (!prompt) throw new Error("workflow.spawnAgent requires a prompt");
-      const { results } = await deps.runSubagents(
-        {
-          reason: [
-            input.rationale,
-            `Workflow ${workflowId} spawned agent: ${title}`,
-          ].join("\n"),
-          concurrency: 1,
-          tasks: [
-            {
-              id: cleanText(agentInput.id, 80) || title,
-              title,
-              prompt: [`Workflow objective: ${input.objective}`, prompt].join("\n\n"),
-              role: agentInput.role,
-              cwd: agentInput.cwd,
-              allowedTools: safeAllowedTools(manifest, agentInput.allowedTools),
-              maxTurns: agentInput.maxTurns,
-              timeoutMs: agentInput.timeoutMs,
-            },
-          ],
-        },
-        signal
-      );
-      const result = results[0];
-      if (!result) throw new Error(`No subagent result returned for ${title}`);
-      return result;
+      let worktree: WorkflowWorktree | undefined;
+      let cwd = cleanText(agentInput?.cwd, 1000) || undefined;
+      if (isolation === "worktree") {
+        requireCapability(manifest, "worktree");
+        worktree = await this.createWorktree({ name: title });
+        cwd = worktree.path;
+      }
+      const schema = agentInput?.schema;
+      const fullPrompt = [
+        prompt,
+        schema ? schemaInstruction(schema) : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      pushTrace({
+        type: "agent_start",
+        workflowId,
+        agentRunId,
+        title,
+        agentType,
+        role,
+        model: agentInput?.model,
+        isolation,
+        createdAt: now(),
+      });
+      let schemaValid: boolean | undefined;
+      try {
+        const result = await runSpawnAgent({
+          id: agentRunId,
+          title,
+          prompt: fullPrompt,
+          role,
+          cwd,
+          allowedTools: agentInput?.tools ?? agentInput?.allowedTools,
+          maxTurns: agentInput?.maxTurns,
+          timeoutMs: agentInput?.timeoutMs,
+        });
+        const text = result.answer ?? "";
+        let data: T | undefined;
+        const localArtifacts: WorkflowArtifact[] = [];
+        if (schema) {
+          const parsed = extractJsonValue(text);
+          const errors = validateJsonSchema(parsed, schema);
+          schemaValid = errors.length === 0;
+          const trace: WorkflowTraceEvent = {
+            type: "schema_validation",
+            workflowId,
+            agentRunId,
+            valid: schemaValid,
+            errors,
+            createdAt: now(),
+          };
+          pushTrace(trace);
+          const artifact: WorkflowArtifact = {
+            name: `schema-output:${agentRunId}`,
+            value: { valid: schemaValid, data: parsed, errors },
+            kind: "schema_output",
+            createdAt: trace.createdAt,
+          };
+          artifacts.set(artifact.name, artifact);
+          localArtifacts.push(artifact);
+          putWorkflowArtifact(workflowId, artifact);
+          deps.onEvent?.({ type: "workflow_artifact", workflowId, artifact });
+          if (!schemaValid) {
+            throw new Error(`workflow.agent schema validation failed: ${errors.join("; ")}`);
+          }
+          data = parsed as T;
+        }
+        pushTrace({
+          type: "agent_end",
+          workflowId,
+          agentRunId,
+          title,
+          status: result.status,
+          schemaValid,
+          error: result.error,
+          createdAt: now(),
+        });
+        return {
+          title,
+          status: result.status,
+          text,
+          data,
+          error: result.error,
+          taskId: result.taskId,
+          agentId: result.agentId,
+          worktree,
+          artifacts: localArtifacts,
+        };
+      } catch (error) {
+        pushTrace({
+          type: "agent_end",
+          workflowId,
+          agentRunId,
+          title,
+          status: "failed",
+          schemaValid,
+          error: serializeError(error),
+          createdAt: now(),
+        });
+        throw error;
+      }
+    },
+
+    async spawnAgent(agentInput: WorkflowSpawnAgentInput) {
+      return runSpawnAgent(agentInput);
     },
 
     async parallel<T>(items: Array<Promise<T> | (() => Promise<T> | T)>) {
@@ -1198,6 +1379,11 @@ async function executeScriptInWorker(args: {
           );
         } else if (method === "callTool") {
           result = await args.sdk.callTool(requestArgs[0] as WorkflowCallToolInput);
+        } else if (method === "agent") {
+          result = await args.sdk.agent(
+            String(requestArgs[0] ?? ""),
+            requestArgs[1] as Omit<WorkflowAgentInput, "prompt"> | undefined
+          );
         } else if (method === "spawnAgent") {
           result = await args.sdk.spawnAgent(requestArgs[0] as WorkflowSpawnAgentInput);
         } else {
@@ -1259,6 +1445,8 @@ async function executeScriptInWorker(args: {
       manifest: args.manifest,
       resume: args.resumeState,
       artifacts: args.sdk.listArtifacts(),
+      params: args.input.templateParams,
+      template: args.input.templateRef,
     });
   });
 }
@@ -1313,6 +1501,8 @@ export async function runWorkflowScript(
     objective: cleanText(rawInput.objective, 2000),
     rationale: cleanText(rawInput.rationale, 2000),
     script: cleanText(rawInput.script, MAX_SCRIPT_CHARS),
+    templateParams: rawInput.templateParams,
+    templateRef: rawInput.templateRef,
     resumeFromWorkflowId: sanitizeWorkflowId(rawInput.resumeFromWorkflowId),
     resumeFromCheckpointName: sanitizeCheckpointName(
       rawInput.resumeFromCheckpointName
@@ -1336,6 +1526,7 @@ export async function runWorkflowScript(
   );
   const checkpoints: WorkflowCheckpoint[] = resumeRun?.checkpoints.slice() ?? [];
   const logs: WorkflowScriptLog[] = [];
+  const traceEvents: WorkflowTraceEvent[] = [];
   const abortController = new AbortController();
   const abortFromExternal = () => abortController.abort();
   externalSignal?.addEventListener("abort", abortFromExternal, { once: true });
@@ -1353,6 +1544,7 @@ export async function runWorkflowScript(
       artifacts: Array.from(artifacts.values()),
       checkpoints,
       logs: [],
+      traceEvents: [],
       createdAt: startedAt,
     },
     abortController
@@ -1371,12 +1563,24 @@ export async function runWorkflowScript(
       artifacts: Array.from(artifacts.values()),
       checkpoints,
       logs: [],
+      traceEvents: [],
       createdAt: startedAt,
     },
   });
+  const pushRuntimeTrace = (trace: WorkflowTraceEvent) => {
+    traceEvents.push(trace);
+    appendWorkflowTraceEvent(workflowId, trace);
+    deps.onEvent?.({ type: "workflow_trace", workflowId, trace });
+  };
 
   try {
-    await approveManifestCapabilities(deps, input, workflowId, manifest);
+    await approveManifestCapabilities(
+      deps,
+      input,
+      workflowId,
+      manifest,
+      pushRuntimeTrace
+    );
     assertRuntimeSupportsCapabilities(manifest);
     const sdk = createSdk(
       deps,
@@ -1387,6 +1591,7 @@ export async function runWorkflowScript(
       artifacts,
       checkpoints,
       logs,
+      traceEvents,
       resumeState
     );
     const value = await Promise.race([
@@ -1409,6 +1614,7 @@ export async function runWorkflowScript(
       artifacts: Array.from(artifacts.values()),
       checkpoints,
       logs,
+      traceEvents,
     });
     deps.onEvent?.({
       type: "workflow_end",
@@ -1419,6 +1625,7 @@ export async function runWorkflowScript(
       artifacts: Array.from(artifacts.values()),
       checkpoints,
       logs,
+      traceEvents,
     });
     return {
       workflowId,
@@ -1430,6 +1637,7 @@ export async function runWorkflowScript(
       artifacts: Array.from(artifacts.values()),
       checkpoints,
       logs,
+      traceEvents,
       startedAt,
       endedAt,
     };
@@ -1443,6 +1651,7 @@ export async function runWorkflowScript(
       artifacts: Array.from(artifacts.values()),
       checkpoints,
       logs,
+      traceEvents,
       error,
     });
     deps.onEvent?.({
@@ -1464,6 +1673,7 @@ export async function runWorkflowScript(
       artifacts: Array.from(artifacts.values()),
       checkpoints,
       logs,
+      traceEvents,
       startedAt,
       endedAt,
       error,

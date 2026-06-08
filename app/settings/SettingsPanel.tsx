@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { Eye, Plus, RefreshCw, RotateCw, Trash2 } from "lucide-react";
 import { getElectronApi, type SettingsApi } from "@/lib/electron-bridge";
 import { ConfirmButton } from "@/app/components/ConfirmButton";
 import { BudgetSettingsSection } from "./BudgetSettingsSection";
@@ -113,29 +114,43 @@ function WebSettingsPanel() {
   };
 
   return (
-    <div className="min-h-screen bg-black text-neutral-200">
-      <header className="px-6 py-4 border-b border-neutral-800 flex items-center justify-between">
-        <h1 className="text-lg font-semibold">
-          设置 · Provider Credentials (Web)
-        </h1>
+    <div className="settings-page h-screen overflow-y-scroll bg-[color:var(--bg)] text-[color:var(--text)]">
+      <header className="sticky top-0 z-20 border-b bg-[color:var(--bg-panel)]/95 px-6 py-4 backdrop-blur">
+        <div className="mx-auto flex max-w-5xl items-start justify-between gap-4">
+          <div>
+            <h1 className="text-lg font-semibold">设置</h1>
+            <p className="mt-1 text-xs text-[color:var(--text-muted)]">
+              管理模型凭证、预算保护、工具审批、Workflow 网络边界和 MCP server。
+            </p>
+          </div>
         <div className="flex items-center gap-2 text-xs">
           <Link
             href="/"
-            className="px-2 py-1 border border-neutral-700 rounded hover:bg-neutral-900"
+            className="rounded border border-[color:var(--border)] px-2 py-1 hover:bg-[color:var(--bg-hover)]"
           >
-            ← 返回
+            返回
           </Link>
           <button
             onClick={() => void load()}
             disabled={loading || busy !== null}
-            className="px-2 py-1 border border-neutral-700 rounded hover:bg-neutral-900 disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded border border-[color:var(--border)] px-2 py-1 hover:bg-[color:var(--bg-hover)] disabled:opacity-50"
           >
+            <RefreshCw size={13} />
             刷新
           </button>
         </div>
+        </div>
       </header>
 
-      <main className="p-6 space-y-6 max-w-3xl mx-auto">
+      <main className="mx-auto max-w-5xl space-y-6 p-6">
+        <section className="rounded border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-4">
+          <h2 className="text-sm font-semibold">Provider Credentials (Web)</h2>
+          <p className="mt-1 text-xs leading-relaxed text-[color:var(--text-muted)]">
+            Web 模式会把 API key 写入本机 auth 文件；桌面模式会优先使用系统 Keychain。
+            修改凭证后，正在运行的后端进程可能需要刷新或重启后才会读取新值。
+          </p>
+        </section>
+
         {error && (
           <div className="rounded border border-red-800 bg-red-900/40 p-3 text-sm text-red-200">
             {error}
@@ -209,10 +224,11 @@ function WebSettingsPanel() {
                         <ConfirmButton
                           onConfirm={() => void deleteKey(p.provider)}
                           disabled={isBusy}
-                          className="px-2 py-0.5 border border-red-800 text-red-300 rounded hover:bg-red-900/40 disabled:opacity-50"
+                          className="inline-flex items-center gap-1 rounded border border-red-800 px-2 py-0.5 text-red-300 hover:bg-red-900/40 disabled:opacity-50"
                           title={`删除 ${p.provider} 的凭证`}
                         >
-                          🗑 删除
+                          <Trash2 size={12} />
+                          删除
                         </ConfirmButton>
                       )}
                     </div>
@@ -273,8 +289,9 @@ function WebSettingsPanel() {
             <button
               onClick={() => void addNew()}
               disabled={!newProvider.trim() || !newKey.trim()}
-              className="px-3 py-1 text-xs bg-blue-700 hover:bg-blue-600 rounded disabled:bg-neutral-800 disabled:text-neutral-600"
+              className="inline-flex items-center gap-1 rounded bg-[color:var(--accent)] px-3 py-1 text-xs text-white hover:bg-[color:var(--accent-hover)] disabled:bg-neutral-800 disabled:text-neutral-600"
             >
+              <Plus size={13} />
               添加
             </button>
           </div>
@@ -442,29 +459,46 @@ export default function SettingsPanel() {
   }
 
   return (
-    <div className="min-h-screen bg-black text-neutral-200">
-      <header className="px-6 py-4 border-b border-neutral-800 flex items-center justify-between">
-        <h1 className="text-lg font-semibold">设置 · Provider API Keys</h1>
-        <div className="flex items-center gap-2 text-xs">
-          <button
-            onClick={() => void refresh()}
-            disabled={busy !== null}
-            className="px-2 py-1 border border-neutral-700 rounded hover:bg-neutral-900 disabled:opacity-50"
-          >
-            刷新
-          </button>
-          <button
-            onClick={() => void reloadServer()}
-            disabled={busy !== null}
-            className="px-2 py-1 border border-blue-700 bg-blue-900/40 hover:bg-blue-900 rounded disabled:opacity-50"
-            title="重启 standalone 后端，让新 key 生效"
-          >
-            ↻ 重启 server
-          </button>
+    <div className="settings-page h-screen overflow-y-scroll bg-[color:var(--bg)] text-[color:var(--text)]">
+      <header className="sticky top-0 z-20 border-b bg-[color:var(--bg-panel)]/95 px-6 py-4 backdrop-blur">
+        <div className="mx-auto flex max-w-5xl items-start justify-between gap-4">
+          <div>
+            <h1 className="text-lg font-semibold">设置</h1>
+            <p className="mt-1 text-xs text-[color:var(--text-muted)]">
+              管理模型凭证、预算保护、工具审批、Workflow 网络边界和 MCP server。
+            </p>
+          </div>
+          <div className="flex items-center gap-2 text-xs">
+            <button
+              onClick={() => void refresh()}
+              disabled={busy !== null}
+              className="inline-flex items-center gap-1 rounded border border-[color:var(--border)] px-2 py-1 hover:bg-[color:var(--bg-hover)] disabled:opacity-50"
+            >
+              <RefreshCw size={13} />
+              刷新
+            </button>
+            <button
+              onClick={() => void reloadServer()}
+              disabled={busy !== null}
+              className="inline-flex items-center gap-1 rounded border border-[color:var(--accent)] bg-[color:var(--bg-subtle)] px-2 py-1 text-[color:var(--accent)] hover:bg-[color:var(--bg-hover)] disabled:opacity-50"
+              title="重启 standalone 后端，让新 key 生效"
+            >
+              <RotateCw size={13} />
+              重启 server
+            </button>
+          </div>
         </div>
       </header>
 
-      <main className="p-6 space-y-6 max-w-3xl mx-auto">
+      <main className="mx-auto max-w-5xl space-y-6 p-6">
+        <section className="rounded border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-4">
+          <h2 className="text-sm font-semibold">Provider API Keys</h2>
+          <p className="mt-1 text-xs leading-relaxed text-[color:var(--text-muted)]">
+            API key 保存在 macOS Keychain，不写入明文配置文件。新增或替换 key
+            后，点击“重启 server”让后台服务重新读取环境变量；开发模式下只会提示跳过。
+          </p>
+        </section>
+
         {error && (
           <div className="rounded border border-red-800 bg-red-900/40 p-3 text-sm text-red-200">
             {error}
@@ -523,17 +557,19 @@ export default function SettingsPanel() {
                           <button
                             onClick={() => void revealKey(row.provider)}
                             disabled={isBusy}
-                            className="px-2 py-0.5 border border-neutral-700 rounded hover:bg-neutral-900 disabled:opacity-50"
+                            className="inline-flex items-center gap-1 rounded border border-neutral-700 px-2 py-0.5 hover:bg-neutral-900 disabled:opacity-50"
                           >
-                            👁 显示
+                            <Eye size={12} />
+                            显示
                           </button>
                           <ConfirmButton
                             onConfirm={() => void deleteKey(row.provider)}
                             disabled={isBusy}
-                            className="px-2 py-0.5 border border-red-800 text-red-300 rounded hover:bg-red-900/40 disabled:opacity-50"
+                            className="inline-flex items-center gap-1 rounded border border-red-800 px-2 py-0.5 text-red-300 hover:bg-red-900/40 disabled:opacity-50"
                             title={`删除 ${row.provider} 的 key`}
                           >
-                            🗑 删除
+                            <Trash2 size={12} />
+                            删除
                           </ConfirmButton>
                         </>
                       )}
@@ -606,8 +642,9 @@ export default function SettingsPanel() {
             <button
               onClick={() => void addNew()}
               disabled={!newProvider.trim() || !newKey.trim()}
-              className="px-3 py-1 text-xs bg-blue-700 hover:bg-blue-600 rounded disabled:bg-neutral-800 disabled:text-neutral-600"
+              className="inline-flex items-center gap-1 rounded bg-[color:var(--accent)] px-3 py-1 text-xs text-white hover:bg-[color:var(--accent-hover)] disabled:bg-neutral-800 disabled:text-neutral-600"
             >
+              <Plus size={13} />
               添加
             </button>
           </div>

@@ -11,6 +11,7 @@ import type {
   WorkflowRun,
   WorkflowRunStatus,
   WorkflowScriptLog,
+  WorkflowTraceEvent,
 } from "./types";
 
 const WORKFLOW_STORE_SCHEMA_VERSION = 2;
@@ -218,6 +219,7 @@ function cloneRun(run: WorkflowRun): WorkflowRun {
     artifacts: run.artifacts.slice(),
     checkpoints: run.checkpoints.slice(),
     logs: run.logs.slice(),
+    traceEvents: (run.traceEvents ?? []).slice(),
   };
 }
 
@@ -294,6 +296,17 @@ export function putWorkflowArtifact(
   persistRun(run);
 }
 
+export function appendWorkflowTraceEvent(
+  workflowId: string,
+  trace: WorkflowTraceEvent
+): void {
+  loadPersistedRuns();
+  const run = store.runs.get(workflowId);
+  if (!run) return;
+  run.traceEvents = [...(run.traceEvents ?? []), trace];
+  persistRun(run);
+}
+
 export function finishWorkflowRun(
   workflowId: string,
   patch: {
@@ -302,6 +315,7 @@ export function finishWorkflowRun(
     artifacts?: WorkflowArtifact[];
     checkpoints?: WorkflowCheckpoint[];
     logs?: WorkflowScriptLog[];
+    traceEvents?: WorkflowTraceEvent[];
     returnValue?: unknown;
     error?: string;
   }
@@ -316,6 +330,7 @@ export function finishWorkflowRun(
     artifacts: patch.artifacts ?? run.artifacts,
     checkpoints: patch.checkpoints ?? run.checkpoints,
     logs: patch.logs ?? run.logs,
+    traceEvents: patch.traceEvents ?? run.traceEvents ?? [],
     returnValue: patch.returnValue,
     error: patch.error,
   };
@@ -423,6 +438,7 @@ function encodeRunForPersistence(run: WorkflowRun): {
 function decodeRunFromPersistence(run: WorkflowRun): WorkflowRun {
   return {
     ...run,
+    traceEvents: run.traceEvents ?? [],
     artifacts: run.artifacts.map((artifact) => {
       const value = decodeArtifactValue(artifact.value);
       return value === artifact.value ? artifact : { ...artifact, value };

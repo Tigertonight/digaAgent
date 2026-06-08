@@ -148,6 +148,7 @@ export interface AppSettings {
 }
 
 export interface SettingsApi {
+  open(): Promise<boolean>;
   listProviders(): Promise<string[]>;
   getKey(provider: string): Promise<string | null>;
   setKey(provider: string, value: string): Promise<boolean>;

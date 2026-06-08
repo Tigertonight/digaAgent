@@ -1,0 +1,27 @@
+{
+  "id": "deep-research",
+  "name": "Deep Research",
+  "version": "1.0.0",
+  "description": "Fan out research questions, verify findings adversarially, and synthesize a sourced report.",
+  "capabilities": ["spawn_agent", "read_files", "network"],
+  "maxAgents": 10,
+  "maxConcurrency": 4,
+  "timeoutMs": 600000,
+  "tags": ["research", "verification", "fan-out"],
+  "paramsSchema": {
+    "type": "object",
+    "required": ["topic", "questions"],
+    "properties": {
+      "topic": { "type": "string" },
+      "questions": {
+        "type": "array",
+        "minItems": 1,
+        "items": { "type": "string" }
+      }
+    }
+  },
+  "defaultParams": {
+    "questions": []
+  },
+  "script": "const { topic, questions } = workflow.params; const findings = await workflow.patterns.fanOutAndSynthesize({ items: questions, worker: (question) => workflow.agent(`Research this question about ${topic}: ${question}\\nReturn concise findings, uncertainties, and source notes.`, { title: `Research: ${question}`, agentType: 'researcher' }), synthesizer: (results) => workflow.agent(`Synthesize these research findings for ${topic}. Highlight agreements, conflicts, and missing evidence.\\n${JSON.stringify(results.map((r) => r.text), null, 2)}`, { title: 'Research synthesis', agentType: 'researcher' }) }); const verified = await workflow.patterns.adversarialVerify({ result: findings.synthesis.text, verifier: (text) => workflow.agent(`Adversarially verify this research synthesis. List unsupported claims and source-quality risks.\\n${text}`, { title: 'Research verifier', agentType: 'verifier' }) }); workflow.artifact('deep-research-report', { topic, findings, verified }); return { topic, findings, verified };"
+}

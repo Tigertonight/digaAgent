@@ -362,6 +362,10 @@ function registerIpc() {
   });
 
   /* ---- D3：设置 IPC ---- */
+  ipcMain.handle("settings:open", async () => {
+    await openSettingsWindow();
+    return true;
+  });
   ipcMain.handle("settings:listProviders", () =>
     settingsModule.listStoredProviders()
   );

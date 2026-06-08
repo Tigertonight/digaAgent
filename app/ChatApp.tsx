@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Download, Loader2, RotateCcw, X } from "lucide-react";
+import { CheckCircle2, Download, FileText, Loader2, RotateCcw, X } from "lucide-react";
 import type {
   SessionInfoLite,
   ChatMessage,
@@ -9,7 +9,11 @@ import type {
   ImageContentLite,
   ForkableUserMessage,
 } from "@/lib/types";
-import type { WorkflowResumeSnapshot } from "@/lib/workflows/types";
+import type {
+  WorkflowDebugBundle,
+  WorkflowResumeSnapshot,
+  WorkflowTraceEvent,
+} from "@/lib/workflows/types";
 import type { BrowserAnnotation } from "@/lib/browser/types";
 import { extractImagesFromClipboard } from "@/lib/image-utils";
 import {
@@ -94,6 +98,46 @@ function formatWorkflowTime(ms: number | undefined): string {
   }
 }
 
+function shortWorkflowJson(value: unknown, maxChars = 5000): string {
+  try {
+    const text =
+      typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    if (!text) return "(empty)";
+    return text.length > maxChars ? `${text.slice(0, maxChars)}...` : text;
+  } catch {
+    return String(value);
+  }
+}
+
+function workflowTraceSummary(event: WorkflowTraceEvent): string {
+  switch (event.type) {
+    case "agent_start":
+      return [
+        event.title,
+        event.agentType ? `type=${event.agentType}` : "",
+        event.role ? `role=${event.role}` : "",
+        event.isolation ? `isolation=${event.isolation}` : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+    case "agent_end":
+      return [
+        event.title,
+        `status=${event.status}`,
+        event.schemaValid === undefined ? "" : `schema=${event.schemaValid}`,
+        event.error ?? "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+    case "schema_validation":
+      return event.valid ? "schema valid" : event.errors.join("; ");
+    case "approval":
+      return `${event.capability} · ${event.decision}`;
+    default:
+      return shortWorkflowJson(event, 800);
+  }
+}
+
 function UpdateNotice({
   state,
   onView,
@@ -162,6 +206,54 @@ function UpdateNotice({
   );
 }
 
+function UpdateLatestNotice({
+  state,
+  onClose,
+}: {
+  state: UpdateState;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="absolute right-4 top-12 z-40 w-[300px] rounded-lg border p-2.5 shadow-xl"
+      style={{
+        borderColor: "var(--border)",
+        background: "var(--bg-panel)",
+        color: "var(--text)",
+      }}
+    >
+      <div className="flex items-start gap-3">
+        <span
+          className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border"
+          style={{
+            borderColor: "rgba(34,197,94,0.35)",
+            background: "rgba(34,197,94,0.10)",
+            color: "#22c55e",
+          }}
+        >
+          <CheckCircle2 size={15} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-semibold">当前已经是最新版本</div>
+          <div className="mt-0.5 text-[12px]" style={{ color: "var(--text-muted)" }}>
+            Diga Agent {state.currentVersion}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-[color:var(--bg-hover)]"
+          title="关闭"
+          aria-label="关闭更新状态提示"
+          style={{ color: "var(--text-muted)" }}
+        >
+          <X size={14} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function formatWorkflowResumeSummaries(
   snapshot: WorkflowResumeSnapshot | undefined,
   checkpointName: string | undefined
@@ -200,27 +292,167 @@ function formatWorkflowResumeSummaries(
   return lines;
 }
 
+function WorkflowDebugInspector({
+  bundle,
+  loading,
+  error,
+  onClose,
+}: {
+  bundle: WorkflowDebugBundle | null;
+  loading: boolean;
+  error: string | null;
+  onClose: () => void;
+}) {
+  return (
+    <aside
+      className="min-h-0 overflow-auto border-t p-3 md:border-l md:border-t-0"
+      style={{ borderColor: "var(--border)" }}
+    >
+      <div className="mb-3 flex items-center gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-semibold">Workflow inspector</div>
+          <div className="truncate text-[11px]" style={{ color: "var(--text-muted)" }}>
+            Trace, logs, artifacts, checkpoints, and script
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="inline-flex h-7 w-7 items-center justify-center rounded border"
+          style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+          aria-label="Close workflow inspector"
+          title="Close inspector"
+        >
+          <X size={14} />
+        </button>
+      </div>
+      {loading ? (
+        <div className="flex h-32 items-center justify-center gap-2 text-sm" style={{ color: "var(--text-muted)" }}>
+          <Loader2 size={15} className="animate-spin" />
+          Loading debug bundle
+        </div>
+      ) : error ? (
+        <div className="rounded border px-3 py-2 text-xs text-red-500" style={{ borderColor: "rgba(220,38,38,0.35)" }}>
+          {error}
+        </div>
+      ) : !bundle ? (
+        <div className="flex h-32 items-center justify-center text-sm" style={{ color: "var(--text-muted)" }}>
+          Select a workflow to inspect
+        </div>
+      ) : (
+        <div className="space-y-3 text-xs">
+          <section className="rounded border px-3 py-2" style={{ borderColor: "var(--border-soft)", background: "rgba(255,255,255,0.018)" }}>
+            <div className="truncate font-semibold">{bundle.workflow.objective}</div>
+            <div className="mt-1 grid gap-1 text-[11px]" style={{ color: "var(--text-muted)" }}>
+              <span>{bundle.workflow.status} · {formatWorkflowTime(bundle.workflow.createdAt)}</span>
+              <span>
+                {bundle.counts.traceEvents} trace · {bundle.counts.logs} logs · {bundle.counts.artifacts} artifacts · {bundle.counts.checkpoints} checkpoints
+              </span>
+              <span>Capabilities: {bundle.workflow.manifest.capabilities.join(", ")}</span>
+            </div>
+          </section>
+
+          <section className="rounded border px-3 py-2" style={{ borderColor: "var(--border-soft)", background: "rgba(255,255,255,0.018)" }}>
+            <div className="mb-1 font-semibold">Trace</div>
+            {bundle.traceEvents.length ? (
+              <div className="space-y-1">
+                {bundle.traceEvents.map((event, index) => (
+                  <div key={`${event.type}-${index}`} className="rounded border px-2 py-1" style={{ borderColor: "var(--border-soft)" }}>
+                    <div className="flex gap-2">
+                      <span className="shrink-0 font-medium">{event.type}</span>
+                      <span className="min-w-0 truncate" style={{ color: "var(--text-muted)" }}>
+                        {workflowTraceSummary(event)}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 text-[11px]" style={{ color: "var(--text-muted)" }}>
+                      {formatWorkflowTime(event.createdAt)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ color: "var(--text-muted)" }}>No trace events</div>
+            )}
+          </section>
+
+          {bundle.logs.length > 0 && (
+            <section className="rounded border px-3 py-2" style={{ borderColor: "var(--border-soft)", background: "rgba(255,255,255,0.018)" }}>
+              <div className="mb-1 font-semibold">Logs</div>
+              <div className="space-y-1">
+                {bundle.logs.slice(-20).map((log, index) => (
+                  <div key={index} style={{ color: "var(--text-muted)" }}>
+                    [{log.level}] {log.message}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          <section className="rounded border px-3 py-2" style={{ borderColor: "var(--border-soft)", background: "rgba(255,255,255,0.018)" }}>
+            <div className="mb-1 font-semibold">Artifacts & checkpoints</div>
+            {[...bundle.artifacts, ...bundle.checkpoints].length ? (
+              <div className="space-y-1">
+                {[...bundle.artifacts, ...bundle.checkpoints].slice(-12).map((item, index) => (
+                  <details key={`${item.name}-${index}`}>
+                    <summary className="cursor-pointer list-none truncate [&::-webkit-details-marker]:hidden">
+                      {item.name}
+                    </summary>
+                    <pre className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap text-[11px]" style={{ color: "var(--text-muted)" }}>
+                      {shortWorkflowJson(item.value)}
+                    </pre>
+                  </details>
+                ))}
+              </div>
+            ) : (
+              <div style={{ color: "var(--text-muted)" }}>No artifacts or checkpoints</div>
+            )}
+          </section>
+
+          <details className="rounded border px-3 py-2" style={{ borderColor: "var(--border-soft)", background: "rgba(255,255,255,0.018)" }}>
+            <summary className="cursor-pointer list-none font-semibold [&::-webkit-details-marker]:hidden">
+              Script
+            </summary>
+            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-[11px]" style={{ color: "var(--text-muted)" }}>
+              {bundle.script}
+            </pre>
+          </details>
+        </div>
+      )}
+    </aside>
+  );
+}
+
 function WorkflowHistoryPanel({
   items,
   loading,
+  debugBundle,
+  debugLoading,
+  debugError,
   onRefresh,
   onClose,
   onResume,
+  onInspect,
+  onCloseInspector,
 }: {
   items: WorkflowResumeSnapshot[];
   loading: boolean;
+  debugBundle: WorkflowDebugBundle | null;
+  debugLoading: boolean;
+  debugError: string | null;
   onRefresh: () => void | Promise<void>;
   onClose: () => void;
   onResume: (snapshot: WorkflowResumeSnapshot, checkpointName?: string) => void;
+  onInspect: (snapshot: WorkflowResumeSnapshot) => void | Promise<void>;
+  onCloseInspector: () => void;
 }) {
   const visible = items.slice(0, 50);
   const [selectedCheckpoints, setSelectedCheckpoints] = useState<
     Record<string, string>
   >({});
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/35 px-4 pt-16">
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/35 px-4 pt-12">
       <div
-        className="flex max-h-[72vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg border shadow-2xl"
+        className="flex max-h-[82vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border shadow-2xl"
         style={{
           borderColor: "var(--border)",
           background: "var(--bg-panel)",
@@ -258,28 +490,29 @@ function WorkflowHistoryPanel({
             <X size={14} />
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-auto p-2">
-          {loading && visible.length === 0 ? (
-            <div className="flex h-32 items-center justify-center gap-2 text-sm" style={{ color: "var(--text-muted)" }}>
-              <Loader2 size={15} className="animate-spin" />
-              Loading workflows
-            </div>
-          ) : visible.length === 0 ? (
-            <div className="flex h-32 items-center justify-center text-sm" style={{ color: "var(--text-muted)" }}>
-              No resumable workflow history yet
-            </div>
-          ) : (
-            <div className="space-y-1.5">
-              {visible.map((item) => (
-                <div
-                  key={item.workflowId}
-                  className="rounded border px-3 py-2"
-                  style={{
-                    borderColor: "var(--border-soft)",
-                    background: "rgba(255,255,255,0.02)",
-                  }}
-                >
-                  <div className="flex items-start gap-3">
+        <div className="grid min-h-0 flex-1 md:grid-cols-[minmax(0,1fr)_minmax(360px,0.9fr)]">
+          <div className="min-h-0 overflow-auto p-2">
+            {loading && visible.length === 0 ? (
+              <div className="flex h-32 items-center justify-center gap-2 text-sm" style={{ color: "var(--text-muted)" }}>
+                <Loader2 size={15} className="animate-spin" />
+                Loading workflows
+              </div>
+            ) : visible.length === 0 ? (
+              <div className="flex h-32 items-center justify-center text-sm" style={{ color: "var(--text-muted)" }}>
+                No resumable workflow history yet
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {visible.map((item) => (
+                  <div
+                    key={item.workflowId}
+                    className="rounded border px-3 py-2"
+                    style={{
+                      borderColor: "var(--border-soft)",
+                      background: "rgba(255,255,255,0.02)",
+                    }}
+                  >
+                    <div className="flex items-start gap-3">
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium">
                         {item.objective || item.workflowId}
@@ -343,30 +576,51 @@ function WorkflowHistoryPanel({
                         </div>
                       )}
                     </div>
-                    <button
-                      type="button"
-                      disabled={!item.canResume}
-                      onClick={() =>
-                        onResume(
-                          item,
-                          selectedCheckpoints[item.workflowId] ??
-                            item.lastCheckpoint?.name
-                        )
-                      }
-                      className="inline-flex h-7 shrink-0 items-center gap-1 rounded border px-2 text-xs disabled:cursor-not-allowed disabled:opacity-45"
-                      style={{
-                        borderColor: "var(--border-soft)",
-                        color: item.canResume ? "var(--text)" : "var(--text-muted)",
-                      }}
-                    >
-                      <RotateCcw size={13} />
-                      Resume
-                    </button>
+                    <div className="flex shrink-0 flex-col gap-1">
+                      <button
+                        type="button"
+                        onClick={() => void onInspect(item)}
+                        className="inline-flex h-7 items-center gap-1 rounded border px-2 text-xs"
+                        style={{
+                          borderColor: "var(--border-soft)",
+                          color: "var(--text-muted)",
+                        }}
+                      >
+                        <FileText size={13} />
+                        Inspect
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!item.canResume}
+                        onClick={() =>
+                          onResume(
+                            item,
+                            selectedCheckpoints[item.workflowId] ??
+                              item.lastCheckpoint?.name
+                          )
+                        }
+                        className="inline-flex h-7 items-center gap-1 rounded border px-2 text-xs disabled:cursor-not-allowed disabled:opacity-45"
+                        style={{
+                          borderColor: "var(--border-soft)",
+                          color: item.canResume ? "var(--text)" : "var(--text-muted)",
+                        }}
+                      >
+                        <RotateCcw size={13} />
+                        Resume
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <WorkflowDebugInspector
+            bundle={debugBundle}
+            loading={debugLoading}
+            error={debugError}
+            onClose={onCloseInspector}
+          />
         </div>
       </div>
     </div>
@@ -684,6 +938,10 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     string | null
   >(null);
   const [workflowHistoryLoading, setWorkflowHistoryLoading] = useState(false);
+  const [workflowDebugBundle, setWorkflowDebugBundle] =
+    useState<WorkflowDebugBundle | null>(null);
+  const [workflowDebugLoading, setWorkflowDebugLoading] = useState(false);
+  const [workflowDebugError, setWorkflowDebugError] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const persistWorkbench = useCallback((open: boolean, view: WorkbenchView) => {
     try {
@@ -746,6 +1004,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   );
   const [updateState, setUpdateState] = useState<UpdateState | null>(null);
   const [updateNoticeHidden, setUpdateNoticeHidden] = useState(false);
+  const [latestNoticeHidden, setLatestNoticeHidden] = useState(true);
   const [openCommandMenuRequest, setOpenCommandMenuRequest] = useState(0);
   useEffect(() => {
     const api = getElectronApi();
@@ -778,12 +1037,23 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     const id = window.setTimeout(() => setUpdateNoticeHidden(true), 8000);
     return () => window.clearTimeout(id);
   }, [updateNoticeHidden, updateState?.status, updateState?.latestVersion]);
+  useEffect(() => {
+    if (updateState?.status !== "not-available" || latestNoticeHidden) return;
+    const id = window.setTimeout(() => setLatestNoticeHidden(true), 5000);
+    return () => window.clearTimeout(id);
+  }, [latestNoticeHidden, updateState?.status, updateState?.checkedAt]);
   const checkForUpdates = useCallback(() => {
     if (!electronApi?.updater) return;
     setUpdateNoticeHidden(false);
+    setLatestNoticeHidden(true);
     void electronApi.updater
       .check({ manual: true })
-      .then(setUpdateState)
+      .then((state) => {
+        setUpdateState(state);
+        if (state.status === "not-available") {
+          setLatestNoticeHidden(false);
+        }
+      })
       .catch((e) =>
         setUpdateState((prev) => ({
           ...(prev ?? {
@@ -1892,8 +2162,40 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     }
   }, [agentId]);
 
+  const loadWorkflowDebugBundle = useCallback(
+    async (snapshot: WorkflowResumeSnapshot) => {
+      if (!agentId) return;
+      setWorkflowDebugLoading(true);
+      setWorkflowDebugError(null);
+      try {
+        const r = await fetch(
+          `/api/agent/${agentId}/workflows?id=${encodeURIComponent(
+            snapshot.workflowId
+          )}&debug=1`
+        );
+        const d = (await r.json()) as {
+          debugBundle?: WorkflowDebugBundle;
+          error?: string;
+        };
+        if (!r.ok || !d.debugBundle) {
+          throw new Error(d.error ?? `workflow debug HTTP ${r.status}`);
+        }
+        setWorkflowDebugBundle(d.debugBundle);
+      } catch (e) {
+        setWorkflowDebugError(`workflow inspector error: ${String(e)}`);
+      } finally {
+        setWorkflowDebugLoading(false);
+      }
+    },
+    [agentId]
+  );
+
   const openWorkflowHistory = useCallback(() => {
     if (!agentId) return;
+    if (workflowHistoryAgentId !== agentId) {
+      setWorkflowDebugBundle(null);
+      setWorkflowDebugError(null);
+    }
     setShowWorkflowHistory(true);
     if (workflowHistoryAgentId !== agentId) {
       void loadWorkflowHistory();
@@ -2266,6 +2568,13 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           onOpenAuth={() => {
             openAuth();
           }}
+          onOpenSettings={() => {
+            if (electronApi?.settings.open) {
+              void electronApi.settings.open().catch((e) => setError(String(e)));
+              return;
+            }
+            window.open("/settings", "_blank", "noopener,noreferrer");
+          }}
           onReconnectSession={reconnectActiveSession}
           onToggleTools={toggleTools}
           onToggleWorkbench={toggleWorkbench}
@@ -2278,6 +2587,12 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             state={updateState}
             onView={viewUpdateDetails}
             onClose={() => setUpdateNoticeHidden(true)}
+          />
+        ) : null}
+        {updateState?.status === "not-available" && !latestNoticeHidden ? (
+          <UpdateLatestNotice
+            state={updateState}
+            onClose={() => setLatestNoticeHidden(true)}
           />
         ) : null}
 
@@ -2427,9 +2742,17 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         <WorkflowHistoryPanel
           items={workflowHistory}
           loading={workflowHistoryLoading}
+          debugBundle={workflowDebugBundle}
+          debugLoading={workflowDebugLoading}
+          debugError={workflowDebugError}
           onRefresh={loadWorkflowHistory}
           onClose={() => setShowWorkflowHistory(false)}
           onResume={resumeWorkflowFromHistory}
+          onInspect={loadWorkflowDebugBundle}
+          onCloseInspector={() => {
+            setWorkflowDebugBundle(null);
+            setWorkflowDebugError(null);
+          }}
         />
       )}
       <ChatModals

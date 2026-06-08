@@ -1,6 +1,6 @@
 # Dynamic Workflow Script Harness
 
-> 状态：MVP landed + process worker runtime
+> 状态：Dynamic Workflow 2.0 delivered through template registry + inspector
 > 日期：2026-06-04
 
 ## 目标
@@ -37,6 +37,13 @@ Main agent
 - `workflow.warn(message)`
 - `workflow.error(message)`
 - `workflow.sleep(ms)`
+- `workflow.agent(prompt, { title, schema, agentType, tools, maxTurns, timeoutMs, isolation })`
+- `workflow.patterns.classifyAndAct(...)`
+- `workflow.patterns.fanOutAndSynthesize(...)`
+- `workflow.patterns.adversarialVerify(...)`
+- `workflow.patterns.generateAndFilter(...)`
+- `workflow.patterns.tournament(...)`
+- `workflow.patterns.loopUntilDone(...)`
 
 这样模型拥有编排表达力，但权限仍然集中在父进程 SDK 入口，继续复用 subagent 的 tool allowlist、timeout、event 和 abort 链路。
 
@@ -75,7 +82,13 @@ run_workflow_script tool
 - `run_workflow_script` 支持 `resumeFromWorkflowId` 与可选 `resumeFromCheckpointName`：新 harness 会加载同一 parent agent 下旧 workflow 的 checkpoints/artifacts，并通过 `workflow.resume` 与 `workflow.readArtifact(name)` 继续执行。指定 checkpoint 时，`workflow.resume.lastCheckpoint` 会指向该 checkpoint；未指定时默认使用最新 checkpoint。这里恢复的是 checkpoint/artifact 状态，不恢复任意 JavaScript 调用栈。
 - Workflow 状态卡支持 Resume action：从已有 checkpoint/artifact 生成续跑提示并填入 Composer，引导模型用 `resumeFromWorkflowId` 生成新的续跑 harness。
 - Workflow history UI 已接入动作菜单：可从当前 agent 的历史 workflow resume snapshot 列表直接选择可恢复 run，并可选择具体 checkpoint，复用同一套 `resumeFromWorkflowId` / `resumeFromCheckpointName` 续跑提示。续跑 prompt 会自动带入选中 checkpoint 以及最近 checkpoint/artifact 的短摘要，减少模型二次查询和误选恢复点。
+- Workflow history UI 已接入 Inspector：单个 run 可通过 `/api/agent/:id/workflows?id=<workflowId>&debug=1` 拉取 debug bundle，展示 manifest、script、trace events、logs、artifacts、checkpoints、return value 和 resume snapshot。
 - `artifact/checkpoint/log` 会实时写入 workflow store，并通过 `workflow_artifact` / `workflow_checkpoint` / `workflow_log` 推到前端。
+- `traceEvents` 已落地：`workflow.agent` 会记录 agent start/end、schema validation 和 approval trace，run 结束事件与 debug bundle 都会携带这些事件。
+- `workflow.agent(prompt, opts)` 已落地：支持 `schema` 结构化输出校验、`agentType` 角色路由、`tools`/`allowedTools`、`maxTurns`、`timeoutMs`、`isolation: "worktree"` 自动创建隔离 worktree。`model` 路由当前显式报错，避免假装支持。
+- `workflow.patterns` 已落地六种核心模式：classify-and-act、fan-out-and-synthesize、adversarial verification、generate-and-filter、tournament、loop-until-done。
+- Template registry 已落地：`~/.mini-pi/workflows/templates/<templateId>.json` 持久化模板，`/api/workflows/templates` 支持 list/get/create/delete，`run_workflow_template` 会合并 `defaultParams` 与运行参数、按 `paramsSchema` 校验，并把结果暴露为 `workflow.params`，模板元信息暴露为 `workflow.template`。
+- 复用方式已文档化：`docs/guides/dynamic-workflows.md` 覆盖六种模式、模板、Inspector、`/goal` 自动续跑和 skill 分发；`docs/examples/workflow-templates/` 提供可安装模板样例。
 - Capability manifest 已落地：默认只启用 `spawn_agent` + `read_files`。
 - Capability approval broker 已接入现有 approval bubble：`write_files` 会先请求用户确认，确认后才允许 child agent 使用 `edit` / `write` / `apply_patch` 类工具。
 - `shell` capability 已有 runtime support：审批通过后，workflow 可以把 `bash` / `shell` 工具名显式下发给 child agent；脚本本身仍不能直接调用 shell。
