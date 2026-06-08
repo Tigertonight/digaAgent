@@ -61,6 +61,12 @@ export interface RunWorkflowScriptInput {
   objective: string;
   rationale: string;
   script: string;
+  templateParams?: unknown;
+  templateRef?: {
+    id: string;
+    name: string;
+    version: string;
+  };
   resumeFromWorkflowId?: string;
   resumeFromCheckpointName?: string;
   capabilities?: WorkflowCapability[];
@@ -69,10 +75,31 @@ export interface RunWorkflowScriptInput {
   timeoutMs?: number;
 }
 
+export interface RunWorkflowTemplateInput {
+  templateId: string;
+  params?: unknown;
+  objective?: string;
+  rationale?: string;
+  capabilities?: WorkflowCapability[];
+  maxAgents?: number;
+  maxConcurrency?: number;
+  timeoutMs?: number;
+}
+
+export type WorkflowJsonSchema = Record<string, unknown>;
+
 export interface WorkflowArtifact {
   name: string;
   value: unknown;
   createdAt: number;
+  kind?:
+    | "result"
+    | "schema_output"
+    | "worktree"
+    | "diff"
+    | "verification"
+    | "debug";
+  preview?: string;
 }
 
 export interface WorkflowCheckpoint {
@@ -97,6 +124,7 @@ export interface WorkflowScriptResult {
   artifacts: WorkflowArtifact[];
   checkpoints: WorkflowCheckpoint[];
   logs: WorkflowScriptLog[];
+  traceEvents: WorkflowTraceEvent[];
   startedAt: number;
   endedAt: number;
   error?: string;
@@ -130,6 +158,41 @@ export interface WorkflowSpawnAgentInput {
   allowedTools?: string[];
   maxTurns?: number;
   timeoutMs?: number;
+}
+
+export type WorkflowAgentType =
+  | "general"
+  | "classifier"
+  | "researcher"
+  | "implementer"
+  | "reviewer"
+  | "verifier";
+
+export interface WorkflowAgentInput {
+  id?: string;
+  title?: string;
+  prompt: string;
+  schema?: WorkflowJsonSchema;
+  model?: string;
+  isolation?: "none" | "worktree";
+  agentType?: WorkflowAgentType;
+  tools?: string[];
+  allowedTools?: string[];
+  cwd?: string;
+  maxTurns?: number;
+  timeoutMs?: number;
+}
+
+export interface WorkflowAgentResult<T = unknown> {
+  title: string;
+  status: "completed" | "failed" | "aborted" | "timeout";
+  text: string;
+  data?: T;
+  error?: string;
+  taskId: string;
+  agentId: string;
+  worktree?: WorkflowWorktree;
+  artifacts: WorkflowArtifact[];
 }
 
 export interface WorkflowCreateWorktreeInput {
@@ -359,11 +422,105 @@ export interface WorkflowRun {
   artifacts: WorkflowArtifact[];
   checkpoints: WorkflowCheckpoint[];
   logs: WorkflowScriptLog[];
+  traceEvents?: WorkflowTraceEvent[];
   createdAt: number;
   endedAt?: number;
   returnValue?: unknown;
   error?: string;
 }
+
+export interface WorkflowTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  version: string;
+  script: string;
+  paramsSchema?: WorkflowJsonSchema;
+  defaultParams?: unknown;
+  capabilities?: WorkflowCapability[];
+  maxAgents?: number;
+  maxConcurrency?: number;
+  timeoutMs?: number;
+  tags?: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface WorkflowTemplateSummary {
+  id: string;
+  name: string;
+  description?: string;
+  version: string;
+  tags: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface WorkflowDebugBundle {
+  workflow: {
+    id: string;
+    parentAgentId: string;
+    objective: string;
+    rationale: string;
+    status: WorkflowRunStatus;
+    manifest: WorkflowManifest;
+    createdAt: number;
+    endedAt?: number;
+    resumedFromWorkflowId?: string;
+    error?: string;
+  };
+  resume: WorkflowResumeSnapshot;
+  script: string;
+  counts: {
+    artifacts: number;
+    checkpoints: number;
+    logs: number;
+    traceEvents: number;
+  };
+  artifacts: WorkflowArtifact[];
+  checkpoints: WorkflowCheckpoint[];
+  logs: WorkflowScriptLog[];
+  traceEvents: WorkflowTraceEvent[];
+  returnValue?: unknown;
+}
+
+export type WorkflowTraceEvent =
+  | {
+      type: "agent_start";
+      workflowId: string;
+      agentRunId: string;
+      title: string;
+      agentType?: WorkflowAgentType;
+      role?: SubagentRole;
+      model?: string;
+      isolation?: "none" | "worktree";
+      createdAt: number;
+    }
+  | {
+      type: "agent_end";
+      workflowId: string;
+      agentRunId: string;
+      title: string;
+      status: WorkflowAgentResult["status"];
+      schemaValid?: boolean;
+      error?: string;
+      createdAt: number;
+    }
+  | {
+      type: "schema_validation";
+      workflowId: string;
+      agentRunId?: string;
+      valid: boolean;
+      errors: string[];
+      createdAt: number;
+    }
+  | {
+      type: "approval";
+      workflowId: string;
+      capability: WorkflowCapability;
+      decision: ApprovalResponse["decision"];
+      createdAt: number;
+    };
 
 export interface WorkflowStartEvent {
   type: "workflow_start";
@@ -396,8 +553,15 @@ export interface WorkflowEndEvent {
   artifacts: WorkflowArtifact[];
   checkpoints: WorkflowCheckpoint[];
   logs: WorkflowScriptLog[];
+  traceEvents?: WorkflowTraceEvent[];
   returnValue?: unknown;
   error?: string;
+}
+
+export interface WorkflowTraceRuntimeEvent {
+  type: "workflow_trace";
+  workflowId: string;
+  trace: WorkflowTraceEvent;
 }
 
 export type WorkflowEvent =
@@ -405,4 +569,5 @@ export type WorkflowEvent =
   | WorkflowLogEvent
   | WorkflowCheckpointEvent
   | WorkflowArtifactEvent
-  | WorkflowEndEvent;
+  | WorkflowEndEvent
+  | WorkflowTraceRuntimeEvent;

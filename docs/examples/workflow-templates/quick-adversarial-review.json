@@ -1,0 +1,23 @@
+{
+  "id": "quick-adversarial-review",
+  "name": "Quick Adversarial Review",
+  "version": "1.0.0",
+  "description": "Generate a primary review, then have an independent verifier challenge it.",
+  "capabilities": ["spawn_agent", "read_files"],
+  "maxAgents": 4,
+  "maxConcurrency": 2,
+  "timeoutMs": 300000,
+  "tags": ["review", "verification"],
+  "paramsSchema": {
+    "type": "object",
+    "required": ["subject"],
+    "properties": {
+      "subject": { "type": "string" },
+      "rubric": { "type": "string" }
+    }
+  },
+  "defaultParams": {
+    "rubric": "Prioritize correctness, missing tests, behavioral regressions, and unresolved risk."
+  },
+  "script": "const { subject, rubric } = workflow.params; const primary = await workflow.agent(`Review ${subject}. Rubric: ${rubric}`, { title: 'Primary reviewer', agentType: 'reviewer' }); const verified = await workflow.patterns.adversarialVerify({ result: primary.text, verifier: (text) => workflow.agent(`Challenge this review. Find false positives, missed risks, and weak evidence.\\n${text}`, { title: 'Adversarial verifier', agentType: 'verifier' }) }); workflow.artifact('quick-adversarial-review', { subject, rubric, primary, verified }); return { subject, primary, verified };"
+}

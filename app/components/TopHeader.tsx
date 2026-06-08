@@ -10,6 +10,7 @@ import {
   History,
   FolderOpen,
   KeyRound,
+  Settings as SettingsIcon,
   Sparkles,
   Wrench,
   PanelRight,
@@ -57,6 +58,7 @@ interface TopHeaderProps {
   onRevealInFinder: () => void;
   onOpenProviderSetup: () => void;
   onOpenAuth: () => void;
+  onOpenSettings: () => void;
   onReconnectSession: () => void;
   onToggleTools: () => void;
   onToggleWorkbench: () => void;
@@ -142,6 +144,7 @@ export function TopHeader({
   onRevealInFinder,
   onOpenProviderSetup,
   onOpenAuth,
+  onOpenSettings,
   onReconnectSession,
   onToggleTools,
   onToggleWorkbench,
@@ -152,6 +155,22 @@ export function TopHeader({
   const [commandOpen, setCommandOpen] = useState(false);
   const commandRef = useRef<HTMLDivElement | null>(null);
   const hasUpdate = updateStatus === "available";
+  const updateCheckDisabled =
+    updateStatus === "checking" || updateStatus === "not-available";
+  const updateCheckLabel =
+    updateStatus === "checking"
+      ? "Checking updates"
+      : updateStatus === "available"
+        ? "Update available"
+        : updateStatus === "not-available"
+          ? "Already up to date"
+          : "Check updates";
+  const updateCheckDescription =
+    updateStatus === "available" && updateLatestVersion
+      ? `Diga Agent ${updateLatestVersion} 可安装`
+      : updateStatus === "not-available"
+        ? "当前已经是最新版本"
+        : "检查 Diga Agent 新版本";
   const sseLabel =
     sseStatus === "active"
       ? "Live"
@@ -284,27 +303,23 @@ export function TopHeader({
                 description="管理 Provider 凭证"
                 onClick={() => runCommand(onOpenAuth)}
               />
+              <CommandMenuItem
+                icon={<SettingsIcon size={15} />}
+                label="Settings"
+                description="Budget、审批、网络策略和 MCP"
+                onClick={() => runCommand(onOpenSettings)}
+              />
               {electronApi && onCheckForUpdates ? (
                 <CommandMenuItem
                   icon={<Download size={15} />}
-                  label={
-                    updateStatus === "checking"
-                      ? "Checking updates"
-                      : updateStatus === "available"
-                        ? "Update available"
-                        : "Check updates"
-                  }
-                  description={
-                    updateStatus === "available" && updateLatestVersion
-                      ? `Diga Agent ${updateLatestVersion} 可安装`
-                      : "检查 Diga Agent 新版本"
-                  }
+                  label={updateCheckLabel}
+                  description={updateCheckDescription}
                   shortcut={
                     updateStatus === "available" && updateLatestVersion
                       ? updateLatestVersion
                       : undefined
                   }
-                  disabled={updateStatus === "checking"}
+                  disabled={updateCheckDisabled}
                   onClick={() => runCommand(onCheckForUpdates)}
                 />
               ) : null}

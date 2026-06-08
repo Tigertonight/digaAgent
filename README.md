@@ -59,6 +59,7 @@ for the full architecture roadmap.
 | **Project memory** via `AGENTS.md` (auto-loaded by SDK from cwd ancestors) | ✅ |
 | **Session-level budget** (cost / turns / duration limits with auto-abort) | ✅ |
 | **Tool approval bubbles** (inline allow / deny / don't-ask with timeout) | ✅ |
+| **Dynamic workflows** (script harness, templates, trace inspector, resume) | ✅ |
 
 ## Configuration
 
@@ -77,6 +78,9 @@ mini-pi-web reads from `~/.pi/` (shared with the `pi` CLI) and `~/.mini-pi/`
 | `~/.mini-pi/subagents/` | Subagent batches, memory, and user-level `*.md` definitions |
 | `~/.mini-pi/mcp/servers.json` | Configured MCP (stdio) servers |
 | `~/.mini-pi/workflows/runs/<workflowId>.json` | Dynamic workflow run history |
+| `~/.mini-pi/workflows/templates/<templateId>.json` | Reusable dynamic workflow templates |
+| `~/.mini-pi/workflows/network-policy.json` | Workflow network allow/deny policy |
+| `~/.mini-pi/workflows/network-audit.json` | Workflow network request audit trail |
 
 The `~/.pi/` files are interchangeable with the upstream `pi` CLI and `pi-web`.
 
@@ -86,6 +90,27 @@ mini-pi-web inherits the SDK's `AGENTS.md` / `CLAUDE.md` auto-loader. Drop a
 file named `AGENTS.md` anywhere from your project root up to filesystem root,
 and it will be injected into the agent's system prompt automatically (no UI
 needed). See [docs/guides/project-memory.md](./docs/guides/project-memory.md).
+
+### Dynamic workflows
+
+Use `/workflow <objective>` for one-off complex work, or ask the agent to call
+`run_workflow_script` directly when a task needs JavaScript control flow,
+parallel agents, checkpoints, structured artifacts, worktree isolation, or
+adversarial verification.
+
+Reusable workflow templates live under `~/.mini-pi/workflows/templates/` and are
+run with `run_workflow_template`. The workflow history panel can resume previous
+runs and inspect per-run debug bundles with trace events, logs, artifacts,
+checkpoints, and the generated script.
+
+For long-running work, combine templates with `/goal <objective>`. Goal mode
+keeps the agent looping toward the objective and rejects premature completion
+unless concrete evidence exists and related workflows have no unresolved failed
+or aborted runs.
+
+See [docs/guides/dynamic-workflows.md](./docs/guides/dynamic-workflows.md) and
+the example templates in
+[docs/examples/workflow-templates](./docs/examples/workflow-templates).
 
 ### Environment variables
 

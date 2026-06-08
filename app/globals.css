@@ -161,6 +161,67 @@ body.pet-window {
   overflow: hidden;
 }
 
+/* Settings page owns its own scroll viewport because the app shell locks body scroll. */
+.settings-page {
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-dim) var(--bg-panel);
+}
+.settings-page::-webkit-scrollbar,
+.settings-page *::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.settings-page::-webkit-scrollbar-track,
+.settings-page *::-webkit-scrollbar-track {
+  background: var(--bg-panel);
+}
+.settings-page::-webkit-scrollbar-thumb,
+.settings-page *::-webkit-scrollbar-thumb {
+  background: var(--text-dim);
+  border: 2px solid var(--bg-panel);
+  border-radius: 999px;
+}
+.settings-page .border-neutral-800,
+.settings-page .border-neutral-700 {
+  border-color: var(--border) !important;
+}
+.settings-page .bg-neutral-950,
+.settings-page .bg-neutral-950\/70,
+.settings-page .bg-neutral-900,
+.settings-page .bg-neutral-800 {
+  background: var(--bg-panel) !important;
+}
+.settings-page .hover\:bg-neutral-900:hover {
+  background: var(--bg-hover) !important;
+}
+.settings-page .text-neutral-200,
+.settings-page .text-neutral-300,
+.settings-page .text-neutral-400 {
+  color: var(--text) !important;
+}
+.settings-page .text-neutral-500 {
+  color: var(--text-muted) !important;
+}
+.settings-page .text-neutral-600 {
+  color: var(--text-dim) !important;
+}
+.settings-page input,
+.settings-page textarea,
+.settings-page select {
+  background: var(--bg) !important;
+  border-color: var(--border) !important;
+  color: var(--text) !important;
+}
+.settings-page input::placeholder,
+.settings-page textarea::placeholder {
+  color: var(--text-dim) !important;
+}
+.settings-page input:focus,
+.settings-page textarea:focus,
+.settings-page select:focus {
+  border-color: var(--accent) !important;
+}
+
 /* 通用脉动（attention 红点 / bubble 状态点用） */
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }

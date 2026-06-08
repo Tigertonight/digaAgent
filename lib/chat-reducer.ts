@@ -36,6 +36,7 @@ import type {
   WorkflowRun,
   WorkflowRunStatus,
   WorkflowScriptLog,
+  WorkflowTraceEvent,
 } from "./workflows/types";
 import { stripContextAside } from "./context-aside";
 
@@ -148,6 +149,8 @@ interface AnyEvent {
   artifacts?: WorkflowArtifact[];
   checkpoints?: WorkflowCheckpoint[];
   logs?: WorkflowScriptLog[];
+  trace?: WorkflowTraceEvent;
+  traceEvents?: WorkflowTraceEvent[];
   returnValue?: unknown;
 }
 
@@ -1211,6 +1214,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
           checkpoints: run.checkpoints,
           artifacts: run.artifacts,
           logs: run.logs,
+          traceEvents: run.traceEvents ?? [],
           createdAt: run.createdAt,
           endedAt: run.endedAt,
           returnValue: run.returnValue,
@@ -1223,7 +1227,8 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
 
     case "workflow_log":
     case "workflow_checkpoint":
-    case "workflow_artifact": {
+    case "workflow_artifact":
+    case "workflow_trace": {
       const workflowId = ev.workflowId;
       if (!workflowId) return state;
       for (let mi = state.messages.length - 1; mi >= 0; mi--) {
@@ -1248,6 +1253,9 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
                 ev.artifact,
               ]
             : cur.artifacts,
+          traceEvents: ev.trace
+            ? [...(cur.traceEvents ?? []), ev.trace]
+            : cur.traceEvents,
         };
         state.messages[mi] = { ...m, parts };
         break;
@@ -1273,6 +1281,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
           artifacts: ev.artifacts ?? cur.artifacts,
           checkpoints: ev.checkpoints ?? cur.checkpoints,
           logs: ev.logs ?? cur.logs,
+          traceEvents: ev.traceEvents ?? cur.traceEvents,
           returnValue: ev.returnValue,
           error: ev.error,
         };

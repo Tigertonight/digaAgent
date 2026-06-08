@@ -80,6 +80,8 @@ contextBridge.exposeInMainWorld("miniPi", {
 
   /* ---- D3：设置 / keytar ---- */
   settings: {
+    /** 打开独立设置窗口 */
+    open: () => ipcRenderer.invoke("settings:open"),
     /** 列出已存的 provider 名（不返回 key 原文） */
     listProviders: () => ipcRenderer.invoke("settings:listProviders"),
     /** 取一个 provider 的 key（仅设置 UI 用，谨慎暴露） */

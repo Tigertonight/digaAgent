@@ -146,6 +146,323 @@ describe("runWorkflowScript", () => {
     expect(listRunningWorkflowRuns("parent-1")).toHaveLength(0);
   });
 
+  it("runs workflow.agent with schema validation and structured data", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-agent-schema",
+        runSubagents: async (input) => ({
+          batchId: "batch-agent-schema",
+          results: [
+            {
+              taskId: input.tasks[0]?.id ?? "schema-agent",
+              agentId: "agent-schema",
+              status: "completed",
+              answer: JSON.stringify({ bugs: ["missing auth check"], count: 1 }),
+              startedAt: Date.now(),
+              endedAt: Date.now(),
+            },
+          ],
+        }),
+      },
+      {
+        objective: "Audit auth.",
+        rationale: "Verify schema output.",
+        script: `
+          return await workflow.agent("Audit auth.ts", {
+            id: "auth-audit",
+            title: "Auth audit",
+            agentType: "reviewer",
+            schema: {
+              type: "object",
+              required: ["bugs", "count"],
+              properties: {
+                bugs: { type: "array", items: { type: "string" } },
+                count: { type: "number" }
+              }
+            }
+          });
+        `,
+      }
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.returnValue).toMatchObject({
+      title: "Auth audit",
+      data: { bugs: ["missing auth check"], count: 1 },
+      taskId: "auth-audit",
+    });
+    expect(result.artifacts[0]).toMatchObject({
+      name: "schema-output:auth-audit",
+      kind: "schema_output",
+      value: { valid: true },
+    });
+    expect(result.traceEvents.map((event) => event.type)).toEqual([
+      "agent_start",
+      "schema_validation",
+      "agent_end",
+    ]);
+    expect(getWorkflowRun(result.workflowId)?.traceEvents?.length).toBe(3);
+  });
+
+  it("fails workflow.agent when schema validation fails", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-agent-schema-fail",
+        runSubagents: async (input) => ({
+          batchId: "batch-agent-schema-fail",
+          results: [
+            {
+              taskId: input.tasks[0]?.id ?? "schema-agent",
+              agentId: "agent-schema-fail",
+              status: "completed",
+              answer: JSON.stringify({ bugs: "not-an-array" }),
+              startedAt: Date.now(),
+              endedAt: Date.now(),
+            },
+          ],
+        }),
+      },
+      {
+        objective: "Audit auth.",
+        rationale: "Verify schema failure.",
+        script: `
+          await workflow.agent("Audit auth.ts", {
+            id: "auth-audit-fail",
+            title: "Auth audit",
+            schema: {
+              type: "object",
+              required: ["bugs", "count"],
+              properties: {
+                bugs: { type: "array", items: { type: "string" } },
+                count: { type: "number" }
+              }
+            }
+          });
+        `,
+      }
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("workflow.agent schema validation failed");
+    expect(result.artifacts[0]).toMatchObject({
+      name: "schema-output:auth-audit-fail",
+      kind: "schema_output",
+      value: { valid: false },
+    });
+    expect(result.traceEvents.some(
+      (event) => event.type === "schema_validation" && event.valid === false
+    )).toBe(true);
+  });
+
+  it("runs workflow.agent inside an automatically-created worktree", async () => {
+    const approvals: string[] = [];
+    const cwdSeen: Array<string | undefined> = [];
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-agent-worktree",
+        approveCapability: async (request) => {
+          approvals.push(request.capability);
+          return { decision: "allow" };
+        },
+        worktrees: {
+          async create(input) {
+            return {
+              id: `${input.workflowId.slice(0, 4)}-agent`,
+              path: "/tmp/workflow-agent",
+              branchName: "mini-pi-workflow/test/agent",
+              baseRef: input.baseRef ?? "HEAD",
+              createdAt: Date.now(),
+            };
+          },
+        },
+        runSubagents: async (input) => {
+          cwdSeen.push(input.tasks[0]?.cwd);
+          return {
+            batchId: "batch-agent-worktree",
+            results: [
+              {
+                taskId: input.tasks[0]?.id ?? "agent-worktree",
+                agentId: "agent-worktree",
+                status: "completed",
+                answer: "done",
+                startedAt: Date.now(),
+                endedAt: Date.now(),
+              },
+            ],
+          };
+        },
+      },
+      {
+        objective: "Implement isolated change.",
+        rationale: "Verify agent isolation option.",
+        capabilities: ["spawn_agent", "read_files", "worktree"],
+        script: `
+          return await workflow.agent("Inspect inside worktree", {
+            id: "isolated-agent",
+            title: "Isolated agent",
+            isolation: "worktree"
+          });
+        `,
+      }
+    );
+
+    expect(result.status).toBe("completed");
+    expect(approvals).toEqual(["worktree"]);
+    expect(cwdSeen).toEqual(["/tmp/workflow-agent"]);
+    expect(result.returnValue).toMatchObject({
+      title: "Isolated agent",
+      text: "done",
+      worktree: { path: "/tmp/workflow-agent" },
+    });
+    expect(result.artifacts.some((artifact) => artifact.name.startsWith("worktree:"))).toBe(true);
+  });
+
+  it("supports fan-out and synthesis through workflow.patterns", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-pattern-fanout",
+        runSubagents: async (input) => ({
+          batchId: "batch-pattern-fanout",
+          results: [
+            {
+              taskId: input.tasks[0]?.id ?? "task",
+              agentId: `agent-${input.tasks[0]?.id ?? "task"}`,
+              status: "completed",
+              answer: JSON.stringify({ item: input.tasks[0]?.id, ok: true }),
+              startedAt: Date.now(),
+              endedAt: Date.now(),
+            },
+          ],
+        }),
+      },
+      {
+        objective: "Review modules.",
+        rationale: "Verify fan-out pattern.",
+        script: `
+          return await workflow.patterns.fanOutAndSynthesize({
+            items: ["auth", "billing"],
+            worker: (item) => workflow.agent("Review " + item, {
+              id: item,
+              title: "Review " + item,
+              schema: {
+                type: "object",
+                required: ["item", "ok"],
+                properties: {
+                  item: { type: "string" },
+                  ok: { type: "boolean" }
+                }
+              }
+            }),
+            synthesizer: (results) => ({
+              count: results.length,
+              items: results.map((result) => result.data.item)
+            })
+          });
+        `,
+      }
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.returnValue).toEqual({ count: 2, items: ["auth", "billing"] });
+    expect(result.artifacts.filter((artifact) => artifact.kind === "schema_output")).toHaveLength(2);
+  });
+
+  it("supports adversarial verification through workflow.patterns", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-pattern-verify",
+        runSubagents: async (input) => ({
+          batchId: "batch-pattern-verify",
+          results: [
+            {
+              taskId: input.tasks[0]?.id ?? "verifier",
+              agentId: "agent-verifier",
+              status: "completed",
+              answer: JSON.stringify({ pass: true, issues: [] }),
+              startedAt: Date.now(),
+              endedAt: Date.now(),
+            },
+          ],
+        }),
+      },
+      {
+        objective: "Verify report.",
+        rationale: "Verify adversarial pattern.",
+        script: `
+          return await workflow.patterns.adversarialVerify({
+            draft: "All auth paths enforce login.",
+            criteria: "Find unsupported security claims.",
+            verifierCount: 2,
+            requirePass: true
+          });
+        `,
+      }
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.returnValue).toMatchObject({ passed: true });
+    expect(result.artifacts.some((artifact) => artifact.name === "adversarial-verification")).toBe(true);
+  });
+
+  it("supports loop-until-done through workflow.patterns", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-pattern-loop",
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Iterate until complete.",
+        rationale: "Verify loop pattern.",
+        script: `
+          return await workflow.patterns.loopUntilDone({
+            state: { count: 0 },
+            maxIterations: 5,
+            step: (state) => ({ count: state.count + 1 }),
+            verifier: (state) => ({ done: state.count >= 3 }),
+            stopWhen: (_state, verification) => verification.done
+          });
+        `,
+      }
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.returnValue).toMatchObject({
+      state: { count: 3 },
+      iterations: 3,
+    });
+    expect(result.checkpoints).toHaveLength(3);
+  });
+
+  it("exposes template params and metadata inside the workflow worker", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-template-params",
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Run template.",
+        rationale: "Verify template init data.",
+        script: "return { params: workflow.params, template: workflow.template };",
+        templateParams: { topic: "dynamic workflows", depth: 2 },
+        templateRef: {
+          id: "deep-research",
+          name: "Deep research",
+          version: "1.0.0",
+        },
+      }
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.returnValue).toEqual({
+      params: { topic: "dynamic workflows", depth: 2 },
+      template: {
+        id: "deep-research",
+        name: "Deep research",
+        version: "1.0.0",
+      },
+    });
+  });
+
   it("does not expose Node process or require", async () => {
     const result = await runWorkflowScript(
       {
