@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Script from "next/script";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -9,19 +8,6 @@ export const metadata: Metadata = {
     icon: "/brand/diga-logo-main.webp",
   },
 };
-
-// 在 hydrate 前同步把 theme 应用到 <html>，避免 FOUC
-const themeBootstrap = `
-(function(){
-  try {
-    var t = localStorage.getItem("pi-theme");
-    if (t !== "light" && t !== "dark") t = "light";
-    document.documentElement.setAttribute("data-theme", t);
-  } catch (e) {
-    document.documentElement.setAttribute("data-theme", "light");
-  }
-})();
-`;
 
 export default function RootLayout({
   children,
@@ -34,13 +20,7 @@ export default function RootLayout({
       data-theme="light"
       suppressHydrationWarning
     >
-      <head>
-        <Script
-          id="theme-bootstrap"
-          strategy="beforeInteractive"
-          dangerouslySetInnerHTML={{ __html: themeBootstrap }}
-        />
-      </head>
+      <head />
       <body>{children}</body>
     </html>
   );

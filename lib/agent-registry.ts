@@ -78,6 +78,7 @@ import {
 } from "./mcp/runtime";
 import { listEnabledMcpServers } from "./mcp/registry";
 import { updateProgress } from "./progress/server-store";
+import { writePersistedProgress } from "./progress/file-store";
 import { appendEvidenceMany } from "./evidence/server-store";
 import { appendRuntimeEvent } from "./runtime/event-store";
 import { bridgeAgentEventToRuntime } from "./runtime/agent-event-bridge";
@@ -158,6 +159,7 @@ export interface AgentRecord {
 }
 
 const MAX_EVENTS_PER_AGENT = 5000;
+const FINISH_WATCHDOG_MS = 1500;
 const DEFAULT_BROWSER_TOOL_NAMES = [
   "browser_open",
   "browser_screenshot",
@@ -383,6 +385,39 @@ function clearFinishWatchdog(rec: AgentRecord) {
   rec.pendingFinishMessage = null;
 }
 
+function finishStreamingRun(rec: AgentRecord): void {
+  if (!rec.isStreaming) return;
+  rec.isStreaming = false;
+  // Close the open goal turn before deciding whether to auto-continue. The
+  // goal's terminal status (complete/blocked) maps onto the turn status.
+  const goal = getGoal(rec.id);
+  if (goal) {
+    const turnStatus =
+      goal.status === "complete"
+        ? "completed"
+        : goal.status === "blocked"
+          ? "blocked"
+          : "completed";
+    finishGoalTurn(rec.id, {
+      status: turnStatus,
+      ...(goal.status === "blocked" && goal.blockedReason
+        ? { blockedReason: goal.blockedReason }
+        : {}),
+    });
+  }
+  maybeContinueGoal(rec);
+}
+
+function scheduleFinishWatchdog(rec: AgentRecord, message: unknown): void {
+  clearFinishWatchdog(rec);
+  rec.pendingFinishMessage = message;
+  rec.finishWatchdog = setTimeout(() => {
+    rec.finishWatchdog = null;
+    rec.pendingFinishMessage = null;
+    finishStreamingRun(rec);
+  }, FINISH_WATCHDOG_MS);
+}
+
 export interface CreateOptions {
   provider: string;
   modelId: string;
@@ -542,15 +577,22 @@ export async function createAgent(opts: CreateOptions): Promise<{
       resp.denyReason === undefined && resp.decision === req.defaultDecision
         ? "timeout"
         : "user";
+    const resolvedResp =
+      resolvedBy === "timeout" && resp.decision === "deny"
+        ? {
+            ...resp,
+            denyReason: `Workflow capability approval timed out: ${params.capability}`,
+          }
+        : resp;
     pushExternalEvent(rec, {
       type: "approval_resolved",
       id: req.id,
       toolCallId: req.toolCallId,
-      decision: resp.decision,
+      decision: resolvedResp.decision,
       resolvedBy,
-      denyReason: resp.denyReason,
+      denyReason: resolvedResp.denyReason,
     });
-    return resp;
+    return resolvedResp;
   }
 
   async function requestWorkflowWorktreeMergeApproval(params: {
@@ -1070,13 +1112,21 @@ export async function createAgent(opts: CreateOptions): Promise<{
   });
   const progressExtension = createProgressExtension({
     getAgentId: () => id,
-    onProgressUpdate: (_agentId, input) => {
+    onProgressUpdate: async (_agentId, input) => {
       const progress = updateProgress(id, input);
       // Bridge progress artifacts into goal evidence (only when a goal is
       // active). De-dupes by id, so repeated updates are safe.
       bridgeProgressEvidence(id, progress);
       const rec = recordHolder.current;
-      if (rec) pushProgressEvent(rec, progress);
+      if (rec) {
+        try {
+          await writePersistedProgress(rec.session.sessionId, progress);
+        } catch {
+          // Best-effort runtime cache; do not fail the tool call if persistence
+          // is temporarily unavailable.
+        }
+        pushProgressEvent(rec, progress);
+      }
       return progress;
     },
   });
@@ -1396,29 +1446,13 @@ export async function createAgent(opts: CreateOptions): Promise<{
       if (goal && goal.status === "active") {
         startGoalTurn(record.id);
       }
-    } else if (event.type === "message_end" || event.type === "agent_end") {
+    } else if (event.type === "tool_execution_start") {
       clearFinishWatchdog(record);
-      if (event.type === "agent_end") {
-        record.isStreaming = false;
-        // Close the open goal turn before deciding whether to auto-continue. The
-        // goal's terminal status (complete/blocked) maps onto the turn status.
-        const goal = getGoal(record.id);
-        if (goal) {
-          const turnStatus =
-            goal.status === "complete"
-              ? "completed"
-              : goal.status === "blocked"
-                ? "blocked"
-                : "completed";
-          finishGoalTurn(record.id, {
-            status: turnStatus,
-            ...(goal.status === "blocked" && goal.blockedReason
-              ? { blockedReason: goal.blockedReason }
-              : {}),
-          });
-        }
-        maybeContinueGoal(record);
-      }
+    } else if (event.type === "message_end") {
+      scheduleFinishWatchdog(record, event.message);
+    } else if (event.type === "agent_end") {
+      clearFinishWatchdog(record);
+      finishStreamingRun(record);
     } else if (messageHasStopReason(event)) {
       // Do not synthesize completion from partial assistant messages. For
       // OpenAI-compatible tool-call turns the SDK emits stopReason-bearing

@@ -18,15 +18,25 @@
  */
 
 import type { Dispatch, ReactNode, SetStateAction } from "react";
-import { useState, useSyncExternalStore } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
+import { FloatingLayer } from "./FloatingLayer";
 import {
   Brain,
   ChevronRight,
+  Download,
+  Ellipsis,
+  FileText,
+  FolderOpen,
   GitBranch,
+  History,
+  KeyRound,
+  Moon,
+  PanelLeft,
   Pin,
   Plus,
   Search,
   Settings,
+  Sun,
   X,
 } from "lucide-react";
 import type { SessionInfoLite } from "@/lib/types";
@@ -37,10 +47,29 @@ import SidebarExplorer from "./SidebarExplorer";
 export interface SidebarProps {
   // ===== 开合 =====
   sidebarOpen: boolean;
+  onToggleSidebar: () => void;
 
   // ===== cwd =====
   cwd: string;
   setShowCwdPicker: Dispatch<SetStateAction<boolean>>;
+
+  // ===== quick actions =====
+  theme: "light" | "dark";
+  onToggleTheme: () => void;
+  updateAvailable?: boolean;
+  updateLatestVersion?: string | null;
+  onDownloadUpdate?: () => void;
+
+  // ===== action menu =====
+  agentId: string | null;
+  currentSessionFile: string | null;
+  onOpenBranches: () => void;
+  onOpenSystemPrompt: () => void;
+  onOpenWorkflows: () => void;
+  onRevealInFinder: () => void;
+  onOpenAuth: () => void;
+  onOpenSettings: () => void;
+  onSkipUpdateVersion?: () => void;
 
   // ===== sessions =====
   sessions: SessionInfoLite[];
@@ -110,11 +139,67 @@ function getHydratedServer(): boolean {
   return false;
 }
 
+function SidebarActionMenuItem({
+  icon,
+  label,
+  description,
+  disabled,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  description?: string;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="group flex w-full items-center gap-3 rounded px-2.5 py-2 text-left transition-colors hover:bg-[color:var(--bg-hover)] disabled:cursor-not-allowed disabled:opacity-45"
+    >
+      <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded border border-[color:var(--border)] bg-[color:var(--bg-subtle)] text-[color:var(--text-muted)]">
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13px] font-medium text-[color:var(--text)]">
+          {label}
+        </span>
+        {description ? (
+          <span className="block truncate text-[11px] text-[color:var(--text-muted)]">
+            {description}
+          </span>
+        ) : null}
+      </span>
+      <ChevronRight
+        size={13}
+        className="shrink-0 text-[color:var(--text-dim)] opacity-0 transition-opacity group-hover:opacity-100"
+      />
+    </button>
+  );
+}
+
 export function Sidebar(props: SidebarProps) {
   const {
     sidebarOpen,
+    onToggleSidebar,
     cwd,
     setShowCwdPicker,
+    theme,
+    onToggleTheme,
+    updateAvailable,
+    updateLatestVersion,
+    onDownloadUpdate,
+    agentId,
+    currentSessionFile,
+    onOpenBranches,
+    onOpenSystemPrompt,
+    onOpenWorkflows,
+    onRevealInFinder,
+    onOpenAuth,
+    onOpenSettings,
+    onSkipUpdateVersion,
     sessions,
     groupedSessions,
     selectedId,
@@ -159,6 +244,18 @@ export function Sidebar(props: SidebarProps) {
   const [expandedParents, setExpandedParents] = useState<Set<string>>(
     () => new Set()
   );
+  const [actionMenuOpen, setActionMenuOpen] = useState(false);
+  const actionMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
+
+  // session ⋯ popover 触发器 DOM 引用 —— FloatingLayer 需要 anchor 元素
+  const sessionMenuTriggerRefs = useRef<Map<string, HTMLButtonElement>>(
+    new Map()
+  );
+
+  const runAction = (fn: () => void) => {
+    setActionMenuOpen(false);
+    fn();
+  };
 
   const searchEnabled = onSearchQueryChange != null;
   const selectedSession = selectedId
@@ -184,14 +281,105 @@ export function Sidebar(props: SidebarProps) {
         className="px-2.5 pt-3 pb-2.5 border-b"
         style={{ borderColor: "var(--border)" }}
       >
-        <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center justify-between mb-2 gap-2">
           <span
-            className="font-mono text-[15px] font-bold tracking-tight inline-flex items-center gap-1.5"
+            className="min-w-0 font-mono text-[15px] font-bold tracking-tight inline-flex items-center gap-1.5"
             style={{ color: "var(--text)" }}
           >
             <BrandLogo size={32} />
-            Diga Agent
+            <span className="truncate">Diga Agent</span>
           </span>
+          <div
+            className="relative inline-flex shrink-0 items-center gap-0.5 rounded-lg border p-0.5"
+            style={{ borderColor: "var(--border-soft)", background: "var(--bg)" }}
+          >
+            <button
+              type="button"
+              ref={actionMenuTriggerRef}
+              onClick={() => setActionMenuOpen((value) => !value)}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[color:var(--bg-hover)]"
+              style={{ color: "var(--text-muted)" }}
+              title="更多操作"
+              aria-label="更多操作"
+            >
+              <Ellipsis size={16} />
+            </button>
+            {actionMenuOpen ? (
+              <FloatingLayer
+                anchor={actionMenuTriggerRef.current}
+                open={actionMenuOpen}
+                onClose={() => setActionMenuOpen(false)}
+                placement="bottom-end"
+                minWidth={300}
+                minHeight={360}
+                className="w-[300px] rounded-lg border bg-[color:var(--bg-panel)] p-2 shadow-xl"
+                style={{ borderColor: "var(--border)" }}
+              >
+                <div className="px-2 pb-1.5 pt-0.5 text-[11px] font-medium uppercase text-[color:var(--text-dim)]">
+                  Session
+                </div>
+                <SidebarActionMenuItem icon={<GitBranch size={15} />} label="Branches" description="查看 / 切换分支" disabled={!agentId} onClick={() => runAction(onOpenBranches)} />
+                <SidebarActionMenuItem icon={<FileText size={15} />} label="System prompt" description="查看当前会话系统提示" disabled={!agentId} onClick={() => runAction(onOpenSystemPrompt)} />
+                <SidebarActionMenuItem icon={<History size={15} />} label="Workflow history" description="从 checkpoint / artifact 续跑" disabled={!agentId} onClick={() => runAction(onOpenWorkflows)} />
+                {currentSessionFile ? (
+                  <SidebarActionMenuItem icon={<FolderOpen size={15} />} label="Reveal session file" description={currentSessionFile} onClick={() => runAction(onRevealInFinder)} />
+                ) : null}
+                <div className="my-1 h-px bg-[color:var(--border)]" />
+                <div className="px-2 pb-1.5 pt-1 text-[11px] font-medium uppercase text-[color:var(--text-dim)]">
+                  Workspace
+                </div>
+                <SidebarActionMenuItem icon={<KeyRound size={15} />} label="Credentials" description="管理 Provider 凭证" onClick={() => runAction(onOpenAuth)} />
+                <SidebarActionMenuItem icon={<Settings size={15} />} label="Settings" description="Budget、审批、网络策略和 MCP" onClick={() => runAction(onOpenSettings)} />
+                {updateAvailable && onDownloadUpdate ? (
+                  <SidebarActionMenuItem icon={<Download size={15} />} label="Download DMG" description="打开新版本下载页" onClick={() => runAction(onDownloadUpdate)} />
+                ) : null}
+                {updateAvailable && onSkipUpdateVersion ? (
+                  <SidebarActionMenuItem icon={<X size={15} />} label="Ignore this version" description="这个版本不再提醒" onClick={() => runAction(onSkipUpdateVersion)} />
+                ) : null}
+              </FloatingLayer>
+            ) : null}
+            {updateAvailable && onDownloadUpdate ? (
+              <button
+                type="button"
+                onClick={onDownloadUpdate}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[color:var(--bg-hover)]"
+                style={{ color: "#2563eb" }}
+                title={
+                  updateLatestVersion
+                    ? `下载最新版 ${updateLatestVersion}`
+                    : "下载最新版"
+                }
+                aria-label="下载最新版"
+              >
+                <Download size={15} />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={onToggleTheme}
+              className="group/theme inline-flex h-7 w-7 items-center justify-center rounded-md transition-all duration-200 hover:scale-105 hover:bg-[color:var(--bg-hover)] active:scale-95"
+              style={{ color: "var(--text-muted)" }}
+              title={theme === "dark" ? "切换到 Light" : "切换到 Dark"}
+              aria-label="切换 Light/Dark 主题"
+            >
+              <span
+                key={theme}
+                className="theme-icon-swap inline-flex transition-transform duration-300 ease-out group-hover/theme:rotate-12"
+              >
+                {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={onToggleSidebar}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[color:var(--bg-hover)]"
+              style={{ color: "var(--text-muted)" }}
+              title="收起左侧栏"
+              aria-label="收起左侧栏"
+            >
+              <PanelLeft size={15} />
+            </button>
+          </div>
         </div>
         <button
           type="button"
@@ -497,6 +685,10 @@ export function Sidebar(props: SidebarProps) {
                 <button
                   type="button"
                   data-session-menu
+                  ref={(el) => {
+                    if (el) sessionMenuTriggerRefs.current.set(s.id, el);
+                    else sessionMenuTriggerRefs.current.delete(s.id);
+                  }}
                   onClick={(e) => {
                     e.stopPropagation();
                     setMenuFor(menuOpen ? null : s.id);
@@ -508,9 +700,14 @@ export function Sidebar(props: SidebarProps) {
                   ⋯
                 </button>
                 {menuOpen && (
-                  <div
-                    data-session-menu
-                    className="absolute right-1 top-7 z-20 rounded border text-xs min-w-[140px] py-1"
+                  <FloatingLayer
+                    anchor={sessionMenuTriggerRefs.current.get(s.id) ?? null}
+                    open={menuOpen}
+                    onClose={() => setMenuFor(null)}
+                    placement="bottom-end"
+                    minWidth={168}
+                    minHeight={168}
+                    className="rounded border text-xs min-w-[168px] py-1 shadow-xl"
                     style={{
                       background: "var(--bg-panel-2)",
                       borderColor: "var(--border)",
@@ -564,7 +761,7 @@ export function Sidebar(props: SidebarProps) {
                     >
                       ✕ 删除
                     </button>
-                  </div>
+                  </FloatingLayer>
                 )}
               </div>
             );

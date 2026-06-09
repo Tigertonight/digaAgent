@@ -50,6 +50,30 @@ export type SlashName = (typeof SLASH_COMMANDS)[number]["name"];
  * 触发条件：紧邻光标向左找到 `@` 或 `/`，且其左侧是行首/空白/换行。
  * `/` 仅在文本最前面（光标 ≤ 第一个非空白后）才算 slash 命令。
  */
+/**
+ * 把 /api/files 返回的目录条目过滤 + 排序 + 截断 + 包装为 AutocompleteItem。
+ * 拆出来是因为 cache hit 与 debounce fetch 两条路径都要复用同一份格式化逻辑。
+ */
+function buildFileItems(
+  entries: Array<{ name: string; isDir: boolean; path: string }>,
+  query: string
+): AutocompleteItem[] {
+  return entries
+    .filter(
+      (e) => !e.name.startsWith(".") && e.name.toLowerCase().includes(query)
+    )
+    .sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    })
+    .slice(0, 20)
+    .map<AutocompleteItem>((e) => ({
+      label: e.name + (e.isDir ? "/" : ""),
+      hint: e.isDir ? "dir" : "file",
+      value: `@${e.path}`,
+    }));
+}
+
 function detectAutocompleteToken(
   text: string,
   caret: number
@@ -78,7 +102,7 @@ function detectAutocompleteToken(
 
 export interface UseAutocompleteParams {
   // ── 输入框上下文 ─────────────────────────────────────────────────
-  input: string;
+  getInput: () => string;
   cwd: string | null;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
   setInput: (v: string) => void;
@@ -119,7 +143,7 @@ export function useAutocomplete(
   opts: UseAutocompleteParams
 ): UseAutocompleteReturn {
   const {
-    input,
+    getInput,
     cwd,
     inputRef,
     setInput,
@@ -148,18 +172,65 @@ export function useAutocomplete(
     acTriggerPosRef.current = -1;
   }, []);
 
+  // ── @ 文件请求的轻量 in-memory cache + debounce（P0-B）────────────────
+  // - cache：同 cwd + query 5s 内复用，避免快速反复 @ 触发重复 fetch；
+  // - debounce：每次 @ 输入触发的 fetch 延后 200ms，仅最后一次真正发请求，
+  //   降低连击 keystroke 的网络/解析压力。
+  // - acMode 当前为 null 且未检测到触发 token 时，直接 return 不再调
+  //   closeAutocomplete()，避免无谓 setState 触发上层 re-render。
+  type FilesEntry = { name: string; isDir: boolean; path: string };
+  const filesCacheRef = useRef<
+    Map<string, { ts: number; entries: FilesEntry[] }>
+  >(new Map());
+  const acModeRef = useRef<"@" | "/" | null>(acMode);
+  acModeRef.current = acMode;
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debounceSeqRef = useRef(0);
+  const FILES_CACHE_TTL_MS = 5000;
+  const FILES_DEBOUNCE_MS = 200;
+
+  const fetchFilesEntries = useCallback(
+    async (cwdKey: string): Promise<FilesEntry[]> => {
+      const cached = filesCacheRef.current.get(cwdKey);
+      const now = Date.now();
+      if (cached && now - cached.ts < FILES_CACHE_TTL_MS) {
+        return cached.entries;
+      }
+      const r = await fetch(`/api/files?path=${encodeURIComponent(cwdKey)}`);
+      const d = await r.json();
+      const entries: FilesEntry[] = Array.isArray(d.entries) ? d.entries : [];
+      filesCacheRef.current.set(cwdKey, { ts: now, entries });
+      return entries;
+    },
+    []
+  );
+
   /** 输入或光标位置变化时刷新 autocomplete */
   const refreshAutocomplete = useCallback(
     async (text: string, caret: number) => {
       const tok = detectAutocompleteToken(text, caret);
       if (!tok) {
-        closeAutocomplete();
+        // 仅当当前确实是打开状态时才 close，避免无谓 setState
+        if (acModeRef.current !== null) {
+          // 同时取消 debounced fetch，否则上一个挂起的会用旧 query 写回 items
+          if (debounceTimerRef.current) {
+            clearTimeout(debounceTimerRef.current);
+            debounceTimerRef.current = null;
+          }
+          debounceSeqRef.current++;
+          closeAutocomplete();
+        }
         return;
       }
       acTriggerPosRef.current = tok.triggerPos;
       setAcMode(tok.mode);
       setAcIndex(0);
       if (tok.mode === "/") {
+        // slash 是纯本地过滤，不走 debounce
+        if (debounceTimerRef.current) {
+          clearTimeout(debounceTimerRef.current);
+          debounceTimerRef.current = null;
+        }
         const q = tok.query.toLowerCase();
         const items: AutocompleteItem[] = SLASH_COMMANDS.filter((c) =>
           c.name.startsWith(q)
@@ -171,37 +242,37 @@ export function useAutocomplete(
         setAcItems(items);
         return;
       }
-      // @ 文件：从 cwd 读目录
-      try {
-        const r = await fetch(`/api/files?path=${encodeURIComponent(cwd ?? "")}`);
-        const d = await r.json();
-        if (!Array.isArray(d.entries)) {
-          setAcItems([]);
-          return;
-        }
-        const q = tok.query.toLowerCase();
-        const filtered = (
-          d.entries as Array<{ name: string; isDir: boolean; path: string }>
-        )
-          .filter(
-            (e) => !e.name.startsWith(".") && e.name.toLowerCase().includes(q)
-          )
-          .sort((a, b) => {
-            if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-            return a.name.localeCompare(b.name);
-          })
-          .slice(0, 20)
-          .map<AutocompleteItem>((e) => ({
-            label: e.name + (e.isDir ? "/" : ""),
-            hint: e.isDir ? "dir" : "file",
-            value: `@${e.path}`,
-          }));
-        setAcItems(filtered);
-      } catch {
-        setAcItems([]);
+      // @ 文件：debounce 200ms 后请求；同 cwd 5s 内复用
+      const cwdKey = cwd ?? "";
+      const query = tok.query.toLowerCase();
+      const seq = ++debounceSeqRef.current;
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
       }
+      // 命中缓存：直接同步过滤，省掉 200ms 等待
+      const cached = filesCacheRef.current.get(cwdKey);
+      const now = Date.now();
+      if (cached && now - cached.ts < FILES_CACHE_TTL_MS) {
+        setAcItems(buildFileItems(cached.entries, query));
+        return;
+      }
+      debounceTimerRef.current = setTimeout(() => {
+        debounceTimerRef.current = null;
+        void (async () => {
+          try {
+            const entries = await fetchFilesEntries(cwdKey);
+            // 过期请求：在 fetch 期间用户又改了输入 / 关掉了 AC，丢弃
+            if (seq !== debounceSeqRef.current) return;
+            if (acModeRef.current !== "@") return;
+            setAcItems(buildFileItems(entries, query));
+          } catch {
+            if (seq !== debounceSeqRef.current) return;
+            setAcItems([]);
+          }
+        })();
+      }, FILES_DEBOUNCE_MS);
     },
-    [cwd, closeAutocomplete]
+    [cwd, closeAutocomplete, fetchFilesEntries]
   );
 
   // ── Slash 命令执行 ────────────────────────────────────────────────
@@ -262,6 +333,7 @@ export function useAutocomplete(
         closeAutocomplete();
         return;
       }
+      const input = getInput();
       const caret = ta?.selectionStart ?? input.length;
       // value 已经包含触发字符（@xx 或 /xx），后接一个空格便于继续输入
       const before = input.slice(0, triggerPos);
@@ -287,7 +359,7 @@ export function useAutocomplete(
         }
       }
     },
-    [acMode, input, inputRef, setInput, closeAutocomplete, runSlashCommand]
+    [acMode, getInput, inputRef, setInput, closeAutocomplete, runSlashCommand]
   );
 
   /**

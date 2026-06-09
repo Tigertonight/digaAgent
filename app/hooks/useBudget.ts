@@ -85,21 +85,19 @@ export function useBudget(opts: UseBudgetOptions): UseBudgetReturn {
   // budget 配置：mount + 每次 agentId 切换 重新解析；
   // setter 内手动 trigger 一次 reload 来推动 UI。
   const [budgetVersion, setBudgetVersion] = useState(0);
+  const [budget, setBudgetState] = useState<SessionBudget>(DEFAULT_BUDGET);
+  const [hasOverride, setHasOverride] = useState(false);
 
-  const budget = useMemo<SessionBudget>(() => {
-    void budgetVersion;
-    if (typeof window === "undefined") return DEFAULT_BUDGET;
-    return resolveBudget(agentId);
-    // 依赖 budgetVersion：setter 调用后 ++ 触发 re-resolve
-     
-  }, [agentId, budgetVersion]);
-
-  const hasOverride = useMemo<boolean>(() => {
-    void budgetVersion;
-    if (typeof window === "undefined") return false;
-    if (!agentId) return false;
-    return loadSessionOverride(agentId) != null;
-     
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setBudgetState(resolveBudget(agentId));
+      setHasOverride(agentId ? loadSessionOverride(agentId) != null : false);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [agentId, budgetVersion]);
 
   // duration tick：仅 streaming 中才订阅 setInterval，省 CPU。

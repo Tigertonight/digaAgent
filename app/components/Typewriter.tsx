@@ -11,12 +11,23 @@ export const TYPEWRITER_PHRASES = [
 ];
 
 export function Typewriter({ phrases }: { phrases: string[] }) {
-  const [phraseIdx, setPhraseIdx] = useState(() =>
-    Math.floor(Math.random() * phrases.length)
-  );
+  const [phraseIdx, setPhraseIdx] = useState(0);
   const [text, setText] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [caretOn, setCaretOn] = useState(true);
+
+  useEffect(() => {
+    if (phrases.length <= 1) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) {
+        setPhraseIdx(Math.floor(Math.random() * phrases.length));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [phrases.length]);
 
   useEffect(() => {
     const blink = setInterval(() => setCaretOn((v) => !v), 530);

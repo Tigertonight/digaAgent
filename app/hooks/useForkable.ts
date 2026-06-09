@@ -23,7 +23,7 @@
  */
 
 import type React from "react";
-import { useCallback, useState } from "react";
+import { startTransition, useCallback, useState } from "react";
 import type { ForkableUserMessage, ThinkingLevel, SessionInfoLite } from "@/lib/types";
 import type { SubagentBatch } from "@/lib/subagents/types";
 import {
@@ -162,8 +162,13 @@ export function useForkable(params: UseForkableParams): UseForkableReturn {
         );
         const data = await r.json();
         if (Array.isArray(data.messages)) {
-          updateRunner(ownerKey ?? activeKeyRef.current, {
-            forkableUserMessages: data.messages as ForkableUserMessage[],
+          // P2-I: forkable user message 列表是不紧急的背景资源。变化会让
+          // ChatApp 重算 messageRenderState，抖动到整个 list。包进 startTransition
+          // 让输入交互优先保持响应。
+          startTransition(() => {
+            updateRunner(ownerKey ?? activeKeyRef.current, {
+              forkableUserMessages: data.messages as ForkableUserMessage[],
+            });
           });
         }
       } catch (e) {

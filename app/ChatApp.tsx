@@ -1,7 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Download, FileText, Loader2, RotateCcw, X } from "lucide-react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  // P1-E：input 全局 store helpers。详见 lib/composer/input-store.ts。
+  // ChatApp 只需 setter 与 LRU 淘汰清理；可视化读取走 useComposerInput hook。
+  getInput as getStoreInput,
+  setInput as storeSetInput,
+  updateInput as storeUpdateInput,
+  deleteInput as deleteStoreInput,
+} from "@/lib/composer/input-store";
+import { ArrowDown, CheckCircle2, Download, FileText, Loader2, RotateCcw, X } from "lucide-react";
 import type {
   SessionInfoLite,
   ChatMessage,
@@ -15,6 +30,7 @@ import type {
   WorkflowTraceEvent,
 } from "@/lib/workflows/types";
 import type { BrowserAnnotation } from "@/lib/browser/types";
+import type { AgentProgress } from "@/lib/progress/types";
 import { extractImagesFromClipboard } from "@/lib/image-utils";
 import {
   getElectronApi,
@@ -687,6 +703,16 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     },
   });
 
+  const handleEvictRunner = useCallback(
+    (key: RunnerKey) => {
+      // LRU 淘汰 runner 时同步清理该 key 在 input store 里的草稿，
+      // 避免留下“孤儿” input slot。
+      deleteStoreInput(key);
+      closeSseFor(key);
+    },
+    [closeSseFor]
+  );
+
   const {
     runnersRef,
     activeKey,
@@ -697,7 +723,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     switchTo,
     setRunner,
   } = useRunners({
-    onEvict: closeSseFor,
+    onEvict: handleEvictRunner,
   });
 
   // 把 updateRunner 绑到 ref，供 useSseManager 的 onStatusChange 回调使用
@@ -773,23 +799,48 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // thinking 字段(thinkingLevel / availableThinkingLevels / supportsThinking)
   // 已挪到 RunnerState。见下方 activeSnapshot 解构区。
 
-  // theme（首屏由 layout 里的 inline script 设置）
-  const [theme, setTheme] = useState<Theme>(() => {
-    if (typeof document === "undefined") return "dark";
-    return (
-      (document.documentElement.getAttribute("data-theme") as Theme | null) ??
-      "dark"
-    );
-  });
+  // theme: 首屏固定 light，避免服务端/客户端因 localStorage 差异导致 hydration mismatch。
+  const [theme, setTheme] = useState<Theme>("light");
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      let next: Theme = "light";
+      try {
+        const stored = localStorage.getItem("pi-theme");
+        if (stored === "light" || stored === "dark") next = stored;
+      } catch {
+        /* noop */
+      }
+      setTheme(next);
+      document.documentElement.setAttribute("data-theme", next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const toggleTheme = () => {
     const next: Theme = theme === "dark" ? "light" : "dark";
-    setTheme(next);
-    document.documentElement.setAttribute("data-theme", next);
-    try {
-      localStorage.setItem("pi-theme", next);
-    } catch {
-      /* noop */
+    const apply = () => {
+      setTheme(next);
+      document.documentElement.setAttribute("data-theme", next);
+      try {
+        localStorage.setItem("pi-theme", next);
+      } catch {
+        /* noop */
+      }
+    };
+
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")
+      .matches;
+    const doc = document as Document & {
+      startViewTransition?: (callback: () => void) => { finished: Promise<void> };
+    };
+    if (!reduceMotion && typeof doc.startViewTransition === "function") {
+      void doc.startViewTransition(apply).finished.catch(() => {});
+      return;
     }
+    apply();
   };
 
   const initialWorkbenchView = (): WorkbenchView => {
@@ -834,9 +885,10 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       return false;
     }
   };
-  const [workbenchOpen, setWorkbenchOpen] = useState(initialWorkbenchOpen);
-  const [workbenchView, setWorkbenchView] =
-    useState<WorkbenchView>(initialWorkbenchView);
+  const [workbenchOpen, setWorkbenchOpen] = useState(false);
+  const [workbenchView, setWorkbenchView] = useState<WorkbenchView>({
+    type: "overview",
+  });
   const [showSkills, setShowSkills] = useState(false);
   const [showTools, setShowTools] = useState(false);
   const [browserOpenRequest, setBrowserOpenRequest] = useState<{
@@ -845,26 +897,42 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   } | null>(null);
 
   // 右侧 panel 宽度（仅 files/tools 用 inline 形态需要，skills 是 modal）
-  const [rightPanelWidth, setRightPanelWidth] = useState(() => {
-    if (typeof window === "undefined") return 480;
-    try {
-      const stored = localStorage.getItem("rightPanelWidth");
-      const n = stored ? Number(stored) : NaN;
-      if (Number.isFinite(n) && n >= 320) return n;
-    } catch {}
-    return 480;
-  });
+  const [rightPanelWidth, setRightPanelWidth] = useState(480);
   /** FileBrowser 内部折叠状态:不再影响外层宽度,仅 56px 极窄态特殊处理
    *  (FileBrowser 内部用 flex:1 自适应,外层一直用 rightPanelWidth) */
   const [filesLayout, setFilesLayout] = useState<FilesLayout>({
     treeCollapsed: false,
     viewerHidden: false,
   });
-  /** 两侧都收起时容器收成 56px 窄条,其它情况都用 rightPanelWidth */
+  useEffect(() => {
+    queueMicrotask(() => {
+      const view = initialWorkbenchView();
+      setWorkbenchView(view);
+      setWorkbenchOpen(initialWorkbenchOpen());
+      try {
+        const stored = localStorage.getItem("rightPanelWidth");
+        const n = stored ? Number(stored) : NaN;
+        if (Number.isFinite(n) && n >= 320) {
+          setRightPanelWidth(n);
+        }
+      } catch {
+        /* noop */
+      }
+    });
+  }, []);
+  const [viewportWidth, setViewportWidth] = useState(1440);
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    onResize();
+    window.addEventListener("resize", onResize, { passive: true });
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const rightPanelMaxWidth = Math.max(320, Math.floor(viewportWidth * 0.8));
+  /** 两侧都收起时容器收成 56px 窄条,其它情况都用统一 clamp 后的 rightPanelWidth */
   const filesContainerWidth =
     filesLayout.viewerHidden && filesLayout.treeCollapsed
       ? 56
-      : rightPanelWidth;
+      : Math.min(rightPanelWidth, rightPanelMaxWidth);
   useEffect(() => {
     try {
       localStorage.setItem("rightPanelWidth", String(rightPanelWidth));
@@ -873,8 +941,10 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const splitterDragRef = useRef<{ startX: number; startW: number } | null>(
     null
   );
+  const [rightPanelResizing, setRightPanelResizing] = useState(false);
   const onSplitterMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
+    setRightPanelResizing(true);
     splitterDragRef.current = {
       startX: e.clientX,
       startW: rightPanelWidth,
@@ -883,12 +953,15 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       const ref = splitterDragRef.current;
       if (!ref) return;
       const dx = ref.startX - ev.clientX;
-      const max = Math.max(320, window.innerWidth * 0.8);
-      const next = Math.min(max, Math.max(320, ref.startW + dx));
+      const next = Math.min(
+        rightPanelMaxWidth,
+        Math.max(320, ref.startW + dx)
+      );
       setRightPanelWidth(next);
     };
     const onUp = () => {
       splitterDragRef.current = null;
+      setRightPanelResizing(false);
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
       document.body.style.cursor = "";
@@ -1178,7 +1251,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     agentId,
     agentSessionId,
     sessionFile: currentSessionFile,
-    input,
     pendingImages,
     pendingFiles,
     streaming,
@@ -1220,17 +1292,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     ]
   );
 
-  const progressRunning = useMemo(() => {
-    const groups = progress?.groups ?? [];
-    const steps =
-      groups.length > 0
-        ? groups.flatMap((group) => group.steps)
-        : progress?.steps ?? [];
-    return steps.some(
-      (step) => step.status === "running" || step.status === "pending"
-    );
-  }, [progress]);
-  const abortable = streaming || progressRunning;
+  // Composer should only enter Steer/Follow-up/Stop mode while the agent is
+  // actually streaming. Progress steps may be left pending by older tool traces
+  // or restored history; those should not make the input look like it is still
+  // outputting after the assistant has already finished.
+  const abortable = streaming;
 
   const openUrlInBrowserPanel = useCallback(
     (url: string) => {
@@ -1272,10 +1338,24 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     [resolve, updateActive]
   );
   // setForkBusy 已下沉到 useForkable hook（C1：fork 流程内 updateRunner 直接写）
+  // P1-E: input 不再写入 RunnerState，而是走全局 store。
+  //   - setInput：只动 store，不再 setActiveSnapshot 、不再重建 RunnerState。
+  //   - getCurrentInput：交互时点快照读（send/steer/followUp 等）。
+  //   - Composer 作为叶子组件订阅 activeKey 对应的 input slot。
   const setInput = useCallback(
-    (v: Updater<string>) =>
-      updateActive((s) => ({ input: resolve(s.input, v) })),
-    [resolve, updateActive]
+    (v: Updater<string>) => {
+      const key = activeKeyRef.current;
+      if (typeof v === "function") {
+        storeUpdateInput(key, (prev) => (v as (p: string) => string)(prev));
+      } else {
+        storeSetInput(key, v);
+      }
+    },
+    [activeKeyRef]
+  );
+  const getCurrentInput = useCallback(
+    () => getStoreInput(activeKeyRef.current),
+    [activeKeyRef]
   );
   const setPendingImages = useCallback(
     (v: Updater<ImageContentLite[]>) =>
@@ -1436,8 +1516,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // 锚定阶段:仅此期间渲染 60vh 底部占位,让最后一条 user 能被 scroll-to-top
   // 一旦锚定完成或被取消,移除占位,避免列表底部一大片空白可滚。
   const [pinSpacer, setPinSpacer] = useState(false);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
 
-  const scrollMessagesToBottom = useCallback(() => {
+  const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
     if (scrollRafRef.current != null) {
       cancelAnimationFrame(scrollRafRef.current);
     }
@@ -1445,8 +1526,16 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       scrollRafRef.current = null;
       const el = messagesScrollRef.current;
       if (!el) return;
-      el.scrollTop = el.scrollHeight;
+      if (behavior === "smooth") {
+        el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+      } else {
+        // Streaming token updates must be an immediate snap-to-bottom. Smooth
+        // animations overlap with frequent content growth and make the scrollbar
+        // visibly bounce.
+        el.scrollTop = el.scrollHeight;
+      }
       stickToBottomRef.current = true;
+      setShowScrollToBottom(false);
     });
   }, []);
 
@@ -1454,7 +1543,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     const el = messagesScrollRef.current;
     if (!el) return;
     const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    stickToBottomRef.current = distanceToBottom < 64;
+    const atBottom = distanceToBottom < 64;
+    stickToBottomRef.current = atBottom;
+    setShowScrollToBottom((visible) => (visible === !atBottom ? visible : !atBottom));
     // 用户主动滚动 = 取消锚定意图(占位也跟着移除,见 effect)
     if (pendingPinUserCountRef.current !== null) {
       pendingPinUserCountRef.current = null;
@@ -1518,15 +1609,20 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
     if (runnersRef.current.has(key)) {
       // 已有 runner —— 直接切。后台 SSE 继续,切回时累积内容立即可见。
-      switchTo(key);
+      // P2-I: 进入 transition，让输入框不被列表 reconcile 阻塞。
+      startTransition(() => {
+        switchTo(key);
+      });
       return;
     }
 
     // 冷启动:建空 runner,先切过去显示空(很快),再异步填 context
     const fresh = emptyRunner();
     fresh.sessionFile = sel.path;
-    setRunner(key, fresh);
-    switchTo(key);
+    startTransition(() => {
+      setRunner(key, fresh);
+      switchTo(key);
+    });
 
     void fetch(`/api/sessions/${selectedId}/context`)
       .then((r) => r.json())
@@ -1535,21 +1631,28 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           setError(ctx.error);
           return;
         }
-        updateRunner(key, {
-          chatState: createInitialState(
-            appendRestoredSubagentBatches(
-              ctxToMessages(ctx.messages ?? []),
-              Array.isArray(ctx.subagentBatches)
-                ? (ctx.subagentBatches as SubagentBatch[])
-                : undefined
-            )
-          ),
-          ...(Array.isArray(ctx.forkableUserMessages)
-            ? {
-                forkableUserMessages:
-                  ctx.forkableUserMessages as ForkableUserMessage[],
-              }
-            : {}),
+        // P2-I: 从后端拉回的整个历史会话可能包含几百条消息；
+        // 这一重重渲染量包进低优先级 transition，让输入交互优先保持响应。
+        startTransition(() => {
+          updateRunner(key, {
+            chatState: createInitialState(
+              appendRestoredSubagentBatches(
+                ctxToMessages(ctx.messages ?? []),
+                Array.isArray(ctx.subagentBatches)
+                  ? (ctx.subagentBatches as SubagentBatch[])
+                  : undefined
+              )
+            ),
+            ...(Array.isArray(ctx.forkableUserMessages)
+              ? {
+                  forkableUserMessages:
+                    ctx.forkableUserMessages as ForkableUserMessage[],
+                }
+              : {}),
+            ...(ctx.progress
+              ? { progress: ctx.progress as AgentProgress }
+              : {}),
+          });
         });
       })
       .catch((e) => setError(String(e)));
@@ -1874,7 +1977,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     startWorkflow,
   } = useChatStream({
     agentId,
-    input,
+    getInput: getCurrentInput,
     pendingImages,
     pendingFiles,
     currentSessionFile,
@@ -1972,13 +2075,14 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         current.selectionStart === current.value.length &&
         current.selectionEnd === current.value.length;
       const browsingHistory = historyCursorRef.current != null;
+      const currentValue = current.value;
       if (!browsingHistory) {
-        if (direction === "prev" && !atStart && input.trim()) return false;
+        if (direction === "prev" && !atStart && currentValue.trim()) return false;
         if (direction === "next" && !atEnd) return false;
       }
 
       if (historyCursorRef.current == null) {
-        historyDraftRef.current = input;
+        historyDraftRef.current = currentValue;
         historyCursorRef.current = inputHistory.length;
       }
 
@@ -2001,7 +2105,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       });
       return true;
     },
-    [input, inputHistory, inputRef, setInput]
+    [inputHistory, inputRef, setInput]
   );
 
   const runGoalCommand = useCallback(
@@ -2088,21 +2192,23 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   }, [agentId, agentAction]);
 
   const sendWithHistory = useCallback(async () => {
-    if (await runGoalCommand(input)) return;
-    if (await runWorkflowCommand(input)) return;
-    rememberComposerInput(input);
+    // P1-E: input 不再是 ChatApp 订阅状态，在交互时点同步读一次 store 快照。
+    const current = getCurrentInput();
+    if (await runGoalCommand(current)) return;
+    if (await runWorkflowCommand(current)) return;
+    rememberComposerInput(current);
     await send();
-  }, [input, rememberComposerInput, runGoalCommand, runWorkflowCommand, send]);
+  }, [getCurrentInput, rememberComposerInput, runGoalCommand, runWorkflowCommand, send]);
 
   const steerWithHistory = useCallback(async () => {
-    rememberComposerInput(input);
+    rememberComposerInput(getCurrentInput());
     await onSteer();
-  }, [input, onSteer, rememberComposerInput]);
+  }, [getCurrentInput, onSteer, rememberComposerInput]);
 
   const followUpWithHistory = useCallback(async () => {
-    rememberComposerInput(input);
+    rememberComposerInput(getCurrentInput());
     await onFollowUp();
-  }, [input, onFollowUp, rememberComposerInput]);
+  }, [getCurrentInput, onFollowUp, rememberComposerInput]);
 
   const setComposerInput = useCallback(
     (v: string | ((cur: string) => string)) => {
@@ -2337,7 +2443,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     applyAutocomplete,
     tryHandleAutocompleteKey,
   } = useAutocomplete({
-    input,
+    getInput: getCurrentInput,
     cwd,
     inputRef,
     setInput,
@@ -2463,8 +2569,45 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       {/* 左：会话列表 */}
       <Sidebar
         sidebarOpen={sidebarOpen}
+        onToggleSidebar={() => setSidebarOpen((v) => !v)}
         cwd={cwd}
         setShowCwdPicker={setShowCwdPicker}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        updateAvailable={updateState?.status === "available"}
+        updateLatestVersion={updateState?.latestVersion}
+        onDownloadUpdate={openUpdateDownload}
+        agentId={agentId}
+        currentSessionFile={currentSessionFile}
+        onOpenBranches={() => setShowBranches(true)}
+        onOpenSystemPrompt={async () => {
+          if (!agentId) return;
+          setShowSystemPrompt(true);
+          try {
+            const r = await fetch(`/api/agent/${agentId}?action=system_prompt`);
+            const d = (await r.json()) as { systemPrompt?: string };
+            setSystemPromptText(d.systemPrompt ?? "");
+          } catch (e) {
+            setSystemPromptText(`error: ${String(e)}`);
+          }
+        }}
+        onOpenWorkflows={openWorkflowHistory}
+        onRevealInFinder={() => {
+          if (electronApi && currentSessionFile) {
+            void electronApi
+              .revealInFinder(currentSessionFile)
+              .catch((e) => setError(String(e)));
+          }
+        }}
+        onOpenAuth={() => openAuth()}
+        onOpenSettings={() => {
+          if (electronApi?.settings.open) {
+            void electronApi.settings.open().catch((e) => setError(String(e)));
+            return;
+          }
+          window.open("/settings", "_blank", "noopener,noreferrer");
+        }}
+        onSkipUpdateVersion={skipUpdateVersion}
         sessions={sessions}
         groupedSessions={groupedSessions}
         selectedId={selectedId}
@@ -2608,6 +2751,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             agentPhase={agentPhase}
             cwd={cwd}
             streaming={streaming}
+            compacting={compacting}
+            compactError={compactError}
             pinSpacer={pinSpacer}
             forksCollapsed={forksCollapsed}
             forkingIndex={forkingIndex}
@@ -2635,8 +2780,26 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           />
         )}
 
+        <div className="relative shrink-0">
+          {showScrollToBottom ? (
+            <button
+              type="button"
+              onClick={() => scrollMessagesToBottom("smooth")}
+              className="absolute left-1/2 top-0 z-20 inline-flex h-9 w-9 -translate-x-1/2 -translate-y-[calc(100%+8px)] items-center justify-center rounded-full border shadow-lg backdrop-blur transition-all hover:-translate-y-[calc(100%+10px)] hover:shadow-xl"
+              style={{
+                borderColor: "var(--border)",
+                background: "color-mix(in srgb, var(--bg-panel) 88%, transparent)",
+                color: "var(--text)",
+              }}
+              aria-label="滚动到底部"
+              title="滚动到底部"
+            >
+              <ArrowDown size={16} />
+            </button>
+          ) : null}
+
         <Composer
-          input={input}
+          inputKey={activeKey}
           setInput={setComposerInput}
           inputRef={inputRef}
           fileInputRef={fileInputRef}
@@ -2687,6 +2850,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           soundEnabled={soundEnabled}
           onSoundToggle={onSoundToggle}
         />
+        </div>
       </main>
 
       <WorkbenchSidebar
@@ -2694,6 +2858,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         view={workbenchView}
         cwd={cwd}
         width={filesContainerWidth}
+        isResizing={rightPanelResizing}
         agentId={agentId}
         runtimeIdentity={runtimeIdentity}
         progress={progress}

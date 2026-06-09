@@ -90,6 +90,27 @@ describe("ctxToMessages", () => {
     ]);
   });
 
+  it("assistant 认证失效且 content 为空 → 显示可操作错误提示", () => {
+    const out = ctxToMessages([
+      {
+        role: "assistant",
+        timestamp: 2000,
+        stopReason: "error",
+        errorMessage:
+          "Your authentication token has been invalidated. Please try signing in again.",
+        content: [],
+      },
+    ]);
+
+    expect(out).toHaveLength(1);
+    expect(out[0].parts).toEqual([
+      {
+        kind: "text",
+        text: "当前登录凭证已失效，请重新登录 ChatGPT Plus/Pro（Codex Subscription）或重新配置 Provider 凭证后再发送。",
+      },
+    ]);
+  });
+
   it("assistant tool_use + 后续 tool_result → 回填 result/status=done", () => {
     const out = ctxToMessages([
       {
@@ -372,6 +393,30 @@ describe("appendRestoredSubagentBatches", () => {
 });
 
 describe("applyEvent — shim duplicate completion guards", () => {
+  it("message_end 认证失效且 content 为空 → 不保留空 assistant 气泡", () => {
+    let s = createInitialState();
+    const message = {
+      role: "assistant",
+      stopReason: "error",
+      errorMessage:
+        "Your authentication token has been invalidated. Please try signing in again.",
+      content: [],
+      timestamp: 1000,
+    };
+
+    s = applyEvent(s, { type: "message_start", message });
+    s = applyEvent(s, { type: "message_end", message });
+
+    expect(s.messages).toHaveLength(1);
+    expect(s.activeAssistantIndex).toBe(-1);
+    expect(s.messages[0].parts).toEqual([
+      {
+        kind: "text",
+        text: "当前登录凭证已失效，请重新登录 ChatGPT Plus/Pro（Codex Subscription）或重新配置 Provider 凭证后再发送。",
+      },
+    ]);
+  });
+
   it("uses full assistant content from message_start and ignores duplicate deltas", () => {
     let s = createInitialState();
     const message = {

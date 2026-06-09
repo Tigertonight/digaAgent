@@ -213,6 +213,8 @@ export default function PetSprite({ animState, size = 80 }: Props) {
         alt="Diga"
         width={size}
         height={size}
+        loading="eager"
+        priority
         unoptimized
         style={{
           display: "block",

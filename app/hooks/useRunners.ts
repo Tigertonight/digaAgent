@@ -125,6 +125,7 @@ export function useRunners(opts: UseRunnersOptions = {}): UseRunnersReturn {
   const lruEvictRef = useRef<(() => void) | null>(null);
 
   const switchTo = useCallback<UseRunnersReturn["switchTo"]>((newKey) => {
+    if (newKey === activeKeyRef.current) return;
     const target = runnersRef.current.get(newKey);
     if (!target) {
       // 目标不存在 —— 调用方应该先 lazy create runner 再 switchTo。

@@ -40,6 +40,40 @@ import type { ThinkingLevel } from "@/lib/types";
 /** SSE event 的通用形状 —— 业务字段通过 cast 收窄 */
 type AgentEvent = { type: string; [k: string]: unknown };
 
+function settleProgressAfterAgentEnd(
+  progress: AgentProgress | null
+): AgentProgress | null {
+  if (!progress) return progress;
+  const t = Date.now();
+  let changed = false;
+  const closeStep = (step: AgentProgress["steps"][number]) => {
+    if (step.status !== "running" && step.status !== "pending") return step;
+    changed = true;
+    return {
+      ...step,
+      status: "completed" as const,
+      completedAt: step.completedAt ?? t,
+    };
+  };
+  const groups = (progress.groups ?? []).map((group) => ({
+    ...group,
+    steps: group.steps.map(closeStep),
+    endedAt:
+      group.endedAt ??
+      (group.steps.some(
+        (step) => step.status === "running" || step.status === "pending"
+      )
+        ? t
+        : undefined),
+  }));
+  const steps =
+    groups.length > 0
+      ? groups.at(-1)?.steps ?? []
+      : (progress.steps ?? []).map(closeStep);
+  if (!changed) return progress;
+  return { ...progress, groups, steps, updatedAt: t };
+}
+
 export interface UseAgentEventsOptions {
   /** 写 runner 状态（来自 useRunners） */
   updateRunner: (key: RunnerKey, patch: RunnerPatch) => void;
@@ -194,12 +228,13 @@ export function useAgentEvents(
           return;
 
         case "agent_end":
-          updateRunner(ownerKey, {
+          updateRunner(ownerKey, (state) => ({
             streaming: false,
             agentPhase: null,
             retryInfo: null,
             runStartedAt: null,
-          });
+            progress: settleProgressAfterAgentEnd(state.progress),
+          }));
           playDoneSound();
           refreshSessions();
           if (aidForEvents) {

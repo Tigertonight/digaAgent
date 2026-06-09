@@ -48,6 +48,10 @@ import {
   getProgress,
   updateProgress,
 } from "@/lib/progress/server-store";
+import {
+  readPersistedProgress,
+  writePersistedProgress,
+} from "@/lib/progress/file-store";
 import { listEvidence } from "@/lib/evidence/server-store";
 import type { EvidenceKind } from "@/lib/evidence/types";
 import { listRuntimeEvents } from "@/lib/runtime/event-store";
@@ -95,6 +99,18 @@ function parseProgressUpdate(body: Record<string, unknown>): ProgressUpdateInput
     replaceSteps: body.replaceSteps === true,
     replaceArtifacts: body.replaceArtifacts === true,
   };
+}
+
+async function persistProgressForAgent(
+  rec: NonNullable<ReturnType<typeof getAgent>>,
+  progress: ReturnType<typeof getProgress>
+): Promise<void> {
+  try {
+    await writePersistedProgress(rec.session.sessionId, progress);
+  } catch {
+    // Progress persistence is best-effort; UI should not fail a tool/run because
+    // the auxiliary runtime cache cannot be written.
+  }
 }
 
 export const runtime = "nodejs";
@@ -225,6 +241,14 @@ export async function GET(
     }
   }
 
+  const memoryProgress = getProgress(id);
+  const persistedProgress =
+    memoryProgress.groups.length === 0 &&
+    memoryProgress.steps.length === 0 &&
+    memoryProgress.artifacts.length === 0
+      ? await readPersistedProgress(rec.session.sessionId)
+      : null;
+
   return NextResponse.json({
     id: rec.id,
     sessionId: rec.session.sessionId,
@@ -246,7 +270,7 @@ export async function GET(
     pendingMessageCount: rec.session.pendingMessageCount,
     nextSeq: rec.nextSeq,
     goal: getGoal(id),
-    progress: getProgress(id),
+    progress: persistedProgress ?? memoryProgress,
   });
 }
 
@@ -442,6 +466,7 @@ export async function POST(
         const goal = setGoal(id, objective, tokenBudget);
         pushGoalEvent(rec, goal);
         const progress = clearProgress(id);
+        await persistProgressForAgent(rec, progress);
         pushProgressEvent(rec, progress);
 
         const prompt = [
@@ -490,6 +515,7 @@ export async function POST(
       case "goal_clear": {
         clearGoal(id);
         const progress = clearProgress(id);
+        await persistProgressForAgent(rec, progress);
         pushGoalEvent(rec, null);
         pushProgressEvent(rec, progress);
         return NextResponse.json({ ok: true, goal: null });
@@ -497,6 +523,7 @@ export async function POST(
 
       case "progress_update": {
         const progress = updateProgress(id, parseProgressUpdate(body));
+        await persistProgressForAgent(rec, progress);
         pushProgressEvent(rec, progress);
         return NextResponse.json({ ok: true, progress });
       }
@@ -531,10 +558,15 @@ export async function POST(
 
       case "abort": {
         const progress = failOpenProgress(id, "用户已中止当前任务。");
+        await persistProgressForAgent(rec, progress);
         pushProgressEvent(rec, progress);
         await abortWorkflowsForParent(id);
         await abortSubagentsForParent(id);
         await rec.session.abort();
+        // SDK 不一定会再送 agent_end（底层 stream 已被拆）。为避免 sidebar 黄点
+        // 一直亮着，这里主动将 record.isStreaming 扯低。getRunningSessionFiles 下一
+        // 次被 GET /api/sessions 调用时就会不再含该 sessionFile。
+        rec.isStreaming = false;
         return NextResponse.json({ ok: true, progress });
       }
 

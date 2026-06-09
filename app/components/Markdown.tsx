@@ -12,7 +12,7 @@ import {
   oneDark,
   oneLight,
 } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { memo, useMemo, useState, useSyncExternalStore } from "react";
 import { previewStore } from "@/lib/preview-store";
 
 // Prism 按需注册 —— 默认 Prism 会带全部语言(几 MB);PrismLight 只 ship 已注册的。
@@ -218,7 +218,7 @@ function inlineLocalImages(input: string, cwd?: string): string {
   return out;
 }
 
-export default function Markdown({
+function MarkdownInner({
   text,
   size = "normal",
   streaming = false,
@@ -370,6 +370,11 @@ export default function Markdown({
     </div>
   );
 }
+
+// P2-H: 包一层 React.memo。默认 shallow 比较 props（text/cwd/streaming/size/onOpenUrl），
+// 不变则跳过重新渲染。主题变化仍由 useIsLight 的订阅触发。
+const Markdown = memo(MarkdownInner);
+export default Markdown;
 
 const COLLAPSED_LINES = 12;
 
