@@ -50,7 +50,14 @@ export function applyGoalUpdate(
   }
 
   // status === "complete": verify before accepting.
-  const workflowStatuses = listWorkflowRuns(agentId).map((run) => run.status);
+  const workflowRuns = listWorkflowRuns(agentId)
+    .filter((run) => run.createdAt >= current.createdAt)
+    .map((run) => ({
+      id: run.id,
+      objective: run.objective,
+      status: run.status,
+      createdAt: run.createdAt,
+    }));
   const verification = verifyGoalCompletion({
     goal: {
       objective: current.objective,
@@ -58,7 +65,7 @@ export function applyGoalUpdate(
     },
     evidence: listGoalEvidence(agentId),
     turns: listGoalTurns(agentId),
-    workflowStatuses,
+    workflowRuns,
   });
 
   if (verification.decision === "reject") {

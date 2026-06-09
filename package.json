@@ -128,7 +128,20 @@
       "node_modules/keytar/**/*",
       "**/.next/standalone/node_modules/@earendil-works/pi-coding-agent/**/*"
     ],
-    "extraResources": [],
+    "extraResources": [
+      {
+        "from": "build/trayTemplate.png",
+        "to": "trayTemplate.png"
+      },
+      {
+        "from": "build/trayTemplate@2x.png",
+        "to": "trayTemplate@2x.png"
+      },
+      {
+        "from": "build/trayIconSource.png",
+        "to": "trayIconSource.png"
+      }
+    ],
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": {

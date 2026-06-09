@@ -7,6 +7,13 @@ import type {
 
 export type GoalVerifyDecision = "accept" | "reject";
 
+export interface GoalWorkflowStatus {
+  status: "pending" | "running" | "completed" | "failed" | "aborted";
+  createdAt?: number;
+  id?: string;
+  objective?: string;
+}
+
 export interface GoalVerifyInput {
   goal: Pick<AgentGoal, "objective" | "acceptanceCriteria">;
   evidence: GoalEvidence[];
@@ -16,6 +23,12 @@ export interface GoalVerifyInput {
    * cares whether any of them failed/aborted, so callers can pass a simple list.
    */
   workflowStatuses?: Array<"pending" | "running" | "completed" | "failed" | "aborted">;
+  /**
+   * Rich workflow status records, preferably scoped by the caller to the active
+   * goal's lifecycle. When provided, failed/aborted runs are considered
+   * unresolved only if no later completed workflow supersedes them.
+   */
+  workflowRuns?: GoalWorkflowStatus[];
 }
 
 export interface GoalVerifyResult {
@@ -32,8 +45,11 @@ export interface GoalVerifyResult {
  *
  * Rules (v1, intentionally conservative):
  *  1. No evidence at all -> reject (completion must be backed by something).
- *  2. Any related workflow failed/aborted -> reject (unresolved failure).
- *  3. Acceptance criteria exist and a required one is unmet -> reject.
+ *  2. Any related workflow is still running/pending -> reject.
+ *  3. Any related workflow failed/aborted after the latest successful workflow
+ *     -> reject (unresolved failure). Older failures can be superseded by a
+ *     later successful validation workflow.
+ *  4. Acceptance criteria exist and a required one is unmet -> reject.
  *
  * Otherwise accept. This is a pure function: callers gather the inputs (from the
  * goal store / workflow store) and pass them in, which keeps it fully testable.
@@ -50,9 +66,30 @@ export function verifyGoalCompletion(
     );
   }
 
-  // Rule 2: any related workflow that failed or aborted blocks completion.
-  const failedWorkflows = (input.workflowStatuses ?? []).filter(
-    (s) => s === "failed" || s === "aborted"
+  const workflowRuns = normalizeWorkflowRuns(input);
+
+  // Rule 2: completion cannot be accepted while related workflows are active.
+  const activeWorkflows = workflowRuns.filter(
+    (run) => run.status === "pending" || run.status === "running"
+  );
+  if (activeWorkflows.length > 0) {
+    missingEvidence.push(
+      `Wait for ${activeWorkflows.length} pending/running workflow run(s) before completing.`
+    );
+  }
+
+  // Rule 3: failed/aborted workflows block only until a later completed
+  // workflow supersedes them. This avoids stale historical failures trapping a
+  // goal after a successful rerun records fresh evidence.
+  const latestCompletedIndex = workflowRuns
+    .map((run, index) => ({ run, index }))
+    .filter((item) => item.run.status === "completed")
+    .map((item) => item.index)
+    .at(-1) ?? -1;
+  const failedWorkflows = workflowRuns.filter(
+    (run, index) =>
+      index > latestCompletedIndex &&
+      (run.status === "failed" || run.status === "aborted")
   );
   if (failedWorkflows.length > 0) {
     missingEvidence.push(
@@ -80,6 +117,19 @@ export function verifyGoalCompletion(
     reason: "Completion accepted: evidence present and no unresolved failures.",
     missingEvidence: [],
   };
+}
+
+function normalizeWorkflowRuns(input: GoalVerifyInput): GoalWorkflowStatus[] {
+  if (input.workflowRuns) {
+    return input.workflowRuns
+      .slice()
+      .sort((a, b) =>
+        typeof a.createdAt === "number" && typeof b.createdAt === "number"
+          ? a.createdAt - b.createdAt
+          : 0
+      );
+  }
+  return (input.workflowStatuses ?? []).map((status) => ({ status }));
 }
 
 function unmetRequiredCriteria(

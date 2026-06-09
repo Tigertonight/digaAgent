@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { findSessionPathById, getSessionDetail } from "@/lib/sessions";
 import { deleteMeta } from "@/lib/meta/store";
+import { deletePersistedProgress } from "@/lib/progress/file-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -68,8 +69,10 @@ export async function DELETE(
       return NextResponse.json({ error: "session not found" }, { status: 404 });
     }
     await fs.unlink(path);
-    // RFC-3 Phase A2：联删 mini-pi-web 的元数据文件（幂等，不存在即跳过）
+    // RFC-3 Phase A2：联删 mini-pi-web 的元数据文件；runtime progress 同步清理。
+    // 二者都是幂等操作，不存在即跳过。
     await deleteMeta(id);
+    await deletePersistedProgress(id);
     return NextResponse.json({ ok: true, id });
   } catch (e) {
     return NextResponse.json(

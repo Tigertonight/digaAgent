@@ -52,6 +52,7 @@ interface AnyEvent {
     model?: string;
     api?: string;
     stopReason?: string;
+    errorMessage?: string;
     usage?: {
       input?: number;
       output?: number;
@@ -266,6 +267,30 @@ function metaFromMessage(m?: AnyEvent["message"]): ChatMessageMeta | undefined {
     usage,
   };
   return Object.values(meta).some((v) => v !== undefined) ? meta : undefined;
+}
+
+function assistantErrorText(message?: Pick<
+  NonNullable<AnyEvent["message"]>,
+  "stopReason" | "errorMessage"
+>): string | null {
+  if (!message || message.stopReason !== "error") return null;
+  const raw = message.errorMessage?.trim();
+  if (!raw) return "回复失败，请检查当前模型或凭证配置后重试。";
+  if (raw.includes("authentication token has been invalidated")) {
+    return "当前登录凭证已失效，请重新登录 ChatGPT Plus/Pro（Codex Subscription）或重新配置 Provider 凭证后再发送。";
+  }
+  return `回复失败：${raw}`;
+}
+
+function appendAssistantErrorFallback(
+  parts: MessagePart[],
+  message?: Pick<NonNullable<AnyEvent["message"]>, "stopReason" | "errorMessage">
+): MessagePart[] {
+  if (parts.some((p) => p.kind === "text" && p.text.trim().length > 0)) {
+    return parts;
+  }
+  const text = assistantErrorText(message);
+  return text ? [...parts, { kind: "text", text }] : parts;
 }
 
 function mergeMeta(
@@ -844,6 +869,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         } else {
           parts = cur.parts.slice();
         }
+        parts = appendAssistantErrorFallback(parts, m);
         // 不管哪种来源，最后一个未结束的 thinking 在结束时间打个 endedAt
         sealLastThinkingIfOpen(parts);
         state.messages[state.activeAssistantIndex] = {
@@ -1324,6 +1350,8 @@ export function ctxToMessages(
     provider?: string;
     model?: string;
     api?: string;
+    stopReason?: string;
+    errorMessage?: string;
     usage?: NonNullable<AnyEvent["message"]>["usage"];
     toolCallId?: string;
     toolName?: string;
@@ -1442,9 +1470,10 @@ export function ctxToMessages(
           }
         }
       }
+      const finalParts = appendAssistantErrorFallback(parts, m);
       out.push({
         role: "assistant",
-        parts,
+        parts: finalParts,
         timestamp: m.timestamp,
         meta: metaFromMessage({ ...m, role: "assistant" }),
       });

@@ -10,8 +10,18 @@
  *
  * MINI_PI_WEB_ROOT：文件 API 的根护栏，默认设成 home 目录，避免误删别人文件。
  */
-const { app, BrowserWindow, shell, dialog, ipcMain, Menu } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  shell,
+  dialog,
+  ipcMain,
+  Menu,
+  Tray,
+  nativeImage,
+} = require("electron");
 const { fork } = require("node:child_process");
+const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const net = require("node:net");
@@ -91,6 +101,136 @@ let serverChild = null;
 let apiBase = null;
 /** 主窗口必须保留强引用，否则加载完成后可能被 GC 回收成无窗口进程。 */
 let mainWin = null;
+/** macOS menu bar / tray icon 必须保留强引用，否则会被 GC 回收。 */
+let tray = null;
+
+function getPrimaryMainWindow() {
+  if (mainWin && !mainWin.isDestroyed()) return mainWin;
+  return BrowserWindow.getAllWindows().find(
+    (w) =>
+      w !== petWin &&
+      (settingsWin ? w !== settingsWin : true) &&
+      !w.isDestroyed()
+  );
+}
+
+function focusWindow(win) {
+  if (!win || win.isDestroyed()) return false;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.moveTop();
+  app.focus({ steal: true });
+  win.focus();
+  return true;
+}
+
+async function openMainWindow() {
+  const win = getPrimaryMainWindow();
+  if (focusWindow(win)) return win;
+  return createWindow();
+}
+
+function createTrayIcon() {
+  const iconPath = DEV
+    ? path.resolve(__dirname, "..", "build", "trayTemplate.png")
+    : path.join(process.resourcesPath, "trayTemplate.png");
+  const retinaIconPath = DEV
+    ? path.resolve(__dirname, "..", "build", "trayTemplate@2x.png")
+    : path.join(process.resourcesPath, "trayTemplate@2x.png");
+  const image = nativeImage.createFromBuffer(fs.readFileSync(iconPath));
+  if (fs.existsSync(retinaIconPath)) {
+    image.addRepresentation({
+      scaleFactor: 2,
+      buffer: fs.readFileSync(retinaIconPath),
+    });
+  }
+  if (image.isEmpty()) {
+    console.warn(`[electron] tray icon is empty: ${iconPath}`);
+  }
+  return image;
+}
+
+function updateTrayMenu() {
+  if (!tray) return;
+  const petVisible = !!(petWin && !petWin.isDestroyed() && petWin.isVisible());
+  const template = [
+    {
+      label: "打开 Diga Agent",
+      click: () => void openMainWindow(),
+    },
+    {
+      label: "设置…",
+      accelerator: process.platform === "darwin" ? "Cmd+," : "Ctrl+,",
+      click: () => void openSettingsWindow(),
+    },
+    {
+      label: petVisible ? "隐藏宠物" : "显示宠物",
+      click: async () => {
+        if (DISABLE_PET_WINDOW) return;
+        const base = apiBase || DEV_URL;
+        if (!petWin || petWin.isDestroyed()) {
+          await createPetWindow(base);
+        }
+        if (!petWin || petWin.isDestroyed()) return;
+        if (petWin.isVisible()) petWin.hide();
+        else petWin.show();
+        updateTrayMenu();
+      },
+    },
+    { type: "separator" },
+    {
+      label: "检查更新",
+      enabled: !DEV,
+      click: () => {
+        void updaterModule.checkForUpdates({ manual: true });
+      },
+    },
+    { type: "separator" },
+    {
+      label: "退出 Diga Agent",
+      accelerator: process.platform === "darwin" ? "Cmd+Q" : "Ctrl+Q",
+      click: () => app.quit(),
+    },
+  ];
+  tray.setContextMenu(Menu.buildFromTemplate(template));
+}
+
+function createTray() {
+  if (tray) return tray;
+  const icon = createTrayIcon();
+  tray = new Tray(icon);
+  tray.setImage(icon);
+  tray.setToolTip("Diga Agent");
+  tray.on("click", () => void openMainWindow());
+  tray.on("right-click", () => {
+    updateTrayMenu();
+    tray.popUpContextMenu();
+  });
+  updateTrayMenu();
+  console.log("[electron] tray created");
+  if (DEV) {
+    setTimeout(() => {
+      if (!tray) return;
+      console.log("[electron] tray bounds", tray.getBounds());
+    }, 1000).unref();
+  }
+  return tray;
+}
+
+function attachWindowDiagnostics(win, label) {
+  if (!DEV) return;
+  win.webContents.on(
+    "did-fail-load",
+    (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      console.warn(
+        `[electron:${label}:did-fail-load] ${errorCode} ${errorDescription} ${validatedURL} mainFrame=${isMainFrame}`
+      );
+    }
+  );
+  win.webContents.on("render-process-gone", (_event, details) => {
+    console.warn(`[electron:${label}:render-process-gone]`, details);
+  });
+}
 
 async function startStandaloneServer() {
   const port = await getFreePort();
@@ -430,13 +570,8 @@ function registerIpc() {
 
   // 宠物窗口请求聚焦主窗口，并可选切换 session
   ipcMain.on("pet:focus-main", (_event, sessionId) => {
-    const mainWin = BrowserWindow.getAllWindows().find(
-      (w) => w !== petWin && (settingsWin ? w !== settingsWin : true) && !w.isDestroyed()
-    );
-    if (mainWin) {
-      if (mainWin.isMinimized()) mainWin.restore();
-      mainWin.show();
-      mainWin.focus();
+    const mainWin = getPrimaryMainWindow();
+    if (focusWindow(mainWin)) {
       if (sessionId) {
         mainWin.webContents.send("pet:switch-session", sessionId);
       }
@@ -450,12 +585,7 @@ function registerIpc() {
    */
   ipcMain.on("pet:reconnect-session", (_event, sessionId) => {
     if (!sessionId) return;
-    const mainWin = BrowserWindow.getAllWindows().find(
-      (w) =>
-        w !== petWin &&
-        (settingsWin ? w !== settingsWin : true) &&
-        !w.isDestroyed()
-    );
+    const mainWin = getPrimaryMainWindow();
     if (mainWin) {
       mainWin.webContents.send("pet:reconnect-session", sessionId);
     }
@@ -466,6 +596,7 @@ function registerIpc() {
     if (!petWin || petWin.isDestroyed()) return;
     if (visible) petWin.show();
     else petWin.hide();
+    updateTrayMenu();
   });
 
   // 宠物拖拽：移动宠物窗口位置
@@ -531,17 +662,7 @@ function registerIpc() {
         accelerator: "CmdOrCtrl+1",
         click: () => {
           // 复用 pet:focus-main 行为：找到主窗 + show/focus
-          const mainWin = BrowserWindow.getAllWindows().find(
-            (w) =>
-              w !== petWin &&
-              (settingsWin ? w !== settingsWin : true) &&
-              !w.isDestroyed()
-          );
-          if (mainWin) {
-            if (mainWin.isMinimized()) mainWin.restore();
-            mainWin.show();
-            mainWin.focus();
-          }
+          void openMainWindow();
         },
       },
       // 切换会话子菜单：>1 个 session 才显示
@@ -580,6 +701,7 @@ function registerIpc() {
         label: "隐藏宠物",
         click: () => {
           if (petWin && !petWin.isDestroyed()) petWin.hide();
+          updateTrayMenu();
           // v1 没暴露"再次显示"入口，但主窗口设置里可控
           // 主窗启动时会自动 createPetWindow，下次重启可见
         },
@@ -602,6 +724,10 @@ function registerIpc() {
 }
 
 async function createWindow() {
+  if (mainWin && !mainWin.isDestroyed()) {
+    focusWindow(mainWin);
+    return mainWin;
+  }
   mainWin = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -629,13 +755,14 @@ async function createWindow() {
 
   // 外链用系统浏览器打开，不要在 Electron 内导航
   const win = mainWin;
+  attachWindowDiagnostics(win, "main");
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: "deny" };
   });
 
-  const url = DEV ? DEV_URL : await startStandaloneServer();
+  const url = DEV ? DEV_URL : apiBase || await startStandaloneServer();
   console.log(`[electron] loading ${url}`);
 
   // dev 下 next dev 启动可能需要时间，做个简单 retry
@@ -675,6 +802,7 @@ async function createWindow() {
   }, 2000).unref();
   win.on("closed", () => {
     if (mainWin === win) mainWin = null;
+    updateTrayMenu();
   });
   return win;
 }
@@ -710,6 +838,7 @@ async function openSettingsWindow() {
     shell.openExternal(url);
     return { action: "deny" };
   });
+  attachWindowDiagnostics(settingsWin, "settings");
   settingsWin.on("closed", () => {
     settingsWin = null;
   });
@@ -750,8 +879,12 @@ async function createPetWindow(baseUrl) {
 
   // 默认透明区域穿透（forward=true），有内容时渲染进程通知关闭穿透
   petWin.setIgnoreMouseEvents(true, { forward: true });
+  attachWindowDiagnostics(petWin, "pet");
   petWin.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  petWin.on("closed", () => { petWin = null; });
+  petWin.on("closed", () => {
+    petWin = null;
+    updateTrayMenu();
+  });
   // 失焦时通知 renderer 关闭可关闭的浮层（如卡片）
   // 触发场景：用户点击其他窗口 / 点击桌面 / 切到别的 App
   petWin.on("blur", () => {
@@ -761,6 +894,7 @@ async function createPetWindow(baseUrl) {
   });
 
   await petWin.loadURL(`${baseUrl}/pet`);
+  updateTrayMenu();
   return petWin;
 }
 
@@ -842,6 +976,7 @@ function buildAppMenu() {
 app.whenReady().then(async () => {
   registerIpc();
   buildAppMenu();
+  createTray();
 
   // 一次性 env → keytar 迁移（首次启动若 keytar 空且 env 里有 key，自动入库）
   try {
@@ -873,9 +1008,7 @@ app.whenReady().then(async () => {
   }
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      void createWindow();
-    }
+    void openMainWindow();
   });
 });
 

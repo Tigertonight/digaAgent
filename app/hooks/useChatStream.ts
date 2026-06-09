@@ -97,7 +97,7 @@ function extractSessionIdFromPath(p: string): string | null {
 export interface UseChatStreamParams {
   // ===== 活跃 runner 数据（每次 render 拿最新） =====
   agentId: string | null;
-  input: string;
+  getInput: () => string;
   pendingImages: ImageContentLite[];
   pendingFiles: PendingAttachment[];
   currentSessionFile: string | null;
@@ -165,7 +165,7 @@ export function useChatStream(
 ): UseChatStreamReturn {
   const {
     agentId,
-    input,
+    getInput,
     pendingImages,
     pendingFiles,
     currentSessionFile,
@@ -325,6 +325,7 @@ export function useChatStream(
   //   - 冷启动（agentId == null）：fetch /api/agent/new → 升级草稿 → attachSSE → 拉 stats
   //   - 已有 agent（startNewSession eager create 过）：只走草稿升级
   const send = useCallback(async () => {
+    const input = getInput();
     if (
       !input.trim() &&
       pendingImages.length === 0 &&
@@ -415,7 +416,7 @@ export function useChatStream(
     }
   }, [
     agentId,
-    input,
+    getInput,
     messages,
     pendingImages,
     pendingFiles,
@@ -526,10 +527,12 @@ export function useChatStream(
     if (!agentId) return;
     const ownerKey = activeKeyRef.current ?? DRAFT_KEY;
     try {
-      updateRunner(ownerKey, { compactError: null });
+      updateRunner(ownerKey, { compacting: true, compactError: null });
       await agentAction(agentId, { type: "compact" });
+      updateRunner(ownerKey, { compacting: false });
     } catch (e) {
       updateRunner(ownerKey, {
+        compacting: false,
         compactError: e instanceof Error ? e.message : "compact failed",
       });
     }
@@ -538,10 +541,12 @@ export function useChatStream(
   // 中断 compaction
   const onAbortCompaction = useCallback(async () => {
     if (!agentId) return;
+    const ownerKey = activeKeyRef.current ?? DRAFT_KEY;
+    updateRunner(ownerKey, { compacting: false });
     try {
       await agentAction(agentId, { type: "abort_compaction" });
     } catch {}
-  }, [agentId, agentAction]);
+  }, [activeKeyRef, agentId, agentAction, updateRunner]);
 
   /**
    * Steer / Follow-up 公共实现。
@@ -552,7 +557,7 @@ export function useChatStream(
   const sendAgentText = useCallback(
     async (type: "steer" | "follow_up") => {
       if (!agentId) return;
-      const text = input.trim();
+      const text = getInput().trim();
       if (
         !text &&
         pendingImages.length === 0 &&
@@ -579,7 +584,7 @@ export function useChatStream(
     [
       agentId,
       agentAction,
-      input,
+      getInput,
       pendingImages,
       pendingFiles,
       setInput,

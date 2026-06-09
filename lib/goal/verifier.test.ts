@@ -54,6 +54,39 @@ describe("goal verifier v1", () => {
     expect(result.decision).toBe("accept");
   });
 
+  it("accepts when a failed workflow is superseded by a later completed run", () => {
+    const result = verifyGoalCompletion(
+      input({
+        workflowRuns: [
+          { status: "failed", createdAt: 1, id: "failed-old" },
+          { status: "completed", createdAt: 2, id: "completed-new" },
+        ],
+      })
+    );
+    expect(result.decision).toBe("accept");
+  });
+
+  it("rejects when a failed workflow is newer than the latest completed run", () => {
+    const result = verifyGoalCompletion(
+      input({
+        workflowRuns: [
+          { status: "completed", createdAt: 1, id: "completed-old" },
+          { status: "failed", createdAt: 2, id: "failed-new" },
+        ],
+      })
+    );
+    expect(result.decision).toBe("reject");
+    expect(result.missingEvidence.join(" ")).toMatch(/failed\/aborted/);
+  });
+
+  it("rejects when a related workflow is still running", () => {
+    const result = verifyGoalCompletion(
+      input({ workflowRuns: [{ status: "running", createdAt: 1 }] })
+    );
+    expect(result.decision).toBe("reject");
+    expect(result.missingEvidence.join(" ")).toMatch(/pending\/running/);
+  });
+
   it("rejects when a required acceptance criterion is unmet", () => {
     const result = verifyGoalCompletion(
       input({

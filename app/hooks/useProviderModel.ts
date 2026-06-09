@@ -25,14 +25,20 @@ export function normalizeProviderModelSelection(
 
 export function useProviderModel() {
   const { providers, reloadProviders: fetchProviders } = useProviderStatus();
-  const [providerId, setProviderId] = useState<string>(() => {
-    if (typeof window === "undefined") return "";
-    return localStorage.getItem("pi-provider-id") ?? "";
-  });
-  const [modelId, setModelId] = useState<string>(() => {
-    if (typeof window === "undefined") return "";
-    return localStorage.getItem("pi-model-id") ?? "";
-  });
+  const [providerId, setProviderId] = useState<string>("");
+  const [modelId, setModelId] = useState<string>("");
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setProviderId(localStorage.getItem("pi-provider-id") ?? "");
+      setModelId(localStorage.getItem("pi-model-id") ?? "");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (providerId) localStorage.setItem("pi-provider-id", providerId);

@@ -23,10 +23,20 @@ import type {
   ChangeEvent,
   KeyboardEvent,
   ClipboardEvent,
+  CompositionEvent as ReactCompositionEvent,
+  SyntheticEvent,
   RefObject,
   Dispatch,
   SetStateAction,
 } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import { flushSync } from "react-dom";
 import {
   Target,
   CornerDownLeft,
@@ -65,13 +75,14 @@ import type { AutocompleteItem } from "./InputAutocomplete";
 import { PillSelect } from "./PillSelect";
 import { ProviderIcon } from "./ProviderIcon";
 import { GoalBar } from "./GoalBar";
+import { useComposerInput } from "../hooks/useComposerInput";
 
 /** autocomplete 弹层模式：跟 useAutocomplete 一致 */
 type AcMode = "@" | "/" | null;
 
 export interface ComposerProps {
   // ===== textarea =====
-  input: string;
+  inputKey: string;
   setInput: (v: string | ((cur: string) => string)) => void;
   inputRef: RefObject<HTMLTextAreaElement | null>;
   fileInputRef: RefObject<HTMLInputElement | null>;
@@ -141,7 +152,7 @@ export interface ComposerProps {
 
 export function Composer(props: ComposerProps) {
   const {
-    input,
+    inputKey,
     setInput,
     inputRef,
     fileInputRef,
@@ -192,7 +203,174 @@ export function Composer(props: ComposerProps) {
     soundEnabled,
     onSoundToggle,
   } = props;
+  const input = useComposerInput(inputKey);
 
+  // ===== 本地 input state（P0-A）=====
+  // 让 textarea 的高频 keystroke 只更新本地 state，避免每键都触发上层
+  // RunnerState.input 写入（每次 setInput 都会走 updateActive→对比所有 runner→
+  // 重渲染整棵 ChatApp），从而把输入卡顿降到最低。
+  //
+  // 同步策略：
+  //   - onChange：只 setLocalInput（compose 阶段同样只更新 local，不调 refreshAutocomplete）
+  //   - useDeferredValue + 空闲 effect：把 deferred 值低优先级地 flush 到 setInput
+  //   - 外部写回（slash 命令、@文件、页面注释、history、setInput("")）：通过 useEffect
+  //     检测 input prop 变化，且不是自己刚刚 flush 出去的值，则 sync 回 localInput
+  //   - send/steer/followUp/abort/applyAutocomplete 前必须 flushSync 一次到上层，
+  //     保证父组件的 useCallback 闭包（依赖 input）读到最新值
+  const [localInput, setLocalInput] = useState<string>(input);
+  const composingRef = useRef(false);
+  // 记录"我们最近一次写给 setInput 的值"，避免 input prop 回流时把 local 覆盖回去
+  const lastFlushedRef = useRef<string>(input);
+  // setInput / refreshAutocomplete / closeAutocomplete 等回调本身可能依赖父组件
+  // 闭包；用 ref 拿最新引用，flushSync 之后再调用，避免 stale closure。
+  const setInputRef = useRef(setInput);
+  setInputRef.current = setInput;
+  const refreshAutocompleteRef = useRef(refreshAutocomplete);
+  refreshAutocompleteRef.current = refreshAutocomplete;
+  const closeAutocompleteRef = useRef(closeAutocomplete);
+  closeAutocompleteRef.current = closeAutocomplete;
+  const applyAutocompleteRef = useRef(applyAutocomplete);
+  applyAutocompleteRef.current = applyAutocomplete;
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  const onSteerRef = useRef(onSteer);
+  onSteerRef.current = onSteer;
+  const onFollowUpRef = useRef(onFollowUp);
+  onFollowUpRef.current = onFollowUp;
+  const onAbortRef = useRef(onAbort);
+  onAbortRef.current = onAbort;
+
+  // 外部写回：父 input 变了且与本地不一致，且不是自己刚刚 flush 的值 → 覆盖回 local
+  useEffect(() => {
+    if (input !== localInput && input !== lastFlushedRef.current) {
+      setLocalInput(input);
+      lastFlushedRef.current = input;
+    }
+    // 注意：不把 localInput 加进依赖，否则每次本地改动也会跑这个 effect 把 local 覆盖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [input]);
+
+  // 低优先级 sync：deferred(localInput) 稳定后写回上层（idle / 下一次 paint 之后）
+  const deferredLocalInput = useDeferredValue(localInput);
+  useEffect(() => {
+    if (deferredLocalInput === lastFlushedRef.current) return;
+    type IdleHandle = number;
+    const ric: ((cb: () => void) => IdleHandle) | undefined =
+      typeof window !== "undefined" &&
+      typeof (window as unknown as { requestIdleCallback?: unknown })
+        .requestIdleCallback === "function"
+        ? (cb) =>
+            (
+              window as unknown as {
+                requestIdleCallback: (cb: () => void) => IdleHandle;
+              }
+            ).requestIdleCallback(cb)
+        : undefined;
+    const cic: ((h: IdleHandle) => void) | undefined =
+      typeof window !== "undefined" &&
+      typeof (window as unknown as { cancelIdleCallback?: unknown })
+        .cancelIdleCallback === "function"
+        ? (h) =>
+            (
+              window as unknown as {
+                cancelIdleCallback: (h: IdleHandle) => void;
+              }
+            ).cancelIdleCallback(h)
+        : undefined;
+    const run = () => {
+      lastFlushedRef.current = deferredLocalInput;
+      setInputRef.current(deferredLocalInput);
+    };
+    if (ric) {
+      const handle = ric(run);
+      return () => {
+        if (cic) cic(handle);
+      };
+    }
+    const handle = window.setTimeout(run, 0);
+    return () => window.clearTimeout(handle);
+  }, [deferredLocalInput]);
+
+  // 同步把 localInput flush 到上层：用于发送 / steer / followUp / abort /
+  // applyAutocomplete 之前，保证父组件 useCallback 闭包读到最新文本。
+  const flushLocalInput = useCallback(() => {
+    if (lastFlushedRef.current === localInput) return;
+    lastFlushedRef.current = localInput;
+    flushSync(() => {
+      setInputRef.current(localInput);
+    });
+  }, [localInput]);
+
+  const handleSend = useCallback(() => {
+    flushLocalInput();
+    return sendRef.current();
+  }, [flushLocalInput]);
+  const handleSteer = useCallback(() => {
+    flushLocalInput();
+    return onSteerRef.current();
+  }, [flushLocalInput]);
+  const handleFollowUp = useCallback(() => {
+    flushLocalInput();
+    return onFollowUpRef.current();
+  }, [flushLocalInput]);
+  const handleAbort = useCallback(() => {
+    flushLocalInput();
+    return onAbortRef.current();
+  }, [flushLocalInput]);
+  // applyAutocomplete 同样依赖父 input 闭包（hook 里 input.slice(triggerPos)）
+  const handlePickAutocomplete = useCallback(
+    (item: AutocompleteItem) => {
+      flushLocalInput();
+      applyAutocompleteRef.current(item);
+    },
+    [flushLocalInput]
+  );
+
+  // textarea handlers
+  const onTextareaChange = useCallback(
+    (e: ChangeEvent<HTMLTextAreaElement>) => {
+      const v = e.target.value;
+      const caret = e.target.selectionStart ?? v.length;
+      // 用 layout-style 同步更新本地值，UI 立刻看到字符
+      setLocalInput(v);
+      // IME compose 阶段不刷新 autocomplete，避免重复布局/请求
+      if (!composingRef.current) {
+        void refreshAutocompleteRef.current(v, caret);
+      }
+    },
+    []
+  );
+  const onTextareaSelect = useCallback(
+    (e: SyntheticEvent<HTMLTextAreaElement>) => {
+      if (composingRef.current) return;
+      const t = e.currentTarget;
+      void refreshAutocompleteRef.current(
+        t.value,
+        t.selectionStart ?? t.value.length
+      );
+    },
+    []
+  );
+  const onTextareaBlur = useCallback(() => {
+    closeAutocompleteRef.current();
+  }, []);
+  const onCompositionStart = useCallback(() => {
+    composingRef.current = true;
+  }, []);
+  const onCompositionEnd = useCallback(
+    (e: ReactCompositionEvent<HTMLTextAreaElement>) => {
+      composingRef.current = false;
+      const t = e.currentTarget;
+      const v = t.value;
+      // compose 结束时 v 已是合成后的最终字符串；React onChange 也会跟一发
+      // 但 caret 可能还没到末尾，这里直接用 selectionStart
+      const caret = t.selectionStart ?? v.length;
+      // 同步一下 localInput（防止某些浏览器 compositionend 早于最后一次 input）
+      if (v !== localInput) setLocalInput(v);
+      void refreshAutocompleteRef.current(v, caret);
+    },
+    [localInput]
+  );
   const composerBlocker = getComposerBlocker({
     agentId,
     providerId,
@@ -200,8 +378,11 @@ export function Composer(props: ComposerProps) {
     currentProvider,
     visibleProviders,
   });
+  // hasDraft 用 localInput（最新本地值），避免每键都等上层 sync 才更新 send 按钮
   const hasDraft =
-    input.trim().length > 0 || pendingImages.length > 0 || pendingFiles.length > 0;
+    localInput.trim().length > 0 ||
+    pendingImages.length > 0 ||
+    pendingFiles.length > 0;
   const sendDisabled =
     !hasDraft || (!agentId && Boolean(composerBlocker?.blocking));
 
@@ -313,18 +494,27 @@ export function Composer(props: ComposerProps) {
         >
           <textarea
             ref={inputRef}
-            value={input}
-            onChange={(e) => {
-              const v = e.target.value;
-              setInput(v);
-              void refreshAutocomplete(v, e.target.selectionStart ?? v.length);
+            value={localInput}
+            onChange={onTextareaChange}
+            onSelect={onTextareaSelect}
+            onBlur={onTextareaBlur}
+            onCompositionStart={onCompositionStart}
+            onCompositionEnd={onCompositionEnd}
+            onKeyDown={(e) => {
+              // 动作键（Enter/Tab/箭头）会触发依赖父 input 的逻辑
+              // （sendWithHistory / navigateInputHistory / autocomplete apply），
+              // 先把 localInput 同步刷到上层，避免父闭包读到旧文本。
+              if (
+                !e.nativeEvent.isComposing &&
+                (e.key === "Enter" ||
+                  e.key === "Tab" ||
+                  e.key === "ArrowUp" ||
+                  e.key === "ArrowDown")
+              ) {
+                flushLocalInput();
+              }
+              onKeyDown(e);
             }}
-            onSelect={(e) => {
-              const t = e.currentTarget;
-              void refreshAutocomplete(t.value, t.selectionStart ?? t.value.length);
-            }}
-            onBlur={() => closeAutocomplete()}
-            onKeyDown={onKeyDown}
             onPaste={onPasteTextarea}
             placeholder={
               streaming
@@ -342,7 +532,7 @@ export function Composer(props: ComposerProps) {
               mode={acMode}
               items={acItems}
               selectedIndex={acIndex}
-              onPick={applyAutocomplete}
+              onPick={handlePickAutocomplete}
               onHover={setAcIndex}
             />
           )}
@@ -365,8 +555,8 @@ export function Composer(props: ComposerProps) {
               <>
                 <button
                   type="button"
-                  onClick={() => void onSteer()}
-                  disabled={!streaming || (!input.trim() && pendingImages.length === 0 && pendingFiles.length === 0)}
+                  onClick={() => void handleSteer()}
+                  disabled={!streaming || (!localInput.trim() && pendingImages.length === 0 && pendingFiles.length === 0)}
                   className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md text-xs hover:bg-[color:var(--bg-hover)] disabled:opacity-40"
                   style={{ color: "var(--text-muted)" }}
                   title="Steer：立即注入当前 turn（不打断）"
@@ -376,8 +566,8 @@ export function Composer(props: ComposerProps) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => void onFollowUp()}
-                  disabled={!streaming || (!input.trim() && pendingImages.length === 0 && pendingFiles.length === 0)}
+                  onClick={() => void handleFollowUp()}
+                  disabled={!streaming || (!localInput.trim() && pendingImages.length === 0 && pendingFiles.length === 0)}
                   className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md text-xs hover:bg-[color:var(--bg-hover)] disabled:opacity-40"
                   style={{ color: "var(--text-muted)" }}
                   title="Follow-up：排队，当前 turn 结束后自动发送"
@@ -387,7 +577,7 @@ export function Composer(props: ComposerProps) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => void onAbort()}
+                  onClick={() => void handleAbort()}
                   className="inline-flex items-center justify-center h-7 w-7 rounded-md text-white bg-red-600 hover:bg-red-500"
                   title="中止当前 turn"
                   aria-label="Stop"
@@ -397,7 +587,7 @@ export function Composer(props: ComposerProps) {
               </>
             ) : (
               <button
-                onClick={() => void send()}
+                onClick={() => void handleSend()}
                 disabled={sendDisabled}
                 className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-[13px] font-medium text-white disabled:opacity-40 transition-opacity"
                 style={{ background: "var(--accent)" }}

@@ -2,7 +2,7 @@
 
 import type { RefObject } from "react";
 import { useMemo, useState } from "react";
-import { CheckCircle2 } from "lucide-react";
+import { CheckCircle2, Loader2 } from "lucide-react";
 import { MessageView } from "./MessageView";
 import { ChatMinimap } from "../ChatMinimap";
 import type { ChatMessage } from "@/lib/types";
@@ -10,6 +10,7 @@ import type { MessagePart } from "@/lib/types";
 import type { AgentPhase } from "@/lib/session-runner";
 import type { ProviderInfo } from "@/lib/types";
 import type { WorkflowWorktreeAction } from "./MessageView";
+import { formatTokens } from "@/lib/format";
 
 const INITIAL_RENDER_ITEM_WINDOW = 120;
 const RENDER_ITEM_WINDOW_STEP = 120;
@@ -24,6 +25,8 @@ interface MessagesScrollAreaProps {
   agentPhase: AgentPhase;
   cwd: string;
   streaming: boolean;
+  compacting: boolean;
+  compactError: string | null;
   pinSpacer: boolean;
   // fork state
   forksCollapsed: boolean;
@@ -78,6 +81,8 @@ export function MessagesScrollArea({
   agentPhase,
   cwd,
   streaming,
+  compacting,
+  compactError,
   pinSpacer,
   forksCollapsed,
   forkingIndex,
@@ -128,7 +133,7 @@ export function MessagesScrollArea({
         onScroll={onScroll}
         className="flex-1 overflow-y-auto"
       >
-        <div className="mx-auto w-full max-w-[820px] px-4 py-6 space-y-6">
+        <div className="mx-auto w-full max-w-[820px] px-4 py-5 space-y-4">
           {error && (
             <div className="p-3 rounded bg-red-900/40 border border-red-700 text-sm text-red-200">
               {error}
@@ -138,7 +143,12 @@ export function MessagesScrollArea({
             const modelLabel = currentProvider?.models.find(
               (mm) => mm.id === modelId
             )?.name;
-            const renderMessage = (m: ChatMessage, i: number, refMode: "normal" | "none") => {
+            const renderMessage = (
+              m: ChatMessage,
+              i: number,
+              refMode: "normal" | "none",
+              assistantChrome: "full" | "content" = "full"
+            ) => {
               const isVisible =
                 m.role === "user" || m.role === "assistant";
               const currentRefIdx =
@@ -193,6 +203,7 @@ export function MessagesScrollArea({
                   onForkToNewSession={onForkToNewSession}
                   onOpenUrl={onOpenUrl}
                   modelLabel={messageModelLabel}
+                  assistantChrome={assistantChrome}
                   meta={messageMeta}
                   streamingPhase={
                     isActiveAssistant && streaming ? agentPhase : undefined
@@ -210,13 +221,19 @@ export function MessagesScrollArea({
                   onOpenSubagentSession={onOpenSubagentSession}
                 />
               );
-              if (!isVisible) return <div key={stableKey}>{view}</div>;
+              if (!isVisible)
+                return (
+                  <div key={stableKey} className="cv-auto">
+                    {view}
+                  </div>
+                );
               return (
                 <div
                   key={stableKey}
                   ref={(el) => {
                     if (currentRefIdx >= 0) messageRefs.current[currentRefIdx] = el;
                   }}
+                  className="cv-auto"
                 >
                   {view}
                 </div>
@@ -251,6 +268,11 @@ export function MessagesScrollArea({
                   const stableKey = `process:${item.messages[0]?.index ?? "x"}:${
                     item.messages.at(-1)?.index ?? "x"
                   }`;
+                  const groupLastIndex = item.messages.at(-1)?.index ?? -1;
+                  const hasLaterAnswerText = messages
+                    .slice(groupLastIndex + 1)
+                    .some((message) => message.role === "assistant" && hasTextAnswer(message));
+                  const forceExecuting = streaming && !hasLaterAnswerText;
                   const refSlot =
                     visibleOrdinalByMessageIndex[item.messages[0]?.index ?? -1] ??
                     -1;
@@ -260,16 +282,24 @@ export function MessagesScrollArea({
                       ref={(el) => {
                         if (refSlot >= 0) messageRefs.current[refSlot] = el;
                       }}
+                      className="cv-auto"
                     >
                       <CollapsedProcessGroup
                         items={item.messages}
+                        forceExecuting={forceExecuting}
                         renderMessage={(message, index) =>
-                          renderMessage(message, index, "none")
+                          renderMessage(message, index, "none", "content")
                         }
                       />
                     </div>
                   );
                 })}
+                {(compacting || compactError) && (
+                  <ContextCompactionDivider
+                    compacting={compacting}
+                    error={compactError}
+                  />
+                )}
               </>
             );
           })()}
@@ -285,6 +315,65 @@ export function MessagesScrollArea({
         messages={messages}
         scrollContainer={messagesScrollRef}
         messageRefs={messageRefs}
+      />
+    </div>
+  );
+}
+
+function ContextCompactionDivider({
+  compacting,
+  error,
+}: {
+  compacting: boolean;
+  error: string | null;
+}) {
+  const tone = error && !compacting ? "error" : "muted";
+  return (
+    <div
+      className="flex items-center gap-3 py-1"
+      role={compacting ? "status" : error ? "alert" : undefined}
+      aria-live="polite"
+    >
+      <div
+        className="h-px flex-1"
+        style={{
+          background:
+            tone === "error"
+              ? "rgba(248,113,113,0.42)"
+              : "var(--border-soft)",
+        }}
+      />
+      <div
+        className="inline-flex max-w-[70%] items-center gap-2 rounded-full border px-3 py-1 text-[11px]"
+        style={{
+          borderColor:
+            tone === "error" ? "rgba(248,113,113,0.48)" : "var(--border-soft)",
+          background: "var(--bg)",
+          color: tone === "error" ? "#ef4444" : "var(--text-muted)",
+        }}
+        title={error ?? undefined}
+      >
+        {compacting && (
+          <Loader2
+            size={12}
+            className="animate-spin"
+            aria-hidden="true"
+          />
+        )}
+        <span className="truncate">
+          {compacting
+            ? "正在压缩上下文"
+            : `上下文压缩失败：${error ?? "未知错误"}`}
+        </span>
+      </div>
+      <div
+        className="h-px flex-1"
+        style={{
+          background:
+            tone === "error"
+              ? "rgba(248,113,113,0.42)"
+              : "var(--border-soft)",
+        }}
       />
     </div>
   );
@@ -349,21 +438,13 @@ function appendAssistantBlockItems(
   blockEnd: number,
   items: RenderItem[]
 ) {
-  const finalAnswerIndex = findFinalAnswerIndex(messages, blockStart, blockEnd);
-  const canCollapse = finalAnswerIndex >= 0;
-
   let j = blockStart;
   while (j < blockEnd) {
     const current = messages[j];
-    if (
-      canCollapse &&
-      j < finalAnswerIndex &&
-      current.role === "assistant" &&
-      isProcessOnlyAssistant(current)
-    ) {
+    if (current.role === "assistant" && isProcessOnlyAssistant(current)) {
       const group: Array<{ message: ChatMessage; index: number }> = [];
       while (
-        j < finalAnswerIndex &&
+        j < blockEnd &&
         messages[j].role === "assistant" &&
         isProcessOnlyAssistant(messages[j])
       ) {
@@ -378,18 +459,6 @@ function appendAssistantBlockItems(
   }
 }
 
-function findFinalAnswerIndex(
-  messages: ChatMessage[],
-  start: number,
-  end: number
-): number {
-  for (let i = end - 1; i >= start; i -= 1) {
-    const message = messages[i];
-    if (message.role === "assistant" && hasTextAnswer(message)) return i;
-  }
-  return -1;
-}
-
 function hasTextAnswer(message: ChatMessage): boolean {
   return messageParts(message).some(
     (part) => part.kind === "text" && part.text.trim().length > 0
@@ -397,56 +466,82 @@ function hasTextAnswer(message: ChatMessage): boolean {
 }
 
 function isProcessOnlyAssistant(message: ChatMessage): boolean {
+  if (message.role !== "assistant") return false;
   const parts = messageParts(message);
-  if (parts.length === 0) return false;
+  // Some SDK turns only carry model/usage metadata. Rendering them as standalone
+  // assistant messages creates the repeated “GPT-5.5 + token row” whitespace; in
+  // the conversation hierarchy they are part of the surrounding execution trace.
+  if (parts.length === 0) return Boolean(message.meta?.usage || message.meta?.model);
   return !parts.some((part) => part.kind === "text" && part.text.trim().length > 0);
 }
 
 function messageParts(message: ChatMessage): MessagePart[] {
-  const parts = message.parts ?? [];
-  if (parts.length > 0) return parts;
-  const fallback: MessagePart[] = [];
-  if (message.thinking) fallback.push({ kind: "thinking", text: message.thinking });
-  if (message.text) fallback.push({ kind: "text", text: message.text });
-  return fallback;
+  let parts: MessagePart[] = message.parts ? [...message.parts] : [];
+  // Keep compatibility with mixed legacy/parts messages: a turn may have tool
+  // parts plus final text on `message.text`. If we ignore that field, the final
+  // answer is misclassified as process-only and hidden inside the execution card.
+  if (message.thinking && !parts.some((part) => part.kind === "thinking")) {
+    parts = [...parts, { kind: "thinking", text: message.thinking }];
+  }
+  if (
+    message.text &&
+    !parts.some((part) => part.kind === "text" && part.text === message.text)
+  ) {
+    parts = [...parts, { kind: "text", text: message.text }];
+  }
+  return parts;
 }
 
 function CollapsedProcessGroup({
   items,
+  forceExecuting,
   renderMessage,
 }: {
   items: Array<{ message: ChatMessage; index: number }>;
+  forceExecuting: boolean;
   renderMessage: (message: ChatMessage, index: number) => React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const summary = summarizeProcessGroup(items.map((item) => item.message));
+  const summary = summarizeProcessGroup(
+    items.map((item) => item.message),
+    forceExecuting
+  );
   return (
     <div
-      className="group rounded-lg border text-xs"
+      className="group rounded-md border text-xs"
       style={{
         borderColor: "var(--border-soft)",
-        background: "var(--bg)",
+        background: "var(--tool-bg)",
       }}
       data-testid="assistant-process-group"
     >
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-[color:var(--bg-hover)]"
+        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-[color:var(--bg-hover)]"
         aria-expanded={open}
         data-testid="assistant-process-toggle"
       >
-        <CheckCircle2
-          size={13}
-          className="shrink-0"
-          style={{ color: "var(--text-dim)" }}
-          aria-hidden
-        />
+        {summary.running ? (
+          <Loader2
+            size={13}
+            className="shrink-0 animate-spin"
+            style={{ color: "var(--text-muted)" }}
+            aria-hidden
+          />
+        ) : (
+          <CheckCircle2
+            size={13}
+            className="shrink-0"
+            style={{ color: "var(--text-dim)" }}
+            aria-hidden
+          />
+        )}
         <span className="min-w-0 flex-1">
-          <span className="block truncate font-medium" style={{ color: "var(--text)" }}>
+          <span className="inline truncate font-medium" style={{ color: "var(--text)" }}>
             {summary.title}
           </span>
-          <span className="block truncate text-[11px]" style={{ color: "var(--text-muted)" }}>
+          <span className="ml-2 inline truncate text-[11px]" style={{ color: "var(--text-muted)" }}>
             {summary.detail}
           </span>
         </span>
@@ -459,7 +554,7 @@ function CollapsedProcessGroup({
       </button>
       {open ? (
         <div
-          className="space-y-4 border-t px-3 py-3"
+          className="space-y-2 border-t px-2.5 py-2"
           style={{ borderColor: "var(--border-soft)" }}
         >
           {items.map((item) => renderMessage(item.message, item.index))}
@@ -469,21 +564,39 @@ function CollapsedProcessGroup({
   );
 }
 
-function summarizeProcessGroup(messages: ChatMessage[]): {
+function summarizeProcessGroup(
+  messages: ChatMessage[],
+  forceExecuting: boolean
+): {
   title: string;
   detail: string;
+  running: boolean;
 } {
   let tools = 0;
   let thinking = 0;
   let approvals = 0;
   let errorCount = 0;
+  let runningCount = 0;
+  let input = 0;
+  let output = 0;
+  let cost = 0;
   const names = new Map<string, number>();
+  const models = new Map<string, number>();
 
   for (const message of messages) {
+    if (message.meta?.model) {
+      models.set(message.meta.model, (models.get(message.meta.model) ?? 0) + 1);
+    }
+    if (message.meta?.usage) {
+      input += message.meta.usage.input;
+      output += message.meta.usage.output;
+      cost += message.meta.usage.cost;
+    }
     for (const part of messageParts(message)) {
       if (part.kind === "tool") {
         tools += 1;
         names.set(part.toolName, (names.get(part.toolName) ?? 0) + 1);
+        if (part.status === "running") runningCount += 1;
         if (part.status === "error" || part.isError) errorCount += 1;
       } else if (part.kind === "thinking") {
         thinking += 1;
@@ -493,21 +606,31 @@ function summarizeProcessGroup(messages: ChatMessage[]): {
     }
   }
 
+  const modelLabel = [...models.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   const topNames = [...names.entries()]
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
+    .slice(0, 4)
     .map(([name, count]) => (count > 1 ? `${name}×${count}` : name));
-  const chunks = [
-    tools > 0 ? `${tools} 个工具调用` : "",
-    thinking > 0 ? `${thinking} 段思考` : "",
-    approvals > 0 ? `${approvals} 个确认` : "",
-  ].filter(Boolean);
   const stepCount = tools + thinking + approvals || messages.length;
+  const usage =
+    input > 0 || output > 0 || cost > 0
+      ? `${formatTokens(input)} in · ${formatTokens(output)} out${
+          cost > 0 ? ` · $${cost.toFixed(4)}` : ""
+        }`
+      : "";
+  const detailChunks = [
+    topNames.length > 0 ? topNames.join(" / ") : "",
+    usage,
+  ].filter(Boolean);
+  const actor = modelLabel ? `${modelLabel} · ` : "";
+  const isRunning = forceExecuting || runningCount > 0;
+  const verb = isRunning ? "执行中" : "已处理";
   return {
     title:
       errorCount > 0
-        ? `已处理 ${stepCount} 个步骤，期间遇到 ${errorCount} 个问题并已恢复`
-        : `已处理 ${stepCount} 个步骤`,
-    detail: topNames.length > 0 ? topNames.join(" / ") : chunks.join(" / ") || "过程记录",
+        ? `${actor}${verb} ${stepCount} 个步骤，${errorCount} 个问题已恢复`
+        : `${actor}${verb} ${stepCount} 个步骤`,
+    detail: detailChunks.join(" · ") || "过程记录",
+    running: isRunning,
   };
 }

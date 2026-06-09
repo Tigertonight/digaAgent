@@ -87,6 +87,43 @@ body {
     color var(--transition-duration) var(--transition-timing);
 }
 
+/* Theme switch uses the browser View Transition snapshot cross-fade instead of
+   transitioning every colored node individually. This avoids grey cards flashing
+   and text color “jumping” at slightly different times. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 180ms;
+  animation-timing-function: ease;
+}
+::view-transition-old(root) {
+  animation-name: theme-fade-out;
+}
+::view-transition-new(root) {
+  animation-name: theme-fade-in;
+}
+@keyframes theme-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes theme-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.theme-icon-swap {
+  animation: theme-icon-pop 180ms ease;
+}
+@keyframes theme-icon-pop {
+  0% { transform: scale(0.86) rotate(-10deg); opacity: 0.75; }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root),
+  .theme-icon-swap {
+    animation: none;
+  }
+}
+
 .font-mono {
   font-family:
     var(--font-noto-mono), "JetBrains Mono", "Fira Code", Consolas,
@@ -131,10 +168,57 @@ body {
   border-right: 1px solid var(--border);
   overflow: hidden;
   flex-shrink: 0;
+  transition:
+    width 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-color 180ms ease,
+    opacity 180ms ease;
+  will-change: width;
 }
+/* P2-G: 屏外消息跳过样式/布局/绘制。contain-intrinsic-size 给一个合理的
+   默认占位高度，避免滚动条跳动；visible 后默认高度会被真实高度覆盖。
+   不适用于最后一条（貌似需要流式下准确高度才能贴底），由调用方决定不加该类。 */
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 220px;
+}
+
 .sidebar-container.sidebar-closed {
   width: 0;
   border-right: 0;
+  opacity: 0;
+}
+
+/* Chat/workbench scroll surfaces: compact native scrollbar.
+   Do not set global scroll-behavior:smooth here: streaming auto-follow calls
+   scrollTo({behavior:"auto"}), and CSS smooth would turn every token update into
+   an overlapping smooth animation, which makes the scrollbar appear to jump. */
+.overflow-y-auto,
+.overflow-auto,
+.settings-page {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-muted) 48%, transparent) transparent;
+}
+.overflow-y-auto::-webkit-scrollbar,
+.overflow-auto::-webkit-scrollbar,
+.settings-page::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.overflow-y-auto::-webkit-scrollbar-track,
+.overflow-auto::-webkit-scrollbar-track,
+.settings-page::-webkit-scrollbar-track {
+  background: transparent;
+}
+.overflow-y-auto::-webkit-scrollbar-thumb,
+.overflow-auto::-webkit-scrollbar-thumb,
+.settings-page::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-muted) 36%, transparent);
+  border-radius: 999px;
+}
+.overflow-y-auto::-webkit-scrollbar-thumb:hover,
+.overflow-auto::-webkit-scrollbar-thumb:hover,
+.settings-page::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-muted) 58%, transparent);
 }
 
 /* 拖拽图片 overlay */

@@ -59,6 +59,8 @@ export interface MessageViewProps {
   onForkToNewSession: (entryId: string) => void;
   /** assistant caption 用的模型名（仅本轮的 modelId 名） */
   modelLabel?: string;
+  /** 在执行组件展开态中复用 MessageView 时隐藏重复的 assistant 身份/usage chrome。 */
+  assistantChrome?: "full" | "content";
   /** 仅最后一条 assistant 的本轮 token meta */
   meta?: { input: number; output: number; cost: number };
   /** 仅最后一条 assistant + 正在 streaming 时传入：用于 phase 标签 + t/s pill */
@@ -119,6 +121,7 @@ export const MessageView = memo(function MessageView({
   onSubmitFork,
   onForkToNewSession,
   modelLabel,
+  assistantChrome = "full",
   meta,
   streamingPhase,
   isStreaming,
@@ -313,26 +316,35 @@ export const MessageView = memo(function MessageView({
 
   // assistant：左侧，按 parts 顺序渲染
   // 兼容老 message（只有 thinking/text 字段，没有 parts）
-  let parts: MessagePart[] = msg.parts ?? [];
-  if (parts.length === 0 && (msg.thinking || msg.text)) {
-    if (msg.thinking) parts = [...parts, { kind: "thinking", text: msg.thinking }];
-    if (msg.text) parts = [...parts, { kind: "text", text: msg.text }];
+  let parts: MessagePart[] = msg.parts ? [...msg.parts] : [];
+  // Some restored / provider-specific messages can contain structured parts for
+  // tool calls while the final assistant text still lives on the legacy `text`
+  // field. Do not drop that text just because parts already exist.
+  if (msg.thinking && !parts.some((p) => p.kind === "thinking")) {
+    parts = [...parts, { kind: "thinking", text: msg.thinking }];
+  }
+  if (msg.text && !parts.some((p) => p.kind === "text" && p.text === msg.text)) {
+    parts = [...parts, { kind: "text", text: msg.text }];
   }
 
   const captionText = modelLabel || "Assistant";
+  const showAssistantChrome = assistantChrome === "full";
+  if (!showAssistantChrome && parts.length === 0) return null;
 
   const plainText = extractPlainText(parts);
   return (
     <div className="group">
-      <div
-        className="text-[11px] mb-1 flex items-center gap-2"
-        style={{ color: "var(--text-muted)" }}
-      >
-        <span>{captionText}</span>
-        {isStreaming && (
-          <AssistantStreamMeta phase={streamingPhase ?? null} parts={parts} />
-        )}
-      </div>
+      {showAssistantChrome && (
+        <div
+          className="text-[11px] mb-1 flex items-center gap-2"
+          style={{ color: "var(--text-muted)" }}
+        >
+          <span>{captionText}</span>
+          {isStreaming && (
+            <AssistantStreamMeta phase={streamingPhase ?? null} parts={parts} />
+          )}
+        </div>
+      )}
       <div className="space-y-2 text-sm">
         {(() => {
           // 流式中只有"最后一个 text part"在累积 token,提前算好它的 index,
@@ -457,37 +469,39 @@ export const MessageView = memo(function MessageView({
           return rendered;
         })()}
       </div>
-      <div
-        className="text-[11px] mt-2 flex items-center gap-2"
-        style={{ color: "var(--text-muted)" }}
-      >
-        {meta && (
-          <>
-            <span>{formatTokens(meta.input)} in</span>
-            <span aria-hidden="true">·</span>
-            <span>{formatTokens(meta.output)} out</span>
-            {meta.cost > 0 && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span>
-                  {meta.cost < 0.0001
-                    ? "<$0.0001"
-                    : `$${meta.cost.toFixed(4)}`}
-                </span>
-              </>
-            )}
-          </>
-        )}
-        <CopyButton text={plainText} />
-        {msg.timestamp && (
-          <span
-            className="ml-auto text-[10px]"
-            style={{ color: "var(--fg-faint)" }}
-          >
-            {formatMessageTime(msg.timestamp)}
-          </span>
-        )}
-      </div>
+      {showAssistantChrome && (
+        <div
+          className="text-[11px] mt-2 flex items-center gap-2"
+          style={{ color: "var(--text-muted)" }}
+        >
+          {meta && (
+            <>
+              <span>{formatTokens(meta.input)} in</span>
+              <span aria-hidden="true">·</span>
+              <span>{formatTokens(meta.output)} out</span>
+              {meta.cost > 0 && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span>
+                    {meta.cost < 0.0001
+                      ? "<$0.0001"
+                      : `$${meta.cost.toFixed(4)}`}
+                  </span>
+                </>
+              )}
+            </>
+          )}
+          <CopyButton text={plainText} />
+          {msg.timestamp && (
+            <span
+              className="ml-auto text-[10px]"
+              style={{ color: "var(--fg-faint)" }}
+            >
+              {formatMessageTime(msg.timestamp)}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 });

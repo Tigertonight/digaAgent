@@ -3,6 +3,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  __setWorkflowStoreRootForTest,
+  putWorkflowRun,
+} from "../workflows/server-store";
+import type { WorkflowRun } from "../workflows/types";
+import {
   __setGoalStoreRootForTest,
   addGoalEvidence,
   getGoal,
@@ -12,16 +17,44 @@ import { applyGoalUpdate } from "./update";
 
 describe("applyGoalUpdate (verifier integration)", () => {
   let root: string;
+  let workflowRoot: string;
 
   beforeEach(() => {
     root = mkdtempSync(path.join(os.tmpdir(), "mini-pi-goals-"));
+    workflowRoot = mkdtempSync(path.join(os.tmpdir(), "mini-pi-workflows-"));
     __setGoalStoreRootForTest(root);
+    __setWorkflowStoreRootForTest(workflowRoot);
   });
 
   afterEach(() => {
     __setGoalStoreRootForTest(null);
+    __setWorkflowStoreRootForTest(null);
     rmSync(root, { recursive: true, force: true });
+    rmSync(workflowRoot, { recursive: true, force: true });
   });
+
+  function workflow(
+    id: string,
+    patch: Partial<WorkflowRun> & Pick<WorkflowRun, "parentAgentId" | "status" | "createdAt">
+  ): WorkflowRun {
+    return {
+      id,
+      objective: id,
+      rationale: "test workflow",
+      script: "return true;",
+      manifest: {
+        capabilities: ["spawn_agent", "read_files"],
+        maxAgents: 8,
+        maxConcurrency: 4,
+        timeoutMs: 600000,
+        runtime: "process",
+      },
+      artifacts: [],
+      checkpoints: [],
+      logs: [],
+      ...patch,
+    };
+  }
 
   it("returns not-accepted when no goal exists", () => {
     const result = applyGoalUpdate("missing", { status: "complete" });
@@ -56,6 +89,92 @@ describe("applyGoalUpdate (verifier integration)", () => {
     expect(result.rejectionNote).toBeUndefined();
     expect(getGoal("agent-1")?.status).toBe("complete");
     expect(getGoal("agent-1")?.completedAt).toBeTypeOf("number");
+  });
+
+  it("ignores failed workflows created before the active goal", () => {
+    putWorkflowRun(
+      workflow("old-failed", {
+        parentAgentId: "agent-1",
+        status: "failed",
+        createdAt: Date.now() - 10000,
+        endedAt: Date.now() - 9000,
+      })
+    );
+    setGoal("agent-1", "Do the thing");
+    addGoalEvidence("agent-1", {
+      id: "ev-1",
+      kind: "test",
+      title: "tests pass",
+      createdAt: Date.now(),
+    });
+
+    const result = applyGoalUpdate("agent-1", { status: "complete" });
+
+    expect(result.accepted).toBe(true);
+    expect(getGoal("agent-1")?.status).toBe("complete");
+  });
+
+  it("accepts when a later successful workflow supersedes an earlier goal-era failure", () => {
+    const goal = setGoal("agent-1", "Do the thing");
+    putWorkflowRun(
+      workflow("failed-during-goal", {
+        parentAgentId: "agent-1",
+        status: "failed",
+        createdAt: goal.createdAt + 1,
+        endedAt: goal.createdAt + 2,
+      })
+    );
+    putWorkflowRun(
+      workflow("success-after-failure", {
+        parentAgentId: "agent-1",
+        status: "completed",
+        createdAt: goal.createdAt + 3,
+        endedAt: goal.createdAt + 4,
+      })
+    );
+    addGoalEvidence("agent-1", {
+      id: "ev-1",
+      kind: "test",
+      title: "tests pass",
+      createdAt: Date.now(),
+    });
+
+    const result = applyGoalUpdate("agent-1", { status: "complete" });
+
+    expect(result.accepted).toBe(true);
+    expect(getGoal("agent-1")?.status).toBe("complete");
+  });
+
+  it("rejects when the newest goal-era workflow failure is unresolved", () => {
+    const goal = setGoal("agent-1", "Do the thing");
+    putWorkflowRun(
+      workflow("success-before-failure", {
+        parentAgentId: "agent-1",
+        status: "completed",
+        createdAt: goal.createdAt + 1,
+        endedAt: goal.createdAt + 2,
+      })
+    );
+    putWorkflowRun(
+      workflow("failed-after-success", {
+        parentAgentId: "agent-1",
+        status: "failed",
+        createdAt: goal.createdAt + 3,
+        endedAt: goal.createdAt + 4,
+      })
+    );
+    addGoalEvidence("agent-1", {
+      id: "ev-1",
+      kind: "test",
+      title: "tests pass",
+      createdAt: Date.now(),
+    });
+
+    const result = applyGoalUpdate("agent-1", { status: "complete" });
+
+    expect(result.accepted).toBe(false);
+    expect(result.rejectionNote).toContain("failed/aborted");
+    expect(getGoal("agent-1")?.status).toBe("active");
   });
 
   it("applies blocked directly without verification", () => {

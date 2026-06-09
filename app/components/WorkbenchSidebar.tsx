@@ -74,6 +74,7 @@ export interface WorkbenchSidebarProps {
   open: boolean;
   view: WorkbenchView;
   width: number;
+  isResizing?: boolean;
   cwd: string;
   agentId: string | null;
   runtimeIdentity: RuntimeIdentity;
@@ -101,6 +102,7 @@ export function WorkbenchSidebar({
   open,
   view,
   width,
+  isResizing = false,
   cwd,
   agentId,
   runtimeIdentity,
@@ -230,22 +232,28 @@ export function WorkbenchSidebar({
       ? 56
       : 320;
 
-  if (!open) return null;
+  const panelWidth = open ? width : 0;
+  const panelTransition =
+    "width 240ms cubic-bezier(0.22, 1, 0.36, 1), flex-basis 240ms cubic-bezier(0.22, 1, 0.36, 1), min-width 240ms cubic-bezier(0.22, 1, 0.36, 1), max-width 240ms cubic-bezier(0.22, 1, 0.36, 1), opacity 160ms ease, border-color 160ms ease";
 
   return (
     <>
       <div
-        onMouseDown={onSplitterMouseDown}
-        title="拖动调整宽度"
+        onMouseDown={open ? onSplitterMouseDown : undefined}
+        title={open ? "拖动调整宽度" : undefined}
         style={{
-          width: 4,
-          cursor: "ew-resize",
+          width: open ? 4 : 0,
+          cursor: open ? "ew-resize" : "default",
           background: "var(--border-soft)",
           flexShrink: 0,
-          transition: "background 0.12s",
+          opacity: open ? 1 : 0,
+          pointerEvents: open ? "auto" : "none",
+          transition: isResizing
+            ? "background 120ms ease"
+            : "width 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 140ms ease, background 120ms ease",
         }}
         onMouseEnter={(e) => {
-          e.currentTarget.style.background = "var(--accent)";
+          if (open) e.currentTarget.style.background = "var(--accent)";
         }}
         onMouseLeave={(e) => {
           e.currentTarget.style.background = "var(--border-soft)";
@@ -254,13 +262,19 @@ export function WorkbenchSidebar({
       <aside
         className="flex h-full min-h-0 flex-col border-l"
         style={{
-          flex: `0 1 ${width}px`,
-          minWidth,
-          maxWidth: "80vw",
+          flex: `0 0 ${panelWidth}px`,
+          width: panelWidth,
+          minWidth: open ? minWidth : 0,
+          maxWidth: panelWidth,
+          opacity: open ? 1 : 0,
+          pointerEvents: open ? "auto" : "none",
+          overflow: "hidden",
+          contain: "layout paint",
+          willChange: "width, flex-basis, opacity",
           background: "var(--bg-panel)",
-          borderColor: "var(--border)",
+          borderColor: open ? "var(--border)" : "transparent",
           color: "var(--text)",
-          transition: "flex-basis 0.16s ease",
+          transition: isResizing ? "none" : panelTransition,
         }}
         data-testid="workbench-sidebar"
       >
@@ -305,7 +319,7 @@ export function WorkbenchSidebar({
           ) : null}
         </header>
 
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div className="min-h-0 w-full max-w-full flex-1 overflow-auto">
           {activeTab.kind === "home" && (
             <OverviewPanel
               progress={progress}
@@ -544,8 +558,8 @@ function WorkbenchHomeLauncher({
   onOpenTerminal: () => void;
 }) {
   return (
-    <section className="space-y-3" data-testid="workbench-home-launcher">
-      <div className="grid grid-cols-2 gap-2">
+    <section className="w-full min-w-0 max-w-full space-y-3" data-testid="workbench-home-launcher">
+      <div className="grid w-full min-w-0 max-w-full grid-cols-[repeat(2,minmax(0,1fr))] gap-2">
         <LauncherTile
           icon={<FolderOpen size={18} />}
           title="文件"
@@ -611,15 +625,15 @@ function LauncherTile({
     <button
       type="button"
       onClick={onClick}
-      className="rounded border p-3 text-left hover:bg-[color:var(--bg-hover)]"
+      className="w-full min-w-0 max-w-full overflow-hidden rounded border p-3 text-left hover:bg-[color:var(--bg-hover)]"
       style={{ borderColor: "var(--border-soft)", background: "var(--bg-panel-2)" }}
       data-testid={`workbench-launch-${title}`}
     >
       <span className="inline-flex h-8 w-8 items-center justify-center rounded" style={{ background: "var(--bg-selected)", color: "var(--accent)" }}>
         {icon}
       </span>
-      <span className="mt-2 block text-xs font-medium">{title}</span>
-      <span className="mt-0.5 block text-[11px]" style={{ color: "var(--text-muted)" }}>
+      <span className="mt-2 block truncate text-xs font-medium">{title}</span>
+      <span className="mt-0.5 block truncate text-[11px]" style={{ color: "var(--text-muted)" }}>
         {body}
       </span>
     </button>
@@ -828,7 +842,7 @@ function OverviewPanel({
   };
 
   return (
-    <div className="space-y-3 p-2.5" data-testid="workbench-overview">
+    <div className="w-full min-w-0 max-w-full space-y-3 overflow-hidden p-2.5" data-testid="workbench-overview">
       <WorkbenchHomeLauncher
         recommendations={recommendations}
         onOpenView={onOpenView}
