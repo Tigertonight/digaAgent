@@ -44,6 +44,7 @@ import {
   type RunnerKey,
   type RunnerState,
 } from "@/lib/session-runner";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 const STORAGE_KEY = "sessionLastSeen";
 const POLL_INTERVAL_MS = 15_000;
@@ -87,6 +88,11 @@ function sameSessionList(a: SessionInfoLite[], b: SessionInfoLite[]): boolean {
       left.messageCount !== right.messageCount ||
       left.firstMessage !== right.firstMessage ||
       left.isRunning !== right.isRunning ||
+      left.runtimeState !== right.runtimeState ||
+      left.waitingApprovalCount !== right.waitingApprovalCount ||
+      left.waitingClarificationCount !== right.waitingClarificationCount ||
+      left.lastEventSeq !== right.lastEventSeq ||
+      left.runtimeUpdatedAt !== right.runtimeUpdatedAt ||
       left.meta?.title !== right.meta?.title ||
       left.meta?.pinned !== right.meta?.pinned
     ) {
@@ -259,6 +265,12 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
       .catch(() => {});
   }, []);
 
+  // 首屏立即校验最新 session 列表。SSR / E2E / 移动远程入口可能先给
+  // 一个轻量初始列表，主动刷新能减少切 session 前的空白等待。
+  useEffect(() => {
+    refreshSessions();
+  }, [refreshSessions]);
+
   /**
    * 轻量轮询 session 列表 —— 用来追踪"别的 agent"在后台的进展。
    * 自己的 agent_end 事件已经会主动 refreshSessions（见 reducer 监听），
@@ -295,10 +307,10 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
           body: JSON.stringify({ name: trimmed }),
         });
         const data = (await r.json()) as { error?: string };
-        if (data.error) onError(data.error);
+        if (data.error) onError(userFacingMessage(data.error));
         else refreshSessions();
       } catch (e) {
-        onError(String(e));
+        onError(userFacingMessage(e));
       }
     },
     [refreshSessions, onError]
@@ -310,7 +322,7 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
         const r = await fetch(`/api/sessions/${id}`, { method: "DELETE" });
         const data = (await r.json()) as { error?: string };
         if (data.error) {
-          onError(data.error);
+          onError(userFacingMessage(data.error));
           return;
         }
         // 把对应 runner 从 Map 里删掉（如果有），关其 SSE
@@ -331,7 +343,7 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
         }
         refreshSessions();
       } catch (e) {
-        onError(String(e));
+        onError(userFacingMessage(e));
       }
     },
     [

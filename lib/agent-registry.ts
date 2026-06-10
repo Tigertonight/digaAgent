@@ -82,6 +82,10 @@ import { writePersistedProgress } from "./progress/file-store";
 import { appendEvidenceMany } from "./evidence/server-store";
 import { appendRuntimeEvent } from "./runtime/event-store";
 import { bridgeAgentEventToRuntime } from "./runtime/agent-event-bridge";
+import {
+  DEFAULT_CLIENT_REQUEST_TTL_MS,
+  claimRecentClientRequest,
+} from "./client-request-dedupe";
 import type {
   ApprovalRequestEvent,
   ApprovalResolvedEvent,
@@ -98,6 +102,7 @@ import type {
   AgentProgress,
   ProgressUpdatedEvent,
 } from "./progress/types";
+import type { SessionRuntimePhase, SessionRuntimeState } from "./types";
 
 function workflowFetchUrlRuleId(rawUrl: string): string {
   try {
@@ -153,6 +158,10 @@ export interface AgentRecord {
   unsubscribe: () => void;
   /** 当前是否在跑(agent_start/end 之间为 true);给 sidebar 标"运行中"用 */
   isStreaming: boolean;
+  /** 最近一次 runtime 相关更新，用于 PC/移动端 reconcile。 */
+  updatedAt: number;
+  /** 短时间内的客户端请求去重，避免弱网/双击重复 prompt。 */
+  recentClientRequests: Map<string, number>;
   /** local shim 可能给完整 assistant 内容但漏掉 done/end，用 watchdog 兜底收尾 */
   finishWatchdog: ReturnType<typeof setTimeout> | null;
   pendingFinishMessage: unknown | null;
@@ -206,22 +215,65 @@ export function getModelRegistry(): ModelRegistry {
   return reg.modelRegistry;
 }
 
-export function listAgentSummaries(): Array<{
-  id: string;
-  sessionId: string;
-  sessionFile: string | null;
-  cwd: string;
-  isStreaming: boolean;
-  hidden: boolean;
-}> {
-  return Array.from(reg.agents.values()).map((rec) => ({
-    id: rec.id,
-    sessionId: rec.session.sessionId,
-    sessionFile: rec.session.sessionFile ?? null,
-    cwd: rec.cwd,
-    isStreaming: rec.isStreaming,
-    hidden: rec.hidden === true,
-  }));
+export function listAgentSummaries(): SessionRuntimeState[] {
+  return Array.from(reg.agents.values()).map((rec) => {
+    const waitingApprovalCount = listPendingApprovals(rec.id).length;
+    const waitingClarificationCount = listPendingClarifications(rec.id).length;
+    const runtimeState: SessionRuntimePhase =
+      waitingApprovalCount + waitingClarificationCount > 0
+        ? "waiting_user"
+        : rec.isStreaming
+          ? "streaming"
+          : rec.nextSeq > 0
+            ? "completed"
+            : "idle";
+    return {
+      id: rec.id,
+      agentId: rec.id,
+      sessionId: rec.session.sessionId,
+      sessionFile: rec.session.sessionFile ?? null,
+      cwd: rec.cwd,
+      isStreaming: rec.isStreaming,
+      hidden: rec.hidden === true,
+      waitingApprovalCount,
+      waitingClarificationCount,
+      lastEventSeq: rec.nextSeq - 1,
+      updatedAt: rec.updatedAt ?? Date.now(),
+      runtimeState,
+    };
+  });
+}
+
+export function claimClientRequest(
+  agentId: string,
+  clientRequestId: string | null | undefined
+): boolean {
+  const requestId = clientRequestId?.trim();
+  if (!requestId) return true;
+  const rec = getAgent(agentId);
+  if (!rec) return true;
+  if (!rec.recentClientRequests) {
+    rec.recentClientRequests = new Map();
+  }
+  const now = Date.now();
+  const claimed = claimRecentClientRequest(
+    rec.recentClientRequests,
+    requestId,
+    now,
+    DEFAULT_CLIENT_REQUEST_TTL_MS
+  );
+  if (!claimed) return false;
+  rec.updatedAt = now;
+  return true;
+}
+
+export function clearClientRequest(
+  agentId: string,
+  clientRequestId: string | null | undefined
+): void {
+  const requestId = clientRequestId?.trim();
+  if (!requestId) return;
+  getAgent(agentId)?.recentClientRequests?.delete(requestId);
 }
 
 /** 拿（或创建）对应 cwd 的 SettingsManager */
@@ -354,6 +406,7 @@ function maybeContinueGoal(rec: AgentRecord): void {
 
 function pushAgentEvent(rec: AgentRecord, event: RingBufferEvent): void {
   const seq = rec.nextSeq++;
+  rec.updatedAt = Date.now();
   rec.events[seq % MAX_EVENTS_PER_AGENT] = { seq, event };
   mirrorRuntimeEvent(rec, seq, event);
   for (const l of rec.listeners) l();
@@ -1446,6 +1499,8 @@ export async function createAgent(opts: CreateOptions): Promise<{
     listeners: new Set(),
     unsubscribe: () => {},
     isStreaming: false,
+    updatedAt: Date.now(),
+    recentClientRequests: new Map(),
     finishWatchdog: null,
     pendingFinishMessage: null,
   };
@@ -1458,6 +1513,7 @@ export async function createAgent(opts: CreateOptions): Promise<{
     if (event.type === "agent_start") {
       clearFinishWatchdog(record);
       record.isStreaming = true;
+      record.updatedAt = Date.now();
       // Open a goal turn when this run is driving an active goal. Records turn
       // history so a long goal's progress survives restart (M2).
       const goal = getGoal(record.id);
@@ -1471,6 +1527,7 @@ export async function createAgent(opts: CreateOptions): Promise<{
     } else if (event.type === "agent_end") {
       clearFinishWatchdog(record);
       finishStreamingRun(record);
+      record.updatedAt = Date.now();
     } else if (messageHasStopReason(event)) {
       // Do not synthesize completion from partial assistant messages. For
       // OpenAI-compatible tool-call turns the SDK emits stopReason-bearing

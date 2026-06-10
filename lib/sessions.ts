@@ -17,12 +17,18 @@ import {
 import { stripContextAside } from "./context-aside";
 import { batchReadMeta } from "./meta/store";
 import type { SessionMeta } from "./meta/types";
+import type { SessionRuntimePhase } from "./types";
 
 export type { SessionInfo, SessionEntry, SessionHeader, SessionContext };
 
 /** SessionInfo + 运行时状态（运行中 / 空闲）+ 自维护元数据。 */
 export type SessionInfoWithStatus = SessionInfo & {
   isRunning: boolean;
+  runtimeState?: SessionRuntimePhase;
+  waitingApprovalCount?: number;
+  waitingClarificationCount?: number;
+  lastEventSeq?: number;
+  runtimeUpdatedAt?: number;
   /** RFC-3 Phase A：~/.mini-pi/sessions/{id}.meta.json 内容，未建时缺省 undefined */
   meta?: SessionMeta;
 };
@@ -36,20 +42,35 @@ export type SessionInfoWithStatus = SessionInfo & {
 export async function listAllSessions(): Promise<SessionInfoWithStatus[]> {
   // 在这里做一次动态 import,避免 client bundle 误把 server-only 的 agent-registry
   // 拉进来 —— 这个文件本身有 "server-only" 守门,但 import 顺序还是显式更清楚。
-  const { getRunningSessionFiles } = await import("./agent-registry");
-  const running = getRunningSessionFiles();
+  const { listAgentSummaries } = await import("./agent-registry");
+  const runtimeByPath = new Map(
+    listAgentSummaries()
+      .filter((agent) => !agent.hidden && agent.sessionFile)
+      .map((agent) => [agent.sessionFile!, agent])
+  );
   const list = await SessionManager.listAll();
   const metas = await batchReadMeta(list.map((s) => s.id));
-  const enriched: SessionInfoWithStatus[] = list.map((s) => ({
-    ...s,
-    isRunning: running.has(s.path),
-    meta: metas.get(s.id),
-  }));
+  const enriched: SessionInfoWithStatus[] = list.map((s) => {
+    const runtime = runtimeByPath.get(s.path);
+    return {
+      ...s,
+      isRunning: runtime?.runtimeState === "streaming" || runtime?.isStreaming === true,
+      runtimeState: runtime?.runtimeState,
+      waitingApprovalCount: runtime?.waitingApprovalCount,
+      waitingClarificationCount: runtime?.waitingClarificationCount,
+      lastEventSeq: runtime?.lastEventSeq,
+      runtimeUpdatedAt: runtime?.updatedAt,
+      meta: metas.get(s.id),
+    };
+  });
   return enriched.sort((a, b) => {
     // pinned 始终最优先（无论是否 running）
     const ap = a.meta?.pinned ? 1 : 0;
     const bp = b.meta?.pinned ? 1 : 0;
     if (ap !== bp) return bp - ap;
+    const aw = a.runtimeState === "waiting_user" ? 1 : 0;
+    const bw = b.runtimeState === "waiting_user" ? 1 : 0;
+    if (aw !== bw) return bw - aw;
     if (a.isRunning !== b.isRunning) return a.isRunning ? -1 : 1;
     return b.modified.getTime() - a.modified.getTime();
   });

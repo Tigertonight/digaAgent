@@ -41,6 +41,12 @@ import {
   type RunnerState,
 } from "@/lib/session-runner";
 import type { AgentProgress, ProgressStep } from "@/lib/progress/types";
+import { userFacingMessage } from "@/lib/user-facing-error";
+import {
+  deleteInput as deleteStoreInput,
+  getInput as getStoreInput,
+  setInput as setStoreInput,
+} from "@/lib/composer/input-store";
 
 type Updater<T> = T | ((prev: T) => T);
 
@@ -204,8 +210,9 @@ export function useChatStream(
       });
       const data = await r.json();
       if (data.error) {
-        setError(data.error);
-        throw new Error(data.error);
+        const message = userFacingMessage(data.error);
+        setError(message);
+        throw new Error(message);
       }
       return data;
     },
@@ -225,8 +232,11 @@ export function useChatStream(
       }
       const upgraded = runnersRef.current?.get(DRAFT_KEY);
       if (!upgraded) return currentKey;
+      const draftInput = getStoreInput(DRAFT_KEY);
       runnersRef.current?.set(newKey, upgraded);
       runnersRef.current?.delete(DRAFT_KEY);
+      if (draftInput) setStoreInput(newKey, draftInput);
+      deleteStoreInput(DRAFT_KEY);
       closeSseFor(DRAFT_KEY);
       switchTo(newKey);
       const idFromPath = extractSessionIdFromPath(sessionFilePath);
@@ -276,7 +286,7 @@ export function useChatStream(
     });
     const data = await r.json();
     if (data.error) {
-      setError(data.error);
+      setError(userFacingMessage(data.error));
       return null;
     }
     const ownerKey = activeKeyRef.current ?? DRAFT_KEY;
@@ -354,7 +364,7 @@ export function useChatStream(
       });
       const data = await r.json();
       if (data.error) {
-        setError(data.error);
+        setError(userFacingMessage(data.error));
         return;
       }
       aid = data.id;

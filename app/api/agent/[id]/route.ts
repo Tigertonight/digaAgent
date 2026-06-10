@@ -26,6 +26,8 @@ import {
   abortWorkflowsForParent,
   pushGoalEvent,
   pushProgressEvent,
+  claimClientRequest,
+  clearClientRequest,
 } from "@/lib/agent-registry";
 import {
   clearGoal,
@@ -357,6 +359,16 @@ export async function POST(
             { status: 400 }
           );
         }
+        const clientRequestId =
+          typeof body.clientRequestId === "string"
+            ? body.clientRequestId.trim().slice(0, 128)
+            : "";
+        if (
+          clientRequestId &&
+          !claimClientRequest(rec.id, clientRequestId)
+        ) {
+          return NextResponse.json({ ok: true, deduped: true });
+        }
         const images = parseImages(body.images);
         // 附件引用（@path）：前端单独传 attachments，不再拼进展示文本。
         const attachments = Array.isArray(body.attachments)
@@ -405,14 +417,19 @@ export async function POST(
           ? `${displayText}\n\n${CONTEXT_ASIDE_OPEN}\n${asideContext}\n${CONTEXT_ASIDE_CLOSE}`
           : displayText;
 
-        // 如果当前在 streaming，默认按 followUp 处理；否则正常 prompt
-        if (rec.isStreaming) {
-          await rec.session.prompt(finalText, {
-            streamingBehavior: "followUp",
-            images,
-          });
-        } else {
-          await rec.session.prompt(finalText, images ? { images } : undefined);
+        try {
+          // 如果当前在 streaming，默认按 followUp 处理；否则正常 prompt
+          if (rec.isStreaming) {
+            await rec.session.prompt(finalText, {
+              streamingBehavior: "followUp",
+              images,
+            });
+          } else {
+            await rec.session.prompt(finalText, images ? { images } : undefined);
+          }
+        } catch (e) {
+          clearClientRequest(rec.id, clientRequestId);
+          throw e;
         }
         return NextResponse.json({
           ok: true,
@@ -572,6 +589,7 @@ export async function POST(
         // 一直亮着，这里主动将 record.isStreaming 扯低。getRunningSessionFiles 下一
         // 次被 GET /api/sessions 调用时就会不再含该 sessionFile。
         rec.isStreaming = false;
+        rec.updatedAt = Date.now();
         return NextResponse.json({ ok: true, progress });
       }
 
