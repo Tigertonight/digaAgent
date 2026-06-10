@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   getSessionContext,
+  getSessionContextPageByPath,
   getSessionContextTail,
   getSessionContextTailByPath,
   getForkableUserMessages,
@@ -23,9 +24,20 @@ export async function GET(
     const url = new URL(req.url);
     const tailRaw = url.searchParams.get("tail");
     const tail = tailRaw ? Number(tailRaw) : 0;
+    const beforeRaw = url.searchParams.get("before");
+    const before = beforeRaw ? Number(beforeRaw) : NaN;
+    const limitRaw = url.searchParams.get("limit");
+    const limit = limitRaw ? Number(limitRaw) : tail;
     const sessionPath = url.searchParams.get("path");
     const ctx =
-      Number.isFinite(tail) && tail > 0
+      sessionPath && Number.isFinite(before) && before >= 0
+        ? await getSessionContextPageByPath(
+            sessionPath,
+            id,
+            before,
+            Number.isFinite(limit) && limit > 0 ? limit : 80
+          )
+        : Number.isFinite(tail) && tail > 0
         ? sessionPath
           ? await getSessionContextTailByPath(sessionPath, id, tail)
           : await getSessionContextTail(id, tail)
@@ -33,7 +45,10 @@ export async function GET(
     if (!ctx) {
       return NextResponse.json({ error: "session not found" }, { status: 404 });
     }
-    if (Number.isFinite(tail) && tail > 0) {
+    if (
+      (sessionPath && Number.isFinite(before) && before >= 0) ||
+      (Number.isFinite(tail) && tail > 0)
+    ) {
       return NextResponse.json(ctx);
     }
     // 顺带返回 fork 锚点和持久化 runtime progress：选中历史 session 后无需

@@ -126,14 +126,63 @@ export async function getSessionContextTailByPath(
   sessionPath: string,
   expectedId: string,
   limit: number
-): Promise<(SessionContext & { truncatedBefore?: number }) | null> {
+): Promise<
+  (SessionContext & {
+    truncatedBefore?: number;
+    beforeCursor?: number | null;
+    hasMoreBefore?: boolean;
+  }) | null
+> {
   const sm = SessionManager.open(sessionPath);
   if (sm.getSessionId() !== expectedId) return null;
   const branch = sm.getBranch();
   const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
-  const tailEntries = branch.slice(-safeLimit);
-  const leafId = sm.getLeafId();
-  const ctx = buildSessionContext(tailEntries, leafId);
+  return buildSessionContextSlice(branch, sm.getLeafId(), {
+    start: Math.max(0, branch.length - safeLimit),
+    end: branch.length,
+  });
+}
+
+/** 拿当前 leaf 路径上 beforeCursor 之前的一页上下文，给移动端“加载更早内容”。 */
+export async function getSessionContextPageByPath(
+  sessionPath: string,
+  expectedId: string,
+  beforeCursor: number,
+  limit: number
+): Promise<
+  (SessionContext & {
+    beforeCursor?: number | null;
+    hasMoreBefore?: boolean;
+    truncatedBefore?: number;
+  }) | null
+> {
+  const sm = SessionManager.open(sessionPath);
+  if (sm.getSessionId() !== expectedId) return null;
+  const branch = sm.getBranch();
+  const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
+  const safeEnd = Math.max(
+    0,
+    Math.min(branch.length, Math.floor(beforeCursor))
+  );
+  return buildSessionContextSlice(branch, sm.getLeafId(), {
+    start: Math.max(0, safeEnd - safeLimit),
+    end: safeEnd,
+  });
+}
+
+function buildSessionContextSlice(
+  branch: SessionEntry[],
+  leafId: string | null,
+  range: { start: number; end: number }
+): SessionContext & {
+  truncatedBefore?: number;
+  beforeCursor?: number | null;
+  hasMoreBefore?: boolean;
+} {
+  const start = Math.max(0, Math.min(branch.length, range.start));
+  const end = Math.max(start, Math.min(branch.length, range.end));
+  const entries = branch.slice(start, end);
+  const ctx = buildSessionContext(entries, leafId);
 
   // 尾部截断可能丢掉前序 model / thinking_level_change，轻量扫描当前分支补回来。
   let thinkingLevel = "off";
@@ -160,7 +209,9 @@ export async function getSessionContextTailByPath(
     ...ctx,
     thinkingLevel,
     model,
-    truncatedBefore: Math.max(0, branch.length - tailEntries.length),
+    truncatedBefore: start,
+    beforeCursor: start > 0 ? start : null,
+    hasMoreBefore: start > 0,
   };
 }
 
