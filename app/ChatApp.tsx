@@ -4,6 +4,7 @@ import {
   startTransition,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -896,6 +897,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     url: string;
   } | null>(null);
 
+  // sidebar 开合－— 提前声明供右侧面板宽度计算使用
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+
   // 右侧 panel 宽度（仅 files/tools 用 inline 形态需要，skills 是 modal）
   const [rightPanelWidth, setRightPanelWidth] = useState(480);
   /** FileBrowser 内部折叠状态:不再影响外层宽度,仅 56px 极窄态特殊处理
@@ -913,7 +917,17 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         const stored = localStorage.getItem("rightPanelWidth");
         const n = stored ? Number(stored) : NaN;
         if (Number.isFinite(n) && n >= 320) {
-          setRightPanelWidth(n);
+          // 注水时就拿当前 viewport / sidebar 状态下的 max 做一次 clamp，
+          // 避免“stored 是上次大窗口里拖出的 1100”在小窗口里首帧先
+          // 按 1100 画一下、下一帧才被 useLayoutEffect 压回。
+          // 这里重新计算 max，不能用闭包里的 rightPanelMaxWidth（那个
+          // 依赖于 viewportWidth state，本函数体是首载时调的）。
+          const liveSidebarWidth = sidebarOpen ? 260 : 0;
+          const liveMax = Math.max(
+            320,
+            window.innerWidth - liveSidebarWidth - 4 - 360,
+          );
+          setRightPanelWidth(Math.min(n, liveMax));
         }
       } catch {
         /* noop */
@@ -927,7 +941,20 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     window.addEventListener("resize", onResize, { passive: true });
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  const rightPanelMaxWidth = Math.max(320, Math.floor(viewportWidth * 0.8));
+  // 右侧面板宽度上限：减去 sidebar 、splitter 、chat 区最小宽度，
+  // 保证拖到左极限时不会越过“中间区最小宽度”。
+  // 否则 rightPanelWidth 会被存成一个远大于实际可用空间的值，
+  // flex 布局会压回去，但 aside 内部仍按 props.width 排版，
+  // 导致“容器被压缩 + 内容变宽”的堆叠错位。
+  const SIDEBAR_WIDTH_OPEN = 260; // 同 globals.css 里的 .sidebar-container
+  const SIDEBAR_WIDTH_CLOSED = 0;
+  const SPLITTER_WIDTH = 4;
+  const CHAT_MIN_WIDTH = 360; // 中间 chat 区最小可用宽
+  const sidebarWidth = sidebarOpen ? SIDEBAR_WIDTH_OPEN : SIDEBAR_WIDTH_CLOSED;
+  const rightPanelMaxWidth = Math.max(
+    320,
+    viewportWidth - sidebarWidth - SPLITTER_WIDTH - CHAT_MIN_WIDTH,
+  );
   /** 两侧都收起时容器收成 56px 窄条,其它情况都用统一 clamp 后的 rightPanelWidth */
   const filesContainerWidth =
     filesLayout.viewerHidden && filesLayout.treeCollapsed
@@ -942,22 +969,40 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     null
   );
   const [rightPanelResizing, setRightPanelResizing] = useState(false);
+  // 拖拽时读最新的 max 宽度，避免 onMove 闭包拿到老值
+  //（拖动过程中窗口 resize 、sidebar 开合变化都会调整 max）。
+  const rightPanelMaxWidthRef = useRef(rightPanelMaxWidth);
+  useEffect(() => {
+    rightPanelMaxWidthRef.current = rightPanelMaxWidth;
+  }, [rightPanelMaxWidth]);
+  // rightPanelWidth state 同步被 clamp 到最新 max：
+  // 窗口变窄 / sidebar 开起后，state 里保存的“希望宽度”不能遗留为一个
+  // 远超可用空间的数值，否则下一次拖拽剩余压缩才能看到变化。
+  // 用 useLayoutEffect 在 paint 前完成 clamp，避免 localStorage 里存着
+  // 一个过大的 width 在首帧先画出一个“外壳被压、内容溢出”的跨帧。
+  useLayoutEffect(() => {
+    setRightPanelWidth((prev) =>
+      prev > rightPanelMaxWidth ? rightPanelMaxWidth : prev,
+    );
+  }, [rightPanelMaxWidth]);
   const onSplitterMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
     setRightPanelResizing(true);
     splitterDragRef.current = {
       startX: e.clientX,
-      startW: rightPanelWidth,
+      // 关键：startW 不能取 state 里可能被 clamp 过的值，
+      // 用当前真实可见宽度（filesContainerWidth）作起点。
+      // 拖到极限后反向拖，必须越过起点才会改变宽度，从根本上消除“虚增 dx”。
+      startW: filesContainerWidth,
     };
     const onMove = (ev: MouseEvent) => {
       const ref = splitterDragRef.current;
       if (!ref) return;
       const dx = ref.startX - ev.clientX;
-      const next = Math.min(
-        rightPanelMaxWidth,
-        Math.max(320, ref.startW + dx)
-      );
-      setRightPanelWidth(next);
+      const liveMax = rightPanelMaxWidthRef.current;
+      const next = Math.min(liveMax, Math.max(320, ref.startW + dx));
+      // 如果 clamp 后与当前 state 相同，不触发 re-render。
+      setRightPanelWidth((prev) => (prev === next ? prev : next));
     };
     const onUp = () => {
       splitterDragRef.current = null;
@@ -1066,8 +1111,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       openWorkbench({ type: "files" });
     });
   }, [openWorkbench]);
-
-  const [sidebarOpen, setSidebarOpen] = useState(true);
 
   // Electron 桥
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
@@ -2655,10 +2698,14 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         }
       />
 
-      {/* 右：对话 */}
+      {/* 右：对话。不再加 inline minWidth=360 ——
+          那是个布局 hint，现在 rightPanelMaxWidth 已经预留了
+          CHAT_MIN_WIDTH 的空间。一旦这里还定下 minWidth，在
+          rightPanelWidth 还没被 clamp 完的跨帧里会让 <main> 拒绝
+          压缩、进而迫使父级 flex 压缩 <aside>、导致外壳与内容宽度
+          不一致。min-w-0 足够保证 truncate 生效。 */}
       <main
         className="flex flex-1 flex-col min-w-0 relative"
-        style={{ minWidth: 360 }}
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
