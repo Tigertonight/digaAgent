@@ -56,6 +56,25 @@ test("reliability: pending approval 可通过 snapshot 恢复为审批气泡", a
   await expect(page.getByText("rm -rf /tmp/e2e-danger")).toBeVisible();
 });
 
+test("reliability: 桌面端首次 SSE attach 只监听最新事件", async ({
+  bootedPage: page,
+}) => {
+  await editor(page).fill("check first sse cursor");
+  await sendBtn(page).click();
+  await activeAgentId(page);
+
+  const latestOpenUrl = await page.evaluate(() => {
+    const w = window as unknown as {
+      __mockEventSources: Array<{ url: string; readyState: number }>;
+    };
+    return [...w.__mockEventSources]
+      .reverse()
+      .find((h) => h.readyState === 1)?.url;
+  });
+
+  expect(latestOpenUrl).toContain("since=latest");
+});
+
 test("reliability: pending clarification 可恢复并提交推荐项", async ({
   bootedPage: page,
 }) => {

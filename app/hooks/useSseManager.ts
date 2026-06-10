@@ -123,11 +123,13 @@ export function useSseManager(
         lastSeqRecord && lastSeqRecord.agentId === agentId
           ? lastSeqRecord.seq
           : undefined;
-      const since =
+      const sinceValue =
         typeof lastSeq === "number" && Number.isFinite(lastSeq)
-          ? `?since=${encodeURIComponent(String(lastSeq))}`
-          : "";
-      const es = new EventSource(`/api/agent/${agentId}/events${since}`);
+          ? String(lastSeq)
+          : "latest";
+      const es = new EventSource(
+        `/api/agent/${agentId}/events?since=${encodeURIComponent(sinceValue)}`
+      );
       esMapRef.current.set(key, es);
 
       es.onopen = () => {
