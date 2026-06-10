@@ -801,7 +801,7 @@ export function Sidebar(props: SidebarProps) {
           style={{ color: "var(--text)" }}
         >
           <Settings size={15} />
-          <span>Settings</span>
+          <span>设置</span>
         </button>
       </div>
     </aside>

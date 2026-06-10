@@ -101,7 +101,7 @@ const SETTINGS_SECTIONS: Array<{
     group: "工具与集成",
     id: "skills",
     label: "技能",
-    description: "管理 Agent 可用的 Skills、启用状态和安装来源。",
+    description: "管理 Agent 可用的技能、启用状态和安装来源。",
     icon: Hammer,
   },
   {

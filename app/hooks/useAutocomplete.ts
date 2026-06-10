@@ -36,7 +36,7 @@ export const SLASH_COMMANDS = [
   { name: "compact", hint: "压缩当前 session 上下文" },
   { name: "branches", hint: "查看分支" },
   { name: "system", hint: "查看 system prompt" },
-  { name: "models", hint: "Models 配置" },
+  { name: "models", hint: "模型配置" },
   { name: "auth", hint: "凭证管理" },
   { name: "goal", hint: "设置长期目标" },
   { name: "workflow", hint: "用 dynamic workflow 执行一个目标" },

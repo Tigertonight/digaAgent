@@ -1055,7 +1055,7 @@ export default function SkillsPanel({ cwd, onClose, embedded = false }: Props) {
             <span
               style={{ fontSize: 15, fontWeight: 700, color: "var(--text)" }}
             >
-              Skills
+              技能
             </span>
             <code
               style={{

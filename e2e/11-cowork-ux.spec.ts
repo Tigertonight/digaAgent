@@ -40,7 +40,7 @@ base("cowork ux: composer explains why send is blocked", async ({ page }) => {
   await expect(page.getByTestId("composer-readiness")).toContainText("没有可用模型");
   await page.locator("textarea").first().fill("hello");
   await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
-  await page.getByRole("button", { name: "配置 Models" }).click();
+  await page.getByRole("button", { name: "配置模型" }).click();
   await expect(page.getByText("自定义模型配置")).toBeVisible();
 });
 
