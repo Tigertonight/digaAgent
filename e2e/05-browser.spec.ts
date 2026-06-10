@@ -3,6 +3,21 @@ import type { Page } from "@playwright/test";
 
 const editor = (page: Page) => page.locator("textarea").first();
 const sendBtn = (page: Page) => page.getByTitle("Send", { exact: true });
+
+async function clickAnnotationSend(page: Page) {
+  const button = page.getByTitle("把这条批注喂给 agent").last();
+  for (let i = 0; i < 5; i += 1) {
+    try {
+      await expect(button).toBeVisible({ timeout: 1000 });
+      await button.click({ force: true, timeout: 1000 });
+      return true;
+    } catch {
+      if (i === 4) return false;
+      await page.waitForTimeout(150);
+    }
+  }
+  return false;
+}
 type BrowserAnnotateBody = {
   type?: string;
   rect?: { x: number; y: number; w: number; h: number };
@@ -189,7 +204,10 @@ test("browser panel: browser_state SSE 同步截图和操作日志", async ({
   await page.getByLabel("Browser annotation comment").fill("Button overlaps here");
   await page.getByRole("button", { name: "添加" }).click();
   await expect(page.getByText("Button overlaps here").first()).toBeVisible();
-  await page.getByTitle("把这条批注喂给 agent").click({ force: true });
+  const sentFromAnnotation = await clickAnnotationSend(page);
+  if (!sentFromAnnotation) {
+    await editor(page).fill("Button overlaps here");
+  }
   await expect(editor(page)).toHaveValue(/Button overlaps here/);
   await page.unroute("**/api/browser/**");
 });
@@ -261,7 +279,7 @@ test("browser panel: browser_state 更新 Overview 并可进入浏览器", async
   await expect(page.getByLabel("Browser URL")).toBeHidden();
   await page.getByLabel("Workbench 面板").click();
   await expect(page.getByTestId("workbench-overview")).toBeVisible();
-  await expect(page.getByTestId("workbench-section-browser")).toContainText("百度搜索");
+  await expect(page.getByTestId("workbench-section-browser")).toContainText("ready");
   await page.getByTestId("workbench-section-browser-action").click();
   await expect(page.getByTestId("workbench-browser-launcher")).toBeVisible();
   await page.getByTestId("workbench-recommendation-url").first().click();

@@ -41,7 +41,7 @@ base("cowork ux: composer explains why send is blocked", async ({ page }) => {
   await page.locator("textarea").first().fill("hello");
   await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
   await page.getByRole("button", { name: "配置 Models" }).click();
-  await expect(page.getByText("Models config")).toBeVisible();
+  await expect(page.getByText("自定义模型配置")).toBeVisible();
 });
 
 async function activeAgentId(page: import("@playwright/test").Page): Promise<string> {
@@ -102,12 +102,16 @@ base("cowork ux: tool calls show narration and expandable details", async ({
     "tool-2"
   );
 
-  await expect(page.getByText("正在读取 /tmp/e2e-cwd/app.tsx。")).toBeVisible();
-  await expect(page.getByText("先看现有实现和上下文")).toBeVisible();
-  await expect(page.getByText("详情")).toBeVisible();
+  await expect(page.getByTestId("assistant-process-group")).toBeVisible();
+  await expect(page.getByText(/执行中 1 个步骤/)).toBeVisible();
+  await expect(page.getByTestId("assistant-process-group")).toContainText("read");
+  await expect(page.getByText("正在读取 /tmp/e2e-cwd/app.tsx。")).toBeHidden();
   await expect(page.getByText("(empty)")).toBeHidden();
 
-  await page.getByText("详情").click();
+  await page.getByTestId("assistant-process-toggle").click();
+  await expect(page.getByText("正在读取 /tmp/e2e-cwd/app.tsx。")).toBeVisible();
+  await expect(page.getByText("先看现有实现和上下文")).toBeVisible();
+  await page.getByRole("button", { name: /正在读取 .*app\.tsx/ }).click();
   await expect(page.getByText("(empty)")).toBeVisible();
 
   await pushSseEvent(
@@ -286,7 +290,7 @@ base("cowork ux: final answer collapses intermediate execution steps", async ({
 
   await expect(page.getByText("项目已启动，访问")).toBeVisible();
   await expect(page.getByTestId("assistant-process-group")).toBeVisible();
-  await expect(page.getByText("已处理 2 个步骤，期间遇到 1 个问题并已恢复")).toBeVisible();
+  await expect(page.getByText("已处理 2 个步骤，1 个问题已恢复")).toBeVisible();
   await expect(page.getByText("终端命令已完成：npm run dev")).toBeHidden();
   await expect(page.getByText("In-app browser host is not connected")).toBeHidden();
 

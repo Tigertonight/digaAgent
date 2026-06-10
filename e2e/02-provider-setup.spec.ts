@@ -93,24 +93,19 @@ test("provider setup: 首次打开后可选择 OpenAI API Key 并 mock 保存验
     return route.fallback();
   });
 
-  await page.goto("/?e2e=1", { waitUntil: "domcontentloaded" });
+  await page.goto("/settings", { waitUntil: "domcontentloaded" });
   await page.evaluate(() => {
     try {
       localStorage.clear();
     } catch {}
   });
   await page.reload();
-  await page.waitForSelector("text=Diga Agent", { timeout: 10_000 });
+  await page.waitForSelector("text=模型与账号", { timeout: 10_000 });
+  await expect(page.getByText("模型服务账号")).toBeVisible();
 
-  await page.getByRole("button", { name: "动作菜单" }).click();
-  await page.getByRole("button", { name: /Provider \/ Models/ }).click();
-  await expect(page.getByText("Provider setup")).toBeVisible();
+  const input = page.getByPlaceholder("粘贴 API 密钥…").first();
+  await input.fill("sk-test-e2e");
+  await input.locator("xpath=following-sibling::button").click();
 
-  await page.getByRole("button", { name: /OpenAI API Key/ }).click();
-  await expect(page.getByText("Standard OpenAI API provider")).toBeVisible();
-
-  await page.getByPlaceholder("API key").fill("sk-test-e2e");
-  await page.getByRole("button", { name: "Save" }).click();
-
-  await expect(page.getByText(/Test passed.*gpt-4o-mini/)).toBeVisible();
+  await expect(page.getByText("已保存")).toBeVisible();
 });

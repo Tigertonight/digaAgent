@@ -97,7 +97,8 @@ async function installMcpFixture(page: Page, initial: MockServer[]) {
 
 async function gotoSettings(page: Page) {
   await page.goto("/settings");
-  await page.waitForSelector("text=MCP servers", { timeout: 10_000 });
+  await page.getByRole("button", { name: /MCP 工具/ }).click();
+  await page.waitForSelector("text=外部工具服务", { timeout: 10_000 });
 }
 
 test("mcp settings: lists configured servers", async ({ page }) => {
@@ -117,7 +118,7 @@ test("mcp settings: lists configured servers", async ({ page }) => {
   await expect(page.getByText("filesystem", { exact: true })).toBeVisible();
   await expect(page.getByText("Filesystem", { exact: true })).toBeVisible();
   await expect(
-    page.locator("span.text-emerald-300").filter({ hasText: "enabled" })
+    page.locator("span.text-emerald-300").filter({ hasText: "已启用" })
   ).toBeVisible();
 });
 
@@ -126,14 +127,15 @@ test("mcp settings: add a new server refreshes the list", async ({ page }) => {
   await installMcpFixture(page, []);
   await gotoSettings(page);
 
-  await expect(page.getByText("还没有配置 MCP server。")).toBeVisible();
+  await expect(page.getByText("还没有配置外部工具服务。")).toBeVisible();
 
-  await page.getByRole("textbox", { name: "id", exact: true }).fill("github");
+  await page.getByRole("button", { name: "添加工具服务" }).click();
+  await page.getByRole("textbox", { name: "服务标识" }).fill("github");
   await page
-    .getByRole("textbox", { name: "title (可选)" })
+    .getByRole("textbox", { name: "显示名称（可选）" })
     .fill("GitHub");
-  await page.getByRole("textbox", { name: "command" }).fill("gh-mcp");
-  await page.getByRole("button", { name: "保存 server" }).click();
+  await page.getByRole("textbox", { name: "启动命令" }).fill("gh-mcp");
+  await page.getByRole("button", { name: "保存工具服务" }).click();
 
   await expect(page.getByText("github", { exact: true })).toBeVisible();
   await expect(page.getByText("gh-mcp")).toBeVisible();
@@ -169,5 +171,5 @@ test("mcp settings: remove a server refreshes the list", async ({ page }) => {
 
   await expect(page.getByText("filesystem", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "删除" }).click();
-  await expect(page.getByText("还没有配置 MCP server。")).toBeVisible();
+  await expect(page.getByText("还没有配置外部工具服务。")).toBeVisible();
 });
