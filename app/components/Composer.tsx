@@ -981,7 +981,7 @@ function getComposerBlocker({
       title: "还不能开始：没有可用模型",
       detail: "需要先配置 provider 和默认模型，Send 才会启用。",
       action: "models",
-      actionLabel: "配置 Models",
+      actionLabel: "配置模型",
     };
   }
   if (!currentProvider.hasAuth) {
