@@ -64,6 +64,7 @@ import {
   CONTEXT_ASIDE_CLOSE,
   stripContextAside,
 } from "@/lib/context-aside";
+import { assertRemoteAuth } from "@/lib/remote/auth";
 import type { ProgressUpdateInput } from "@/lib/progress/types";
 import type { ThinkingLevel, ImageContentLite } from "@/lib/types";
 
@@ -121,6 +122,8 @@ export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await assertRemoteAuth(req);
+  if (auth) return auth;
   const { id } = await params;
   const rec = getAgent(id);
   if (!rec) return NextResponse.json({ error: "not found" }, { status: 404 });
@@ -320,6 +323,8 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await assertRemoteAuth(req);
+  if (auth) return auth;
   const { id } = await params;
   const rec = getAgent(id);
   if (!rec) return NextResponse.json({ error: "not found" }, { status: 404 });

@@ -19,6 +19,8 @@ const PI_VERSION = readJsonVersion(
 );
 
 const nextConfig: NextConfig = {
+  allowedDevOrigins: ["*.trycloudflare.com"],
+  devIndicators: false,
   env: {
     NEXT_PUBLIC_APP_VERSION: APP_VERSION,
     NEXT_PUBLIC_PI_VERSION: PI_VERSION,

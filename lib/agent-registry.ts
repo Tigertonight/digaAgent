@@ -206,6 +206,24 @@ export function getModelRegistry(): ModelRegistry {
   return reg.modelRegistry;
 }
 
+export function listAgentSummaries(): Array<{
+  id: string;
+  sessionId: string;
+  sessionFile: string | null;
+  cwd: string;
+  isStreaming: boolean;
+  hidden: boolean;
+}> {
+  return Array.from(reg.agents.values()).map((rec) => ({
+    id: rec.id,
+    sessionId: rec.session.sessionId,
+    sessionFile: rec.session.sessionFile ?? null,
+    cwd: rec.cwd,
+    isStreaming: rec.isStreaming,
+    hidden: rec.hidden === true,
+  }));
+}
+
 /** 拿（或创建）对应 cwd 的 SettingsManager */
 export function getSettingsManager(cwd?: string): SettingsManager {
   const useCwd = cwd && cwd.length > 0 ? cwd : os.homedir();
@@ -1533,6 +1551,11 @@ export function getEventsSince(
   }
   out.sort((a, b) => a.seq - b.seq);
   return out;
+}
+
+export function getLatestEventSeq(agentId: string): number {
+  const rec = reg.agents.get(agentId);
+  return rec ? rec.nextSeq - 1 : -1;
 }
 
 /** 注册一个事件监听器（用于 SSE 长连接），返回取消函数 */

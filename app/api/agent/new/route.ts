@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
 import { createAgent, getAgent } from "@/lib/agent-registry";
+import { assertRemoteAuth } from "@/lib/remote/auth";
 import type { ThinkingLevel } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
+  const auth = await assertRemoteAuth(req);
+  if (auth) return auth;
   try {
     const body = await req.json().catch(() => ({}));
     const provider = body.provider as string | undefined;

@@ -8,6 +8,8 @@
  */
 import { NextResponse } from "next/server";
 import { getModelRegistry } from "@/lib/agent-registry";
+import { pickDefaultProviderModel } from "@/lib/default-model";
+import { assertRemoteAuth } from "@/lib/remote/auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -27,7 +29,9 @@ interface ProviderInfo {
   }>;
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  const auth = await assertRemoteAuth(req);
+  if (auth) return auth;
   try {
     const mr = getModelRegistry();
     const all = mr.getAll();
@@ -71,16 +75,14 @@ export async function GET() {
       return a.displayName.localeCompare(b.displayName);
     });
 
-    // 选个合理默认值
-    const defaultProvider = providers.find((p) => p.hasAuth) ?? providers[0];
-    const defaultModel = defaultProvider?.models[0];
+    const defaultSelection = pickDefaultProviderModel(providers);
 
     return NextResponse.json({
       providers,
       total: providers.length,
       authedCount: providers.filter((p) => p.hasAuth).length,
-      defaultProvider: defaultProvider?.provider,
-      defaultModelId: defaultModel?.id,
+      defaultProvider: defaultSelection.providerId || undefined,
+      defaultModelId: defaultSelection.modelId || undefined,
       loadError: mr.getError(),
     });
   } catch (e) {
