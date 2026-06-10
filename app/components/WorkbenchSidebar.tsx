@@ -1,6 +1,7 @@
 "use client";
 
 import type {
+  CSSProperties,
   Dispatch,
   MouseEventHandler,
   ReactNode,
@@ -557,9 +558,19 @@ function WorkbenchHomeLauncher({
   onOpenView: (view: WorkbenchView) => void;
   onOpenTerminal: () => void;
 }) {
+  // 响应式网格：跟随 workbench 面板自身宽度（容器查询）
+  //   默认 (窄):  1 列，动作名 + body 能完整显示
+  //   ≥ 360px:    2 列
+  //   ≥ 540px:    4 列一排
+  // auto-fit + minmax 会自动填满剩余列，不会出现“三个卡片全隶属一行”的丑状。
+  const gridStyle: CSSProperties = {
+    display: "grid",
+    gap: 8,
+    gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+  };
   return (
-    <section className="w-full min-w-0 max-w-full space-y-3" data-testid="workbench-home-launcher">
-      <div className="grid w-full min-w-0 max-w-full grid-cols-[repeat(2,minmax(0,1fr))] gap-2">
+    <section className="w-full min-w-0 max-w-full space-y-2" data-testid="workbench-home-launcher">
+      <div className="w-full min-w-0 max-w-full" style={gridStyle}>
         <LauncherTile
           icon={<FolderOpen size={18} />}
           title="文件"
@@ -621,19 +632,33 @@ function LauncherTile({
   body: string;
   onClick: () => void;
 }) {
+  // 原来固定 p-3 + 垂直堆叠，窄于 160px 时中文 body 只能剩两个字。
+  // 现在用 padding 稍紧 + 允许 body 换行到两行，使窄宽下可读。
   return (
     <button
       type="button"
       onClick={onClick}
-      className="w-full min-w-0 max-w-full overflow-hidden rounded border p-3 text-left hover:bg-[color:var(--bg-hover)]"
+      className="flex w-full min-w-0 max-w-full flex-col items-start gap-1 overflow-hidden rounded border p-2.5 text-left hover:bg-[color:var(--bg-hover)]"
       style={{ borderColor: "var(--border-soft)", background: "var(--bg-panel-2)" }}
       data-testid={`workbench-launch-${title}`}
     >
-      <span className="inline-flex h-8 w-8 items-center justify-center rounded" style={{ background: "var(--bg-selected)", color: "var(--accent)" }}>
+      <span
+        className="inline-flex h-7 w-7 items-center justify-center rounded"
+        style={{ background: "var(--bg-selected)", color: "var(--accent)" }}
+      >
         {icon}
       </span>
-      <span className="mt-2 block truncate text-xs font-medium">{title}</span>
-      <span className="mt-0.5 block truncate text-[11px]" style={{ color: "var(--text-muted)" }}>
+      <span className="block w-full truncate text-xs font-medium">{title}</span>
+      <span
+        className="block w-full text-[11px] leading-snug"
+        style={{
+          color: "var(--text-muted)",
+          display: "-webkit-box",
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: "vertical",
+          overflow: "hidden",
+        }}
+      >
         {body}
       </span>
     </button>
@@ -842,7 +867,17 @@ function OverviewPanel({
   };
 
   return (
-    <div className="w-full min-w-0 max-w-full space-y-3 overflow-hidden p-2.5" data-testid="workbench-overview">
+    // 概览面板根容器 —— 开启 CSS Container Queries，让里面的子组件能
+    // 按 workbench 面板自身的宽度响应，而不是跟 viewport。
+    // 这里用 inline-style 设 container-type/name，避免给 Tailwind 加插件。
+    <div
+      className="w-full min-w-0 max-w-full space-y-2 overflow-hidden px-2 py-2"
+      style={{
+        containerType: "inline-size",
+        containerName: "workbench-overview",
+      }}
+      data-testid="workbench-overview"
+    >
       <WorkbenchHomeLauncher
         recommendations={recommendations}
         onOpenView={onOpenView}
@@ -989,7 +1024,7 @@ function OverviewSection({
   const Chevron = open ? ChevronDown : ChevronRight;
   return (
     <section
-      className="border-b pb-2 last:border-b-0"
+      className="border-b pb-1.5 last:border-b-0"
       style={{ borderColor: "var(--border-soft)" }}
       data-testid={`workbench-section-${id}`}
     >
@@ -997,20 +1032,26 @@ function OverviewSection({
         <button
           type="button"
           onClick={onToggle}
-          className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-0.5 text-left text-[11px] font-medium hover:bg-[color:var(--bg-hover)]"
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-1 text-left text-[11px] font-medium hover:bg-[color:var(--bg-hover)]"
           style={{ color: "var(--text-muted)" }}
           aria-expanded={open}
           data-testid={`workbench-section-${id}-toggle`}
         >
           <Chevron size={12} className="shrink-0" />
-          <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center" style={{ color: "var(--accent)" }}>
+          <span
+            className="inline-flex h-5 w-5 shrink-0 items-center justify-center"
+            style={{ color: "var(--accent)" }}
+          >
             {icon}
           </span>
-          <span className="truncate">{title}</span>
+          {/* 标题必须能被压缩，flex-1 使它占位，min-w-0 才能生效 truncate */}
+          <span className="min-w-0 flex-1 truncate">{title}</span>
           {summary ? (
+            // 讯讷：徽章有最大宽限制，极窄时自身也 truncate，不再跳出表格。
             <span
-              className="ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px]"
+              className="max-w-[40%] shrink truncate rounded px-1.5 py-0.5 text-[10px]"
               style={{ background: "var(--bg-selected)", color: "var(--text-muted)" }}
+              title={summary}
             >
               {summary}
             </span>
@@ -1020,7 +1061,7 @@ function OverviewSection({
           <button
             type="button"
             onClick={onAction}
-            className="rounded px-1.5 py-0.5 text-[10px] hover:bg-[color:var(--bg-hover)]"
+            className="shrink-0 rounded px-1.5 py-0.5 text-[10px] hover:bg-[color:var(--bg-hover)]"
             style={{ color: "var(--text-muted)" }}
             data-testid={`workbench-section-${id}-action`}
           >
@@ -1028,7 +1069,15 @@ function OverviewSection({
           </button>
         ) : null}
       </div>
-      {open ? <div className="mt-1 space-y-1 pl-7">{children}</div> : null}
+      {/* 窄态下取消 pl-7 缩进，避免内容区被压到 < 200px。
+          宽态（workbench 面板 ≥ 380px）保留缩进以对齐标题。 */}
+      {open ? (
+        <div
+          className="mt-1 space-y-1 pl-1 [@container_workbench-overview_(min-width:380px)]:pl-7"
+        >
+          {children}
+        </div>
+      ) : null}
     </section>
   );
 }
