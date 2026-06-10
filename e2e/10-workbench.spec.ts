@@ -69,7 +69,7 @@ test("workbench: Overview 作为右侧 root 并支持折叠分组", async ({
   await expect(page.getByText("暂无进度")).toBeVisible();
 
   await page.getByRole("button", { name: "New chat" }).click();
-  await expect(page.getByTestId("workbench-sidebar")).toBeHidden();
+  await expect(page.getByTestId("workbench-overview")).toBeVisible();
 });
 
 test("workbench: Outputs 作为产物 inbox 展示 URL 和文件动作", async ({

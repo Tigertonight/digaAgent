@@ -282,31 +282,19 @@ test("场景 4: 草稿输入框切走再切回仍保留", async ({ bootedPage: p
   await editor(page).fill("半句话 in draft");
   expect(await activeKey(page)).toBe("draft");
 
-  // 模拟切到 A:再 +New 不行(还是 draft)。这里我们用 sidebar refresh 后点击。
-  // streaming 中 sidebar 不刷新,但 +New 切走又切回的目标也可以是 draft 自身。
-  // 直接验证 draft 输入留存:再次 +New 不会清(因为已经是 draft)。所以测试切走方式:
-  //   - 改 selectedId 经由 sidebar 不行
-  //   - 把另一个 newChatBtn 不行(语义就是 reset to draft)
-  // 退而求其次:验证刷新后 draft runner 仍然保有 input。
-  const draftInput = await page.evaluate(() => {
-    const w = window as unknown as {
-      __chatAppDiag?: {
-        runners: { current: Map<string, { input: string }> };
-      };
-    };
-    return w.__chatAppDiag!.runners.current.get("draft")!.input;
-  });
-  expect(draftInput).toBe("半句话 in draft");
+  // Composer 输入为性能先保存在本地受控 state；用户可见值是这里的
+  // 权威验收点，发送/切换时才会 flush 到 input store。
+  await expect(editor(page)).toHaveValue("半句话 in draft");
 
   // 验证 A runner 的 input 是空(send 后清掉)
   const keyA = (await runnerKeys(page)).find((k) => k !== "draft")!;
   const aInput = await page.evaluate((k) => {
     const w = window as unknown as {
       __chatAppDiag?: {
-        runners: { current: Map<string, { input: string }> };
+        inputFor: (key: string) => string;
       };
     };
-    return w.__chatAppDiag!.runners.current.get(k)!.input;
+    return w.__chatAppDiag!.inputFor(k);
   }, keyA);
   expect(aInput).toBe("");
 });

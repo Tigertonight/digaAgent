@@ -92,6 +92,8 @@ test("subagents: SSE card expands answer, shows audit badges, and retries one ta
     "10"
   );
 
+  await expect(page.getByTestId("assistant-process-group")).toBeVisible();
+  await page.getByTestId("assistant-process-toggle").click();
   await expect(page.getByText("Subagents")).toBeVisible();
   await expect(page.getByText("Planner: accepted")).toBeVisible();
   await expect(page.getByText("2 tasks")).toBeVisible();
@@ -378,6 +380,8 @@ test("subagents: restored unfinished batch can create a parent agent and continu
   await expect(page.getByText("1 subagent")).toBeVisible();
   await page.getByText("Restored parent").click();
 
+  await expect(page.getByTestId("assistant-process-group")).toBeVisible();
+  await page.getByTestId("assistant-process-toggle").click();
   await expect(page.getByText("Subagents")).toBeVisible();
   await expect(page.getByText("Resume unfinished procurement questions.")).toBeVisible();
   await expect(page.getByText("Planner: accepted")).toBeVisible();
@@ -403,6 +407,8 @@ test("subagents: restored unfinished batch can create a parent agent and continu
   expect(await activeKey(page)).toBe(childSession.path);
 
   await page.getByText("Restored parent").click();
+  await expect(page.getByTestId("assistant-process-group")).toBeVisible();
+  await page.getByTestId("assistant-process-toggle").click();
   await expect(page.getByLabel("继续执行未完成的 subagent tasks")).toBeVisible();
 
   await page.getByLabel("继续执行未完成的 subagent tasks").click();

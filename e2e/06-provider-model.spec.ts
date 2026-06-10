@@ -7,20 +7,20 @@ import {
 import type { Page } from "@playwright/test";
 
 const editor = (page: Page) => page.locator("textarea").first();
-const sendBtn = (page: Page) => page.getByTitle("Send", { exact: true });
+const sendBtn = (page: Page) => page.getByRole("button", { name: /^Send$/ });
 
 const providersResponse = {
   providers: [
     {
-      provider: "anthropic",
-      displayName: "Anthropic",
+      provider: "openai-codex",
+      displayName: "ChatGPT Plus/Pro (Codex Subscription)",
       hasAuth: true,
       authSource: "runtime",
       authLabel: "mock",
       models: [
         {
-          id: "claude-haiku-4-5-20251001",
-          name: "Claude Haiku 4.5",
+          id: "gpt-5.5",
+          name: "GPT-5.5",
           reasoning: true,
           contextWindow: 200_000,
           maxTokens: 8192,
@@ -35,8 +35,8 @@ const providersResponse = {
       authLabel: "models.json",
       models: [
         {
-          id: "claude-opus-4-7-rednote-runway",
-          name: "Claude Opus 4.7 via Rednote Runway",
+          id: "claude-opus-4-7",
+          name: "Claude Opus 4.7",
           reasoning: true,
           contextWindow: 200_000,
           maxTokens: 8192,
@@ -46,8 +46,8 @@ const providersResponse = {
   ],
   total: 2,
   authedCount: 2,
-  defaultProvider: "anthropic",
-  defaultModelId: "claude-haiku-4-5-20251001",
+  defaultProvider: "openai-codex",
+  defaultModelId: "gpt-5.5",
 };
 
 test("provider switch selects the provider's first model before set_model", async ({
@@ -91,25 +91,25 @@ test("provider switch selects the provider's first model before set_model", asyn
   });
 
   const selects = page.locator("select");
-  await expect(selects.nth(0)).toHaveValue("anthropic");
-  await expect(selects.nth(1)).toHaveValue("claude-haiku-4-5-20251001");
+  await expect(selects.nth(0)).toHaveValue("openai-codex");
+  await expect(selects.nth(1)).toHaveValue("gpt-5.5");
 
   await selects.nth(0).selectOption("rednote-runway-local");
 
   await expect(selects.nth(1)).toHaveValue(
-    "claude-opus-4-7-rednote-runway"
+    "claude-opus-4-7"
   );
   await expect
     .poll(() => setModelBody)
     .toEqual({
       type: "set_model",
       provider: "rednote-runway-local",
-      modelId: "claude-opus-4-7-rednote-runway",
+      modelId: "claude-opus-4-7",
     });
   await expect(page.getByText("provider and modelId required")).toBeHidden();
 });
 
-test("provider/model selection repairs stale localStorage model ids", async ({
+test("provider/model selection resets stale localStorage to curated default", async ({
   page,
 }) => {
   await installSseMock(page);
@@ -139,10 +139,8 @@ test("provider/model selection repairs stale localStorage model ids", async ({
   await page.waitForSelector("text=Diga Agent", { timeout: 10_000 });
 
   const selects = page.locator("select");
-  await expect(selects.nth(0)).toHaveValue("rednote-runway-local");
-  await expect(selects.nth(1)).toHaveValue(
-    "claude-opus-4-7-rednote-runway"
-  );
+  await expect(selects.nth(0)).toHaveValue("openai-codex");
+  await expect(selects.nth(1)).toHaveValue("gpt-5.5");
 
   await editor(page).fill("hello");
   await sendBtn(page).click();
@@ -151,8 +149,8 @@ test("provider/model selection repairs stale localStorage model ids", async ({
     .poll(() => createBody)
     .toEqual(
       expect.objectContaining({
-        provider: "rednote-runway-local",
-        modelId: "claude-opus-4-7-rednote-runway",
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
       })
     );
   await expect(page.getByText("model not found")).toBeHidden();

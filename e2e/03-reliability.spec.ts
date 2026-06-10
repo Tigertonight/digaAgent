@@ -1,8 +1,8 @@
-import { test, expect } from "./fixtures";
+import { installApiFixtures, installSseMock, test, expect } from "./fixtures";
 import type { Page } from "@playwright/test";
 
 const editor = (page: Page) => page.locator("textarea").first();
-const sendBtn = (page: Page) => page.getByTitle("Send", { exact: true });
+const sendBtn = (page: Page) => page.getByRole("button", { name: /^Send$/ });
 
 async function activeAgentId(page: Page): Promise<string> {
   const handle = await page.waitForFunction(() => {
@@ -106,7 +106,9 @@ test("reliability: pending clarification 可恢复并提交推荐项", async ({
 
   await expect(page.getByText("需要你确认下一步")).toBeVisible();
   await expect(page.getByText("先做 MVP 还是完整重构？")).toBeVisible();
-  await expect(page.getByText("推荐")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /推荐\s+先做 MVP/ })
+  ).toBeVisible();
 
   await page.getByRole("button", { name: /先做 MVP/ }).click();
   await expect.poll(() => posted).toEqual({
@@ -139,4 +141,67 @@ test("reliability: 搜索冷构建显示 building 和 timeout 提示", async ({
     page.getByText(/Building index is taking longer than usual/)
   ).toBeVisible({ timeout: 7_000 });
   await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+});
+
+test("reliability: 切换历史 session 不触发 prompt POST", async ({
+  page,
+}) => {
+  const sessions = [
+    {
+      id: "session-a",
+      path: "/tmp/e2e-sessions/session-a.jsonl",
+      cwd: "/tmp/e2e-cwd",
+      name: "Switch A",
+      firstMessage: "Switch A",
+      created: new Date().toISOString(),
+      modified: new Date().toISOString(),
+      messageCount: 1,
+      isRunning: false,
+    },
+    {
+      id: "session-b",
+      path: "/tmp/e2e-sessions/session-b.jsonl",
+      cwd: "/tmp/e2e-cwd",
+      name: "Switch B",
+      firstMessage: "Switch B",
+      created: new Date().toISOString(),
+      modified: new Date(Date.now() - 1000).toISOString(),
+      messageCount: 1,
+      isRunning: false,
+    },
+  ];
+  const promptPosts: unknown[] = [];
+
+  await installSseMock(page);
+  await installApiFixtures(page, { sessionsResponse: { sessions } });
+  await page.route("**/api/sessions/*/context", async (route) => {
+    return route.fulfill({
+      json: {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "restored historical prompt" }],
+          },
+        ],
+        forkableUserMessages: [],
+      },
+    });
+  });
+  await page.route("**/api/agent/*", async (route) => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postDataJSON();
+      if (body?.type === "prompt") {
+        promptPosts.push(body);
+      }
+    }
+    return route.fulfill({ json: { ok: true } });
+  });
+
+  await page.goto("/?e2e=1");
+  await page.getByText("Switch A").click();
+  await page.waitForTimeout(200);
+  await page.getByText("Switch B").click();
+  await page.waitForTimeout(200);
+
+  expect(promptPosts).toEqual([]);
 });

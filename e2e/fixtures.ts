@@ -14,18 +14,19 @@ interface ApiFixtureOptions {
   providersResponse?: unknown;
   authResponse?: unknown;
   modelsConfigResponse?: unknown;
+  sessionsResponse?: unknown;
 }
 
 const defaultProvidersResponse = {
   providers: [
     {
-      provider: "anthropic",
-      displayName: "Anthropic",
+      provider: "openai-codex",
+      displayName: "ChatGPT Plus/Pro (Codex Subscription)",
       hasAuth: true,
       models: [
         {
-          id: "claude-haiku-4-5-20251001",
-          name: "Claude Haiku 4.5",
+          id: "gpt-5.5",
+          name: "GPT-5.5",
           reasoning: true,
           contextWindow: 200_000,
           maxTokens: 8192,
@@ -35,8 +36,26 @@ const defaultProvidersResponse = {
   ],
   total: 1,
   authedCount: 1,
-  defaultProvider: "anthropic",
-  defaultModelId: "claude-haiku-4-5-20251001",
+  defaultProvider: "openai-codex",
+  defaultModelId: "gpt-5.5",
+};
+
+const defaultAuthResponse = {
+  providers: [
+    {
+      provider: "openai-codex",
+      displayName: "ChatGPT Plus/Pro (Codex Subscription)",
+      hasAuth: true,
+      credentialType: "oauth",
+      status: {
+        configured: true,
+        source: "stored",
+        label: "stored",
+      },
+      supportsOAuth: true,
+    },
+  ],
+  oauthProviders: [],
 };
 
 /**
@@ -71,6 +90,7 @@ export async function installApiFixtures(
   // 全局兜底：未匹配的 /api/* 一律返回 ok 空 (防止某个新接口让 UI 报错)
   await page.route("**/api/**", async (route: Route) => {
     const url = route.request().url();
+    const pathname = new URL(url).pathname;
     const method = route.request().method();
     if (process.env.E2E_DEBUG) {
        
@@ -78,47 +98,50 @@ export async function installApiFixtures(
     }
 
     // === 启动期接口 ===
-    if (url.endsWith("/api/health")) {
+    if (pathname.endsWith("/api/health")) {
       return route.fulfill({ json: { ok: true } });
     }
-    if (url.endsWith("/api/providers")) {
+    if (pathname.endsWith("/api/providers")) {
       return route.fulfill({
         json: options.providersResponse ?? defaultProvidersResponse,
       });
     }
-    if (url.endsWith("/api/sessions")) {
+    if (pathname.endsWith("/api/sessions")) {
+      if (options.sessionsResponse) {
+        return route.fulfill({ json: options.sessionsResponse });
+      }
       const sessions = await page.evaluate(() => {
         const w = window as unknown as { __mockSessions: unknown[] };
         return w.__mockSessions;
-      });
+      }).catch(() => []);
       return route.fulfill({ json: { sessions } });
     }
-    if (url.endsWith("/api/default-cwd")) {
+    if (pathname.endsWith("/api/default-cwd")) {
       return route.fulfill({ json: { cwd: "/tmp/e2e-cwd" } });
     }
-    if (url.endsWith("/api/home")) {
+    if (pathname.endsWith("/api/home")) {
       return route.fulfill({ json: { home: "/tmp" } });
     }
-    if (url.endsWith("/api/auth")) {
+    if (pathname.endsWith("/api/auth")) {
       return route.fulfill({
-        json: options.authResponse ?? { providers: [] },
+        json: options.authResponse ?? defaultAuthResponse,
       });
     }
-    if (url.endsWith("/api/skills")) {
+    if (pathname.endsWith("/api/skills")) {
       return route.fulfill({ json: { skills: [] } });
     }
-    if (url.endsWith("/api/models-config")) {
+    if (pathname.endsWith("/api/models-config")) {
       return route.fulfill({
         json: options.modelsConfigResponse ?? { providers: [] },
       });
     }
-    if (url.endsWith("/api/files")) {
+    if (pathname.endsWith("/api/files")) {
       return route.fulfill({ json: { entries: [] } });
     }
 
     // === Agent 创建：每次返回一个递增 fakeId + sessionFile ===
     //   并把对应的 session row push 进 __mockSessions，让 sidebar refresh 后能看到
-    if (url.endsWith("/api/agent/new") && method === "POST") {
+    if (pathname.endsWith("/api/agent/new") && method === "POST") {
       const created = await page.evaluate(() => {
         const w = window as unknown as {
           __mockAgentCounter: number;
@@ -152,9 +175,9 @@ export async function installApiFixtures(
           supportsThinking: true,
           availableThinkingLevels: ["low", "medium", "high"],
           model: {
-            provider: "anthropic",
-            id: "claude-haiku-4-5-20251001",
-            name: "Claude Haiku 4.5",
+            provider: "openai-codex",
+            id: "gpt-5.5",
+            name: "GPT-5.5",
           },
         },
       });
