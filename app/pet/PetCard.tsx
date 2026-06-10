@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { PetSessionInfo } from "@/lib/electron-bridge";
 import type { PetAnimState, PetBubbleText } from "./use-pet-state";
 import { derivePetAnimState } from "./use-pet-state";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 const STATE_COLOR: Record<PetAnimState, string> = {
   idle: "#6b7280",
@@ -91,9 +92,9 @@ export default function PetCard({
         body: JSON.stringify({ type: "abort" }),
       });
       const d = await r.json();
-      if (d.error) setActionError(d.error);
+      if (d.error) setActionError(userFacingMessage(d.error));
     } catch (e) {
-      setActionError(String(e));
+      setActionError(userFacingMessage(e));
     } finally {
       setAborting(false);
     }
@@ -110,13 +111,13 @@ export default function PetCard({
         body: JSON.stringify({ type: "prompt", text: input.trim() }),
       });
       const d = await r.json();
-      if (d.error) setActionError(d.error);
+      if (d.error) setActionError(userFacingMessage(d.error));
       else {
         setInput("");
         onClose();
       }
     } catch (e) {
-      setActionError(String(e));
+      setActionError(userFacingMessage(e));
     } finally {
       setSending(false);
     }

@@ -449,11 +449,12 @@ export function Sidebar(props: SidebarProps) {
             // （主窗口失焦/被遮挡）。markSessionSeen 在用户真聚焦时已写
             // lastSeenMap，所以聚焦着的 active session 这里自然不会 unread。
             const isRunning = !!s.isRunning;
+            const isWaitingUser = s.runtimeState === "waiting_user";
             const seenAt = lastSeenMap[s.id];
             // hydrated gate：SSR/首次 hydrate 时强制 false，避免 lastSeenMap
             // 在客户端注水前误判全部未读。
             const isUnread =
-              hydrated && !isRunning && (!seenAt || seenAt < s.modified);
+              hydrated && !isRunning && !isWaitingUser && (!seenAt || seenAt < s.modified);
             if (isPendingDelete) {
               return (
                 <div
@@ -549,7 +550,18 @@ export function Sidebar(props: SidebarProps) {
                       style={{ color: "var(--text-muted)" }}
                     />
                   )}
-                  {isRunning ? (
+                  {isWaitingUser ? (
+                    <span
+                      className="mt-1 shrink-0 inline-block rounded-full"
+                      title="需确认"
+                      aria-label="需确认"
+                      style={{
+                        width: 7,
+                        height: 7,
+                        background: "#f59e0b",
+                      }}
+                    />
+                  ) : isRunning ? (
                     <span
                       className="mt-1 shrink-0 inline-block rounded-full"
                       title="运行中"
@@ -628,6 +640,14 @@ export function Sidebar(props: SidebarProps) {
                       </span>
                       <span aria-hidden="true">·</span>
                       <span className="shrink-0">{s.messageCount} msgs</span>
+                      {isWaitingUser && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span className="shrink-0 font-medium text-amber-600 dark:text-amber-300">
+                            需确认
+                          </span>
+                        </>
+                      )}
                       {depth === 0 && (
                         <>
                           <span aria-hidden="true">·</span>

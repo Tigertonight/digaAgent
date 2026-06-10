@@ -10,6 +10,7 @@ import {
   XCircle,
 } from "lucide-react";
 import type { GoalEvidence, GoalTurn } from "@/lib/goal/types";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 export interface GoalTimelineProps {
   agentId: string;
@@ -68,7 +69,7 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
         evidence: Array.isArray(json.evidence) ? json.evidence : [],
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load timeline.");
+      setError(userFacingMessage(e));
     } finally {
       setLoading(false);
     }

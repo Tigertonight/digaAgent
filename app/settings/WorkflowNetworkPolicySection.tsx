@@ -5,6 +5,7 @@ import type {
   WorkflowNetworkAuditEntry,
   WorkflowNetworkPolicy,
 } from "@/lib/workflows/types";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 function linesToList(value: string): string[] | undefined {
   const out = value
@@ -90,7 +91,7 @@ export function WorkflowNetworkPolicySection() {
       applyPolicy(d.policy ?? {});
       setAudits(Array.isArray(d.audits) ? d.audits : []);
     } catch (e) {
-      setStatus(`加载失败: ${String(e)}`);
+      setStatus(`加载失败：${userFacingMessage(e)}`);
     } finally {
       setLoading(false);
     }
@@ -127,7 +128,7 @@ export function WorkflowNetworkPolicySection() {
       applyPolicy(d.policy ?? {});
       setStatus("已保存");
     } catch (e) {
-      setStatus(`保存失败: ${String(e)}`);
+      setStatus(`保存失败：${userFacingMessage(e)}`);
     } finally {
       setSaving(false);
     }

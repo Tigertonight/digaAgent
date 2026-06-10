@@ -15,6 +15,7 @@ import {
 } from "./auth/AuthProviderRow";
 import { OAuthLoginModal } from "./auth/OAuthLoginModal";
 import { useProviderStatus } from "@/app/hooks/useProviderStatus";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 interface Props {
   onClose: () => void;
@@ -139,7 +140,7 @@ export default function AuthPanel({ onClose, initialProvider, onChanged }: Props
           body: JSON.stringify({ provider, apiKey: k }),
         });
         const d = await r.json();
-        if (d.error) setError(d.error);
+        if (d.error) setError(userFacingMessage(d.error, { context: "settings" }));
         else {
           setEditing(null);
           setKeyInput("");
@@ -148,7 +149,7 @@ export default function AuthPanel({ onClose, initialProvider, onChanged }: Props
           void testAuth(provider);
         }
       } catch (e) {
-        setError(String(e));
+        setError(userFacingMessage(e, { context: "settings" }));
       } finally {
         setBusy(null);
       }
@@ -166,13 +167,13 @@ export default function AuthPanel({ onClose, initialProvider, onChanged }: Props
           { method: "DELETE" }
         );
         const d = await r.json();
-        if (d.error) setError(d.error);
+        if (d.error) setError(userFacingMessage(d.error, { context: "settings" }));
         else {
           await load();
           onChanged?.();
         }
       } catch (e) {
-        setError(String(e));
+        setError(userFacingMessage(e, { context: "settings" }));
       } finally {
         setBusy(null);
       }

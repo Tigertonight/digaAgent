@@ -31,6 +31,7 @@ import { BudgetSettingsSection } from "./BudgetSettingsSection";
 import { CollabSettingsSection } from "./CollabSettingsSection";
 import { WorkflowNetworkPolicySection } from "./WorkflowNetworkPolicySection";
 import { McpServersSection } from "./McpServersSection";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 /* ===================== Web 模式 Settings（用 /api/auth） ===================== */
 
@@ -312,7 +313,7 @@ function BrowserPolicySection() {
         blockedOrigins: data.policy?.blockedOrigins ?? [],
       });
     } catch (e) {
-      setStatus(`加载失败: ${e instanceof Error ? e.message : String(e)}`);
+      setStatus(`加载失败：${userFacingMessage(e)}`);
     } finally {
       setLoading(false);
     }
@@ -347,7 +348,7 @@ function BrowserPolicySection() {
         await load();
         setStatus("已保存");
       } catch (e) {
-        setStatus(`保存失败: ${e instanceof Error ? e.message : String(e)}`);
+        setStatus(`保存失败：${userFacingMessage(e)}`);
       } finally {
         setSaving(false);
       }
@@ -507,7 +508,7 @@ function WebSettingsPanel() {
       if (d.error) setError(d.error);
       else setData(d);
     } catch (e) {
-      setError(String(e));
+      setError(userFacingMessage(e, { context: "remote" }));
     } finally {
       setLoading(false);
     }
@@ -540,7 +541,7 @@ function WebSettingsPanel() {
         await load();
       }
     } catch (e) {
-      setError(String(e));
+      setError(userFacingMessage(e, { context: "settings" }));
     } finally {
       setBusy(null);
     }
@@ -558,7 +559,7 @@ function WebSettingsPanel() {
       if (d.error) setError(d.error);
       else await load();
     } catch (e) {
-      setError(String(e));
+      setError(userFacingMessage(e, { context: "settings" }));
     } finally {
       setBusy(null);
     }
@@ -945,7 +946,7 @@ function RemoteAccessSection({
       const tunnelJson = (await tunnelRes.json().catch(() => null)) as PublicTunnelStatus | null;
       setTunnel(tunnelJson);
     } catch (e) {
-      setError(String(e));
+      setError(userFacingMessage(e, { context: "remote" }));
     }
   }, [electronApi, localFetch]);
 
@@ -1046,7 +1047,7 @@ function RemoteAccessSection({
       resetPairing();
       await loadRemote();
     } catch (e) {
-      setError(String(e));
+      setError(userFacingMessage(e, { context: "settings" }));
     } finally {
       setBusy(false);
     }
@@ -1060,7 +1061,7 @@ function RemoteAccessSection({
       resetPairing();
       await loadRemote();
     } catch (e) {
-      setError(String(e));
+      setError(userFacingMessage(e, { context: "settings" }));
     } finally {
       setBusy(false);
     }
@@ -1085,7 +1086,7 @@ function RemoteAccessSection({
       }
       await applyPairTarget(data, first, bases);
     } catch (e) {
-      setError(String(e));
+      setError(userFacingMessage(e, { context: "pairing" }));
     } finally {
       setBusy(false);
     }
@@ -1113,7 +1114,7 @@ function RemoteAccessSection({
         );
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(userFacingMessage(e, { context: "remote" }));
     } finally {
       setBusy(false);
     }
@@ -1129,7 +1130,7 @@ function RemoteAccessSection({
       setTunnel(data);
       resetPairing();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(userFacingMessage(e, { context: "remote" }));
     } finally {
       setBusy(false);
     }
@@ -1145,7 +1146,7 @@ function RemoteAccessSection({
       if (!res.ok) throw new Error(await res.text());
       await loadRemote();
     } catch (e) {
-      setError(String(e));
+      setError(userFacingMessage(e, { context: "settings" }));
     } finally {
       setBusy(false);
     }
@@ -1201,7 +1202,7 @@ function RemoteAccessSection({
       }
       await loadRemote();
     } catch (e) {
-      setError(String(e));
+      setError(userFacingMessage(e, { context: "settings" }));
     } finally {
       setBusy(false);
     }
@@ -1543,7 +1544,7 @@ export default function SettingsPanel() {
       }));
       setRows(list);
     } catch (e) {
-      setError(String(e));
+      setError(userFacingMessage(e, { context: "settings" }));
     } finally {
       setLoading(false);
     }
@@ -1570,7 +1571,7 @@ export default function SettingsPanel() {
       setRevealed((s) => ({ ...s, [provider]: "" }));
       await refresh();
     } catch (e) {
-      setError(String(e));
+      setError(userFacingMessage(e, { context: "settings" }));
     } finally {
       setBusy(null);
     }
@@ -1584,7 +1585,7 @@ export default function SettingsPanel() {
       setRevealed((s) => ({ ...s, [provider]: "" }));
       await refresh();
     } catch (e) {
-      setError(String(e));
+      setError(userFacingMessage(e, { context: "settings" }));
     } finally {
       setBusy(null);
     }
@@ -1597,7 +1598,7 @@ export default function SettingsPanel() {
       const v = await api.getKey(provider);
       setRevealed((s) => ({ ...s, [provider]: v ?? "" }));
     } catch (e) {
-      setError(String(e));
+      setError(userFacingMessage(e, { context: "settings" }));
     } finally {
       setBusy(null);
     }
@@ -1615,7 +1616,7 @@ export default function SettingsPanel() {
           : `server reloaded: ${r.base ?? "?"}`
       );
     } catch (e) {
-      setError(String(e));
+      setError(userFacingMessage(e, { context: "settings" }));
     } finally {
       setBusy(null);
     }

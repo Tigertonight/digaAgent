@@ -13,6 +13,7 @@
 import { Plus, X, ChevronDown, ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmButton } from "./ConfirmButton";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 interface SkillInfo {
   name: string;
@@ -277,13 +278,13 @@ function AddSkillPanel({
         error?: string;
       };
       if (d.error) {
-        setSearchError(d.error);
+        setSearchError(userFacingMessage(d.error, { context: "skills" }));
         return;
       }
       setResults(d.results ?? []);
       if ((d.results ?? []).length === 0) setSearchError("No skills found");
     } catch (e) {
-      setSearchError(String(e));
+      setSearchError(userFacingMessage(e, { context: "skills" }));
     } finally {
       setSearching(false);
     }
@@ -301,13 +302,13 @@ function AddSkillPanel({
         });
         const d = await r.json();
         if (!r.ok || d.error) {
-          setInstallError(d.error ?? `HTTP ${r.status}`);
+          setInstallError(userFacingMessage(d.error ?? `HTTP ${r.status}`, { context: "skills" }));
           return;
         }
         setInstalled((s) => new Set(s).add(pkg));
         onInstalled();
       } catch (e) {
-        setInstallError(String(e));
+        setInstallError(userFacingMessage(e, { context: "skills" }));
       } finally {
         setInstalling(null);
       }
@@ -333,13 +334,13 @@ function AddSkillPanel({
       });
       const d = await r.json();
       if (!r.ok || d.error) {
-        setInstallError(d.error ?? `HTTP ${r.status}`);
+        setInstallError(userFacingMessage(d.error ?? `HTTP ${r.status}`, { context: "skills" }));
         return;
       }
       setManualSrc("");
       onInstalled();
     } catch (e) {
-      setInstallError(String(e));
+      setInstallError(userFacingMessage(e, { context: "skills" }));
     } finally {
       setInstalling(null);
     }
@@ -873,7 +874,7 @@ export default function SkillsPanel({ cwd, onClose, embedded = false }: Props) {
       );
       const d = (await r.json()) as SkillsResponse;
       if (d.error) {
-        setError(d.error);
+        setError(userFacingMessage(d.error, { context: "skills" }));
       } else {
         setData(d);
         setSelected((cur) => {
@@ -882,7 +883,7 @@ export default function SkillsPanel({ cwd, onClose, embedded = false }: Props) {
         });
       }
     } catch (e) {
-      setError(String(e));
+      setError(userFacingMessage(e, { context: "skills" }));
     } finally {
       setLoading(false);
     }
@@ -928,7 +929,7 @@ export default function SkillsPanel({ cwd, onClose, embedded = false }: Props) {
       });
       const d = (await r.json()) as { success?: boolean; error?: string };
       if (!r.ok || d.error) {
-        setSaveError(d.error ?? `HTTP ${r.status}`);
+        setSaveError(userFacingMessage(d.error ?? `HTTP ${r.status}`, { context: "skills" }));
         return;
       }
       setData((prev) =>
@@ -944,7 +945,7 @@ export default function SkillsPanel({ cwd, onClose, embedded = false }: Props) {
           : prev
       );
     } catch (e) {
-      setSaveError(String(e));
+      setSaveError(userFacingMessage(e, { context: "skills" }));
     } finally {
       setToggling((s) => {
         const n = new Set(s);
@@ -970,10 +971,10 @@ export default function SkillsPanel({ cwd, onClose, embedded = false }: Props) {
           }),
         });
         const d = await r.json();
-        if (d.error) setError(d.error);
+        if (d.error) setError(userFacingMessage(d.error, { context: "skills" }));
         else await load();
       } catch (e) {
-        setError(String(e));
+        setError(userFacingMessage(e, { context: "skills" }));
       } finally {
         setBusyPackage(null);
       }
@@ -996,10 +997,10 @@ export default function SkillsPanel({ cwd, onClose, embedded = false }: Props) {
           }),
         });
         const d = await r.json();
-        if (d.error) setError(d.error);
+        if (d.error) setError(userFacingMessage(d.error, { context: "skills" }));
         else await load();
       } catch (e) {
-        setError(String(e));
+        setError(userFacingMessage(e, { context: "skills" }));
       } finally {
         setBusyPackage(null);
       }

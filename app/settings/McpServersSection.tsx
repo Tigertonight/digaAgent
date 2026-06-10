@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { McpServerConfig } from "@/lib/mcp/types";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 interface DraftServer {
   id: string;
@@ -37,7 +38,7 @@ export function McpServersSection() {
       if (!r.ok || d.error) throw new Error(d.error ?? `HTTP ${r.status}`);
       setServers(Array.isArray(d.servers) ? d.servers : []);
     } catch (e) {
-      setStatus(`加载失败: ${String(e)}`);
+      setStatus(`加载失败：${userFacingMessage(e)}`);
     } finally {
       setLoading(false);
     }
@@ -86,7 +87,7 @@ export function McpServersSection() {
       await load();
       setStatus("已保存");
     } catch (e) {
-      setStatus(`保存失败: ${String(e)}`);
+      setStatus(`保存失败：${userFacingMessage(e)}`);
     } finally {
       setSaving(false);
     }
@@ -99,7 +100,7 @@ export function McpServersSection() {
         await post({ type: "remove", id });
         await load();
       } catch (e) {
-        setStatus(`删除失败: ${String(e)}`);
+        setStatus(`删除失败：${userFacingMessage(e)}`);
       } finally {
         setSaving(false);
       }
@@ -114,7 +115,7 @@ export function McpServersSection() {
         await post({ ...server, type: "upsert", enabled: !server.enabled });
         await load();
       } catch (e) {
-        setStatus(`更新失败: ${String(e)}`);
+        setStatus(`更新失败：${userFacingMessage(e)}`);
       } finally {
         setSaving(false);
       }
@@ -135,7 +136,10 @@ export function McpServersSection() {
           [id]: d.ok ? `连接成功，${d.toolCount ?? 0} 个工具` : "连接失败",
         }));
       } catch (e) {
-        setTestResults((prev) => ({ ...prev, [id]: `失败: ${String(e)}` }));
+        setTestResults((prev) => ({
+          ...prev,
+          [id]: `失败：${userFacingMessage(e)}`,
+        }));
       }
     },
     [post]

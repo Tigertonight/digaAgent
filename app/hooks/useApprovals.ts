@@ -26,6 +26,7 @@ import type {
   ApprovalDecision,
   ApprovalRequest,
 } from "@/lib/collab/types";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 export interface UseApprovalsOptions {
   /** 当前活跃 agent id；null 时 action 退化为 no-op（不应该被触发） */
@@ -69,10 +70,10 @@ async function postDecision(
     });
     if (!r.ok) {
       const text = await r.text().catch(() => "");
-      onError?.(`approval ${body.decision} failed: ${r.status} ${text}`);
+      onError?.(userFacingMessage(text || `HTTP ${r.status}`));
     }
   } catch (e) {
-    onError?.(`approval ${body.decision} network error: ${String(e)}`);
+    onError?.(userFacingMessage(e));
   }
 }
 
@@ -86,13 +87,13 @@ export function useApprovals(opts: UseApprovalsOptions): UseApprovalsReturn {
         const r = await fetch(`/api/agent/${agentId}/approval`);
         if (!r.ok) {
           const text = await r.text().catch(() => "");
-          onError?.(`load pending approvals failed: ${r.status} ${text}`);
+          onError?.(userFacingMessage(text || `HTTP ${r.status}`));
           return [];
         }
         const d = (await r.json()) as { approvals?: ApprovalRequest[] };
         return Array.isArray(d.approvals) ? d.approvals : [];
       } catch (e) {
-        onError?.(`load pending approvals network error: ${String(e)}`);
+        onError?.(userFacingMessage(e));
         return [];
       }
     },

@@ -26,6 +26,7 @@ import type {
   PendingAttachment,
   PendingAttachmentKind,
 } from "@/lib/session-runner";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 type Updater<T> = T | ((prev: T) => T);
 
@@ -78,7 +79,7 @@ export function useComposerAttachments(
         );
         setPendingImages((prev) => [...prev, ...converted]);
       } catch (e) {
-        setError(String(e));
+        setError(userFacingMessage(e));
       }
     },
     [setPendingImages, setError]

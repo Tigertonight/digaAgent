@@ -718,6 +718,12 @@ function findFinalTextPartIndex(parts: MessagePart[]): number {
 }
 
 function isProcessPart(part: MessagePart): boolean {
+  if (
+    (part.kind === "approval" || part.kind === "clarification") &&
+    part.status === "pending"
+  ) {
+    return false;
+  }
   return part.kind === "tool" || part.kind === "thinking" || part.kind === "approval";
 }
 

@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  memo,
   useCallback,
   useEffect,
   useRef,
@@ -47,13 +48,13 @@ import type {
   ProviderInfo,
   ProvidersResponse,
   SessionInfoLite,
+  SessionRuntimeState,
 } from "@/lib/types";
 import {
   approxBase64Bytes,
   fileToImageContent,
   formatBytes,
 } from "@/lib/image-utils";
-import { formatTokens } from "@/lib/format";
 import {
   curateProviderModels,
   DEFAULT_MODEL_ID,
@@ -61,6 +62,8 @@ import {
   DEFAULT_PROVIDER_ID,
   getCuratedModelLabel,
 } from "@/lib/default-model";
+import { buildProcessSummary } from "@/lib/process-summary";
+import { toUserFacingError, userFacingMessage } from "@/lib/user-facing-error";
 
 interface RemoteStorage {
   token: string;
@@ -76,13 +79,7 @@ interface RemoteStatus {
   defaultCwd?: string;
   defaultProvider?: string;
   defaultModelId?: string;
-  activeAgents?: Array<{
-    id: string;
-    sessionId: string;
-    sessionFile: string | null;
-    cwd: string;
-    isStreaming: boolean;
-  }>;
+  activeAgents?: SessionRuntimeState[];
 }
 
 type ConnectionState = "connected" | "reconnecting" | "offline" | "idle";
@@ -104,6 +101,8 @@ const MOBILE_STARTERS = [
 
 const MOBILE_SESSION_PAGE_SIZE = 30;
 const MOBILE_CONTEXT_TAIL_MESSAGES = 80;
+const MOBILE_MESSAGE_WINDOW = 36;
+const MOBILE_MESSAGE_WINDOW_STEP = 24;
 const MOBILE_PROVIDER_STORAGE_KEY = "mini-pi-mobile-provider-id";
 const MOBILE_MODEL_STORAGE_KEY = "mini-pi-mobile-model-id";
 const MOBILE_MODEL_VERSION_STORAGE_KEY = "mini-pi-mobile-model-default-version";
@@ -121,6 +120,7 @@ const MOBILE_FILE_AUTOCOMPLETE_IGNORES = new Set([
 
 type MobileAutocompleteMode = "@" | "/";
 type MobileFileEntry = { name: string; isDir: boolean; path?: string };
+const MobileMarkdown = memo(Markdown);
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
   return Array.from(new Set(values.filter((value): value is string => Boolean(value))));
@@ -154,6 +154,47 @@ function mobileBaseLabel(base: string): string {
     // Fall through to the generic label.
   }
   return "其他网络";
+}
+
+function mobileClientRequestId(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+}
+
+function mobileConnectionText({
+  connection,
+  hasAgent,
+  running,
+  blockerCount,
+  error,
+  baseUrl,
+}: {
+  connection: ConnectionState;
+  hasAgent: boolean;
+  running: boolean;
+  blockerCount: number;
+  error: string | null;
+  baseUrl: string;
+}): string {
+  if (connection === "connected") {
+    if (blockerCount > 0) return "需确认";
+    if (running) return "执行中";
+    return hasAgent ? "已连接" : "任务空闲";
+  }
+  if (connection === "reconnecting" || connection === "idle") {
+    return connection === "idle" ? "正在连接" : "网络恢复中";
+  }
+  const mapped = toUserFacingError(error || "", {
+    baseUrl,
+    context: "remote",
+  });
+  if (mapped.code === "pairing_required") return "需要重新扫码";
+  if (mapped.code === "public_unavailable") return "公网连接不可用";
+  if (mapped.code === "remote_unreachable") return "电脑端未开启";
+  return mapped.title;
 }
 
 function getMobileModelSelection(
@@ -460,58 +501,6 @@ function isMobileProcessPart(part: MessagePart): boolean {
   );
 }
 
-function mobileProcessSummary(
-  parts: MessagePart[],
-  meta?: ReducerState["messages"][number]["meta"]
-): { title: string; detail: string } {
-  let errorCount = 0;
-  let approvals = 0;
-  const tools = new Map<string, number>();
-  for (const part of parts) {
-    if (part.kind === "tool") {
-      tools.set(part.toolName, (tools.get(part.toolName) ?? 0) + 1);
-      if (part.status === "error" || part.isError) errorCount += 1;
-    } else if (part.kind === "approval") {
-      approvals += 1;
-      if (part.status === "denied") errorCount += 1;
-    } else if (part.kind === "subagent_batch" && part.status === "failed") {
-      errorCount += 1;
-    } else if (part.kind === "workflow_run" && part.status === "failed") {
-      errorCount += 1;
-    }
-  }
-  const toolSummary = [...tools.entries()]
-    .slice(0, 4)
-    .map(([name, count]) => (count > 1 ? `${name}×${count}` : name));
-  const usage = meta?.usage;
-  const usageSummary = usage
-    ? [
-        `${formatTokens(usage.input)} in`,
-        `${formatTokens(usage.output)} out`,
-        usage.cost > 0
-          ? usage.cost < 0.0001
-            ? "<$0.0001"
-            : `$${usage.cost.toFixed(4)}`
-          : "",
-      ].filter(Boolean)
-    : [];
-  const stepCount = parts.length;
-  const modelLabel = meta?.model || meta?.provider || "Diga";
-  return {
-    title:
-      errorCount > 0
-        ? `${modelLabel} · 已处理 ${stepCount} 个步骤，${errorCount} 个问题已恢复`
-        : `${modelLabel} · 已处理 ${stepCount} 个步骤`,
-    detail:
-      [
-        toolSummary.join(" / ") || (approvals > 0 ? `确认×${approvals}` : ""),
-        usageSummary.join(" · "),
-      ]
-        .filter(Boolean)
-        .join(" · ") || "过程记录",
-  };
-}
-
 function MobileProcessGroup({
   parts,
   meta,
@@ -535,7 +524,7 @@ function MobileProcessGroup({
   ) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
-  const summary = mobileProcessSummary(parts, meta);
+  const summary = buildProcessSummary({ parts, meta });
   return (
     <div className="overflow-hidden rounded-lg border border-[color:var(--border-soft)] bg-[color:var(--bg)] text-xs">
       <button
@@ -600,7 +589,7 @@ function MobileMessagePart({
   if (part.kind === "text") {
     return (
       <div className="mobile-message-markdown min-w-0 overflow-hidden">
-        <Markdown text={part.text} streaming={streaming} />
+        <MobileMarkdown text={part.text} streaming={streaming} />
       </div>
     );
   }
@@ -613,7 +602,7 @@ function MobileMessagePart({
         icon={<Brain size={14} />}
       >
         <div className="thinking-md text-xs leading-6 text-[color:var(--text-muted)]">
-          <Markdown text={part.text} size="small" />
+          <MobileMarkdown text={part.text} size="small" />
         </div>
       </MobileDisclosure>
     );
@@ -950,6 +939,9 @@ export default function MobileApp({
   const [visibleSessionCount, setVisibleSessionCount] = useState(
     MOBILE_SESSION_PAGE_SIZE
   );
+  const [visibleMessageWindow, setVisibleMessageWindow] = useState(
+    MOBILE_MESSAGE_WINDOW
+  );
   const [selected, setSelected] = useState<SessionInfoLite | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
   const [chatState, setChatState] = useState<ReducerState>(() => createInitialState());
@@ -1180,7 +1172,7 @@ export default function MobileApp({
       setConnection("connected");
     } catch (e) {
       setConnection("offline");
-      setError(e instanceof Error ? e.message : String(e));
+      setError(userFacingMessage(e, { baseUrl: baseUrlRef.current || baseUrl, context: "remote" }));
     }
   }, [apiFetch, baseUrl, modelId, providerId]);
 
@@ -1195,7 +1187,9 @@ export default function MobileApp({
         { signal }
       );
       const ctx = await res.json();
-      if (!res.ok || ctx.error) throw new Error(ctx.error ?? res.statusText);
+      if (!res.ok || ctx.error) {
+        throw new Error(userFacingMessage(ctx.error ?? res.statusText, { baseUrl: baseUrlRef.current, context: "remote" }));
+      }
       const nextState = createInitialState(
         ctxToMessages(Array.isArray(ctx.messages) ? ctx.messages : [])
       );
@@ -1219,6 +1213,7 @@ export default function MobileApp({
         signal
       );
       shouldScrollAfterSessionLoadRef.current = scrollAfterLoad;
+      setVisibleMessageWindow(MOBILE_MESSAGE_WINDOW);
       setChatState(nextState);
       return ctx;
     },
@@ -1232,7 +1227,9 @@ export default function MobileApp({
         Boolean(
           agentId &&
             status?.activeAgents?.some(
-              (agent) => agent.id === agentId && agent.isStreaming
+              (agent) =>
+                agent.id === agentId &&
+                (agent.runtimeState === "streaming" || agent.isStreaming)
             )
         );
       if (!selected || runningNow) return;
@@ -1545,6 +1542,7 @@ export default function MobileApp({
     setSelected(session);
     setAgentId(null);
     setAgentRunning(false);
+    setVisibleMessageWindow(MOBILE_MESSAGE_WINDOW);
     const cached = sessionContextCacheRef.current.get(session.id);
     if (cached) {
       shouldScrollAfterSessionLoadRef.current = true;
@@ -1570,7 +1568,9 @@ export default function MobileApp({
       if (sessionLoadSeqRef.current !== seq) return;
       if (active) {
         setAgentId(active.id);
-        setAgentRunning(active.isStreaming);
+        setAgentRunning(
+          active.runtimeState === "streaming" || active.isStreaming
+        );
         attachSse(active.id);
       }
     } catch (e) {
@@ -1582,7 +1582,7 @@ export default function MobileApp({
         return;
       }
       if (sessionLoadSeqRef.current !== seq) return;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(userFacingMessage(e, { baseUrl: baseUrlRef.current || baseUrl, context: "remote" }));
     } finally {
       if (sessionLoadSeqRef.current === seq) {
         setSessionLoadingId(null);
@@ -1632,7 +1632,7 @@ export default function MobileApp({
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.error) throw new Error(data.error ?? res.statusText);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(userFacingMessage(e, { baseUrl: baseUrlRef.current || baseUrl, context: "remote" }));
     } finally {
       setBusy(false);
     }
@@ -1661,7 +1661,7 @@ export default function MobileApp({
     });
     const data = await res.json();
     if (!res.ok || data.error) {
-      setError(data.error ?? res.statusText);
+      setError(userFacingMessage(data.error ?? res.statusText, { baseUrl, context: "remote" }));
       return null;
     }
     setAgentId(data.id);
@@ -1693,6 +1693,7 @@ export default function MobileApp({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           type: "prompt",
+          clientRequestId: mobileClientRequestId(),
           text: text || "(image)",
           images: images.length > 0 ? images : undefined,
         }),
@@ -1705,7 +1706,7 @@ export default function MobileApp({
       scheduleReconcileSelectedSession("send", 900);
     } catch (e) {
       setAgentRunning(false);
-      setError(e instanceof Error ? e.message : String(e));
+      setError(userFacingMessage(e, { baseUrl: baseUrlRef.current || baseUrl, context: "remote" }));
     } finally {
       sendingRef.current = false;
       setSending(false);
@@ -1728,7 +1729,7 @@ export default function MobileApp({
       const converted = await Promise.all(images.map((file) => fileToImageContent(file)));
       setPendingImages((prev) => [...prev, ...converted]);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(userFacingMessage(e, { baseUrl: baseUrlRef.current || baseUrl, context: "remote" }));
     } finally {
       setBusy(false);
     }
@@ -1834,6 +1835,7 @@ export default function MobileApp({
     setSelected(null);
     setAgentId(null);
     setAgentRunning(false);
+    setVisibleMessageWindow(MOBILE_MESSAGE_WINDOW);
     setChatState(createInitialState());
     setSessionLoadingId(null);
     lastSeqRef.current = null;
@@ -1858,11 +1860,11 @@ export default function MobileApp({
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.error) throw new Error(data.error ?? res.statusText);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(userFacingMessage(e, { baseUrl: baseUrlRef.current || baseUrl, context: "remote" }));
     } finally {
       setBusy(false);
     }
-  }, [agentId, apiFetch]);
+  }, [agentId, apiFetch, baseUrl]);
 
   const runMobileSlashCommand = useCallback(
     (name: SlashName) => {
@@ -2029,6 +2031,8 @@ export default function MobileApp({
   );
 
   const messages = chatState.messages;
+  const hiddenBeforeCount = Math.max(0, messages.length - visibleMessageWindow);
+  const renderedMessages = messages.slice(hiddenBeforeCount);
   const visibleSessions = sessions.slice(0, visibleSessionCount);
   const hasMoreSessions = visibleSessionCount < sessions.length;
   const pendingBlockers = getPendingMobileBlockers(messages);
@@ -2037,7 +2041,9 @@ export default function MobileApp({
     Boolean(
       agentId &&
         status?.activeAgents?.some(
-          (agent) => agent.id === agentId && agent.isStreaming
+          (agent) =>
+            agent.id === agentId &&
+            (agent.runtimeState === "streaming" || agent.isStreaming)
         )
     );
 
@@ -2066,18 +2072,14 @@ export default function MobileApp({
     );
   }
 
-  const statusText =
-    connection === "connected"
-      ? pendingBlockers.count > 0
-        ? "需确认"
-        : effectiveAgentRunning
-        ? "执行中"
-        : agentId
-          ? "已连接"
-        : "任务空闲"
-      : connection === "reconnecting"
-        ? `${mobileBaseLabel(baseUrl)}恢复中`
-        : "主机不可达";
+  const statusText = mobileConnectionText({
+    connection,
+    hasAgent: Boolean(agentId),
+    running: effectiveAgentRunning,
+    blockerCount: pendingBlockers.count,
+    error,
+    baseUrl,
+  });
   const authedProviders = providers.filter((provider) => provider.hasAuth);
   const rawSelectableProviders =
     authedProviders.length > 0 ? authedProviders : providers;
@@ -2197,33 +2199,43 @@ export default function MobileApp({
             className="min-h-0 flex-1 space-y-1 overflow-auto p-2"
             onScroll={onSessionListScroll}
           >
-            {visibleSessions.map((session) => (
-              <button
-                key={session.id}
-                type="button"
-                onClick={() => void selectSession(session)}
-                className={`block w-full rounded border px-2 py-2 text-left text-xs ${
-                  selected?.id === session.id
-                    ? "border-[color:var(--accent)] bg-[color:var(--bg-selected)]"
-                    : "border-[color:var(--border-soft)] hover:bg-[color:var(--bg-hover)]"
-                }`}
-              >
-                <div className="flex items-center gap-1">
-                  {session.isRunning ? (
-                    <Loader2 size={12} className="shrink-0 animate-spin text-[color:var(--accent)]" />
-                  ) : null}
-                  <span className="truncate font-medium">
-                    {session.meta?.title || session.name || session.firstMessage || "(未命名)"}
-                  </span>
-                </div>
-                <div
-                  className="mt-1 truncate text-[11px] text-[color:var(--text-muted)]"
-                  title={session.cwd}
+            {visibleSessions.map((session) => {
+              const waitingUser = session.runtimeState === "waiting_user";
+              return (
+                <button
+                  key={session.id}
+                  type="button"
+                  onClick={() => void selectSession(session)}
+                  className={`block w-full rounded border px-2 py-2 text-left text-xs ${
+                    selected?.id === session.id
+                      ? "border-[color:var(--accent)] bg-[color:var(--bg-selected)]"
+                      : "border-[color:var(--border-soft)] hover:bg-[color:var(--bg-hover)]"
+                  }`}
                 >
-                  {compactPath(session.cwd)}
-                </div>
-              </button>
-            ))}
+                  <div className="flex min-w-0 items-center gap-1">
+                    {waitingUser ? (
+                      <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+                    ) : session.isRunning ? (
+                      <Loader2 size={12} className="shrink-0 animate-spin text-[color:var(--accent)]" />
+                    ) : null}
+                    <span className="min-w-0 flex-1 truncate font-medium">
+                      {session.meta?.title || session.name || session.firstMessage || "(未命名)"}
+                    </span>
+                    {waitingUser ? (
+                      <span className="shrink-0 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-200">
+                        需确认
+                      </span>
+                    ) : null}
+                  </div>
+                  <div
+                    className="mt-1 truncate text-[11px] text-[color:var(--text-muted)]"
+                    title={session.cwd}
+                  >
+                    {compactPath(session.cwd)}
+                  </div>
+                </button>
+              );
+            })}
             {hasMoreSessions ? (
               <button
                 type="button"
@@ -2331,16 +2343,31 @@ export default function MobileApp({
                 </div>
               </div>
             ) : (
-              messages.map((message, index) => (
-                <MobileChatMessage
-                  key={index}
-                  message={message}
-                  input={input}
-                  approve={approve}
-                  deny={deny}
-                  clarify={clarify}
-                />
-              ))
+              <>
+                {hiddenBeforeCount > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setVisibleMessageWindow((prev) =>
+                        Math.min(messages.length, prev + MOBILE_MESSAGE_WINDOW_STEP)
+                      )
+                    }
+                    className="mx-auto block rounded-full border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] px-3 py-1.5 text-xs text-[color:var(--text-muted)] active:bg-[color:var(--bg-hover)]"
+                  >
+                    加载更早的 {hiddenBeforeCount} 条
+                  </button>
+                ) : null}
+                {renderedMessages.map((message, index) => (
+                  <MobileChatMessage
+                    key={hiddenBeforeCount + index}
+                    message={message}
+                    input={input}
+                    approve={approve}
+                    deny={deny}
+                    clarify={clarify}
+                  />
+                ))}
+              </>
             )}
           </div>
           {autoScrollPaused && messages.length > 0 ? (

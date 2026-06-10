@@ -2,6 +2,7 @@
 
 import { useCallback } from "react";
 import type { ClarificationRequest } from "@/lib/clarification/types";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 export interface UseClarificationsOptions {
   agentId: string | null;
@@ -31,10 +32,10 @@ async function postClarification(
     });
     if (!r.ok) {
       const text = await r.text().catch(() => "");
-      onError?.(`clarification failed: ${r.status} ${text}`);
+      onError?.(userFacingMessage(text || `HTTP ${r.status}`));
     }
   } catch (e) {
-    onError?.(`clarification network error: ${String(e)}`);
+    onError?.(userFacingMessage(e));
   }
 }
 
@@ -50,7 +51,7 @@ export function useClarifications(
         const r = await fetch(`/api/agent/${agentId}/clarification`);
         if (!r.ok) {
           const text = await r.text().catch(() => "");
-          onError?.(`load pending clarifications failed: ${r.status} ${text}`);
+          onError?.(userFacingMessage(text || `HTTP ${r.status}`));
           return [];
         }
         const d = (await r.json()) as {
@@ -58,7 +59,7 @@ export function useClarifications(
         };
         return Array.isArray(d.clarifications) ? d.clarifications : [];
       } catch (e) {
-        onError?.(`load pending clarifications network error: ${String(e)}`);
+        onError?.(userFacingMessage(e));
         return [];
       }
     },
