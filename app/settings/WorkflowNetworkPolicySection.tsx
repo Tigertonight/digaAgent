@@ -41,6 +41,7 @@ function patternForUrl(raw: string): string | null {
 }
 
 export function WorkflowNetworkPolicySection() {
+  const [open, setOpen] = useState(false);
   const [allowedOrigins, setAllowedOrigins] = useState("");
   const [deniedOrigins, setDeniedOrigins] = useState("");
   const [allowedUrlPatterns, setAllowedUrlPatterns] = useState("");
@@ -184,46 +185,62 @@ export function WorkflowNetworkPolicySection() {
   return (
     <section className="mb-6 border border-neutral-800 rounded p-4">
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold mb-1">
-            Workflow · Network policy
-          </h2>
-          <p className="text-xs text-neutral-500 mb-4">
-            控制 dynamic workflow 的 host-side `workflow.fetchUrl` 访问边界。
-            deny 规则优先；空 allowlist 表示不按 allowlist 限制。
-          </p>
-        </div>
         <button
           type="button"
-          onClick={() => void load()}
-          disabled={loading || saving}
-          className="px-2 py-1 text-xs border border-neutral-700 rounded hover:bg-neutral-900 disabled:opacity-50"
+          onClick={() => setOpen((v) => !v)}
+          className="min-w-0 flex-1 text-left"
         >
-          {loading ? "加载中" : "刷新"}
+          <h2 className="text-sm font-semibold mb-1">
+            工作流网络访问规则
+          </h2>
+          <p className="text-xs text-neutral-500 mb-4">
+            高级安全配置。用于限制工作流能访问哪些域名和 URL；禁止规则优先生效。
+          </p>
         </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="px-2 py-1 text-xs border border-neutral-700 rounded hover:bg-neutral-900"
+          >
+            {open ? "收起" : "展开"}
+          </button>
+          {open ? (
+            <button
+              type="button"
+              onClick={() => void load()}
+              disabled={loading || saving}
+              className="px-2 py-1 text-xs border border-neutral-700 rounded hover:bg-neutral-900 disabled:opacity-50"
+            >
+              {loading ? "加载中" : "刷新"}
+            </button>
+          ) : null}
+        </div>
       </div>
 
+      {open ? (
+      <>
       <div className="grid gap-3 md:grid-cols-2">
         <PolicyTextarea
-          label="Allowed origins"
+          label="允许访问的域名"
           placeholder="https://api.example.com"
           value={allowedOrigins}
           onChange={setAllowedOrigins}
         />
         <PolicyTextarea
-          label="Denied origins"
+          label="禁止访问的域名"
           placeholder="https://blocked.example.com"
           value={deniedOrigins}
           onChange={setDeniedOrigins}
         />
         <PolicyTextarea
-          label="Allowed URL patterns"
+          label="允许访问的 URL 规则"
           placeholder="https://api.example.com/public/*"
           value={allowedUrlPatterns}
           onChange={setAllowedUrlPatterns}
         />
         <PolicyTextarea
-          label="Denied URL patterns"
+          label="禁止访问的 URL 规则"
           placeholder="https://api.example.com/private/*"
           value={deniedUrlPatterns}
           onChange={setDeniedUrlPatterns}
@@ -231,7 +248,7 @@ export function WorkflowNetworkPolicySection() {
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-4 text-sm">
-        <span className="text-xs text-neutral-500">Allowed methods</span>
+        <span className="text-xs text-neutral-500">允许的请求方法</span>
         <label className="flex items-center gap-2">
           <input
             type="checkbox"
@@ -249,14 +266,13 @@ export function WorkflowNetworkPolicySection() {
           POST
         </label>
         <span className="text-[11px] text-neutral-600">
-          都不勾选时不限制 method。
+          都不勾选时不限制请求方法。
         </span>
       </div>
 
       <div className="mt-4 flex items-center justify-between gap-3">
         <p className="text-[11px] text-neutral-600 leading-relaxed">
-          规则保存到 `~/.mini-pi/workflows/network-policy.json`，下一次
-          `run_workflow_script` 会自动注入 parent runtime。
+          规则保存到本机配置文件，下一次工作流运行时自动生效。
         </p>
         <button
           type="button"
@@ -271,7 +287,7 @@ export function WorkflowNetworkPolicySection() {
       <div className="mt-5 border-t border-neutral-800 pt-4">
         <div className="mb-2 flex items-center justify-between gap-2">
           <h3 className="text-xs font-semibold text-neutral-300">
-            Network audit
+            网络访问记录
           </h3>
           <button
             type="button"
@@ -286,13 +302,13 @@ export function WorkflowNetworkPolicySection() {
           <input
             value={auditWorkflowId}
             onChange={(e) => setAuditWorkflowId(e.target.value)}
-            placeholder="workflow id"
+            placeholder="工作流 ID"
             className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-xs text-neutral-200 outline-none focus:border-neutral-600"
           />
           <input
             value={auditOrigin}
             onChange={(e) => setAuditOrigin(e.target.value)}
-            placeholder="origin, e.g. https://api.example.com"
+            placeholder="域名，例如 https://api.example.com"
             className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-xs text-neutral-200 outline-none focus:border-neutral-600"
           />
           <select
@@ -308,10 +324,10 @@ export function WorkflowNetworkPolicySection() {
             }
             className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-xs text-neutral-200 outline-none focus:border-neutral-600"
           >
-            <option value="">all status</option>
-            <option value="allowed">allowed</option>
-            <option value="denied">denied</option>
-            <option value="failed">failed</option>
+            <option value="">全部状态</option>
+            <option value="allowed">已允许</option>
+            <option value="denied">已拒绝</option>
+            <option value="failed">请求失败</option>
           </select>
           <select
             value={auditLimit}
@@ -326,13 +342,13 @@ export function WorkflowNetworkPolicySection() {
           <input
             value={auditSearch}
             onChange={(e) => setAuditSearch(e.target.value)}
-            placeholder="filter URL / reason / status"
+            placeholder="搜索 URL、原因或状态"
             className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-xs text-neutral-200 outline-none focus:border-neutral-600 md:col-span-4"
           />
         </div>
         {audits.length === 0 ? (
           <div className="text-xs text-neutral-600">
-            没有匹配的 workflow network 请求记录。
+            没有匹配的工作流网络请求记录。
           </div>
         ) : (
           <div className="space-y-1.5">
@@ -367,6 +383,8 @@ export function WorkflowNetworkPolicySection() {
           </div>
         )}
       </div>
+      </>
+      ) : null}
     </section>
   );
 }
@@ -395,7 +413,13 @@ function AuditRow({
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2 text-[11px]">
-            <span className={color}>{entry.outcome}</span>
+            <span className={color}>
+              {entry.outcome === "allowed"
+                ? "已允许"
+                : entry.outcome === "denied"
+                  ? "已拒绝"
+                  : "请求失败"}
+            </span>
             <span className="text-neutral-500">{entry.method}</span>
             {entry.status ? <span className="text-neutral-500">{entry.status}</span> : null}
             <span className="font-mono text-neutral-600" title={entry.workflowId}>
@@ -421,7 +445,7 @@ function AuditRow({
             onClick={() => void onAllowOrigin()}
             className="rounded border border-neutral-700 px-1.5 py-0.5 text-[11px] text-neutral-300 hover:bg-neutral-900 disabled:opacity-50"
           >
-            allow origin
+            允许该域名
           </button>
           <button
             type="button"
@@ -429,7 +453,7 @@ function AuditRow({
             onClick={() => void onDenyOrigin()}
             className="rounded border border-neutral-700 px-1.5 py-0.5 text-[11px] text-neutral-300 hover:bg-neutral-900 disabled:opacity-50"
           >
-            deny origin
+            禁止该域名
           </button>
           <button
             type="button"
@@ -437,7 +461,7 @@ function AuditRow({
             onClick={() => void onDenyPattern()}
             className="rounded border border-neutral-700 px-1.5 py-0.5 text-[11px] text-neutral-300 hover:bg-neutral-900 disabled:opacity-50"
           >
-            deny path
+            禁止该路径
           </button>
         </div>
       </div>

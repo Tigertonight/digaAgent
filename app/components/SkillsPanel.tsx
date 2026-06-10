@@ -46,7 +46,8 @@ interface MarketplaceResult {
 
 interface Props {
   cwd: string;
-  onClose: () => void;
+  onClose?: () => void;
+  embedded?: boolean;
 }
 
 type GroupLabel = "project" | "global" | "path";
@@ -852,7 +853,7 @@ function PackagesSection({
   );
 }
 
-export default function SkillsPanel({ cwd, onClose }: Props) {
+export default function SkillsPanel({ cwd, onClose, embedded = false }: Props) {
   const [data, setData] = useState<SkillsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1009,29 +1010,31 @@ export default function SkillsPanel({ cwd, onClose }: Props) {
   return (
     <div
       style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 1000,
-        background: "rgba(0,0,0,0.4)",
+        position: embedded ? "relative" : "fixed",
+        inset: embedded ? undefined : 0,
+        zIndex: embedded ? undefined : 1000,
+        background: embedded ? "transparent" : "rgba(0,0,0,0.4)",
         display: "flex",
-        alignItems: "center",
+        alignItems: embedded ? "stretch" : "center",
         justifyContent: "center",
+        width: embedded ? "100%" : undefined,
       }}
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (!embedded && e.target === e.currentTarget) onClose?.();
       }}
     >
       <div
         style={{
-          width: 880,
-          maxWidth: "92vw",
-          height: "82vh",
+          width: embedded ? "100%" : 880,
+          maxWidth: embedded ? "none" : "92vw",
+          height: embedded ? "min(720px, calc(100vh - 260px))" : "82vh",
+          minHeight: embedded ? 520 : undefined,
           background: "var(--bg)",
           border: "1px solid var(--border)",
           borderRadius: 10,
           display: "flex",
           flexDirection: "column",
-          boxShadow: "0 8px 32px rgba(0,0,0,0.22)",
+          boxShadow: embedded ? "none" : "0 8px 32px rgba(0,0,0,0.22)",
           overflow: "hidden",
         }}
         onClick={(e) => e.stopPropagation()}
@@ -1086,22 +1089,24 @@ export default function SkillsPanel({ cwd, onClose }: Props) {
             >
               {loading ? "…" : "↻"}
             </button>
-            <button
-              type="button"
-              onClick={onClose}
-              style={{
-                background: "transparent",
-                border: "none",
-                color: "var(--text-muted)",
-                cursor: "pointer",
-                fontSize: 20,
-                lineHeight: 1,
-                padding: "2px 6px",
-              }}
-              aria-label="Close"
-            >
-              <X size={18} />
-            </button>
+            {!embedded ? (
+              <button
+                type="button"
+                onClick={onClose}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  fontSize: 20,
+                  lineHeight: 1,
+                  padding: "2px 6px",
+                }}
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
+            ) : null}
           </div>
         </div>
 
@@ -1325,39 +1330,53 @@ export default function SkillsPanel({ cwd, onClose }: Props) {
         </div>
 
         {/* Footer */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "10px 18px",
-            borderTop: "1px solid var(--border)",
-            flexShrink: 0,
-          }}
-        >
-          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
-            {data && data.diagnostics.length > 0 && (
-              <span style={{ color: "#fde68a" }}>
-                ⚠ {data.diagnostics.length} diagnostic(s)
-              </span>
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
+        {!embedded ? (
+          <div
             style={{
-              padding: "6px 14px",
-              background: "transparent",
-              border: "1px solid var(--border)",
-              borderRadius: 6,
-              color: "var(--text-muted)",
-              cursor: "pointer",
-              fontSize: 13,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "10px 18px",
+              borderTop: "1px solid var(--border)",
+              flexShrink: 0,
             }}
           >
-            Close
-          </button>
-        </div>
+            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+              {data && data.diagnostics.length > 0 && (
+                <span style={{ color: "#fde68a" }}>
+                  ⚠ {data.diagnostics.length} diagnostic(s)
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              style={{
+                padding: "6px 14px",
+                background: "transparent",
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                fontSize: 13,
+              }}
+            >
+              Close
+            </button>
+          </div>
+        ) : data && data.diagnostics.length > 0 ? (
+          <div
+            style={{
+              padding: "10px 18px",
+              borderTop: "1px solid var(--border)",
+              flexShrink: 0,
+              fontSize: 11,
+              color: "#fde68a",
+            }}
+          >
+            ⚠ {data.diagnostics.length} diagnostic(s)
+          </div>
+        ) : null}
       </div>
     </div>
   );

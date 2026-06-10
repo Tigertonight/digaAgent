@@ -76,7 +76,7 @@ export function ProviderConfigCard({
         <span className="w-3 text-center">{isOpen ? "▾" : "▸"}</span>
         <span className="font-medium flex-1 truncate">{provKey}</span>
         <span className="text-[10px]" style={{ color: "var(--fg-faint)" }}>
-          {models.length} model{models.length === 1 ? "" : "s"}
+          {models.length} 个模型
           {prov.api && ` · ${prov.api}`}
         </span>
         <ConfirmButton
@@ -100,7 +100,7 @@ export function ProviderConfigCard({
         >
           <div className="grid grid-cols-2 gap-1 pt-2">
             <LabeledInput
-              label="baseUrl"
+              label="接口地址"
               value={prov.baseUrl ?? ""}
               onChange={(v) => onUpdateProvider(provKey, { baseUrl: v })}
               placeholder="https://api.example.com/v1"
@@ -110,7 +110,7 @@ export function ProviderConfigCard({
                 className="text-[10px]"
                 style={{ color: "var(--fg-faint)" }}
               >
-                api
+                接口协议
               </span>
               <select
                 value={prov.api ?? ""}
@@ -126,7 +126,7 @@ export function ProviderConfigCard({
                   color: "var(--fg)",
                 }}
               >
-                <option value="">(use model.api / default)</option>
+                <option value="">使用模型设置或默认值</option>
                 {API_TYPES.map((a) => (
                   <option key={a} value={a}>
                     {a}
@@ -135,14 +135,14 @@ export function ProviderConfigCard({
               </select>
             </div>
             <LabeledInput
-              label="apiKey (写到 models.json 而非 auth.json)"
+              label="API 密钥（写入模型配置）"
               value={prov.apiKey ?? ""}
               onChange={(v) => onUpdateProvider(provKey, { apiKey: v })}
-              placeholder="留空则 fallback 到 auth.json / env"
+              placeholder="留空则使用账号密钥或环境变量"
               password
             />
             <LabeledInput
-              label="authHeader (可选, e.g. x-api-key)"
+              label="鉴权请求头（可选）"
               value={prov.authHeader ?? ""}
               onChange={(v) => onUpdateProvider(provKey, { authHeader: v })}
               placeholder="(default: Authorization)"
@@ -176,7 +176,7 @@ export function ProviderConfigCard({
               >
                 <div className="grid grid-cols-3 gap-1">
                   <LabeledInput
-                    label="id *"
+                    label="模型 ID *"
                     value={newModelDraft.id}
                     onChange={(v) =>
                       setNewModelDraft((d) => ({ ...d, id: v }))
@@ -184,14 +184,14 @@ export function ProviderConfigCard({
                     placeholder="gpt-4o-mini"
                   />
                   <LabeledInput
-                    label="name"
+                    label="显示名称"
                     value={newModelDraft.name ?? ""}
                     onChange={(v) =>
                       setNewModelDraft((d) => ({ ...d, name: v }))
                     }
                   />
                   <LabeledNumber
-                    label="contextWindow"
+                    label="上下文长度"
                     value={newModelDraft.contextWindow}
                     onChange={(v) =>
                       setNewModelDraft((d) => ({
@@ -201,7 +201,7 @@ export function ProviderConfigCard({
                     }
                   />
                   <LabeledNumber
-                    label="maxTokens"
+                    label="最大输出长度"
                     value={newModelDraft.maxTokens}
                     onChange={(v) =>
                       setNewModelDraft((d) => ({ ...d, maxTokens: v }))
@@ -216,7 +216,7 @@ export function ProviderConfigCard({
                     className="px-2 py-1 text-xs rounded text-white disabled:opacity-50"
                     style={{ background: "var(--accent)" }}
                   >
-                    Add
+                    添加
                   </button>
                   <button
                     type="button"
@@ -224,7 +224,7 @@ export function ProviderConfigCard({
                     className="px-2 py-1 text-xs rounded border hover:opacity-80"
                     style={{ borderColor: "var(--border)" }}
                   >
-                    Cancel
+                    取消
                   </button>
                 </div>
               </div>
@@ -241,7 +241,7 @@ export function ProviderConfigCard({
                   color: "var(--fg-muted)",
                 }}
               >
-                + Add model
+                + 添加模型
               </button>
             )}
           </div>

@@ -42,9 +42,9 @@ export function ModelConfigRow({
           disabled={testing}
           className="px-1.5 py-0.5 text-[10px] rounded border hover:opacity-80 disabled:opacity-50"
           style={{ borderColor: "var(--border)" }}
-          title="Test model connection"
+          title="测试模型连接"
         >
-          {testing ? "Testing…" : "Test"}
+          {testing ? "测试中…" : "测试"}
         </button>
         <button
           type="button"
@@ -60,22 +60,22 @@ export function ModelConfigRow({
       </div>
       <div className="grid grid-cols-3 gap-1 mt-1">
         <LabeledInput
-          label="name"
+          label="显示名称"
           value={m.name ?? ""}
           onChange={(v) => onUpdate(providerKey, m.id, { name: v })}
         />
         <LabeledNumber
-          label="contextWindow"
+          label="上下文长度"
           value={m.contextWindow}
           onChange={(v) => onUpdate(providerKey, m.id, { contextWindow: v })}
         />
         <LabeledNumber
-          label="maxTokens"
+          label="最大输出长度"
           value={m.maxTokens}
           onChange={(v) => onUpdate(providerKey, m.id, { maxTokens: v })}
         />
         <LabeledNumber
-          label="cost.input ($/M)"
+          label="输入价格（美元/百万 token）"
           value={m.cost?.input}
           step={0.01}
           onChange={(v) =>
@@ -85,7 +85,7 @@ export function ModelConfigRow({
           }
         />
         <LabeledNumber
-          label="cost.output ($/M)"
+          label="输出价格（美元/百万 token）"
           value={m.cost?.output}
           step={0.01}
           onChange={(v) =>
@@ -105,7 +105,7 @@ export function ModelConfigRow({
             }
             className="accent-blue-600"
           />
-          reasoning / thinking
+          支持推理模式
         </label>
       </div>
       {t && (

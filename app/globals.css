@@ -130,6 +130,26 @@ body {
     ui-monospace, "PingFang SC", "Microsoft YaHei", monospace !important;
 }
 
+.mobile-safe-screen {
+  height: 100vh;
+  height: var(--mobile-app-height, 100svh);
+  overscroll-behavior: none;
+  touch-action: manipulation;
+}
+
+.mobile-safe-top {
+  padding-top: max(0.5rem, calc(env(safe-area-inset-top) + 0.5rem));
+}
+
+.mobile-safe-bottom {
+  padding-bottom: max(0.5rem, calc(env(safe-area-inset-bottom) + 0.5rem));
+}
+
+.mobile-safe-drawer {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
 /* Thinking 块内的 markdown:prose 默认会撑大字号/给段落很厚 margin,
  * 这里强制 12px + 紧凑行距 + 继承父颜色(已经被设成 dim) */
 .thinking-md .prose,
@@ -156,6 +176,44 @@ body {
 .thinking-md .prose strong {
   color: inherit !important;
   font-weight: 600;
+}
+
+.mobile-message-markdown .prose {
+  font-size: 15px;
+  line-height: 1.72;
+}
+
+.mobile-message-markdown .prose :where(p, ul, ol, pre, blockquote, table) {
+  margin-top: 0.45em;
+  margin-bottom: 0.45em;
+}
+
+.mobile-message-markdown .prose :where(h1, h2, h3, h4) {
+  margin-top: 0.85em;
+  margin-bottom: 0.35em;
+  line-height: 1.28;
+  letter-spacing: 0;
+}
+
+.mobile-message-markdown .prose :where(h1) {
+  font-size: 1.45rem;
+}
+
+.mobile-message-markdown .prose :where(h2) {
+  font-size: 1.28rem;
+}
+
+.mobile-message-markdown .prose :where(h3, h4) {
+  font-size: 1.08rem;
+}
+
+.mobile-message-markdown .prose :where(pre, table) {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.mobile-message-markdown .prose :where(code) {
+  word-break: break-word;
 }
 
 /* upstream layout 元类 */
@@ -304,6 +362,62 @@ body.pet-window {
 .settings-page textarea:focus,
 .settings-page select:focus {
   border-color: var(--accent) !important;
+}
+.settings-page .bg-blue-700,
+.settings-page .bg-blue-600 {
+  background: var(--accent) !important;
+  color: #fff !important;
+}
+.settings-page .hover\:bg-blue-600:hover {
+  background: var(--accent-hover) !important;
+}
+.settings-page button:disabled,
+.settings-page .disabled\:bg-neutral-800:disabled,
+.settings-page .disabled\:text-neutral-600:disabled,
+.settings-page .disabled\:text-neutral-500:disabled {
+  background: color-mix(in srgb, var(--bg-panel) 70%, var(--bg)) !important;
+  border-color: var(--border) !important;
+  color: var(--text-dim) !important;
+}
+.settings-page .border-emerald-700,
+.settings-page .border-emerald-800 {
+  border-color: color-mix(in srgb, #16a34a 45%, var(--border)) !important;
+}
+.settings-page .bg-emerald-900\/40,
+.settings-page .bg-emerald-950\/20,
+.settings-page .bg-emerald-950\/30 {
+  background: color-mix(in srgb, #16a34a 12%, transparent) !important;
+}
+.settings-page .text-emerald-200,
+.settings-page .text-emerald-300 {
+  color: color-mix(in srgb, #16a34a 78%, var(--text)) !important;
+}
+.settings-page .border-amber-700,
+.settings-page .border-amber-800 {
+  border-color: color-mix(in srgb, #d97706 45%, var(--border)) !important;
+}
+.settings-page .bg-amber-950\/20,
+.settings-page .bg-amber-950\/30 {
+  background: color-mix(in srgb, #d97706 10%, transparent) !important;
+}
+.settings-page .text-amber-200,
+.settings-page .text-amber-300 {
+  color: color-mix(in srgb, #d97706 78%, var(--text)) !important;
+}
+.settings-page .border-red-800 {
+  border-color: color-mix(in srgb, #dc2626 48%, var(--border)) !important;
+}
+.settings-page .bg-red-900\/30,
+.settings-page .bg-red-900\/40 {
+  background: color-mix(in srgb, #dc2626 10%, transparent) !important;
+}
+.settings-page .hover\:bg-red-900\/30:hover,
+.settings-page .hover\:bg-red-900\/40:hover {
+  background: color-mix(in srgb, #dc2626 14%, transparent) !important;
+}
+.settings-page .text-red-200,
+.settings-page .text-red-300 {
+  color: color-mix(in srgb, #dc2626 82%, var(--text)) !important;
 }
 
 /* 通用脉动（attention 红点 / bubble 状态点用） */

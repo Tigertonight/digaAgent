@@ -80,9 +80,9 @@ export default function BudgetSettingsSectionInner() {
 
   return (
     <section className="mb-6 border border-neutral-800 rounded p-4">
-      <h2 className="text-sm font-semibold mb-1">Budget · 全局默认</h2>
+      <h2 className="text-sm font-semibold mb-1">任务用量保护</h2>
       <p className="text-xs text-neutral-500 mb-4">
-        命中任一启用维度时自动 abort。单会话可在顶栏 ⏱ 处临时改写本会话的上限。
+        防止单次任务消耗过多时间或费用。达到任一启用上限后，会按你的选择暂停或停止。
       </p>
 
       <div className="flex flex-col gap-3 text-sm">
@@ -98,7 +98,7 @@ export default function BudgetSettingsSectionInner() {
                 persist({ c: next });
               }}
             />
-            <span>Max Cost</span>
+            <span>最高费用</span>
           </label>
           <input
             type="number"
@@ -113,7 +113,7 @@ export default function BudgetSettingsSectionInner() {
             }}
             className={inputCls}
           />
-          <span className="text-neutral-500 text-xs">USD</span>
+          <span className="text-neutral-500 text-xs">美元</span>
         </div>
 
         {/* Turns */}
@@ -128,7 +128,7 @@ export default function BudgetSettingsSectionInner() {
                 persist({ t: next });
               }}
             />
-            <span>Max Turns</span>
+            <span>最多轮数</span>
           </label>
           <input
             type="number"
@@ -143,7 +143,7 @@ export default function BudgetSettingsSectionInner() {
             }}
             className={inputCls}
           />
-          <span className="text-neutral-500 text-xs">user turns</span>
+          <span className="text-neutral-500 text-xs">轮</span>
         </div>
 
         {/* Duration */}
@@ -158,7 +158,7 @@ export default function BudgetSettingsSectionInner() {
                 persist({ d: next });
               }}
             />
-            <span>Max Duration</span>
+            <span>最长时间</span>
           </label>
           <input
             type="number"
@@ -173,12 +173,12 @@ export default function BudgetSettingsSectionInner() {
             }}
             className={inputCls}
           />
-          <span className="text-neutral-500 text-xs">seconds</span>
+          <span className="text-neutral-500 text-xs">秒</span>
         </div>
 
         {/* Action */}
         <div className="flex items-center gap-3 pt-2 border-t border-neutral-800 mt-2">
-          <span className="w-32">命中时</span>
+          <span className="w-32">达到上限后</span>
           <label className="flex items-center gap-1.5">
             <input
               type="radio"
@@ -189,7 +189,7 @@ export default function BudgetSettingsSectionInner() {
                 persist({ a: "pause" });
               }}
             />
-            <span>暂停（弹窗等用户决定）</span>
+            <span>暂停并询问我</span>
           </label>
           <label className="flex items-center gap-1.5">
             <input
@@ -201,7 +201,7 @@ export default function BudgetSettingsSectionInner() {
                 persist({ a: "stop" });
               }}
             />
-            <span>直接停止</span>
+            <span>直接停止任务</span>
           </label>
         </div>
       </div>

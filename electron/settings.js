@@ -179,6 +179,7 @@ async function migrateFromEnvIfNeeded(app) {
 module.exports = {
   SERVICE,
   PROVIDER_ENV_MAP,
+  settingsFile,
   loadSettings,
   saveSettings,
   listStoredProviders,

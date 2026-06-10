@@ -267,7 +267,7 @@ export default function ModelsConfigPanel({ onClose, onChanged }: Props) {
         >
           <span className="text-sm font-semibold inline-flex items-center gap-1.5">
             <Settings size={14} />
-            Models config
+            自定义模型配置
           </span>
           <div className="flex items-center gap-1">
             <button
@@ -288,7 +288,7 @@ export default function ModelsConfigPanel({ onClose, onChanged }: Props) {
               style={{ background: "var(--accent)" }}
               title="写入 models.json"
             >
-              {saving ? "Saving…" : dirty ? "Save *" : "Save"}
+              {saving ? "保存中…" : dirty ? "保存 *" : "保存"}
             </button>
             <button
               type="button"
@@ -320,7 +320,7 @@ export default function ModelsConfigPanel({ onClose, onChanged }: Props) {
               className="text-xs text-center py-8"
               style={{ color: "var(--fg-faint)" }}
             >
-              （暂无 provider，点下方 + Add provider）
+              暂无服务商，点击下方按钮添加。
             </div>
           )}
 
@@ -369,7 +369,7 @@ export default function ModelsConfigPanel({ onClose, onChanged }: Props) {
                   autoFocus
                   value={newProvName}
                   onChange={(e) => setNewProvName(e.target.value)}
-                  placeholder="provider key (e.g. anthropic, my-openrouter)"
+                  placeholder="服务商标识，例如 anthropic、my-openrouter"
                   className="flex-1 rounded px-2 py-1 text-xs border outline-none"
                   style={{
                     background: "var(--bg-panel)",
@@ -391,7 +391,7 @@ export default function ModelsConfigPanel({ onClose, onChanged }: Props) {
                   className="px-2 py-1 text-xs rounded text-white disabled:opacity-50"
                   style={{ background: "var(--accent)" }}
                 >
-                  Add
+                  添加
                 </button>
                 <button
                   type="button"
@@ -402,7 +402,7 @@ export default function ModelsConfigPanel({ onClose, onChanged }: Props) {
                   className="px-2 py-1 text-xs rounded border hover:opacity-80"
                   style={{ borderColor: "var(--border)" }}
                 >
-                  Cancel
+                  取消
                 </button>
               </div>
             </div>
@@ -416,7 +416,7 @@ export default function ModelsConfigPanel({ onClose, onChanged }: Props) {
                 color: "var(--fg-muted)",
               }}
             >
-              + Add provider
+              + 添加服务商
             </button>
           )}
         </div>

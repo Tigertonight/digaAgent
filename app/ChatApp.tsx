@@ -2610,29 +2610,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         updateAvailable={updateState?.status === "available"}
         updateLatestVersion={updateState?.latestVersion}
         onDownloadUpdate={openUpdateDownload}
-        agentId={agentId}
-        currentSessionFile={currentSessionFile}
-        onOpenBranches={() => setShowBranches(true)}
-        onOpenSystemPrompt={async () => {
-          if (!agentId) return;
-          setShowSystemPrompt(true);
-          try {
-            const r = await fetch(`/api/agent/${agentId}?action=system_prompt`);
-            const d = (await r.json()) as { systemPrompt?: string };
-            setSystemPromptText(d.systemPrompt ?? "");
-          } catch (e) {
-            setSystemPromptText(`error: ${String(e)}`);
-          }
-        }}
-        onOpenWorkflows={openWorkflowHistory}
-        onRevealInFinder={() => {
-          if (electronApi && currentSessionFile) {
-            void electronApi
-              .revealInFinder(currentSessionFile)
-              .catch((e) => setError(String(e)));
-          }
-        }}
-        onOpenAuth={() => openAuth()}
         onOpenSettings={() => {
           if (electronApi?.settings.open) {
             void electronApi.settings.open().catch((e) => setError(String(e)));
@@ -2662,9 +2639,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         toggleSessionPin={toggleSessionPin}
         setInput={setInput}
         setShowFilePicker={setShowFilePicker}
-        setShowModelsConfig={setShowModelsConfig}
-        showSkills={showSkills}
-        toggleSkills={toggleSkills}
         searchQuery={searchHook.query}
         onSearchQueryChange={searchHook.setQuery}
         searchView={
@@ -2710,6 +2684,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           sseStatus={sseStatus}
           electronApi={electronApi}
           currentSessionFile={currentSessionFile}
+          hasSessionContext={Boolean(agentId || selectedId || currentSessionFile)}
           showTools={showTools}
           showWorkbench={workbenchOpen}
           updateStatus={updateState?.status}
@@ -2722,13 +2697,18 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           hasAuthedProviders={visibleProviders.length > 0}
           onToggleSidebar={() => setSidebarOpen((v) => !v)}
           onToggleTheme={toggleTheme}
-          onOpenBranches={() => setShowBranches(true)}
+          onOpenBranches={async () => {
+            const ensured = await ensureAgent();
+            if (!ensured) return;
+            setShowBranches(true);
+          }}
           onOpenSystemPrompt={async () => {
-            if (!agentId) return;
+            const ensured = await ensureAgent();
+            if (!ensured) return;
             setShowSystemPrompt(true);
             try {
               const r = await fetch(
-                `/api/agent/${agentId}?action=system_prompt`
+                `/api/agent/${ensured.aid}?action=system_prompt`
               );
               const d = (await r.json()) as { systemPrompt?: string };
               setSystemPromptText(d.systemPrompt ?? "");
