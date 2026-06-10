@@ -9,7 +9,7 @@
  *   2. cwd 显示条（点击切换工作目录）
  *   3. sessions 列表（含 renderRow：父/子嵌套、状态点、⋯ 菜单、内联删除确认）
  *   4. EXPLORER 文件树（SidebarExplorer 包装）
- *   5. 底部：Models / Skills 双标签
+ *   5. 底部：Settings 入口
  *
  * 设计要点：
  *   - 纯受控：所有 state / setter / action 走 props
@@ -21,15 +21,10 @@ import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useRef, useState, useSyncExternalStore } from "react";
 import { FloatingLayer } from "./FloatingLayer";
 import {
-  Brain,
   ChevronRight,
   Download,
   Ellipsis,
-  FileText,
-  FolderOpen,
   GitBranch,
-  History,
-  KeyRound,
   Moon,
   PanelLeft,
   Pin,
@@ -61,15 +56,8 @@ export interface SidebarProps {
   onDownloadUpdate?: () => void;
 
   // ===== action menu =====
-  agentId: string | null;
-  currentSessionFile: string | null;
-  onOpenBranches: () => void;
-  onOpenSystemPrompt: () => void;
-  onOpenWorkflows: () => void;
-  onRevealInFinder: () => void;
-  onOpenAuth: () => void;
-  onOpenSettings: () => void;
   onSkipUpdateVersion?: () => void;
+  onOpenSettings: () => void;
 
   // ===== sessions =====
   sessions: SessionInfoLite[];
@@ -106,11 +94,6 @@ export interface SidebarProps {
   // ===== explorer =====
   setInput: (v: string | ((cur: string) => string)) => void;
   setShowFilePicker: Dispatch<SetStateAction<boolean>>;
-
-  // ===== 底部 Models / Skills =====
-  setShowModelsConfig: Dispatch<SetStateAction<boolean>>;
-  showSkills: boolean;
-  toggleSkills: () => void;
 
   // ===== RFC-3 Phase B / F2：搜索（可选，未传则不渲染搜索框） =====
   /** 搜索框当前值 */
@@ -191,15 +174,8 @@ export function Sidebar(props: SidebarProps) {
     updateAvailable,
     updateLatestVersion,
     onDownloadUpdate,
-    agentId,
-    currentSessionFile,
-    onOpenBranches,
-    onOpenSystemPrompt,
-    onOpenWorkflows,
-    onRevealInFinder,
-    onOpenAuth,
-    onOpenSettings,
     onSkipUpdateVersion,
+    onOpenSettings,
     sessions,
     groupedSessions,
     selectedId,
@@ -221,9 +197,6 @@ export function Sidebar(props: SidebarProps) {
     toggleSessionPin,
     setInput,
     setShowFilePicker,
-    setShowModelsConfig,
-    showSkills,
-    toggleSkills,
     searchQuery,
     onSearchQueryChange,
     searchView,
@@ -262,6 +235,9 @@ export function Sidebar(props: SidebarProps) {
     ? sessions.find((session) => session.id === selectedId)
     : null;
   const selectedParentPath = selectedSession?.parentSessionPath;
+  const hasMaintenanceActions = Boolean(
+    updateAvailable && (onDownloadUpdate || onSkipUpdateVersion)
+  );
 
   const toggleParentExpanded = (parentPath: string) => {
     setExpandedParents((cur) => {
@@ -293,43 +269,32 @@ export function Sidebar(props: SidebarProps) {
             className="relative inline-flex shrink-0 items-center gap-0.5 rounded-lg border p-0.5"
             style={{ borderColor: "var(--border-soft)", background: "var(--bg)" }}
           >
-            <button
-              type="button"
-              ref={actionMenuTriggerRef}
-              onClick={() => setActionMenuOpen((value) => !value)}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[color:var(--bg-hover)]"
-              style={{ color: "var(--text-muted)" }}
-              title="更多操作"
-              aria-label="更多操作"
-            >
-              <Ellipsis size={16} />
-            </button>
-            {actionMenuOpen ? (
+            {hasMaintenanceActions ? (
+              <button
+                type="button"
+                ref={actionMenuTriggerRef}
+                onClick={() => setActionMenuOpen((value) => !value)}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[color:var(--bg-hover)]"
+                style={{ color: "var(--text-muted)" }}
+                title="更多操作"
+                aria-label="更多操作"
+              >
+                <Ellipsis size={16} />
+              </button>
+            ) : null}
+            {actionMenuOpen && hasMaintenanceActions ? (
               <FloatingLayer
                 anchor={actionMenuTriggerRef.current}
                 open={actionMenuOpen}
                 onClose={() => setActionMenuOpen(false)}
                 placement="bottom-end"
-                minWidth={300}
-                minHeight={360}
-                className="w-[300px] rounded-lg border bg-[color:var(--bg-panel)] p-2 shadow-xl"
+                minWidth={240}
+                className="w-[240px] rounded-lg border bg-[color:var(--bg-panel)] p-2 shadow-xl"
                 style={{ borderColor: "var(--border)" }}
               >
                 <div className="px-2 pb-1.5 pt-0.5 text-[11px] font-medium uppercase text-[color:var(--text-dim)]">
-                  Session
+                  App
                 </div>
-                <SidebarActionMenuItem icon={<GitBranch size={15} />} label="Branches" description="查看 / 切换分支" disabled={!agentId} onClick={() => runAction(onOpenBranches)} />
-                <SidebarActionMenuItem icon={<FileText size={15} />} label="System prompt" description="查看当前会话系统提示" disabled={!agentId} onClick={() => runAction(onOpenSystemPrompt)} />
-                <SidebarActionMenuItem icon={<History size={15} />} label="Workflow history" description="从 checkpoint / artifact 续跑" disabled={!agentId} onClick={() => runAction(onOpenWorkflows)} />
-                {currentSessionFile ? (
-                  <SidebarActionMenuItem icon={<FolderOpen size={15} />} label="Reveal session file" description={currentSessionFile} onClick={() => runAction(onRevealInFinder)} />
-                ) : null}
-                <div className="my-1 h-px bg-[color:var(--border)]" />
-                <div className="px-2 pb-1.5 pt-1 text-[11px] font-medium uppercase text-[color:var(--text-dim)]">
-                  Workspace
-                </div>
-                <SidebarActionMenuItem icon={<KeyRound size={15} />} label="Credentials" description="管理 Provider 凭证" onClick={() => runAction(onOpenAuth)} />
-                <SidebarActionMenuItem icon={<Settings size={15} />} label="Settings" description="Budget、审批、网络策略和 MCP" onClick={() => runAction(onOpenSettings)} />
                 {updateAvailable && onDownloadUpdate ? (
                   <SidebarActionMenuItem icon={<Download size={15} />} label="Download DMG" description="打开新版本下载页" onClick={() => runAction(onDownloadUpdate)} />
                 ) : null}
@@ -803,34 +768,20 @@ export function Sidebar(props: SidebarProps) {
           onOpenFilePicker={() => setShowFilePicker(true)}
         />
       </div>
-      {/* sidebar 底：Models / Skills 双标签 */}
+      {/* sidebar 底：低频配置统一进入 Settings */}
       <div
         className="flex items-stretch border-t h-12 shrink-0"
         style={{ borderColor: "var(--border)" }}
       >
         <button
           type="button"
-          onClick={() => setShowModelsConfig(true)}
-          title="配置 models.json"
-          className="flex-1 inline-flex items-center justify-center gap-1.5 text-[12px] hover:bg-[color:var(--bg-hover)]"
+          onClick={onOpenSettings}
+          title="打开设置"
+          className="flex-1 inline-flex items-center justify-center gap-2 text-[13px] font-medium hover:bg-[color:var(--bg-hover)]"
           style={{ color: "var(--text)" }}
         >
-          <Settings size={14} />
-          <span>Models</span>
-        </button>
-        <div className="w-px" style={{ background: "var(--border)" }} />
-        <button
-          type="button"
-          onClick={toggleSkills}
-          title={showSkills ? "关闭 Skills 面板" : "打开 Skills 面板"}
-          className="flex-1 inline-flex items-center justify-center gap-1.5 text-[12px] hover:bg-[color:var(--bg-hover)]"
-          style={{
-            color: "var(--text)",
-            background: showSkills ? "var(--bg-hover)" : "transparent",
-          }}
-        >
-          <Brain size={14} />
-          <span>Skills</span>
+          <Settings size={15} />
+          <span>Settings</span>
         </button>
       </div>
     </aside>

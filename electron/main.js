@@ -26,6 +26,7 @@ const path = require("node:path");
 const os = require("node:os");
 const net = require("node:net");
 const http = require("node:http");
+const crypto = require("node:crypto");
 const settingsModule = require("./settings");
 const updaterModule = require("./updater");
 
@@ -62,17 +63,53 @@ function standaloneServerPath() {
 }
 
 /** 拿一个空闲端口 */
-function getFreePort() {
+function getFreePort(host = "127.0.0.1") {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
     srv.unref();
     srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
+    srv.listen(0, host, () => {
       const addr = srv.address();
       const port = typeof addr === "object" && addr ? addr.port : 0;
       srv.close(() => resolve(port));
     });
   });
+}
+
+function isTailscaleIPv4(ip) {
+  const parts = String(ip).split(".").map((x) => Number(x));
+  return (
+    parts.length === 4 &&
+    parts.every((x) => Number.isInteger(x) && x >= 0 && x <= 255) &&
+    parts[0] === 100 &&
+    parts[1] >= 64 &&
+    parts[1] <= 127
+  );
+}
+
+function bindHostForRemoteMode(mode) {
+  if (mode === "off") return "127.0.0.1";
+  if (mode === "lan") return "0.0.0.0";
+  for (const entries of Object.values(os.networkInterfaces())) {
+    for (const item of entries || []) {
+      if (!item.internal && item.family === "IPv4" && isTailscaleIPv4(item.address)) {
+        return item.address;
+      }
+    }
+  }
+  return "127.0.0.1";
+}
+
+function loadRemoteAccessSettings() {
+  const remote = settingsModule.loadSettings(app).remoteAccess || {};
+  const mode = remote.mode === "vpn" || remote.mode === "lan" ? remote.mode : "off";
+  return {
+    mode,
+    port:
+      Number.isInteger(remote.port) && remote.port > 0
+        ? remote.port
+        : 37373,
+  };
 }
 
 /** 轮询直到 server 起来 */
@@ -99,6 +136,8 @@ async function waitForHttp(url, timeoutMs = 15000) {
 let serverChild = null;
 /** standalone server 的 base URL，IPC getApiBase 返回 */
 let apiBase = null;
+let localSessionSecret = crypto.randomBytes(32).toString("base64url");
+let localSecretHeaderHookInstalled = false;
 /** 主窗口必须保留强引用，否则加载完成后可能被 GC 回收成无窗口进程。 */
 let mainWin = null;
 /** macOS menu bar / tray icon 必须保留强引用，否则会被 GC 回收。 */
@@ -122,6 +161,30 @@ function focusWindow(win) {
   app.focus({ steal: true });
   win.focus();
   return true;
+}
+
+function installLocalSecretHeaderHook() {
+  if (localSecretHeaderHookInstalled) return;
+  localSecretHeaderHookInstalled = true;
+  const ses = require("electron").session.defaultSession;
+  ses.webRequest.onBeforeSendHeaders((details, callback) => {
+    try {
+      const target = new URL(details.url);
+      const bases = [apiBase, DEV_URL].filter(Boolean).map((raw) => new URL(raw));
+      const sameAppOrigin = bases.some(
+        (base) =>
+          target.protocol === base.protocol &&
+          target.hostname === base.hostname &&
+          target.port === base.port
+      );
+      if (sameAppOrigin) {
+        details.requestHeaders["x-mini-pi-local-secret"] = localSessionSecret;
+      }
+    } catch {
+      // leave headers untouched
+    }
+    callback({ requestHeaders: details.requestHeaders });
+  });
 }
 
 async function openMainWindow() {
@@ -233,12 +296,14 @@ function attachWindowDiagnostics(win, label) {
 }
 
 async function startStandaloneServer() {
-  const port = await getFreePort();
+  const remote = loadRemoteAccessSettings();
+  const bindHost = bindHostForRemoteMode(remote.mode);
+  const port = remote.mode === "off" ? await getFreePort(bindHost) : remote.port;
   const serverFile = standaloneServerPath();
   // wrapper 被 asarUnpack：fork 的目标必须走 unpacked 物理路径，Node child 不识别 asar
   const wrapperFile = asarUnpackedPath(path.join(__dirname, "server-wrapper.js"));
   console.log(
-    `[electron] forking standalone server via wrapper: ${serverFile} on :${port} (wrapper=${wrapperFile})`
+    `[electron] forking standalone server via wrapper: ${serverFile} on ${bindHost}:${port} remote=${remote.mode} (wrapper=${wrapperFile})`
   );
 
   // 从 keytar 收集 key → env，注入 child
@@ -277,8 +342,10 @@ async function startStandaloneServer() {
 
   // 固定字段（端口/hostname/wrapper 元信息）
   mergedEnv.PORT = String(port);
-  mergedEnv.HOSTNAME = "127.0.0.1";
+  mergedEnv.HOSTNAME = bindHost;
   mergedEnv.MINI_PI_WEB_ROOT = process.env.MINI_PI_WEB_ROOT || os.homedir();
+  mergedEnv.MINI_PI_SETTINGS_FILE = settingsModule.settingsFile(app);
+  mergedEnv.MINI_PI_LOCAL_SECRET = localSessionSecret;
   mergedEnv.NODE_ENV = "production";
   mergedEnv.MINI_PI_SERVER_ENTRY = serverFile;
   mergedEnv.MINI_PI_PARENT_PID = String(process.pid);
@@ -329,12 +396,14 @@ async function startStandaloneServer() {
   });
   const ready = await Promise.race([
     ipcReady,
-    waitForHttp(`http://127.0.0.1:${port}/api/health`),
+    waitForHttp(
+      `http://${bindHost === "0.0.0.0" ? "127.0.0.1" : bindHost}:${port}/api/health`
+    ),
   ]);
   if (!ready) {
     throw new Error(`standalone server failed to become ready on :${port}`);
   }
-  apiBase = `http://127.0.0.1:${port}`;
+  apiBase = `http://${bindHost === "0.0.0.0" ? "127.0.0.1" : bindHost}:${port}`;
   return apiBase;
 }
 
@@ -477,6 +546,7 @@ function registerIpc() {
   }));
 
   ipcMain.handle("app:getApiBase", () => apiBase || DEV_URL);
+  ipcMain.handle("app:getLocalSecret", () => localSessionSecret);
 
   ipcMain.handle("dialog:selectDirectory", async (event, opts) => {
     const win = BrowserWindow.fromWebContents(event.sender);
@@ -975,6 +1045,7 @@ function buildAppMenu() {
 
 app.whenReady().then(async () => {
   registerIpc();
+  installLocalSecretHeaderHook();
   buildAppMenu();
   createTray();
 

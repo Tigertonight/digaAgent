@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld("miniPi", {
 
   /** standalone server 的真实 URL（留作未来给 main 进程内部用，renderer 不需要） */
   getApiBase: () => ipcRenderer.invoke("app:getApiBase"),
+  getLocalSecret: () => ipcRenderer.invoke("app:getLocalSecret"),
 
   updater: {
     getState: () => ipcRenderer.invoke("updater:getState"),

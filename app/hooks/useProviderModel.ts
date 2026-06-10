@@ -3,15 +3,22 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useProviderStatus } from "./useProviderStatus";
 import type { ProviderInfo } from "@/lib/types";
+import {
+  curateProviderModels,
+  DEFAULT_MODEL_ID,
+  DEFAULT_MODEL_STORAGE_VERSION,
+  DEFAULT_PROVIDER_ID,
+} from "@/lib/default-model";
 
 export function normalizeProviderModelSelection(
   providers: ProviderInfo[],
   providerId: string,
   modelId: string,
-  defaultProvider?: string
+  defaultProvider = DEFAULT_PROVIDER_ID,
+  defaultModel = DEFAULT_MODEL_ID
 ) {
   const provider =
-    providers.find((p) => p.provider === providerId) ??
+    (providerId ? providers.find((p) => p.provider === providerId) : undefined) ??
     providers.find((p) => p.provider === defaultProvider) ??
     providers[0];
   if (!provider) return { providerId: "", modelId: "" };
@@ -19,12 +26,20 @@ export function normalizeProviderModelSelection(
   const modelExists = provider.models.some((m) => m.id === modelId);
   return {
     providerId: provider.provider,
-    modelId: modelExists ? modelId : (provider.models[0]?.id ?? ""),
+    modelId: modelExists
+      ? modelId
+      : (provider.models.find((model) => model.id === defaultModel)?.id ??
+        provider.models[0]?.id ??
+        ""),
   };
 }
 
 export function useProviderModel() {
   const { providers, reloadProviders: fetchProviders } = useProviderStatus();
+  const curatedProviders = useMemo(
+    () => curateProviderModels(providers).filter((provider) => provider.hasAuth),
+    [providers]
+  );
   const [providerId, setProviderId] = useState<string>("");
   const [modelId, setModelId] = useState<string>("");
 
@@ -32,6 +47,18 @@ export function useProviderModel() {
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
+      const storageVersion = localStorage.getItem("pi-model-default-version");
+      if (storageVersion !== DEFAULT_MODEL_STORAGE_VERSION) {
+        localStorage.removeItem("pi-provider-id");
+        localStorage.removeItem("pi-model-id");
+        localStorage.setItem(
+          "pi-model-default-version",
+          DEFAULT_MODEL_STORAGE_VERSION
+        );
+        setProviderId("");
+        setModelId("");
+        return;
+      }
       setProviderId(localStorage.getItem("pi-provider-id") ?? "");
       setModelId(localStorage.getItem("pi-model-id") ?? "");
     });
@@ -55,20 +82,25 @@ export function useProviderModel() {
       void fetchProviders()
         .then((data) => {
           if (!data?.providers || !applyDefaults) return;
+          const curated = curateProviderModels(data.providers).filter(
+            (provider) => provider.hasAuth
+          );
           setProviderId((curProv) => {
             setModelId((curModel) => {
               return normalizeProviderModelSelection(
-                data.providers,
+                curated,
                 curProv,
                 curModel,
-                data.defaultProvider
+                data.defaultProvider,
+                data.defaultModelId
               ).modelId;
             });
             return normalizeProviderModelSelection(
-              data.providers,
+              curated,
               curProv,
               "",
-              data.defaultProvider
+              data.defaultProvider,
+              data.defaultModelId
             ).providerId;
           });
         })
@@ -82,18 +114,13 @@ export function useProviderModel() {
   }, [reloadProviders]);
 
   const currentProvider = useMemo(
-    () => providers.find((p) => p.provider === providerId),
-    [providers, providerId]
-  );
-
-  const visibleProviders = useMemo(
-    () => providers.filter((p) => p.hasAuth),
-    [providers]
+    () => curatedProviders.find((p) => p.provider === providerId),
+    [curatedProviders, providerId]
   );
 
   return {
-    providers,
-    visibleProviders,
+    providers: curatedProviders,
+    visibleProviders: curatedProviders,
     currentProvider,
     providerId,
     setProviderId,

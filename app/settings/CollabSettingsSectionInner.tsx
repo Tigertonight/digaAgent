@@ -38,10 +38,9 @@ export default function CollabSettingsSectionInner() {
 
   return (
     <section className="mb-6 border border-neutral-800 rounded p-4">
-      <h2 className="text-sm font-semibold mb-1">Collab · 工具审批</h2>
+      <h2 className="text-sm font-semibold mb-1">工具操作确认</h2>
       <p className="text-xs text-neutral-500 mb-4">
-        命中危险操作（如 rm -rf、git reset --hard）时弹审批气泡，等用户点
-        Allow/Deny。关闭后所有审批前端自动放行。
+        开启后，删除文件、重置 Git、执行高风险命令等操作前会先询问你。关闭后将自动允许这些操作。
       </p>
 
       <div className="flex flex-col gap-3 text-sm">
@@ -51,17 +50,15 @@ export default function CollabSettingsSectionInner() {
             checked={enabled}
             onChange={(e) => onToggle(e.target.checked)}
           />
-          <span>启用工具审批</span>
+          <span>高风险操作前先询问</span>
           <span className="text-xs text-neutral-500 ml-2">
-            （关闭 = 所有 ask 规则前端自动 allow）
+            （关闭后不再弹出确认）
           </span>
         </label>
       </div>
 
       <p className="mt-4 text-[11px] text-neutral-600 leading-relaxed">
-        提示：「本会话不再问」是 server 端记忆，新建 / 重启会话后失效；本总开关是
-        client 端记忆，跨会话持久。规则本身（哪些工具触发审批）由内置规则集决定，
-        细粒度配置留待后续版本。
+        提示：「本会话不再问」只对当前会话生效；这里的总开关会跨会话保留。哪些操作需要确认由内置安全规则决定。
       </p>
     </section>
   );

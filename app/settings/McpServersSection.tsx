@@ -22,6 +22,7 @@ const EMPTY_DRAFT: DraftServer = {
 export function McpServersSection() {
   const [servers, setServers] = useState<McpServerConfig[]>([]);
   const [draft, setDraft] = useState<DraftServer>(EMPTY_DRAFT);
+  const [showDraft, setShowDraft] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -81,6 +82,7 @@ export function McpServersSection() {
         enabled: draft.enabled,
       });
       setDraft(EMPTY_DRAFT);
+      setShowDraft(false);
       await load();
       setStatus("已保存");
     } catch (e) {
@@ -143,11 +145,9 @@ export function McpServersSection() {
     <section className="mb-6 border border-neutral-800 rounded p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold mb-1">MCP servers</h2>
+          <h2 className="text-sm font-semibold mb-1">外部工具服务</h2>
           <p className="text-xs text-neutral-500 mb-4">
-            配置外部 MCP (stdio) server，其工具会以 `mcp__&lt;server&gt;__&lt;tool&gt;`
-            注入给 agent，调用前经审批/策略控制。配置保存到
-            `~/.mini-pi/mcp/servers.json`。
+            用于接入 MCP 工具服务。普通用户通常不需要配置；启用后，服务里的工具会交给 Agent 使用，并继续受审批规则约束。
           </p>
         </div>
         <button
@@ -162,7 +162,7 @@ export function McpServersSection() {
 
       {/* Existing servers */}
       {servers.length === 0 ? (
-        <div className="text-xs text-neutral-600 mb-4">还没有配置 MCP server。</div>
+        <div className="text-xs text-neutral-600 mb-4">还没有配置外部工具服务。</div>
       ) : (
         <div className="space-y-2 mb-4">
           {servers.map((s) => (
@@ -176,7 +176,7 @@ export function McpServersSection() {
                     <span
                       className={s.enabled ? "text-emerald-300" : "text-neutral-500"}
                     >
-                      {s.enabled ? "enabled" : "disabled"}
+                      {s.enabled ? "已启用" : "已停用"}
                     </span>
                     <span className="font-mono text-neutral-300">{s.id}</span>
                     {s.title ? (
@@ -226,28 +226,39 @@ export function McpServersSection() {
 
       {/* Add / edit draft */}
       <div className="border-t border-neutral-800 pt-3">
-        <h3 className="text-xs font-semibold text-neutral-300 mb-2">添加 server</h3>
+        {!showDraft ? (
+          <button
+            type="button"
+            onClick={() => setShowDraft(true)}
+            className="rounded border border-neutral-700 px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-900"
+          >
+            添加工具服务
+          </button>
+        ) : null}
+        {showDraft ? (
+          <>
+        <h3 className="text-xs font-semibold text-neutral-300 mb-2">添加工具服务</h3>
         <div className="grid gap-2 md:grid-cols-2">
           <Field
-            label="id"
+            label="服务标识"
             placeholder="filesystem"
             value={draft.id}
             onChange={(v) => setDraft((d) => ({ ...d, id: v }))}
           />
           <Field
-            label="title (可选)"
+            label="显示名称（可选）"
             placeholder="Filesystem"
             value={draft.title}
             onChange={(v) => setDraft((d) => ({ ...d, title: v }))}
           />
           <Field
-            label="command"
+            label="启动命令"
             placeholder="npx"
             value={draft.command}
             onChange={(v) => setDraft((d) => ({ ...d, command: v }))}
           />
           <Field
-            label="args (空格分隔)"
+            label="启动参数（用空格分隔）"
             placeholder="-y @modelcontextprotocol/server-filesystem /tmp"
             value={draft.args}
             onChange={(v) => setDraft((d) => ({ ...d, args: v }))}
@@ -262,17 +273,32 @@ export function McpServersSection() {
                 setDraft((d) => ({ ...d, enabled: e.target.checked }))
               }
             />
-            enabled
+            保存后立即启用
           </label>
-          <button
-            type="button"
-            onClick={() => void save()}
-            disabled={saving}
-            className="px-3 py-1 text-xs bg-blue-700 hover:bg-blue-600 rounded disabled:bg-neutral-800 disabled:text-neutral-600"
-          >
-            {saving ? "保存中" : "保存 server"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setDraft(EMPTY_DRAFT);
+                setShowDraft(false);
+              }}
+              disabled={saving}
+              className="px-3 py-1 text-xs border border-neutral-700 rounded hover:bg-neutral-900 disabled:opacity-50"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={saving}
+              className="px-3 py-1 text-xs bg-blue-700 hover:bg-blue-600 rounded disabled:bg-neutral-800 disabled:text-neutral-600"
+            >
+              {saving ? "保存中" : "保存工具服务"}
+            </button>
+          </div>
         </div>
+          </>
+        ) : null}
       </div>
       {status ? <div className="mt-2 text-xs text-neutral-500">{status}</div> : null}
     </section>

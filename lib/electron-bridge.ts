@@ -145,6 +145,20 @@ export interface AppSettings {
   defaultModelId?: string;
   lastCwd?: string;
   fromEnvMigrated?: boolean;
+  remoteAccess?: {
+    mode?: "off" | "vpn" | "lan";
+    port?: number;
+    instanceId?: string;
+    tlsFingerprint?: string;
+    devices?: Array<{
+      id: string;
+      name: string;
+      tokenHash?: string;
+      createdAt: number;
+      lastSeenAt?: number;
+      revokedAt?: number;
+    }>;
+  };
 }
 
 export interface SettingsApi {
@@ -162,6 +176,7 @@ export interface SettingsApi {
 export interface ElectronApi {
   getAppInfo(): Promise<AppInfo>;
   getApiBase(): Promise<string>;
+  getLocalSecret(): Promise<string>;
   updater: UpdaterApi;
   selectDirectory(opts?: SelectDirectoryOptions): Promise<string | null>;
   revealInFinder(path: string): Promise<boolean>;
