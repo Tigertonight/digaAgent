@@ -10,6 +10,7 @@ import {
   type ReactNode,
   type UIEvent,
 } from "react";
+import dynamic from "next/dynamic";
 import {
   Brain,
   Check,
@@ -34,7 +35,6 @@ import {
 } from "lucide-react";
 import { BrandLogo } from "@/app/components/BrandLogo";
 import type { AutocompleteItem } from "@/app/components/InputAutocomplete";
-import Markdown from "@/app/components/Markdown";
 import { SLASH_COMMANDS, type SlashName } from "@/app/hooks/useAutocomplete";
 import {
   applyEvent,
@@ -84,6 +84,11 @@ interface RemoteStatus {
 
 type ConnectionState = "connected" | "reconnecting" | "offline" | "idle";
 type MobileContextMessages = Parameters<typeof ctxToMessages>[0];
+type MobileMarkdownProps = {
+  text: string;
+  size?: "normal" | "small";
+  streaming?: boolean;
+};
 
 interface MobileSessionContextPage {
   messages?: MobileContextMessages;
@@ -155,7 +160,12 @@ function mobileContextHistoryMeta(ctx: MobileSessionContextPage): {
 
 type MobileAutocompleteMode = "@" | "/";
 type MobileFileEntry = { name: string; isDir: boolean; path?: string };
-const MobileMarkdown = memo(Markdown);
+const MobileMarkdown = memo(
+  dynamic<MobileMarkdownProps>(() => import("@/app/components/Markdown"), {
+    ssr: false,
+    loading: () => null,
+  })
+);
 
 function uniqueStrings(values: Array<string | null | undefined>): string[] {
   return Array.from(new Set(values.filter((value): value is string => Boolean(value))));
