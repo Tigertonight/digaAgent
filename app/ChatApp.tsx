@@ -4,7 +4,6 @@ import {
   startTransition,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -919,10 +918,10 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         if (Number.isFinite(n) && n >= 320) {
           // 注水时就拿当前 viewport / sidebar 状态下的 max 做一次 clamp，
           // 避免“stored 是上次大窗口里拖出的 1100”在小窗口里首帧先
-          // 按 1100 画一下、下一帧才被 useLayoutEffect 压回。
+          // 按 1100 画一下、下一帧才被 clamp 压回。
           // 这里重新计算 max，不能用闭包里的 rightPanelMaxWidth（那个
           // 依赖于 viewportWidth state，本函数体是首载时调的）。
-          const liveSidebarWidth = sidebarOpen ? 260 : 0;
+          const liveSidebarWidth = 260;
           const liveMax = Math.max(
             320,
             window.innerWidth - liveSidebarWidth - 4 - 360,
@@ -960,11 +959,12 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     filesLayout.viewerHidden && filesLayout.treeCollapsed
       ? 56
       : Math.min(rightPanelWidth, rightPanelMaxWidth);
+  const rightPanelStoredWidth = Math.min(rightPanelWidth, rightPanelMaxWidth);
   useEffect(() => {
     try {
-      localStorage.setItem("rightPanelWidth", String(rightPanelWidth));
+      localStorage.setItem("rightPanelWidth", String(rightPanelStoredWidth));
     } catch {}
-  }, [rightPanelWidth]);
+  }, [rightPanelStoredWidth]);
   const splitterDragRef = useRef<{ startX: number; startW: number } | null>(
     null
   );
@@ -974,16 +974,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const rightPanelMaxWidthRef = useRef(rightPanelMaxWidth);
   useEffect(() => {
     rightPanelMaxWidthRef.current = rightPanelMaxWidth;
-  }, [rightPanelMaxWidth]);
-  // rightPanelWidth state 同步被 clamp 到最新 max：
-  // 窗口变窄 / sidebar 开起后，state 里保存的“希望宽度”不能遗留为一个
-  // 远超可用空间的数值，否则下一次拖拽剩余压缩才能看到变化。
-  // 用 useLayoutEffect 在 paint 前完成 clamp，避免 localStorage 里存着
-  // 一个过大的 width 在首帧先画出一个“外壳被压、内容溢出”的跨帧。
-  useLayoutEffect(() => {
-    setRightPanelWidth((prev) =>
-      prev > rightPanelMaxWidth ? rightPanelMaxWidth : prev,
-    );
   }, [rightPanelMaxWidth]);
   const onSplitterMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
