@@ -37,6 +37,7 @@ import {
   type RunnerState,
   type RunnerPatch,
 } from "@/lib/session-runner";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 export interface UseForkableParams {
   // ── active runner 字段（来自 ChatApp 解构）───────────────────────────
@@ -297,7 +298,7 @@ export function useForkable(params: UseForkableParams): UseForkableReturn {
         setSelectedId(ad.sessionId);
         refreshSessions();
       } catch (e) {
-        setError(String(e));
+        setError(userFacingMessage(e));
       }
     },
     [
@@ -356,7 +357,7 @@ export function useForkable(params: UseForkableParams): UseForkableReturn {
         });
         const data = await r.json();
         if (data.error) {
-          setError(data.error);
+          setError(userFacingMessage(data.error));
           return;
         }
         aid = data.id as string;
@@ -406,7 +407,7 @@ export function useForkable(params: UseForkableParams): UseForkableReturn {
         updateRunner(ownerKey, { forkingIndex: null, forkText: "" });
         await refreshForkList(aid, ownerKey);
       } catch (e) {
-        setError(String(e));
+        setError(userFacingMessage(e));
       } finally {
         updateRunner(ownerKey, { forkBusy: false });
       }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { EvidenceRef } from "@/lib/evidence/types";
 import type { RuntimeEvent } from "@/lib/runtime/events";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 export interface RuntimeTimelinePayload {
   events: RuntimeEvent[];
@@ -52,7 +53,7 @@ export function useRuntimeTimeline({
         evidence: Array.isArray(evidenceJson.evidence) ? evidenceJson.evidence : [],
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load runtime timeline.");
+      setError(userFacingMessage(e));
     } finally {
       setLoading(false);
     }

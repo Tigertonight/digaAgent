@@ -10,7 +10,7 @@ import type { MessagePart } from "@/lib/types";
 import type { AgentPhase } from "@/lib/session-runner";
 import type { ProviderInfo } from "@/lib/types";
 import type { WorkflowWorktreeAction } from "./MessageView";
-import { formatTokens } from "@/lib/format";
+import { buildProcessSummary } from "@/lib/process-summary";
 
 const INITIAL_RENDER_ITEM_WINDOW = 120;
 const RENDER_ITEM_WINDOW_STEP = 120;
@@ -468,6 +468,7 @@ function hasTextAnswer(message: ChatMessage): boolean {
 function isProcessOnlyAssistant(message: ChatMessage): boolean {
   if (message.role !== "assistant") return false;
   const parts = messageParts(message);
+  if (parts.some(isPendingUserBlockerPart)) return false;
   // Some SDK turns only carry model/usage metadata. Rendering them as standalone
   // assistant messages creates the repeated “GPT-5.5 + token row” whitespace; in
   // the conversation hierarchy they are part of the surrounding execution trace.
@@ -490,6 +491,13 @@ function messageParts(message: ChatMessage): MessagePart[] {
     parts = [...parts, { kind: "text", text: message.text }];
   }
   return parts;
+}
+
+function isPendingUserBlockerPart(part: MessagePart): boolean {
+  return (
+    (part.kind === "approval" || part.kind === "clarification") &&
+    part.status === "pending"
+  );
 }
 
 function CollapsedProcessGroup({
@@ -572,65 +580,5 @@ function summarizeProcessGroup(
   detail: string;
   running: boolean;
 } {
-  let tools = 0;
-  let thinking = 0;
-  let approvals = 0;
-  let errorCount = 0;
-  let runningCount = 0;
-  let input = 0;
-  let output = 0;
-  let cost = 0;
-  const names = new Map<string, number>();
-  const models = new Map<string, number>();
-
-  for (const message of messages) {
-    if (message.meta?.model) {
-      models.set(message.meta.model, (models.get(message.meta.model) ?? 0) + 1);
-    }
-    if (message.meta?.usage) {
-      input += message.meta.usage.input;
-      output += message.meta.usage.output;
-      cost += message.meta.usage.cost;
-    }
-    for (const part of messageParts(message)) {
-      if (part.kind === "tool") {
-        tools += 1;
-        names.set(part.toolName, (names.get(part.toolName) ?? 0) + 1);
-        if (part.status === "running") runningCount += 1;
-        if (part.status === "error" || part.isError) errorCount += 1;
-      } else if (part.kind === "thinking") {
-        thinking += 1;
-      } else if (part.kind === "approval") {
-        approvals += 1;
-      }
-    }
-  }
-
-  const modelLabel = [...models.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-  const topNames = [...names.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 4)
-    .map(([name, count]) => (count > 1 ? `${name}×${count}` : name));
-  const stepCount = tools + thinking + approvals || messages.length;
-  const usage =
-    input > 0 || output > 0 || cost > 0
-      ? `${formatTokens(input)} in · ${formatTokens(output)} out${
-          cost > 0 ? ` · $${cost.toFixed(4)}` : ""
-        }`
-      : "";
-  const detailChunks = [
-    topNames.length > 0 ? topNames.join(" / ") : "",
-    usage,
-  ].filter(Boolean);
-  const actor = modelLabel ? `${modelLabel} · ` : "";
-  const isRunning = forceExecuting || runningCount > 0;
-  const verb = isRunning ? "执行中" : "已处理";
-  return {
-    title:
-      errorCount > 0
-        ? `${actor}${verb} ${stepCount} 个步骤，${errorCount} 个问题已恢复`
-        : `${actor}${verb} ${stepCount} 个步骤`,
-    detail: detailChunks.join(" · ") || "过程记录",
-    running: isRunning,
-  };
+  return buildProcessSummary({ messages, forceRunning: forceExecuting });
 }

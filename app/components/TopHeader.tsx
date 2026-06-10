@@ -25,6 +25,7 @@ import type {
   BudgetStatus,
   SessionBudget,
 } from "@/lib/budget/types";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 interface TopHeaderProps {
   sidebarOpen: boolean;
@@ -136,7 +137,7 @@ function MobilePairDialog({
       setStatus(data);
       return data;
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(userFacingMessage(e, { context: "remote" }));
       return null;
     } finally {
       setBusy(false);
@@ -217,7 +218,7 @@ function MobilePairDialog({
       }
       await applyPairTarget(data, first, bases);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(userFacingMessage(e, { context: "pairing" }));
     } finally {
       setBusy(false);
     }
@@ -259,7 +260,7 @@ function MobilePairDialog({
       const first = bases[0] ?? tunnel.url;
       await applyPairTarget(pairData, first, bases);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(userFacingMessage(e, { context: "pairing" }));
     } finally {
       setBusy(false);
     }

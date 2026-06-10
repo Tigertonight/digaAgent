@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { ProvidersResponse } from "@/lib/types";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 export interface AuthProviderStatus {
   provider: string;
@@ -48,14 +49,13 @@ export function useProviderStatus(
       const data = (await r.json()) as ProvidersResponse & { error?: string };
       if (!r.ok || data.error) {
         const msg = data.error ?? `HTTP ${r.status}`;
-        setProvidersError(msg);
+        setProvidersError(userFacingMessage(msg));
         return null;
       }
       setProvidersData(data);
       return data;
     } catch (e) {
-      const msg = String(e);
-      setProvidersError(msg);
+      setProvidersError(userFacingMessage(e));
       return null;
     } finally {
       setProvidersLoading(false);
@@ -70,14 +70,13 @@ export function useProviderStatus(
       const data = (await r.json()) as AuthStatusResponse;
       if (!r.ok || data.error) {
         const msg = data.error ?? `HTTP ${r.status}`;
-        setAuthError(msg);
+        setAuthError(userFacingMessage(msg));
         return null;
       }
       setAuthData(data);
       return data;
     } catch (e) {
-      const msg = String(e);
-      setAuthError(msg);
+      setAuthError(userFacingMessage(e));
       return null;
     } finally {
       setAuthLoading(false);

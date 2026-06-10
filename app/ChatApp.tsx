@@ -46,6 +46,7 @@ import {
   ctxToMessages,
   type ReducerState,
 } from "@/lib/chat-reducer";
+import { userFacingMessage } from "@/lib/user-facing-error";
 import type { SubagentBatch } from "@/lib/subagents/types";
 import {
   emptyRunner,
@@ -747,6 +748,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       runnerCount: () => runnersRef.current.size,
       runnerKeys: () => [...runnersRef.current.keys()],
       sseKeys: () => [...esMapRef.current.keys()],
+      inputFor: (key: RunnerKey) => getStoreInput(key),
     };
   }, [activeKeyRef, esMapRef, runnersRef]);
 
@@ -1173,7 +1175,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   }, [appInfo?.version, electronApi]);
   const openUpdateDownload = useCallback(() => {
     if (!electronApi?.updater) return;
-    void electronApi.updater.openDownload().catch((e) => setError(String(e)));
+    void electronApi.updater
+      .openDownload()
+      .catch((e) => setError(userFacingMessage(e, { context: "settings" })));
   }, [electronApi]);
   const viewUpdateDetails = useCallback(() => {
     setUpdateNoticeHidden(true);
@@ -1688,7 +1692,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           });
         });
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(userFacingMessage(e, { context: "settings" })));
      
   }, [runnersRef, selectedId, sessions, setRunner, switchTo, updateRunner]);
 
@@ -1791,7 +1795,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         void refreshToolsCount(agentId);
       }
     } catch (e) {
-      setError(String(e));
+      setError(userFacingMessage(e));
     }
   }, [
     agentId,
@@ -1874,6 +1878,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     // draft 已经有上一次留下的 agent? 关掉它再起新的 —— +New chat 语义就是"重置"
     closeSseFor(DRAFT_KEY);
     setRunner(DRAFT_KEY, emptyRunner());
+    storeSetInput(DRAFT_KEY, "");
     // 重新 switchTo 让 useRunners 把新的 empty snapshot 同步给 React state
     switchTo(DRAFT_KEY);
 
@@ -1890,7 +1895,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       });
       const data = await r.json();
       if (data.error) {
-        setError(data.error);
+        setError(userFacingMessage(data.error, { context: "settings" }));
         return;
       }
       updateRunner(DRAFT_KEY, {
@@ -1914,7 +1919,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       void refreshStats(data.id, DRAFT_KEY);
       void refreshToolsCount(data.id, DRAFT_KEY);
     } catch (e) {
-      setError(String(e));
+      setError(userFacingMessage(e, { context: "settings" }));
     }
   }, [
     cwd,
@@ -1963,7 +1968,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ toolCallId, decision: "allow" }),
       }).catch((e) =>
-        setError(`auto-approval failed: ${String(e)}`)
+        setError(userFacingMessage(e))
       );
     },
   });
@@ -2295,7 +2300,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       setWorkflowHistory(Array.isArray(d.resumes) ? d.resumes : []);
       setWorkflowHistoryAgentId(agentId);
     } catch (e) {
-      setError(`workflow history error: ${String(e)}`);
+      setError(userFacingMessage(e));
     } finally {
       setWorkflowHistoryLoading(false);
     }
@@ -2321,7 +2326,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         }
         setWorkflowDebugBundle(d.debugBundle);
       } catch (e) {
-        setWorkflowDebugError(`workflow inspector error: ${String(e)}`);
+        setWorkflowDebugError(userFacingMessage(e));
       } finally {
         setWorkflowDebugLoading(false);
       }
@@ -2612,7 +2617,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         onDownloadUpdate={openUpdateDownload}
         onOpenSettings={() => {
           if (electronApi?.settings.open) {
-            void electronApi.settings.open().catch((e) => setError(String(e)));
+            void electronApi.settings
+              .open()
+              .catch((e) => setError(userFacingMessage(e, { context: "settings" })));
             return;
           }
           window.open("/settings", "_blank", "noopener,noreferrer");
@@ -2713,7 +2720,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
               const d = (await r.json()) as { systemPrompt?: string };
               setSystemPromptText(d.systemPrompt ?? "");
             } catch (e) {
-              setSystemPromptText(`error: ${String(e)}`);
+              setSystemPromptText(userFacingMessage(e));
             }
           }}
           onOpenWorkflows={openWorkflowHistory}
@@ -2721,7 +2728,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             if (electronApi && currentSessionFile) {
               void electronApi
                 .revealInFinder(currentSessionFile)
-                .catch((e) => setError(String(e)));
+                .catch((e) => setError(userFacingMessage(e)));
             }
           }}
           onOpenProviderSetup={() => setShowProviderSetup(true)}
@@ -2730,7 +2737,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           }}
           onOpenSettings={() => {
             if (electronApi?.settings.open) {
-              void electronApi.settings.open().catch((e) => setError(String(e)));
+              void electronApi.settings
+                .open()
+                .catch((e) => setError(userFacingMessage(e, { context: "settings" })));
               return;
             }
             window.open("/settings", "_blank", "noopener,noreferrer");

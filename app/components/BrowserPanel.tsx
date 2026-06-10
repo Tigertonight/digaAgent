@@ -33,6 +33,7 @@ import type { RuntimeIdentity } from "@/lib/runtime/identity";
 import { InAppBrowserSurface } from "./InAppBrowserSurface";
 import { RuntimeTimeline } from "./RuntimeTimeline";
 import { WebviewPocPanel } from "./WebviewPocPanel";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 /** [PoC] 是否在 Electron 桌面环境（webview PoC 仅此环境可用） */
 function isElectronEnv(): boolean {
@@ -321,7 +322,7 @@ export function BrowserPanel({
       if (type === "screenshot") setScreenshotReview(true);
     } catch (e) {
       pendingOpenUrlRef.current = null;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(userFacingMessage(e));
     } finally {
       setBusy(false);
     }
@@ -387,7 +388,7 @@ export function BrowserPanel({
       );
       setSite((await next.json()) as BrowserSiteCheck);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(userFacingMessage(e));
     } finally {
       setBusy(false);
     }
@@ -450,7 +451,7 @@ export function BrowserPanel({
       setDragRect(null);
       setShowAnnotations(true);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(userFacingMessage(e));
     } finally {
       setBusy(false);
     }

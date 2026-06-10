@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Camera, Check, Loader2, WifiOff } from "lucide-react";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 interface PairPayload {
   v: 1;
@@ -80,7 +81,7 @@ export default function MobilePairClient({
       setMessage("");
     } catch (e) {
       setStatus("error");
-      setMessage(e instanceof Error ? e.message : String(e));
+      setMessage(userFacingMessage(e, { context: "pairing" }));
     }
   }, [code, codePayload]);
 
@@ -98,7 +99,7 @@ export default function MobilePairClient({
         new Set([window.location.origin, ...payload.candidates])
       );
       for (const candidate of candidates) {
-        setMessage(`正在尝试 ${candidate}`);
+        setMessage("正在寻找可用连接…");
         if (await probeCandidate(candidate)) {
           base = candidate;
           break;
@@ -138,7 +139,7 @@ export default function MobilePairClient({
       window.location.href = "/mobile";
     } catch (e) {
       setStatus("error");
-      setMessage(e instanceof Error ? e.message : String(e));
+      setMessage(userFacingMessage(e, { context: "pairing" }));
     }
   }, [payload]);
 
