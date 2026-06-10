@@ -83,6 +83,22 @@ interface RemoteStatus {
 }
 
 type ConnectionState = "connected" | "reconnecting" | "offline" | "idle";
+type MobileContextMessages = Parameters<typeof ctxToMessages>[0];
+
+interface MobileSessionContextPage {
+  messages?: MobileContextMessages;
+  beforeCursor?: number | null;
+  hasMoreBefore?: boolean;
+  truncatedBefore?: number;
+  error?: unknown;
+}
+
+interface MobileSessionCache {
+  modified: string;
+  state: ReducerState;
+  beforeCursor: number | null;
+  hasMoreBefore: boolean;
+}
 
 const MOBILE_STARTERS = [
   {
@@ -117,6 +133,25 @@ const MOBILE_FILE_AUTOCOMPLETE_IGNORES = new Set([
   "build",
   "test-results",
 ]);
+
+function mobileContextHistoryMeta(ctx: MobileSessionContextPage): {
+  beforeCursor: number | null;
+  hasMoreBefore: boolean;
+} {
+  const explicitCursor =
+    typeof ctx.beforeCursor === "number" && Number.isFinite(ctx.beforeCursor)
+      ? ctx.beforeCursor
+      : null;
+  const fallbackCursor =
+    typeof ctx.truncatedBefore === "number" && ctx.truncatedBefore > 0
+      ? ctx.truncatedBefore
+      : null;
+  const beforeCursor = explicitCursor ?? fallbackCursor;
+  return {
+    beforeCursor,
+    hasMoreBefore: ctx.hasMoreBefore === true || beforeCursor !== null,
+  };
+}
 
 type MobileAutocompleteMode = "@" | "/";
 type MobileFileEntry = { name: string; isDir: boolean; path?: string };
@@ -956,6 +991,9 @@ export default function MobileApp({
   const [keyboardCompact, setKeyboardCompact] = useState(false);
   const [keyboardInset, setKeyboardInset] = useState(0);
   const [sessionLoadingId, setSessionLoadingId] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyCursor, setHistoryCursor] = useState<number | null>(null);
+  const [hasMoreHistoryBefore, setHasMoreHistoryBefore] = useState(false);
   const [modelSheetOpen, setModelSheetOpen] = useState(false);
   const [attachmentSheetOpen, setAttachmentSheetOpen] = useState(false);
   const [acMode, setAcMode] = useState<MobileAutocompleteMode | null>(null);
@@ -979,7 +1017,7 @@ export default function MobileApp({
   const baseUrlRef = useRef("");
   const sendingRef = useRef(false);
   const sessionContextCacheRef = useRef<
-    Map<string, { modified: string; state: ReducerState }>
+    Map<string, MobileSessionCache>
   >(new Map());
   const sessionPrefetchingRef = useRef<Set<string>>(new Set());
   const filesCacheRef = useRef<
@@ -1186,18 +1224,20 @@ export default function MobileApp({
         `/api/sessions/${encodeURIComponent(session.id)}/context?${params}`,
         { signal }
       );
-      const ctx = await res.json();
+      const ctx = (await res.json()) as MobileSessionContextPage;
       if (!res.ok || ctx.error) {
         throw new Error(userFacingMessage(ctx.error ?? res.statusText, { baseUrl: baseUrlRef.current, context: "remote" }));
       }
+      const historyMeta = mobileContextHistoryMeta(ctx);
       const nextState = createInitialState(
         ctxToMessages(Array.isArray(ctx.messages) ? ctx.messages : [])
       );
       sessionContextCacheRef.current.set(session.id, {
         modified: session.modified,
         state: nextState,
+        ...historyMeta,
       });
-      return { ctx, state: nextState };
+      return { ctx, state: nextState, historyMeta };
     },
     [apiFetch]
   );
@@ -1208,12 +1248,14 @@ export default function MobileApp({
       scrollAfterLoad = false,
       signal?: AbortSignal
     ) => {
-      const { ctx, state: nextState } = await fetchSessionContextState(
+      const { ctx, state: nextState, historyMeta } = await fetchSessionContextState(
         session,
         signal
       );
       shouldScrollAfterSessionLoadRef.current = scrollAfterLoad;
       setVisibleMessageWindow(MOBILE_MESSAGE_WINDOW);
+      setHistoryCursor(historyMeta.beforeCursor);
+      setHasMoreHistoryBefore(historyMeta.hasMoreBefore);
       setChatState(nextState);
       return ctx;
     },
@@ -1532,6 +1574,100 @@ export default function MobileApp({
     lastMessagesScrollTopRef.current = el.scrollTop;
   };
 
+  const loadEarlierMessages = async () => {
+    const hiddenBefore = Math.max(
+      0,
+      chatState.messages.length - visibleMessageWindow
+    );
+    if (hiddenBefore > 0) {
+      setVisibleMessageWindow((prev) =>
+        Math.min(chatState.messages.length, prev + MOBILE_MESSAGE_WINDOW_STEP)
+      );
+      return;
+    }
+    if (
+      !selected ||
+      !hasMoreHistoryBefore ||
+      historyCursor === null ||
+      historyLoading
+    ) {
+      return;
+    }
+
+    const scroller = messagesScrollRef.current;
+    const previousScrollHeight = scroller?.scrollHeight ?? 0;
+    const previousScrollTop = scroller?.scrollTop ?? 0;
+    const loadSeq = sessionLoadSeqRef.current;
+    setHistoryLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        before: String(historyCursor),
+        limit: String(MOBILE_CONTEXT_TAIL_MESSAGES),
+        path: selected.path,
+      });
+      const res = await apiFetch(
+        `/api/sessions/${encodeURIComponent(selected.id)}/context?${params}`
+      );
+      const ctx = (await res.json()) as MobileSessionContextPage;
+      if (!res.ok || ctx.error) {
+        throw new Error(ctx.error ? String(ctx.error) : res.statusText);
+      }
+      if (sessionLoadSeqRef.current !== loadSeq) return;
+      const olderMessages = ctxToMessages(
+        Array.isArray(ctx.messages) ? ctx.messages : []
+      );
+      const historyMeta = mobileContextHistoryMeta(ctx);
+      setHistoryCursor(historyMeta.beforeCursor);
+      setHasMoreHistoryBefore(historyMeta.hasMoreBefore);
+
+      if (olderMessages.length > 0) {
+        setVisibleMessageWindow((prev) => prev + olderMessages.length);
+        setChatState((prev) => {
+          const nextState: ReducerState = {
+            ...prev,
+            messages: [...olderMessages, ...prev.messages],
+            activeAssistantIndex:
+              prev.activeAssistantIndex >= 0
+                ? prev.activeAssistantIndex + olderMessages.length
+                : prev.activeAssistantIndex,
+          };
+          sessionContextCacheRef.current.set(selected.id, {
+            modified: selected.modified,
+            state: nextState,
+            ...historyMeta,
+          });
+          return nextState;
+        });
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const current = messagesScrollRef.current;
+            if (!current) return;
+            current.scrollTop =
+              current.scrollHeight - previousScrollHeight + previousScrollTop;
+          });
+        });
+      } else {
+        setHasMoreHistoryBefore(false);
+        sessionContextCacheRef.current.set(selected.id, {
+          modified: selected.modified,
+          state: chatState,
+          beforeCursor: null,
+          hasMoreBefore: false,
+        });
+      }
+    } catch (e) {
+      setError(
+        userFacingMessage(e, {
+          baseUrl: baseUrlRef.current || baseUrl,
+          context: "remote",
+        })
+      );
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
   const selectSession = async (session: SessionInfoLite) => {
     const seq = sessionLoadSeqRef.current + 1;
     sessionLoadSeqRef.current = seq;
@@ -1547,9 +1683,13 @@ export default function MobileApp({
     if (cached) {
       shouldScrollAfterSessionLoadRef.current = true;
       setChatState(cached.state);
+      setHistoryCursor(cached.beforeCursor);
+      setHasMoreHistoryBefore(cached.hasMoreBefore);
       setSessionLoadingId(null);
     } else {
       setChatState(createInitialState());
+      setHistoryCursor(null);
+      setHasMoreHistoryBefore(false);
       setSessionLoadingId(session.id);
     }
     lastSeqRef.current = null;
@@ -1836,6 +1976,9 @@ export default function MobileApp({
     setAgentId(null);
     setAgentRunning(false);
     setVisibleMessageWindow(MOBILE_MESSAGE_WINDOW);
+    setHistoryCursor(null);
+    setHasMoreHistoryBefore(false);
+    setHistoryLoading(false);
     setChatState(createInitialState());
     setSessionLoadingId(null);
     lastSeqRef.current = null;
@@ -2344,17 +2487,18 @@ export default function MobileApp({
               </div>
             ) : (
               <>
-                {hiddenBeforeCount > 0 ? (
+                {hiddenBeforeCount > 0 || hasMoreHistoryBefore ? (
                   <button
                     type="button"
-                    onClick={() =>
-                      setVisibleMessageWindow((prev) =>
-                        Math.min(messages.length, prev + MOBILE_MESSAGE_WINDOW_STEP)
-                      )
-                    }
+                    onClick={() => void loadEarlierMessages()}
+                    disabled={historyLoading}
                     className="mx-auto block rounded-full border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] px-3 py-1.5 text-xs text-[color:var(--text-muted)] active:bg-[color:var(--bg-hover)]"
                   >
-                    加载更早的 {hiddenBeforeCount} 条
+                    {historyLoading
+                      ? "正在加载更早内容…"
+                      : hiddenBeforeCount > 0
+                        ? `加载更早的 ${hiddenBeforeCount} 条`
+                        : "加载更早内容"}
                   </button>
                 ) : null}
                 {renderedMessages.map((message, index) => (
