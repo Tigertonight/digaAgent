@@ -28,6 +28,7 @@
  */
 import { NextResponse } from "next/server";
 import { getAgent } from "@/lib/agent-registry";
+import { assertRemoteAuth } from "@/lib/remote/auth";
 import {
   addSessionRemember,
   listPendingApprovals,
@@ -46,9 +47,11 @@ interface ApprovalBody {
 }
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await assertRemoteAuth(req);
+  if (auth) return auth;
   const { id: agentId } = await params;
   const rec = getAgent(agentId);
   if (!rec) {
@@ -64,6 +67,8 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await assertRemoteAuth(req);
+  if (auth) return auth;
   const { id: agentId } = await params;
   const rec = getAgent(agentId);
   if (!rec) {

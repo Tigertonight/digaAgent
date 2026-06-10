@@ -7,6 +7,7 @@
  */
 import "server-only";
 import {
+  buildSessionContext,
   SessionManager,
   type SessionInfo,
   type SessionEntry,
@@ -88,6 +89,58 @@ export async function getSessionContext(
   if (!path) return null;
   const sm = SessionManager.open(path);
   return sm.buildSessionContext();
+}
+
+/** 拿当前 leaf 路径尾部的轻量上下文，给移动端快速切换历史会话使用。 */
+export async function getSessionContextTail(
+  id: string,
+  limit: number
+): Promise<(SessionContext & { truncatedBefore?: number }) | null> {
+  const path = await findSessionPathById(id);
+  if (!path) return null;
+  return getSessionContextTailByPath(path, id, limit);
+}
+
+export async function getSessionContextTailByPath(
+  sessionPath: string,
+  expectedId: string,
+  limit: number
+): Promise<(SessionContext & { truncatedBefore?: number }) | null> {
+  const sm = SessionManager.open(sessionPath);
+  if (sm.getSessionId() !== expectedId) return null;
+  const branch = sm.getBranch();
+  const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
+  const tailEntries = branch.slice(-safeLimit);
+  const leafId = sm.getLeafId();
+  const ctx = buildSessionContext(tailEntries, leafId);
+
+  // 尾部截断可能丢掉前序 model / thinking_level_change，轻量扫描当前分支补回来。
+  let thinkingLevel = "off";
+  let model: SessionContext["model"] = null;
+  for (const entry of branch) {
+    if (entry.type === "thinking_level_change") {
+      thinkingLevel = entry.thinkingLevel;
+    } else if (entry.type === "model_change") {
+      model = { provider: entry.provider, modelId: entry.modelId };
+    } else if (
+      entry.type === "message" &&
+      entry.message.role === "assistant" &&
+      entry.message.provider &&
+      entry.message.model
+    ) {
+      model = {
+        provider: entry.message.provider,
+        modelId: entry.message.model,
+      };
+    }
+  }
+
+  return {
+    ...ctx,
+    thinkingLevel,
+    model,
+    truncatedBefore: Math.max(0, branch.length - tailEntries.length),
+  };
 }
 
 /**

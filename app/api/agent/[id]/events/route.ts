@@ -11,7 +11,13 @@
  *   id: <seq>\n
  *   data: <json>\n\n
  */
-import { getAgent, getEventsSince, onNewEvent } from "@/lib/agent-registry";
+import {
+  getAgent,
+  getEventsSince,
+  getLatestEventSeq,
+  onNewEvent,
+} from "@/lib/agent-registry";
+import { assertRemoteAuth } from "@/lib/remote/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,6 +30,8 @@ export async function GET(
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await assertRemoteAuth(req);
+  if (auth) return auth;
   const { id } = await params;
   const rec = getAgent(id);
   if (!rec) {
@@ -36,7 +44,9 @@ export async function GET(
   // 优先用 ?since= 显式查询;没有就 fallback 到 Last-Event-ID
   const lastEventId = req.headers.get("last-event-id");
   const since = sinceRaw
-    ? Number(sinceRaw)
+    ? sinceRaw === "latest"
+      ? getLatestEventSeq(id)
+      : Number(sinceRaw)
     : lastEventId
       ? Number(lastEventId)
       : -1;
