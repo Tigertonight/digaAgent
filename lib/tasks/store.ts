@@ -5,6 +5,8 @@ import path from "node:path";
 import type {
   LongTaskCadence,
   LongTaskCreateInput,
+  LongTaskCheckpoint,
+  LongTaskCheckpointKind,
   LongTaskDashboard,
   LongTaskDefinition,
   LongTaskRun,
@@ -81,7 +83,11 @@ function cloneTask(task: LongTaskDefinition): LongTaskDefinition {
 }
 
 function cloneRun(run: LongTaskRun): LongTaskRun {
-  return { ...run, findingIds: run.findingIds.slice() };
+  return {
+    ...run,
+    checkpoints: (run.checkpoints ?? []).map((checkpoint) => ({ ...checkpoint })),
+    findingIds: run.findingIds.slice(),
+  };
 }
 
 function cloneFinding(finding: TaskFinding): TaskFinding {
@@ -92,6 +98,31 @@ function safeId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random()
     .toString(36)
     .slice(2, 8)}`;
+}
+
+function checkpoint(
+  kind: LongTaskCheckpointKind,
+  title: string,
+  detail?: string,
+  now = Date.now()
+): LongTaskCheckpoint {
+  return {
+    id: safeId("checkpoint"),
+    kind,
+    title: cleanText(title, 160) || "任务状态更新",
+    detail: detail ? cleanText(detail, 500) : undefined,
+    createdAt: now,
+  };
+}
+
+function normalizeRun(raw: LongTaskRun): LongTaskRun {
+  return {
+    ...raw,
+    checkpoints: Array.isArray(raw.checkpoints)
+      ? raw.checkpoints.map((item) => ({ ...item }))
+      : [],
+    findingIds: Array.isArray(raw.findingIds) ? raw.findingIds.slice() : [],
+  };
 }
 
 function cleanText(raw: unknown, limit: number): string {
@@ -193,6 +224,61 @@ function normalizeTask(
   };
 }
 
+function nextCheckpoints(
+  current: LongTaskRun,
+  patch: Partial<Omit<LongTaskRun, "id" | "taskId" | "findingIds">> & {
+    status?: LongTaskRunStatus;
+  },
+  now: number
+): LongTaskCheckpoint[] {
+  const checkpoints = (current.checkpoints ?? []).map((item) => ({ ...item }));
+  if (!patch.status || patch.status === current.status) return checkpoints;
+  if (patch.status === "running") {
+    const wasWaiting = current.status === "waiting_user";
+    checkpoints.push(
+      checkpoint(
+        wasWaiting ? "resumed" : "started",
+        wasWaiting ? "已收到决策，继续执行" : "任务开始执行",
+        patch.summary,
+        now
+      )
+    );
+  } else if (patch.status === "waiting_user") {
+    checkpoints.push(
+      checkpoint(
+        "waiting_user",
+        "等待你决策",
+        patch.waitingReason ?? patch.summary,
+        now
+      )
+    );
+  } else if (
+    patch.status === "completed_empty" ||
+    patch.status === "completed_with_findings"
+  ) {
+    checkpoints.push(
+      checkpoint(
+        "completed",
+        patch.status === "completed_with_findings"
+          ? "任务完成，发现需要处理的事项"
+          : "任务完成，没有新事项",
+        patch.summary,
+        now
+      )
+    );
+  } else if (patch.status === "failed" || patch.status === "aborted") {
+    checkpoints.push(
+      checkpoint(
+        "failed",
+        patch.status === "aborted" ? "任务已中止" : "任务执行失败",
+        patch.error ?? patch.summary,
+        now
+      )
+    );
+  }
+  return checkpoints.slice(-40);
+}
+
 function parsePersisted(value: unknown): PersistedTaskStore | null {
   if (!value || typeof value !== "object") return null;
   const rec = value as Partial<PersistedTaskStore>;
@@ -226,7 +312,10 @@ function load(): void {
   store.runs.clear();
   store.findings.clear();
   for (const task of persisted.tasks) store.tasks.set(task.id, cloneTask(task));
-  for (const run of persisted.runs) store.runs.set(run.id, cloneRun(run));
+  for (const run of persisted.runs) {
+    const normalized = normalizeRun(run);
+    store.runs.set(normalized.id, normalized);
+  }
   for (const finding of persisted.findings) {
     store.findings.set(finding.id, cloneFinding(finding));
   }
@@ -339,6 +428,14 @@ export function createTaskRun(taskId: string): LongTaskRun {
     status: "queued",
     startedAt: now,
     updatedAt: now,
+    checkpoints: [
+      checkpoint(
+        "queued",
+        "任务已排队",
+        "Diga 已接收长期任务运行请求。",
+        now
+      ),
+    ],
     findingIds: [],
   };
   store.runs.set(run.id, run);
@@ -368,6 +465,7 @@ export function updateTaskRun(
   const next: LongTaskRun = {
     ...current,
     ...patch,
+    checkpoints: nextCheckpoints(current, patch, now),
     findingIds: patch.findingIds ?? current.findingIds,
     updatedAt: now,
   };

@@ -75,6 +75,10 @@ describe("long task store", () => {
       status: "completed_with_findings",
       findingIds: [finding.id],
     });
+    expect(dashboard.runs[0]?.checkpoints.map((item) => item.kind)).toEqual([
+      "queued",
+      "completed",
+    ]);
     expect(dashboard.tasks[0]).toMatchObject({
       status: "completed",
       lastSummary: "发现 1 个需要处理的反馈。",
@@ -112,6 +116,10 @@ describe("long task store", () => {
       status: "waiting_user",
       waitingReason: "需要授权 · bash",
     });
+    expect(dashboard.runs[0]?.checkpoints.map((item) => item.kind)).toEqual([
+      "queued",
+      "waiting_user",
+    ]);
 
     updateTaskRun(run.id, {
       status: "running",
@@ -125,5 +133,10 @@ describe("long task store", () => {
       status: "running",
       waitingReason: undefined,
     });
+    expect(dashboard.runs[0]?.checkpoints.map((item) => item.kind)).toEqual([
+      "queued",
+      "waiting_user",
+      "resumed",
+    ]);
   });
 });

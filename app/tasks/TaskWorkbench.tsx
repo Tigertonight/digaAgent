@@ -750,6 +750,28 @@ function RunRow({ run }: { run: LongTaskRun }) {
             run.error ||
             "正在执行，完成后会生成运行报告。"}
         </p>
+        {run.checkpoints.length > 0 ? (
+          <div className="mt-3 space-y-1.5 border-t border-[color:var(--border-soft)] pt-2">
+            {run.checkpoints.slice(-4).map((checkpoint) => (
+              <div
+                key={checkpoint.id}
+                className="grid grid-cols-[88px_minmax(0,1fr)] gap-2 text-xs"
+              >
+                <span className="text-[color:var(--text-muted)]">
+                  {formatTime(checkpoint.createdAt)}
+                </span>
+                <span className="min-w-0">
+                  <span className="font-medium">{checkpoint.title}</span>
+                  {checkpoint.detail ? (
+                    <span className="ml-1 text-[color:var(--text-muted)]">
+                      {checkpoint.detail}
+                    </span>
+                  ) : null}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </div>
       {run.agentId ? (
         <Link
