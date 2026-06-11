@@ -22,6 +22,7 @@ import { useRef, useState, useSyncExternalStore } from "react";
 import { FloatingLayer } from "./FloatingLayer";
 import {
   ChevronRight,
+  ClipboardList,
   Download,
   Ellipsis,
   GitBranch,
@@ -788,11 +789,20 @@ export function Sidebar(props: SidebarProps) {
           onOpenFilePicker={() => setShowFilePicker(true)}
         />
       </div>
-      {/* sidebar 底：低频配置统一进入 Settings */}
+      {/* sidebar 底：长期任务与低频配置入口 */}
       <div
         className="flex items-stretch border-t h-12 shrink-0"
         style={{ borderColor: "var(--border)" }}
       >
+        <a
+          href="/tasks"
+          title="打开长期任务"
+          className="flex-1 inline-flex items-center justify-center gap-2 text-[13px] font-medium hover:bg-[color:var(--bg-hover)]"
+          style={{ color: "var(--text)" }}
+        >
+          <ClipboardList size={15} />
+          <span>任务</span>
+        </a>
         <button
           type="button"
           onClick={onOpenSettings}

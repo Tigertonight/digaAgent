@@ -538,3 +538,74 @@ body.pet-window {
 .pet-bubble-scroll::-webkit-scrollbar-thumb:hover {
   background: rgba(255,255,255,0.3);
 }
+
+.task-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 34px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  padding: 0 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.task-btn:hover {
+  background: var(--bg-hover);
+}
+
+.task-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.task-btn-primary {
+  border-color: color-mix(in srgb, var(--accent) 78%, var(--border));
+  background: var(--accent);
+  color: white;
+}
+
+.task-btn-primary:hover {
+  background: color-mix(in srgb, var(--accent) 88%, black);
+}
+
+.task-mini-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  min-height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  padding: 0 0.55rem;
+  font-size: 0.75rem;
+}
+
+.task-mini-btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.task-input {
+  width: 100%;
+  min-width: 0;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text);
+  padding: 0.6rem 0.7rem;
+  font-size: 0.9rem;
+  outline: none;
+}
+
+.task-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
