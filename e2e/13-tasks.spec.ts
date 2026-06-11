@@ -135,7 +135,14 @@ test("tasks: create, run due, and resolve inbox finding", async ({ page }) => {
   await expect(page.getByText("CI 连续失败")).toBeVisible();
   await expect(page.getByText("发现 1 个需要你处理的新事项。")).toBeVisible();
   await expect(page.getByText("任务完成，发现需要处理的事项")).toBeVisible();
+  await page.getByRole("button", { name: "查看报告" }).click();
+  await expect(page.getByText("任务报告详情")).toBeVisible();
+  const reportPanel = page.getByTestId("task-report-panel");
+  await expect(
+    reportPanel.getByText("主分支 CI 在登录流程上连续失败，需要你确认是否优先处理。")
+  ).toBeVisible();
+  await expect(reportPanel.getByText("执行时间线")).toBeVisible();
 
-  await page.getByRole("button", { name: "已解决" }).click();
+  await page.getByRole("button", { name: "标记已解决" }).click();
   await expect(page.getByText("当前没有需要你处理的新事项。")).toBeVisible();
 });

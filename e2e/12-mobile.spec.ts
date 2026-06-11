@@ -173,7 +173,14 @@ test("mobile: shows long-task inbox and resolves findings", async ({ page }) => 
   await expect(page.getByText("移动端登录反馈升高")).toBeVisible();
   await expect(page.getByText(/最近状态：任务完成/)).toBeVisible();
   await expect(page.getByText("1 待办")).toBeVisible();
+  await page.getByRole("button", { name: "查看报告" }).click();
+  await expect(page.getByText("任务报告")).toBeVisible();
+  const reportSheet = page.getByTestId("mobile-task-report-sheet");
+  await expect(
+    reportSheet.getByText("过去一小时有多条移动端登录失败反馈，需要确认是否优先处理。")
+  ).toBeVisible();
+  await expect(reportSheet.getByText("执行时间线")).toBeVisible();
 
-  await page.getByRole("button", { name: "已解决" }).click();
+  await reportSheet.getByRole("button", { name: "已解决" }).click();
   await expect(page.getByText("移动端登录反馈升高")).not.toBeVisible();
 });
