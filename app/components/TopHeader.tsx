@@ -55,7 +55,7 @@ interface TopHeaderProps {
   onRevealInFinder: () => void;
   onOpenProviderSetup: () => void;
   onOpenAuth: () => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (section?: "mobile") => void;
   onReconnectSession: () => void;
   onToggleTools: () => void;
   onToggleWorkbench: () => void;
@@ -102,7 +102,7 @@ function MobilePairDialog({
 }: {
   electronApi: ElectronApi | null;
   onClose: () => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (section?: "mobile") => void;
 }) {
   const [status, setStatus] = useState<RemoteStatusResponse | null>(null);
   const [pair, setPair] = useState<RemotePairStartResponse | null>(null);
@@ -431,7 +431,7 @@ function MobilePairDialog({
             ) : null}
             <button
               type="button"
-              onClick={onOpenSettings}
+              onClick={() => onOpenSettings("mobile")}
               className="mt-3 text-sm font-medium text-[color:var(--text-muted)] hover:text-[color:var(--text)]"
             >
               管理连接
@@ -629,7 +629,7 @@ export function TopHeader({
           onClose={() => setMobilePairOpen(false)}
           onOpenSettings={() => {
             setMobilePairOpen(false);
-            onOpenSettings();
+            onOpenSettings("mobile");
           }}
         />
       ) : null}

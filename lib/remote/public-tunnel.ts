@@ -12,6 +12,11 @@ export interface PublicTunnelStatus {
   error?: string;
 }
 
+export interface PublicTunnelTarget {
+  port: number;
+  host?: string;
+}
+
 interface PublicTunnelState {
   child: ChildProcess | null;
   status: PublicTunnelStatus;
@@ -81,9 +86,22 @@ export async function checkPublicTunnelHealth(
   }
 }
 
-export async function ensurePublicTunnel(port: number): Promise<PublicTunnelStatus> {
+function normalizeTunnelTarget(target: number | PublicTunnelTarget): Required<PublicTunnelTarget> {
+  if (typeof target === "number") return { host: "127.0.0.1", port: target };
+  return { host: target.host || "127.0.0.1", port: target.port };
+}
+
+export async function ensurePublicTunnel(
+  target: number | PublicTunnelTarget
+): Promise<PublicTunnelStatus> {
+  const normalized = normalizeTunnelTarget(target);
   const current = getPublicTunnelStatus();
-  if (!current.running || !current.url) return startPublicTunnel(port);
+  const nextTarget = `http://${normalized.host}:${normalized.port}`;
+  if (current.running && current.url && current.target && current.target !== nextTarget) {
+    await stopPublicTunnel();
+    return startPublicTunnel(normalized);
+  }
+  if (!current.running || !current.url) return startPublicTunnel(normalized);
   if (
     current.healthy &&
     current.lastCheckedAt &&
@@ -93,26 +111,29 @@ export async function ensurePublicTunnel(port: number): Promise<PublicTunnelStat
   }
   if (await checkPublicTunnelHealth()) return getPublicTunnelStatus();
   await stopPublicTunnel();
-  return startPublicTunnel(port);
+  return startPublicTunnel(normalized);
 }
 
-export async function startPublicTunnel(port: number): Promise<PublicTunnelStatus> {
+export async function startPublicTunnel(
+  target: number | PublicTunnelTarget
+): Promise<PublicTunnelStatus> {
+  const normalized = normalizeTunnelTarget(target);
   const current = getPublicTunnelStatus();
-  if (current.running && current.url) return current;
+  const targetUrl = `http://${normalized.host}:${normalized.port}`;
+  if (current.running && current.url && current.target === targetUrl) return current;
 
   await stopPublicTunnel();
 
-  const target = `http://127.0.0.1:${port}`;
   state.status = {
     running: true,
     provider: "cloudflared",
-    target,
+    target: targetUrl,
     startedAt: Date.now(),
   };
 
   let child: ChildProcess;
   try {
-    child = spawn("cloudflared", ["tunnel", "--url", target], {
+    child = spawn("cloudflared", ["tunnel", "--url", targetUrl], {
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (e) {

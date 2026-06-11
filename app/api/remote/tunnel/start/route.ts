@@ -5,6 +5,7 @@ import {
   updateRemoteAccessSettings,
 } from "@/lib/remote/store";
 import { startPublicTunnel } from "@/lib/remote/public-tunnel";
+import { tunnelTargetFromRequest } from "@/lib/remote/request-target";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,6 +21,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid port" }, { status: 400 });
   }
   await updateRemoteAccessSettings({ publicTunnelDisabled: false });
-  const status = await startPublicTunnel(port);
+  const requestTarget = tunnelTargetFromRequest(req, port);
+  const status = await startPublicTunnel(requestTarget);
   return NextResponse.json(status, { status: status.error && !status.url ? 500 : 200 });
 }

@@ -138,6 +138,25 @@ const SECTION_META = Object.fromEntries(
   SETTINGS_SECTIONS.map((section) => [section.id, section])
 ) as Record<SettingsSectionId, (typeof SETTINGS_SECTIONS)[number]>;
 
+function isSettingsSectionId(value: string | null): value is SettingsSectionId {
+  return Boolean(value && value in SECTION_META);
+}
+
+function settingsSectionFromUrl(): SettingsSectionId {
+  if (typeof window === "undefined") return "models";
+  const params = new URLSearchParams(window.location.search);
+  const section = params.get("section");
+  return isSettingsSectionId(section) ? section : "models";
+}
+
+function replaceSettingsSectionUrl(section: SettingsSectionId) {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  if (section === "models") url.searchParams.delete("section");
+  else url.searchParams.set("section", section);
+  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
 function SettingsShell({
   activeSection,
   onSectionChange,
@@ -498,6 +517,14 @@ function WebSettingsPanel() {
   const [showAllProviders, setShowAllProviders] = useState(false);
   const [activeSection, setActiveSection] =
     useState<SettingsSectionId>("models");
+  const changeSection = useCallback((section: SettingsSectionId) => {
+    setActiveSection(section);
+    replaceSettingsSectionUrl(section);
+  }, []);
+
+  useEffect(() => {
+    queueMicrotask(() => setActiveSection(settingsSectionFromUrl()));
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -575,7 +602,7 @@ function WebSettingsPanel() {
   return (
     <SettingsShell
       activeSection={activeSection}
-      onSectionChange={setActiveSection}
+      onSectionChange={changeSection}
       onRefresh={() => void load()}
       refreshDisabled={loading || busy !== null}
     >
@@ -1509,6 +1536,14 @@ export default function SettingsPanel() {
   const [showAllProviders, setShowAllProviders] = useState(false);
   const [activeSection, setActiveSection] =
     useState<SettingsSectionId>("models");
+  const changeSection = useCallback((section: SettingsSectionId) => {
+    setActiveSection(section);
+    replaceSettingsSectionUrl(section);
+  }, []);
+
+  useEffect(() => {
+    queueMicrotask(() => setActiveSection(settingsSectionFromUrl()));
+  }, []);
 
   // 注意：getElectronApi 在 SSR 时返回 null，必须 mount 后再访问
   useEffect(() => {
@@ -1639,7 +1674,7 @@ export default function SettingsPanel() {
   return (
     <SettingsShell
       activeSection={activeSection}
-      onSectionChange={setActiveSection}
+      onSectionChange={changeSection}
       onRefresh={() => void refresh()}
       refreshDisabled={busy !== null}
       onReloadServer={() => void reloadServer()}

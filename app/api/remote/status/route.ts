@@ -2,24 +2,24 @@ import { NextResponse } from "next/server";
 import os from "node:os";
 import pkg from "@/package.json";
 import { listAgentSummaries, getModelRegistry } from "@/lib/agent-registry";
-import { getRemoteAccessSettings } from "@/lib/remote/store";
+import { getRemoteAccessSettings, isLocalRequest } from "@/lib/remote/store";
 import { listRemoteCandidates } from "@/lib/remote/network";
 import { ensurePublicTunnel, getPublicTunnelStatus } from "@/lib/remote/public-tunnel";
 import { pickDefaultFlatModel } from "@/lib/default-model";
+import { tunnelTargetFromRequest } from "@/lib/remote/request-target";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: Request) {
   const settings = await getRemoteAccessSettings();
+  const tunnelTarget = tunnelTargetFromRequest(req, settings.port);
+  const local = isLocalRequest(req);
   let tunnel = getPublicTunnelStatus();
-  if (
-    !settings.publicTunnelDisabled &&
-    (!tunnel.running || !tunnel.url || tunnel.healthy === false)
-  ) {
-    tunnel = await ensurePublicTunnel(settings.port);
-  } else if (!settings.publicTunnelDisabled && tunnel.running && tunnel.url) {
-    tunnel = await ensurePublicTunnel(settings.port);
+  if (local && !settings.publicTunnelDisabled && (!tunnel.running || !tunnel.url || tunnel.healthy === false)) {
+    tunnel = await ensurePublicTunnel(tunnelTarget);
+  } else if (local && !settings.publicTunnelDisabled && tunnel.running && tunnel.url) {
+    tunnel = await ensurePublicTunnel(tunnelTarget);
   }
   const mr = getModelRegistry();
   const providers = mr.getAll();
