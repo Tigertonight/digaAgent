@@ -7,11 +7,13 @@ import { listRemoteCandidates } from "@/lib/remote/network";
 import { ensurePublicTunnel, getPublicTunnelStatus } from "@/lib/remote/public-tunnel";
 import { pickDefaultFlatModel } from "@/lib/default-model";
 import { tunnelTargetFromRequest } from "@/lib/remote/request-target";
+import { ensureLongTaskScheduler } from "@/lib/tasks/scheduler";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
+  ensureLongTaskScheduler();
   const settings = await getRemoteAccessSettings();
   const tunnelTarget = tunnelTargetFromRequest(req, settings.port);
   const local = isLocalRequest(req);

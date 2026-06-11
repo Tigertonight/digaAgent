@@ -99,4 +99,14 @@ export interface LongTaskDashboard {
   findings: TaskFinding[];
   dueTasks: LongTaskDefinition[];
   inboxCount: number;
+  scheduler?: LongTaskSchedulerState;
+}
+
+export interface LongTaskSchedulerState {
+  enabled: boolean;
+  intervalMs: number;
+  running: boolean;
+  lastCheckedAt?: number;
+  lastStartedCount?: number;
+  lastError?: string;
 }

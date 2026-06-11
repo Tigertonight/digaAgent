@@ -295,6 +295,30 @@ export default function TaskWorkbench() {
           <Metric label="到期" value={dashboard.dueTasks.length} tone="text-blue-600 dark:text-blue-300" />
         </div>
 
+        <div className="border-b border-[color:var(--border)] px-3 py-2 text-xs text-[color:var(--text-muted)]">
+          <div className="flex items-center justify-between gap-2 rounded border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-3 py-2">
+            <span className="inline-flex items-center gap-2">
+              <span
+                className={
+                  dashboard.scheduler?.enabled
+                    ? "text-emerald-500"
+                    : "text-[color:var(--text-muted)]"
+                }
+              >
+                ●
+              </span>
+              自动盯事
+            </span>
+            <span className="truncate">
+              {dashboard.scheduler?.running
+                ? "检查中"
+                : dashboard.scheduler?.lastCheckedAt
+                  ? `上次 ${formatTime(dashboard.scheduler.lastCheckedAt)}`
+                  : "待启动"}
+            </span>
+          </div>
+        </div>
+
         <div className="min-h-0 flex-1 overflow-auto p-2">
           {loading ? (
             <div className="flex items-center gap-2 p-3 text-sm text-[color:var(--text-muted)]">
