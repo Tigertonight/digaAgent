@@ -2616,13 +2616,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         updateLatestVersion={updateState?.latestVersion}
         onDownloadUpdate={openUpdateDownload}
         onOpenSettings={() => {
-          if (electronApi?.settings.open) {
-            void electronApi.settings
-              .open()
-              .catch((e) => setError(userFacingMessage(e, { context: "settings" })));
-            return;
-          }
-          window.open("/settings", "_blank", "noopener,noreferrer");
+          window.location.assign("/settings");
         }}
         onSkipUpdateVersion={skipUpdateVersion}
         sessions={sessions}
@@ -2735,14 +2729,10 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           onOpenAuth={() => {
             openAuth();
           }}
-          onOpenSettings={() => {
-            if (electronApi?.settings.open) {
-              void electronApi.settings
-                .open()
-                .catch((e) => setError(userFacingMessage(e, { context: "settings" })));
-              return;
-            }
-            window.open("/settings", "_blank", "noopener,noreferrer");
+          onOpenSettings={(section) => {
+            window.location.assign(
+              section === "mobile" ? "/settings?section=mobile" : "/settings"
+            );
           }}
           onReconnectSession={reconnectActiveSession}
           onToggleTools={toggleTools}

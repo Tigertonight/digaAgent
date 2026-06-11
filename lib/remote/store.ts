@@ -10,7 +10,11 @@ import type {
   RemotePairPayload,
 } from "./types";
 import { DEFAULT_REMOTE_PORT, listRemoteCandidates } from "./network";
-import { ensurePublicTunnel, getPublicTunnelStatus } from "./public-tunnel";
+import {
+  ensurePublicTunnel,
+  getPublicTunnelStatus,
+  type PublicTunnelTarget,
+} from "./public-tunnel";
 
 const PAIR_TTL_MS = 10 * 60 * 1000;
 
@@ -108,7 +112,10 @@ export async function updateRemoteAccessSettings(
   return next;
 }
 
-export async function createPairingPayload(version = "0.1.1"): Promise<{
+export async function createPairingPayload(
+  version = "0.1.1",
+  tunnelTarget?: PublicTunnelTarget
+): Promise<{
   code: string;
   expiresAt: number;
   payload: RemotePairPayload;
@@ -126,7 +133,7 @@ export async function createPairingPayload(version = "0.1.1"): Promise<{
     !settings.publicTunnelDisabled &&
     (!tunnel.running || !tunnel.url || tunnel.healthy === false)
   ) {
-    tunnel = await ensurePublicTunnel(settings.port);
+    tunnel = await ensurePublicTunnel(tunnelTarget ?? settings.port);
   }
   if (tunnel.running && tunnel.url) {
     candidates.unshift(tunnel.url);

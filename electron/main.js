@@ -878,43 +878,22 @@ async function createWindow() {
 }
 
 /**
- * 设置窗口（独立 BrowserWindow，加载 /settings 路由）
- * 单例，已存在就 focus。
+ * 设置页在主窗口内打开，避免客户端内操作弹出第二个 BrowserWindow。
  */
 let settingsWin = null;
 async function openSettingsWindow() {
   if (settingsWin && !settingsWin.isDestroyed()) {
-    settingsWin.focus();
-    return settingsWin;
-  }
-  settingsWin = new BrowserWindow({
-    width: 760,
-    height: 600,
-    minWidth: 600,
-    minHeight: 480,
-    title: "Diga Agent · 设置",
-    webPreferences: {
-      contextIsolation: true,
-      sandbox: true,
-      nodeIntegration: false,
-      preload: path.join(__dirname, "preload.js"),
-      spellcheck: false,
-      backgroundThrottling: false,
-    },
-    backgroundColor: "#0a0a0a",
-    parent: BrowserWindow.getAllWindows()[0] ?? undefined,
-  });
-  settingsWin.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
-    return { action: "deny" };
-  });
-  attachWindowDiagnostics(settingsWin, "settings");
-  settingsWin.on("closed", () => {
+    settingsWin.close();
     settingsWin = null;
-  });
+  }
+  const win = await openMainWindow();
   const base = apiBase || DEV_URL;
-  await settingsWin.loadURL(`${base}/settings`);
-  return settingsWin;
+  const settingsUrl = `${base}/settings`;
+  if (!win.webContents.getURL().startsWith(settingsUrl)) {
+    await win.loadURL(settingsUrl);
+  }
+  focusWindow(win);
+  return win;
 }
 
 let petWin = null;
