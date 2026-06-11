@@ -132,6 +132,14 @@ test("mobile: shows long-task inbox and resolves findings", async ({ page }) => 
           updatedAt: now,
           endedAt: now,
           summary: "发现 1 个需要处理的反馈。",
+          checkpoints: [
+            {
+              id: "checkpoint-1",
+              kind: "completed",
+              title: "任务完成，发现需要处理的事项",
+              createdAt: now,
+            },
+          ],
           findingIds: ["finding-1"],
         },
       ],
@@ -163,6 +171,7 @@ test("mobile: shows long-task inbox and resolves findings", async ({ page }) => 
 
   await expect(page.getByText("任务收件箱")).toBeVisible();
   await expect(page.getByText("移动端登录反馈升高")).toBeVisible();
+  await expect(page.getByText(/最近状态：任务完成/)).toBeVisible();
   await expect(page.getByText("1 待办")).toBeVisible();
 
   await page.getByRole("button", { name: "已解决" }).click();

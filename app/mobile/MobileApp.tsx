@@ -605,6 +605,7 @@ function MobileTaskInbox({
 
       {waitingTasks.slice(0, 2).map((task) => {
         const run = runForTask(task);
+        const latestCheckpoint = run?.checkpoints.at(-1);
         const canOpen = Boolean(run?.sessionFile && sessionFiles.has(run.sessionFile));
         return (
           <div
@@ -623,6 +624,11 @@ function MobileTaskInbox({
             <div className="mt-1 line-clamp-2 text-xs leading-5 text-[color:var(--text-muted)]">
               {run?.waitingReason || task.lastSummary || "请回到对应会话处理确认。"}
             </div>
+            {latestCheckpoint ? (
+              <div className="mt-1 truncate text-[11px] text-[color:var(--text-muted)]">
+                最近状态：{latestCheckpoint.title}
+              </div>
+            ) : null}
             {canOpen ? (
               <button
                 type="button"
@@ -638,6 +644,7 @@ function MobileTaskInbox({
 
       {inbox.slice(0, 3).map((finding) => {
         const run = runForFinding(finding);
+        const latestCheckpoint = run?.checkpoints.at(-1);
         const canOpen = Boolean(run?.sessionFile && sessionFiles.has(run.sessionFile));
         return (
           <div
@@ -655,6 +662,11 @@ function MobileTaskInbox({
             <div className="mt-1 line-clamp-3 text-xs leading-5 text-[color:var(--text-muted)]">
               {finding.body}
             </div>
+            {latestCheckpoint ? (
+              <div className="mt-1 truncate text-[11px] text-[color:var(--text-muted)]">
+                最近状态：{latestCheckpoint.title}
+              </div>
+            ) : null}
             <div className="mt-2 flex flex-wrap gap-2">
               {canOpen ? (
                 <button

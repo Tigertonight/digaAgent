@@ -21,6 +21,13 @@ export type LongTaskRunStatus =
 
 export type TaskFindingSeverity = "info" | "warning" | "critical";
 export type TaskFindingStatus = "unread" | "reviewed" | "resolved" | "archived";
+export type LongTaskCheckpointKind =
+  | "queued"
+  | "started"
+  | "waiting_user"
+  | "resumed"
+  | "completed"
+  | "failed";
 
 export interface TaskPermissionPolicy {
   requireApprovalBeforeWrite: boolean;
@@ -62,7 +69,16 @@ export interface LongTaskRun {
   summary?: string;
   waitingReason?: string;
   error?: string;
+  checkpoints: LongTaskCheckpoint[];
   findingIds: string[];
+}
+
+export interface LongTaskCheckpoint {
+  id: string;
+  kind: LongTaskCheckpointKind;
+  title: string;
+  detail?: string;
+  createdAt: number;
 }
 
 export interface TaskFinding {

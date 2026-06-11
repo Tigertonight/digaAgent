@@ -71,6 +71,14 @@ async function installTasksFixture(page: Page) {
           updatedAt: now,
           endedAt: now,
           summary: "发现 1 个需要你处理的新事项。",
+          checkpoints: [
+            {
+              id: "checkpoint-1",
+              kind: "completed",
+              title: "任务完成，发现需要处理的事项",
+              createdAt: now,
+            },
+          ],
           findingIds: ["finding-1"],
         };
         const finding: TaskFinding = {
@@ -126,6 +134,7 @@ test("tasks: create, run due, and resolve inbox finding", async ({ page }) => {
   await page.getByRole("button", { name: /运行到期任务/ }).click();
   await expect(page.getByText("CI 连续失败")).toBeVisible();
   await expect(page.getByText("发现 1 个需要你处理的新事项。")).toBeVisible();
+  await expect(page.getByText("任务完成，发现需要处理的事项")).toBeVisible();
 
   await page.getByRole("button", { name: "已解决" }).click();
   await expect(page.getByText("当前没有需要你处理的新事项。")).toBeVisible();

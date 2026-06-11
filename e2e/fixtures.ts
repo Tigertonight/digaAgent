@@ -202,6 +202,14 @@ export async function installApiFixtures(
               updatedAt: now,
               endedAt: now,
               summary: "发现 1 个需要你处理的新事项。",
+              checkpoints: [
+                {
+                  id: "checkpoint-1",
+                  kind: "completed",
+                  title: "任务完成，发现需要处理的事项",
+                  createdAt: now,
+                },
+              ],
               findingIds: ["finding-1"],
             };
             const finding = {
