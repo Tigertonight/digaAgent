@@ -51,10 +51,10 @@ function highlight(snippet: string, tokens: string[]): React.ReactNode[] {
         <mark
           key={i}
           style={{
-            background: "rgba(251,191,36,0.35)",
+            background: "var(--color-warning-bg)",
             color: "inherit",
             padding: "0 1px",
-            borderRadius: 2,
+            borderRadius: "var(--radius-xs)",
           }}
         >
           {p}
@@ -83,7 +83,7 @@ export function SidebarSearch(props: SidebarSearchProps) {
     <div className="flex-1 overflow-y-auto">
       {/* 顶部状态行 */}
       <div
-        className="px-3 py-1.5 text-[11px] border-b flex items-center justify-between"
+        className="flex items-center justify-between border-b px-3 py-1.5 text-token-xs"
         style={{
           borderColor: "var(--border-soft)",
           color: "var(--text-muted)",
@@ -100,7 +100,7 @@ export function SidebarSearch(props: SidebarSearchProps) {
           {status === "ready" &&
             `${results.length} 命中 · ${totalDocs} session 索引`}
           {status === "error" && (
-            <span style={{ color: "#f87171" }}>错误：{error}</span>
+            <span style={{ color: "var(--color-danger)" }}>错误：{error}</span>
           )}
           {status === "idle" && "输入开始搜索"}
         </span>
@@ -125,7 +125,7 @@ export function SidebarSearch(props: SidebarSearchProps) {
       {/* 命中列表 */}
       {status === "ready" && results.length === 0 && (
         <div
-          className="p-4 text-xs"
+          className="p-4 text-token-xs"
           style={{ color: "var(--fg-faint)" }}
         >
           没有命中「{query}」的会话。
@@ -147,7 +147,7 @@ export function SidebarSearch(props: SidebarSearchProps) {
             }}
           >
             <div
-              className="text-sm truncate flex items-center gap-2"
+              className="flex items-center gap-2 truncate text-token-body"
               style={{ color: "var(--text)" }}
             >
               <span className="truncate">
@@ -155,7 +155,7 @@ export function SidebarSearch(props: SidebarSearchProps) {
               </span>
               {info && (
                 <span
-                  className="text-[10px] shrink-0"
+                  className="shrink-0 text-token-xs"
                   style={{ color: "var(--fg-faint)" }}
                 >
                   {shortCwd(info.cwd)}
@@ -166,11 +166,11 @@ export function SidebarSearch(props: SidebarSearchProps) {
               {r.hits.slice(0, 3).map((h, i) => (
                 <div
                   key={`${h.entryId}-${i}`}
-                  className="text-[11px] truncate"
+                  className="truncate text-token-xs"
                   style={{ color: "var(--text-muted)" }}
                 >
                   <span
-                    className="inline-block mr-1 px-1 rounded text-[9px] uppercase"
+                    className="mr-1 inline-block rounded-token-xs px-1 text-token-xs uppercase"
                     style={{
                       background: "var(--bg-hover)",
                       color: "var(--fg-faint)",
@@ -183,7 +183,7 @@ export function SidebarSearch(props: SidebarSearchProps) {
               ))}
               {r.hits.length > 3 && (
                 <div
-                  className="text-[10px]"
+                  className="text-token-xs"
                   style={{ color: "var(--fg-faint)" }}
                 >
                   +{r.hits.length - 3} 处更多命中

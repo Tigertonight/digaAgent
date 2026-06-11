@@ -52,7 +52,7 @@ export function InputAutocomplete({
       role="listbox"
     >
       <div
-        className="px-2 py-1 text-[10px] uppercase tracking-wider"
+        className="px-2 py-1 text-token-xs uppercase tracking-wider"
         style={{
           color: "var(--text-muted)",
           background: "var(--bg-subtle)",
@@ -101,7 +101,7 @@ export function InputAutocomplete({
                 <span className="font-mono truncate">{it.label}</span>
                 {it.hint && (
                   <span
-                    className="ml-auto text-[10px] truncate"
+                    className="ml-auto truncate text-token-xs"
                     style={{ color: "var(--text-muted)", maxWidth: "55%" }}
                   >
                     {it.hint}

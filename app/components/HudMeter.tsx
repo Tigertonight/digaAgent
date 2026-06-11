@@ -30,9 +30,9 @@ export function HudMeter({ stats }: { stats: HudMeterStats }) {
     stats.ctxPct == null
       ? "var(--accent)"
       : stats.ctxPct > 0.85
-      ? "#ef4444"
+      ? "var(--color-danger)"
       : stats.ctxPct > 0.7
-      ? "#eab308"
+      ? "var(--color-warning)"
       : "var(--accent)";
   return (
     <span
@@ -65,7 +65,7 @@ export function HudMeter({ stats }: { stats: HudMeterStats }) {
       )}
       {open && (
         <div
-          className="absolute right-0 top-full mt-1.5 z-50 rounded-md shadow-lg text-[11px] whitespace-nowrap"
+          className="absolute right-0 top-full z-50 mt-1.5 whitespace-nowrap rounded-token shadow-popover text-token-xs"
           style={{
             background: "var(--bg-panel)",
             border: "1px solid var(--border)",

@@ -72,6 +72,41 @@ function writeLastSeenToStorage(map: Record<string, string>): void {
   }
 }
 
+function seenIsoFromMeta(session: SessionInfoLite): string | null {
+  const value = session.meta?.lastSeenAt;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  return new Date(value).toISOString();
+}
+
+function mergeServerLastSeen(
+  prev: Record<string, string>,
+  sessions: SessionInfoLite[]
+): Record<string, string> {
+  let changed = false;
+  const next = { ...prev };
+  for (const session of sessions) {
+    const seen = seenIsoFromMeta(session);
+    if (!seen) continue;
+    if (!next[session.id] || next[session.id] < seen) {
+      next[session.id] = seen;
+      changed = true;
+    }
+  }
+  return changed ? next : prev;
+}
+
+function persistServerLastSeen(sessionId: string, modifiedIso: string): void {
+  const lastSeenAt = Date.parse(modifiedIso);
+  if (!Number.isFinite(lastSeenAt)) return;
+  void fetch(`/api/sessions/${sessionId}/meta`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ lastSeenAt }),
+  }).catch(() => {});
+}
+
 function sameSessionList(a: SessionInfoLite[], b: SessionInfoLite[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i += 1) {
@@ -94,7 +129,8 @@ function sameSessionList(a: SessionInfoLite[], b: SessionInfoLite[]): boolean {
       left.lastEventSeq !== right.lastEventSeq ||
       left.runtimeUpdatedAt !== right.runtimeUpdatedAt ||
       left.meta?.title !== right.meta?.title ||
-      left.meta?.pinned !== right.meta?.pinned
+      left.meta?.pinned !== right.meta?.pinned ||
+      left.meta?.lastSeenAt !== right.meta?.lastSeenAt
     ) {
       return false;
     }
@@ -183,6 +219,7 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
         if (prev[sessionId] === cur.modified) return prev;
         const next = { ...prev, [sessionId]: cur.modified };
         writeLastSeenToStorage(next);
+        persistServerLastSeen(sessionId, cur.modified);
         return next;
       });
     },
@@ -261,6 +298,11 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
       .then((d: { sessions?: SessionInfoLite[] }) => {
         const next = d.sessions ?? [];
         setSessions((prev) => (sameSessionList(prev, next) ? prev : next));
+        setLastSeenMap((prev) => {
+          const merged = mergeServerLastSeen(prev, next);
+          if (merged !== prev) writeLastSeenToStorage(merged);
+          return merged;
+        });
       })
       .catch(() => {});
   }, []);

@@ -391,17 +391,17 @@ export function Composer(props: ComposerProps) {
       <div className="mx-auto w-full max-w-[820px]">
         {retryInfo && (
           <div
-            className="mb-2 px-3 py-1.5 rounded-md text-[12px] flex items-center gap-2"
+            className="mb-2 flex items-center gap-2 rounded-token-sm px-3 py-1.5 text-token-sm"
             style={{
-              background: "rgba(234,179,8,0.10)",
-              border: "1px solid rgba(234,179,8,0.35)",
-              color: "#a16207",
+              background: "var(--color-warning-bg)",
+              border: "1px solid var(--color-warning)",
+              color: "var(--color-warning)",
             }}
             role="status"
           >
             <span
               className="inline-block w-1.5 h-1.5 rounded-full animate-pulse shrink-0"
-              style={{ background: "#eab308" }}
+              style={{ background: "var(--color-warning)" }}
             />
             <span className="font-medium">
               Retrying ({retryInfo.attempt}/{retryInfo.maxAttempts})…
@@ -447,16 +447,16 @@ export function Composer(props: ComposerProps) {
                 <button
                   type="button"
                   onClick={() => removePendingImage(i)}
-                  className="absolute top-0 right-0 w-5 h-5 flex items-center justify-center text-[10px] bg-black/60 text-white opacity-0 group-hover:opacity-100"
+                  className="absolute top-0 right-0 flex h-5 w-5 items-center justify-center bg-[color:var(--color-overlay)] text-token-xs text-[color:var(--color-bg)] opacity-0 group-hover:opacity-100"
                   title="移除"
                 >
                   ✕
                 </button>
                 <div
-                  className="absolute bottom-0 left-0 right-0 text-[10px] px-1 truncate"
+                  className="absolute bottom-0 left-0 right-0 truncate px-1 text-token-xs"
                   style={{
-                    background: "rgba(0,0,0,0.5)",
-                    color: "#fff",
+                    background: "var(--color-overlay)",
+                    color: "var(--color-bg)",
                   }}
                 >
                   {formatBytes(approxBase64Bytes(img.data))}
@@ -486,7 +486,7 @@ export function Composer(props: ComposerProps) {
         )}
         {/* 卡片：textarea + 内嵌 Send */}
         <div
-          className="relative rounded-xl border transition-colors focus-within:border-[color:var(--accent)]"
+          className="relative rounded-token-lg border transition-colors focus-within:border-[color:var(--accent)]"
           style={{
             background: "var(--bg-panel)",
             borderColor: "var(--border)",
@@ -578,18 +578,18 @@ export function Composer(props: ComposerProps) {
                 <button
                   type="button"
                   onClick={() => void handleAbort()}
-                  className="inline-flex items-center justify-center h-7 w-7 rounded-md text-white bg-red-600 hover:bg-red-500"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-token-sm bg-[color:var(--color-danger)] text-[color:var(--color-bg)] hover:opacity-90"
                   title="中止当前 turn"
                   aria-label="Stop"
                 >
-                  <span className="block w-2.5 h-2.5 bg-white rounded-sm" />
+                  <span className="block h-2.5 w-2.5 rounded-sm bg-[color:var(--color-bg)]" />
                 </button>
               </>
             ) : (
               <button
                 onClick={() => void handleSend()}
                 disabled={sendDisabled}
-                className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-[13px] font-medium text-white disabled:opacity-40 transition-opacity"
+                className="inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-token-ui font-medium text-[color:var(--color-bg)] transition-opacity disabled:opacity-40"
                 style={{ background: "var(--accent)" }}
                 title={composerBlocker?.blocking ? composerBlocker.title : "Send"}
               >
@@ -726,28 +726,28 @@ export function Composer(props: ComposerProps) {
                 className="inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs hover:bg-[color:var(--bg-hover)]"
                 style={{
                   borderColor: compacting
-                    ? "rgba(248,113,113,0.45)"
+                    ? "var(--color-danger)"
                     : "var(--border)",
                   background: "var(--bg-panel)",
-                  color: compacting ? "#ef4444" : "var(--text)",
+                  color: compacting ? "var(--color-danger)" : "var(--text)",
                 }}
                 title={compacting ? "Cancel compaction" : "Compact context"}
               >
                 <Minimize2
                   size={12}
                   style={{
-                    color: compacting ? "#ef4444" : "var(--text-muted)",
+                    color: compacting ? "var(--color-danger)" : "var(--text-muted)",
                   }}
                 />
                 {compacting ? "Compacting…" : "Compact"}
               </button>
               {compactError && (
                 <div
-                  className="absolute bottom-full mb-1.5 right-0 z-50 rounded-md px-2.5 py-1.5 text-[11px] shadow-lg whitespace-nowrap max-w-[320px]"
+                  className="absolute bottom-full right-0 z-50 mb-1.5 max-w-[320px] whitespace-nowrap rounded-md px-2.5 py-1.5 text-token-xs shadow-lg"
                   style={{
-                    background: "rgba(127,29,29,0.95)",
-                    border: "1px solid rgba(248,113,113,0.6)",
-                    color: "#fecaca",
+                    background: "var(--color-danger-bg)",
+                    border: "1px solid var(--color-danger)",
+                    color: "var(--color-danger)",
                   }}
                   role="alert"
                 >
@@ -785,7 +785,7 @@ export function Composer(props: ComposerProps) {
 
           {/* 右侧状态：no key 警告（折到末尾，避免抢眼） */}
           {currentProvider && !currentProvider.hasAuth && (
-            <span className="text-yellow-600 dark:text-yellow-500 inline-flex items-center gap-1 ml-1">
+            <span className="ml-1 inline-flex items-center gap-1 text-[color:var(--color-warning)]">
               <AlertTriangle size={12} />
               no key
             </span>
@@ -827,13 +827,13 @@ function FileChip({
     >
       <Icon size={14} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
       <span
-        className="truncate text-[12px] font-mono"
+        className="truncate text-token-sm font-mono"
         style={{ color: "var(--text)" }}
       >
         {att.name}
       </span>
       <span
-        className="text-[10px] shrink-0"
+        className="shrink-0 text-token-xs"
         style={{ color: "var(--text-muted)" }}
       >
         {att.size == null ? "dir" : formatBytes(att.size)}
@@ -898,7 +898,7 @@ function QueuedMessagesBar({
             }}
           >
             <div
-              className="mb-0.5 text-[10px] uppercase tracking-wide"
+              className="mb-0.5 text-token-xs uppercase tracking-wide"
               style={{ color: "var(--fg-faint)" }}
             >
               {index + 1}. {item.kind}
@@ -1024,17 +1024,17 @@ function ComposerReadinessBar({
   onOpenAuth: (provider?: string) => void;
   onOpenModelsConfig: () => void;
 }) {
-  const tone = blocker.blocking ? "#f59e0b" : "#22c55e";
+  const tone = blocker.blocking ? "var(--color-warning)" : "var(--color-success)";
   return (
     <div
       className="mb-2 flex items-center gap-2 rounded-md border px-3 py-2 text-xs"
       style={{
         background: blocker.blocking
-          ? "rgba(245,158,11,0.08)"
-          : "rgba(34,197,94,0.08)",
+          ? "var(--color-warning-bg)"
+          : "var(--color-success-bg)",
         borderColor: blocker.blocking
-          ? "rgba(245,158,11,0.35)"
-          : "rgba(34,197,94,0.30)",
+          ? "var(--color-warning)"
+          : "var(--color-success)",
         color: "var(--text)",
       }}
       data-testid="composer-readiness"
@@ -1043,7 +1043,7 @@ function ComposerReadinessBar({
       <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: tone }} />
       <span className="min-w-0 flex-1">
         <span className="block font-medium">{blocker.title}</span>
-        <span className="block truncate text-[11px]" style={{ color: "var(--text-muted)" }}>
+        <span className="block truncate text-token-xs" style={{ color: "var(--text-muted)" }}>
           {blocker.detail}
         </span>
       </span>
@@ -1055,7 +1055,7 @@ function ComposerReadinessBar({
               ? onOpenAuth(blocker.kind === "no-auth" ? blocker.provider : undefined)
               : onOpenModelsConfig()
           }
-          className="shrink-0 rounded border px-2 py-1 text-[11px] hover:bg-[color:var(--bg-hover)]"
+          className="shrink-0 rounded border px-2 py-1 text-token-xs hover:bg-[color:var(--bg-hover)]"
           style={{ borderColor: "var(--border)", color: "var(--text)" }}
         >
           {blocker.actionLabel}

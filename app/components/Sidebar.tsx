@@ -20,19 +20,23 @@
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useRef, useState, useSyncExternalStore } from "react";
 import { FloatingLayer } from "./FloatingLayer";
+import { Button, Menu, MenuItem } from "./DesignPrimitives";
 import {
   ChevronRight,
-  ClipboardList,
   Download,
+  Edit3,
   Ellipsis,
+  ExternalLink,
   GitBranch,
   Moon,
   PanelLeft,
   Pin,
+  PinOff,
   Plus,
   Search,
   Settings,
   Sun,
+  Trash2,
   X,
 } from "lucide-react";
 import type { SessionInfoLite } from "@/lib/types";
@@ -127,39 +131,57 @@ function SidebarActionMenuItem({
   icon,
   label,
   description,
+  tone = "default",
   disabled,
   onClick,
 }: {
   icon: ReactNode;
   label: string;
   description?: string;
+  tone?: "default" | "danger";
   disabled?: boolean;
   onClick: () => void;
 }) {
+  const danger = tone === "danger";
   return (
     <button
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className="group flex w-full items-center gap-3 rounded px-2.5 py-2 text-left transition-colors hover:bg-[color:var(--bg-hover)] disabled:cursor-not-allowed disabled:opacity-45"
+      role="menuitem"
+      className={`group flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+        danger ? "hover:bg-[color:var(--color-danger-bg)]" : "hover:bg-[color:var(--bg-hover)]"
+      }`}
     >
-      <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded border border-[color:var(--border)] bg-[color:var(--bg-subtle)] text-[color:var(--text-muted)]">
+      <span
+        className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border ${
+          danger
+            ? "border-[color:var(--color-danger)] bg-[color:var(--color-danger-bg)] text-[color:var(--color-danger)]"
+            : "border-[color:var(--border-soft)] bg-[color:var(--bg)] text-[color:var(--text-muted)]"
+        }`}
+      >
         {icon}
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] font-medium text-[color:var(--text)]">
+        <span
+          className={`block truncate text-token-ui font-medium ${
+            danger ? "text-[color:var(--color-danger)]" : "text-[color:var(--text)]"
+          }`}
+        >
           {label}
         </span>
         {description ? (
-          <span className="block truncate text-[11px] text-[color:var(--text-muted)]">
+          <span className="block truncate text-token-xs text-[color:var(--text-muted)]">
             {description}
           </span>
         ) : null}
       </span>
-      <ChevronRight
-        size={13}
-        className="shrink-0 text-[color:var(--text-dim)] opacity-0 transition-opacity group-hover:opacity-100"
-      />
+      {!danger ? (
+        <ChevronRight
+          size={13}
+          className="shrink-0 text-[color:var(--text-dim)] opacity-0 transition-opacity group-hover:opacity-100"
+        />
+      ) : null}
     </button>
   );
 }
@@ -260,7 +282,7 @@ export function Sidebar(props: SidebarProps) {
       >
         <div className="flex items-center justify-between mb-2 gap-2">
           <span
-            className="min-w-0 font-mono text-[15px] font-bold tracking-tight inline-flex items-center gap-1.5"
+            className="min-w-0 font-mono text-token-mobile font-bold tracking-tight inline-flex items-center gap-1.5"
             style={{ color: "var(--text)" }}
           >
             <BrandLogo size={32} />
@@ -293,7 +315,7 @@ export function Sidebar(props: SidebarProps) {
                 className="w-[240px] rounded-lg border bg-[color:var(--bg-panel)] p-2 shadow-xl"
                 style={{ borderColor: "var(--border)" }}
               >
-                <div className="px-2 pb-1.5 pt-0.5 text-[11px] font-medium uppercase text-[color:var(--text-dim)]">
+                <div className="px-2 pb-1.5 pt-0.5 text-token-xs font-medium uppercase text-[color:var(--text-dim)]">
                   App
                 </div>
                 {updateAvailable && onDownloadUpdate ? (
@@ -309,7 +331,7 @@ export function Sidebar(props: SidebarProps) {
                 type="button"
                 onClick={onDownloadUpdate}
                 className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[color:var(--bg-hover)]"
-                style={{ color: "#2563eb" }}
+                style={{ color: "var(--accent)" }}
                 title={
                   updateLatestVersion
                     ? `下载最新版 ${updateLatestVersion}`
@@ -350,7 +372,7 @@ export function Sidebar(props: SidebarProps) {
         <button
           type="button"
           onClick={startNewSession}
-          className="w-full inline-flex items-center justify-center gap-1.5 h-8 rounded-md text-[12px] font-medium transition-colors"
+          className="w-full inline-flex items-center justify-center gap-1.5 h-8 rounded-md text-token-sm font-medium transition-colors"
           style={{
             background: "var(--bg-hover)",
             color: "var(--text)",
@@ -364,7 +386,7 @@ export function Sidebar(props: SidebarProps) {
       <button
         type="button"
         onClick={() => setShowCwdPicker(true)}
-        className="w-full px-2.5 py-2 border-b text-[11px] truncate font-mono text-left transition-colors hover:bg-[color:var(--bg-hover)]"
+        className="w-full px-2.5 py-2 border-b text-token-xs truncate font-mono text-left transition-colors hover:bg-[color:var(--bg-hover)]"
         style={{
           borderColor: "var(--border)",
           color: "var(--text-muted)",
@@ -395,7 +417,7 @@ export function Sidebar(props: SidebarProps) {
             value={searchQuery ?? ""}
             onChange={(e) => onSearchQueryChange?.(e.target.value)}
             placeholder="搜索全部 session…"
-            className="w-full pl-7 pr-7 py-1 rounded text-[12px] border"
+            className="w-full pl-7 pr-7 py-1 rounded text-token-sm border"
             style={{
               background: "var(--bg-app)",
               borderColor: "var(--border)",
@@ -451,7 +473,11 @@ export function Sidebar(props: SidebarProps) {
             // lastSeenMap，所以聚焦着的 active session 这里自然不会 unread。
             const isRunning = !!s.isRunning;
             const isWaitingUser = s.runtimeState === "waiting_user";
-            const seenAt = lastSeenMap[s.id];
+            const serverSeenAt =
+              typeof s.meta?.lastSeenAt === "number" && s.meta.lastSeenAt > 0
+                ? new Date(s.meta.lastSeenAt).toISOString()
+                : undefined;
+            const seenAt = lastSeenMap[s.id] ?? serverSeenAt;
             // hydrated gate：SSR/首次 hydrate 时强制 false，避免 lastSeenMap
             // 在客户端注水前误判全部未读。
             const isUnread =
@@ -462,8 +488,8 @@ export function Sidebar(props: SidebarProps) {
                   key={s.id}
                   className="relative border-b px-3 py-2 text-xs flex items-center gap-2"
                   style={{
-                    borderColor: "rgba(248,113,113,0.4)",
-                    background: "rgba(248,113,113,0.08)",
+                    borderColor: "var(--color-danger)",
+                    background: "var(--color-danger-bg)",
                     paddingLeft: 12 + depth * 14,
                   }}
                 >
@@ -474,39 +500,36 @@ export function Sidebar(props: SidebarProps) {
                   >
                     删除「{s.name || s.firstMessage || s.id.slice(0, 8)}」？
                   </span>
-                  <button
+                  <Button
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       void executeDeleteSession(s.id);
                     }}
-                    className="px-2 py-0.5 rounded text-[11px] text-white"
-                    style={{ background: "#ef4444" }}
+                    size="xs"
+                    tone="danger"
+                    variant="soft"
                   >
                     删除
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       setPendingDeleteId(null);
                     }}
-                    className="px-2 py-0.5 rounded text-[11px] border"
-                    style={{
-                      borderColor: "var(--border)",
-                      background: "var(--bg-panel)",
-                      color: "var(--text-muted)",
-                    }}
+                    size="xs"
+                    variant="outline"
                   >
                     取消
-                  </button>
+                  </Button>
                 </div>
               );
             }
             return (
               <div
                 key={s.id}
-                className="relative border-b"
+                className="group/session relative border-b"
                 style={{ borderColor: "var(--border-soft)" }}
               >
                 <button
@@ -515,7 +538,7 @@ export function Sidebar(props: SidebarProps) {
                   style={{
                     background: active ? "var(--bg-panel-2)" : "transparent",
                     paddingLeft: 12 + depth * 14,
-                    paddingRight: 12,
+                    paddingRight: 36,
                   }}
                   title={s.cwd}
                 >
@@ -559,7 +582,7 @@ export function Sidebar(props: SidebarProps) {
                       style={{
                         width: 7,
                         height: 7,
-                        background: "#f59e0b",
+                        background: "var(--color-warning)",
                       }}
                     />
                   ) : isRunning ? (
@@ -570,8 +593,8 @@ export function Sidebar(props: SidebarProps) {
                       style={{
                         width: 7,
                         height: 7,
-                        background: "#fbbf24",
-                        boxShadow: "0 0 0 0 rgba(251,191,36,0.6)",
+                        background: "var(--color-warning)",
+                        boxShadow: "0 0 0 0 var(--color-warning-bg)",
                         animation: "session-pulse 1.4s ease-in-out infinite",
                       }}
                     />
@@ -583,7 +606,7 @@ export function Sidebar(props: SidebarProps) {
                       style={{
                         width: 7,
                         height: 7,
-                        background: "#3b82f6",
+                        background: "var(--color-info)",
                       }}
                     />
                   ) : null}
@@ -633,7 +656,7 @@ export function Sidebar(props: SidebarProps) {
                       </div>
                     )}
                     <div
-                      className="text-[10px] truncate mt-0.5 flex items-center gap-1.5"
+                      className="text-token-xs truncate mt-0.5 flex items-center gap-1.5"
                       style={{ color: "var(--fg-faint)" }}
                     >
                       <span className="shrink-0">
@@ -644,15 +667,9 @@ export function Sidebar(props: SidebarProps) {
                       {isWaitingUser && (
                         <>
                           <span aria-hidden="true">·</span>
-                          <span className="shrink-0 font-medium text-amber-600 dark:text-amber-300">
+                          <span className="shrink-0 font-medium text-[color:var(--color-warning)]">
                             需确认
                           </span>
-                        </>
-                      )}
-                      {depth === 0 && (
-                        <>
-                          <span aria-hidden="true">·</span>
-                          <span className="truncate">{shortCwd(s.cwd)}</span>
                         </>
                       )}
                       {hasChildren && (
@@ -680,10 +697,16 @@ export function Sidebar(props: SidebarProps) {
                     setMenuFor(menuOpen ? null : s.id);
                   }}
                   title="更多操作"
-                  className="absolute top-1 right-1 px-1.5 rounded hover:opacity-80 text-sm"
+                  aria-label="会话更多操作"
+                  aria-expanded={menuOpen}
+                  className={`absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-md text-sm transition-all ${
+                    menuOpen
+                      ? "bg-[color:var(--bg-hover)] opacity-100"
+                      : "opacity-0 hover:bg-[color:var(--bg-hover)] group-hover/session:opacity-100 focus:opacity-100"
+                  }`}
                   style={{ color: "var(--fg-muted)" }}
                 >
-                  ⋯
+                  <Ellipsis size={15} />
                 </button>
                 {menuOpen && (
                   <FloatingLayer
@@ -691,62 +714,53 @@ export function Sidebar(props: SidebarProps) {
                     open={menuOpen}
                     onClose={() => setMenuFor(null)}
                     placement="bottom-end"
-                    minWidth={168}
+                    minWidth={220}
                     minHeight={168}
-                    className="rounded border text-xs min-w-[168px] py-1 shadow-xl"
-                    style={{
-                      background: "var(--bg-panel-2)",
-                      borderColor: "var(--border)",
-                      color: "var(--fg)",
-                    }}
                   >
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setMenuFor(null);
-                        void toggleSessionPin(s.id, !s.meta?.pinned);
-                      }}
-                      className="w-full text-left px-3 py-1.5 hover:opacity-80"
-                      style={{ color: "var(--fg)" }}
-                    >
-                      {s.meta?.pinned ? "📌 取消置顶" : "📌 置顶"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setMenuFor(null);
-                        setRenamingFor(s.id);
-                        setRenameDraft(s.name || "");
-                      }}
-                      className="w-full text-left px-3 py-1.5 hover:opacity-80"
-                      style={{ color: "var(--fg)" }}
-                    >
-                      ✎ 重命名
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleExportSession(s.id);
-                      }}
-                      className="w-full text-left px-3 py-1.5 hover:opacity-80"
-                      style={{ color: "var(--fg)" }}
-                    >
-                      ⤓ 导出 HTML
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        requestDeleteSession(s.id);
-                      }}
-                      className="w-full text-left px-3 py-1.5 hover:opacity-80"
-                      style={{ color: "#f87171" }}
-                    >
-                      ✕ 删除
-                    </button>
+                    <Menu aria-label="会话操作">
+                      <MenuItem
+                        icon={<Edit3 size={18} />}
+                        onClick={() => {
+                          setMenuFor(null);
+                          setRenamingFor(s.id);
+                          setRenameDraft(s.meta?.title || s.name || s.firstMessage || "");
+                        }}
+                      >
+                        重命名
+                      </MenuItem>
+                      <MenuItem
+                        icon={<ExternalLink size={18} />}
+                        onClick={() => {
+                          handleExportSession(s.id);
+                        }}
+                      >
+                        分享会话
+                      </MenuItem>
+                      <MenuItem
+                        icon={
+                          s.meta?.pinned ? (
+                            <PinOff size={18} />
+                          ) : (
+                            <Pin size={18} />
+                          )
+                        }
+                        onClick={() => {
+                          setMenuFor(null);
+                          void toggleSessionPin(s.id, !s.meta?.pinned);
+                        }}
+                      >
+                        {s.meta?.pinned ? "取消置顶" : "置顶"}
+                      </MenuItem>
+                      <MenuItem
+                        icon={<Trash2 size={18} />}
+                        tone="danger"
+                        onClick={() => {
+                          requestDeleteSession(s.id);
+                        }}
+                      >
+                        删除
+                      </MenuItem>
+                    </Menu>
                   </FloatingLayer>
                 )}
               </div>
@@ -789,25 +803,16 @@ export function Sidebar(props: SidebarProps) {
           onOpenFilePicker={() => setShowFilePicker(true)}
         />
       </div>
-      {/* sidebar 底：长期任务与低频配置入口 */}
+      {/* sidebar 底：低频配置入口 */}
       <div
         className="flex items-stretch border-t h-12 shrink-0"
         style={{ borderColor: "var(--border)" }}
       >
-        <a
-          href="/tasks"
-          title="打开长期任务"
-          className="flex-1 inline-flex items-center justify-center gap-2 text-[13px] font-medium hover:bg-[color:var(--bg-hover)]"
-          style={{ color: "var(--text)" }}
-        >
-          <ClipboardList size={15} />
-          <span>任务</span>
-        </a>
         <button
           type="button"
           onClick={onOpenSettings}
           title="打开设置"
-          className="flex-1 inline-flex items-center justify-center gap-2 text-[13px] font-medium hover:bg-[color:var(--bg-hover)]"
+          className="flex-1 inline-flex items-center justify-center gap-2 text-token-ui font-medium hover:bg-[color:var(--bg-hover)]"
           style={{ color: "var(--text)" }}
         >
           <Settings size={15} />

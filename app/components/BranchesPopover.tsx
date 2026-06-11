@@ -167,7 +167,7 @@ export default function BranchesPopover({
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center pt-16"
-      style={{ background: "rgba(0,0,0,0.4)" }}
+      style={{ background: "var(--color-overlay)" }}
       onClick={onClose}
     >
       <div
@@ -183,7 +183,7 @@ export default function BranchesPopover({
           className="flex items-center justify-between px-3 py-2 border-b"
           style={{ borderColor: "var(--border)" }}
         >
-          <span className="inline-flex items-center gap-1.5 text-[13px] font-medium">
+          <span className="inline-flex items-center gap-1.5 text-token-ui font-medium">
             <GitBranch size={14} />
             Branches
           </span>
@@ -196,7 +196,7 @@ export default function BranchesPopover({
           </button>
         </div>
 
-        <div className="flex-1 min-h-0 overflow-auto p-2 text-[12px]">
+        <div className="min-h-0 flex-1 overflow-auto p-2 text-token-sm">
           {loading && (
             <div
               className="px-2 py-1"
@@ -208,7 +208,7 @@ export default function BranchesPopover({
           {err && (
             <div
               className="px-2 py-1"
-              style={{ color: "#ef4444" }}
+              style={{ color: "var(--color-danger)" }}
               title={err}
             >
               {err}
@@ -233,7 +233,7 @@ export default function BranchesPopover({
                   style={{ borderColor: "var(--border)" }}
                 >
                   <div
-                    className="px-2 py-1 border-b text-[11px]"
+                    className="border-b px-2 py-1 text-token-xs"
                     style={{
                       borderColor: "var(--border)",
                       color: "var(--text-muted)",
@@ -265,7 +265,7 @@ export default function BranchesPopover({
                             分支 {pi + 1}：{summarize(p.firstNode.entry)}
                           </span>
                           <span
-                            className="block text-[10px]"
+                            className="block text-token-xs"
                             style={{ color: "var(--text-muted)" }}
                           >
                             {p.nodeCount} 个节点 · 末端{" "}
@@ -274,7 +274,7 @@ export default function BranchesPopover({
                         </span>
                         {p.isCurrent && (
                           <span
-                            className="text-[10px] shrink-0 px-1.5 py-[1px] rounded"
+                            className="shrink-0 rounded-token-sm px-1.5 py-[1px] text-token-xs"
                             style={{
                               color: "var(--accent)",
                               background:
@@ -296,7 +296,7 @@ export default function BranchesPopover({
           {tree.length > 0 && (
             <details>
               <summary
-                className="cursor-pointer select-none px-2 py-1 text-[11px]"
+                className="cursor-pointer select-none px-2 py-1 text-token-xs"
                 style={{ color: "var(--text-muted)" }}
               >
                 显示完整树

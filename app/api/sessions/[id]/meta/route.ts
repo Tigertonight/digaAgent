@@ -45,6 +45,12 @@ function pickWritable(body: unknown): Partial<SessionMeta> {
         if (typeof v === "boolean") out.pinned = v;
         break;
       }
+      case "lastSeenAt": {
+        if (typeof v === "number" && Number.isFinite(v) && v > 0) {
+          out.lastSeenAt = Math.floor(v);
+        }
+        break;
+      }
     }
   }
   return out;

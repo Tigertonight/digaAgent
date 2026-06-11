@@ -72,6 +72,7 @@ describe("writeMeta + readMeta round-trip", () => {
       id: "rt-1",
       title: "我的 session",
       pinned: true,
+      lastSeenAt: 1_789_000_000_000,
       labels: ["bug-fix", "ui"],
     };
     await writeMeta(meta);
@@ -80,6 +81,7 @@ describe("writeMeta + readMeta round-trip", () => {
       id: "rt-1",
       title: "我的 session",
       pinned: true,
+      lastSeenAt: 1_789_000_000_000,
       labels: ["bug-fix", "ui"],
     });
   });

@@ -180,13 +180,13 @@ export function WebviewPocPanel() {
         <PocBtn onClick={doInspect} disabled={wcId == null}>取标题</PocBtn>
         <PocBtn onClick={doScreenshot} disabled={wcId == null}>截图</PocBtn>
         <PocBtn onClick={doClick} disabled={wcId == null}>CDP点击中心</PocBtn>
-        <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+        <span className="text-token-xs" style={{ color: "var(--text-muted)" }}>
           wcId={wcId ?? "-"}
         </span>
       </div>
 
       {/* webview 原生容器：这就是「所见即所控」的核心 —— 真实页面，零延迟 */}
-      <div className="relative min-h-0 flex-1" style={{ background: "#fff" }}>
+      <div className="relative min-h-0 flex-1" style={{ background: "var(--browser-preview-bg)" }}>
         {/* Electron <webview> 是自定义元素，React 无内置类型，用 createElement 规避 JSX 类型检查 */}
         {createElement("webview", {
           ref: webviewRef,
@@ -198,7 +198,7 @@ export function WebviewPocPanel() {
       {/* CDP 截图回显（验证采集链路；与上方 webview 是两套画面来源） */}
       {shot && (
         <div className="shrink-0 border-t p-2" style={{ borderColor: "var(--border-soft)" }}>
-          <div className="mb-1 text-[10px]" style={{ color: "var(--text-muted)" }}>
+          <div className="mb-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
             CDP 截图结果（按需单帧）：
           </div>
           <Image
@@ -215,7 +215,7 @@ export function WebviewPocPanel() {
 
       {/* 验证日志 */}
       <div
-        className="max-h-40 shrink-0 overflow-auto border-t px-2.5 py-1.5 font-mono text-[10px]"
+        className="max-h-40 shrink-0 overflow-auto border-t px-2.5 py-1.5 font-mono text-token-xs"
         style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
       >
         {log.length === 0 ? (
@@ -242,7 +242,7 @@ function PocBtn({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="h-7 shrink-0 rounded border px-2 text-[11px] disabled:opacity-40"
+      className="h-7 shrink-0 rounded-token-sm border px-2 text-token-xs disabled:opacity-40"
       style={{ borderColor: "var(--border)", color: "var(--text)" }}
     >
       {children}

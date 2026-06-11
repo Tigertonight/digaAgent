@@ -75,17 +75,17 @@ export function ProviderConfigCard({
       >
         <span className="w-3 text-center">{isOpen ? "▾" : "▸"}</span>
         <span className="font-medium flex-1 truncate">{provKey}</span>
-        <span className="text-[10px]" style={{ color: "var(--fg-faint)" }}>
+        <span className="text-token-xs" style={{ color: "var(--fg-faint)" }}>
           {models.length} 个模型
           {prov.api && ` · ${prov.api}`}
         </span>
         <ConfirmButton
           stopPropagation
           onConfirm={() => onRemoveProvider(provKey)}
-          className="px-1.5 py-0.5 text-[10px] rounded border hover:opacity-80"
+          className="rounded-token-sm border px-1.5 py-0.5 text-token-xs hover:opacity-80"
           style={{
             borderColor: "var(--border)",
-            color: "#fca5a5",
+            color: "var(--color-danger)",
           }}
           title={`删除 provider "${provKey}"`}
         >
@@ -107,7 +107,7 @@ export function ProviderConfigCard({
             />
             <div className="flex flex-col gap-0.5">
               <span
-                className="text-[10px]"
+                className="text-token-xs"
                 style={{ color: "var(--fg-faint)" }}
               >
                 接口协议
@@ -213,8 +213,8 @@ export function ProviderConfigCard({
                     type="button"
                     onClick={() => onAddModel(provKey)}
                     disabled={!newModelDraft.id.trim()}
-                    className="px-2 py-1 text-xs rounded text-white disabled:opacity-50"
-                    style={{ background: "var(--accent)" }}
+                    className="rounded px-2 py-1 text-xs disabled:opacity-50"
+                    style={{ background: "var(--accent)", color: "var(--color-bg)" }}
                   >
                     添加
                   </button>
@@ -235,7 +235,7 @@ export function ProviderConfigCard({
                   onStartAddModel(provKey);
                   setNewModelDraft(emptyModel());
                 }}
-                className="w-full px-2 py-1 text-[10px] rounded border hover:opacity-80"
+                className="w-full rounded-token-sm border px-2 py-1 text-token-xs hover:opacity-80"
                 style={{
                   borderColor: "var(--border)",
                   color: "var(--fg-muted)",

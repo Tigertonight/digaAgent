@@ -7,18 +7,18 @@ import { derivePetAnimState } from "./use-pet-state";
 import { userFacingMessage } from "@/lib/user-facing-error";
 
 const STATE_COLOR: Record<PetAnimState, string> = {
-  idle: "#6b7280",
-  complete: "#10b981",
-  approval: "#f59e0b",
-  clarification: "#14b8a6",
-  budget_warning: "#eab308",
-  budget_blocked: "#f97316",
-  thinking: "#6366f1",
-  running: "#a855f7",
-  attention: "#6366f1",
-  done: "#10b981",
-  error: "#dc2626",
-  offline: "#9ca3af",
+  idle: "var(--pet-state-idle)",
+  complete: "var(--pet-state-complete)",
+  approval: "var(--pet-state-approval)",
+  clarification: "var(--pet-state-clarification)",
+  budget_warning: "var(--pet-state-budget-warning)",
+  budget_blocked: "var(--pet-state-budget-blocked)",
+  thinking: "var(--pet-state-thinking)",
+  running: "var(--pet-state-running)",
+  attention: "var(--pet-state-thinking)",
+  done: "var(--pet-state-complete)",
+  error: "var(--pet-state-error)",
+  offline: "var(--pet-state-offline)",
 };
 
 const STATE_LABEL: Record<PetAnimState, string> = {
@@ -138,18 +138,18 @@ export default function PetCard({
       style={{
         position: "relative",
         width: 280,
-        background: "rgba(17,24,39,0.96)",
+        background: "var(--pet-surface-strong)",
         border: isError || isOffline || isActionRequired || isBudgetWarning
           ? `1px solid ${color}`
-          : "1px solid rgba(255,255,255,0.1)",
-        borderRadius: 16,
+          : "1px solid var(--pet-border)",
+        borderRadius: "var(--radius-lg)",
         padding: 12,
         backdropFilter: "blur(16px)",
         boxShadow: isError || isOffline || isActionRequired || isBudgetWarning
-          ? `0 8px 32px rgba(0,0,0,0.6), 0 0 0 4px ${color}22`
-          : "0 8px 32px rgba(0,0,0,0.6)",
-        fontSize: 12,
-        color: "#f9fafb",
+          ? `var(--pet-shadow-strong), 0 0 0 4px color-mix(in srgb, ${color} 13%, transparent)`
+          : "var(--pet-shadow-strong)",
+        fontSize: "var(--text-sm)",
+        color: "var(--pet-text)",
       }}
     >
       {/* ===== Header: 色点 + session 名 + 关闭 ===== */}
@@ -186,9 +186,9 @@ export default function PetCard({
         </span>
         <span
           style={{
-            fontSize: 10,
-            color: "#9ca3af",
-            background: "rgba(255,255,255,0.05)",
+            fontSize: "var(--text-xs)",
+            color: "var(--pet-text-muted)",
+            background: "var(--pet-surface-soft)",
             padding: "2px 6px",
             borderRadius: 6,
           }}
@@ -201,7 +201,7 @@ export default function PetCard({
           style={{
             background: "none",
             border: "none",
-            color: "#6b7280",
+            color: "var(--pet-text-dim)",
             cursor: "pointer",
             fontSize: 18,
             padding: 0,
@@ -226,13 +226,13 @@ export default function PetCard({
             alignItems: "center",
             gap: 8,
             width: "100%",
-            background: "rgba(220,38,38,0.15)",
-            border: "1px solid rgba(220,38,38,0.4)",
-            borderRadius: 8,
+            background: "color-mix(in srgb, var(--pet-state-error) 15%, transparent)",
+            border: "1px solid color-mix(in srgb, var(--pet-state-error) 40%, transparent)",
+            borderRadius: "var(--radius-md)",
             padding: "6px 10px",
             marginBottom: 10,
-            color: "#fca5a5",
-            fontSize: 11,
+            color: "var(--pet-state-error)",
+            fontSize: "var(--text-xs)",
             cursor: "pointer",
             textAlign: "left",
             transition: "background 150ms",
@@ -241,7 +241,7 @@ export default function PetCard({
         >
           <span style={{ fontSize: 13, lineHeight: 1 }}>⚠</span>
           <span style={{ flex: 1, fontWeight: 600 }}>连接已断开</span>
-          <span style={{ fontSize: 10, color: "#fda4af" }}>点击重连</span>
+          <span style={{ fontSize: "var(--text-xs)", color: "var(--pet-state-error)" }}>点击重连</span>
         </button>
       )}
 
@@ -254,13 +254,13 @@ export default function PetCard({
             alignItems: "center",
             gap: 8,
             width: "100%",
-            background: `${color}22`,
-            border: `1px solid ${color}66`,
-            borderRadius: 8,
+            background: `color-mix(in srgb, ${color} 13%, transparent)`,
+            border: `1px solid color-mix(in srgb, ${color} 40%, transparent)`,
+            borderRadius: "var(--radius-md)",
             padding: "6px 10px",
             marginBottom: 10,
-            color: "#fef3c7",
-            fontSize: 11,
+            color: "var(--pet-text)",
+            fontSize: "var(--text-xs)",
             cursor: "pointer",
             textAlign: "left",
           }}
@@ -273,7 +273,7 @@ export default function PetCard({
                 ? "需要确认下一步"
                 : "预算已暂停"}
           </span>
-          <span style={{ fontSize: 10, color: "#fde68a" }}>
+          <span style={{ fontSize: "var(--text-xs)", color }}>
             回主窗口处理
           </span>
         </button>
@@ -283,8 +283,8 @@ export default function PetCard({
       <div style={{ marginBottom: 10 }}>
         <div
           style={{
-            fontSize: 12,
-            color: "#f9fafb",
+            fontSize: "var(--text-sm)",
+            color: "var(--pet-text)",
             fontWeight: 500,
           }}
         >
@@ -294,8 +294,8 @@ export default function PetCard({
           <div
             style={{
               marginTop: 2,
-              fontSize: 11,
-              color: "#9ca3af",
+              fontSize: "var(--text-xs)",
+              color: "var(--pet-text-muted)",
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
@@ -312,12 +312,12 @@ export default function PetCard({
         <div
           className="pet-card-scroll"
           style={{
-            background: "rgba(255,255,255,0.04)",
-            borderRadius: 8,
+            background: "color-mix(in srgb, var(--pet-text) 4%, transparent)",
+            borderRadius: "var(--radius-md)",
             padding: "8px 10px",
             marginBottom: 10,
-            fontSize: 11,
-            color: "#d1d5db",
+            fontSize: "var(--text-xs)",
+            color: "var(--pet-text)",
             lineHeight: 1.5,
             maxHeight: 140,
             overflowY: "auto",
@@ -334,11 +334,11 @@ export default function PetCard({
       {actionError && (
         <div
           style={{
-            fontSize: 10,
-            color: "#fca5a5",
-            background: "rgba(220,38,38,0.12)",
-            border: "1px solid rgba(220,38,38,0.25)",
-            borderRadius: 6,
+            fontSize: "var(--text-xs)",
+            color: "var(--pet-state-error)",
+            background: "color-mix(in srgb, var(--pet-state-error) 12%, transparent)",
+            border: "1px solid color-mix(in srgb, var(--pet-state-error) 25%, transparent)",
+            borderRadius: "var(--radius-sm)",
             padding: "6px 8px",
             marginBottom: 8,
           }}
@@ -365,12 +365,12 @@ export default function PetCard({
           maxLength={500}
           style={{
             flex: 1,
-            background: "rgba(255,255,255,0.06)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            borderRadius: 8,
+            background: "var(--pet-surface-soft)",
+            border: "1px solid var(--pet-border)",
+            borderRadius: "var(--radius-md)",
             padding: "6px 10px",
-            color: "#fff",
-            fontSize: 11,
+            color: "var(--pet-text)",
+            fontSize: "var(--text-xs)",
             outline: "none",
           }}
           disabled={sending || !!session?.streaming}
@@ -380,12 +380,14 @@ export default function PetCard({
           onClick={() => void handleSend()}
           disabled={!canSend}
           style={{
-            background: canSend ? "#6366f1" : "rgba(255,255,255,0.06)",
+            background: canSend
+              ? "var(--pet-state-thinking)"
+              : "var(--pet-surface-soft)",
             border: "none",
-            borderRadius: 8,
+            borderRadius: "var(--radius-md)",
             padding: "6px 12px",
-            color: canSend ? "#fff" : "#4b5563",
-            fontSize: 11,
+            color: canSend ? "var(--pet-text)" : "var(--pet-text-dim)",
+            fontSize: "var(--text-xs)",
             cursor: canSend ? "pointer" : "default",
             fontWeight: 600,
             transition: "background 150ms",
@@ -405,12 +407,12 @@ export default function PetCard({
             title="重新建立 SSE 连接"
             style={{
               flex: 1,
-              background: "rgba(99,102,241,0.18)",
-              border: "1px solid rgba(99,102,241,0.4)",
-              borderRadius: 8,
+              background: "color-mix(in srgb, var(--pet-state-thinking) 18%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--pet-state-thinking) 40%, transparent)",
+              borderRadius: "var(--radius-md)",
               padding: "6px 0",
-              color: "#a5b4fc",
-              fontSize: 11,
+              color: "var(--pet-state-thinking)",
+              fontSize: "var(--text-xs)",
               cursor: "pointer",
               fontWeight: 600,
               transition: "all 150ms",
@@ -426,15 +428,15 @@ export default function PetCard({
             style={{
               flex: 1,
               background: canAbort
-                ? "rgba(248,113,113,0.12)"
-                : "rgba(255,255,255,0.04)",
+                ? "color-mix(in srgb, var(--pet-state-error) 12%, transparent)"
+                : "color-mix(in srgb, var(--pet-text) 4%, transparent)",
               border: canAbort
-                ? "1px solid rgba(248,113,113,0.3)"
-                : "1px solid rgba(255,255,255,0.06)",
-              borderRadius: 8,
+                ? "1px solid color-mix(in srgb, var(--pet-state-error) 30%, transparent)"
+                : "1px solid color-mix(in srgb, var(--pet-text) 6%, transparent)",
+              borderRadius: "var(--radius-md)",
               padding: "6px 0",
-              color: canAbort ? "#f87171" : "#4b5563",
-              fontSize: 11,
+              color: canAbort ? "var(--pet-state-error)" : "var(--pet-text-dim)",
+              fontSize: "var(--text-xs)",
               cursor: canAbort ? "pointer" : "default",
               transition: "all 150ms",
             }}
@@ -446,12 +448,12 @@ export default function PetCard({
           onClick={onFocusMain}
           style={{
             flex: 1,
-            background: "rgba(255,255,255,0.06)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            borderRadius: 8,
+            background: "var(--pet-surface-soft)",
+            border: "1px solid var(--pet-border)",
+            borderRadius: "var(--radius-md)",
             padding: "6px 0",
-            color: "#d1d5db",
-            fontSize: 11,
+            color: "var(--pet-text)",
+            fontSize: "var(--text-xs)",
             cursor: "pointer",
             transition: "background 150ms",
           }}
@@ -466,7 +468,7 @@ export default function PetCard({
           style={{
             marginTop: 10,
             paddingTop: 10,
-            borderTop: "1px solid rgba(255,255,255,0.06)",
+            borderTop: "1px solid color-mix(in srgb, var(--pet-text) 6%, transparent)",
           }}
         >
           <button
@@ -478,14 +480,14 @@ export default function PetCard({
               justifyContent: "space-between",
               background: "none",
               border: "none",
-              color: "#9ca3af",
-              fontSize: 11,
+              color: "var(--pet-text-muted)",
+              fontSize: "var(--text-xs)",
               padding: "2px 0",
               cursor: "pointer",
             }}
           >
             <span>其他会话 ({otherSessions.length})</span>
-            <span style={{ fontSize: 10 }}>
+              <span style={{ fontSize: "var(--text-xs)" }}>
               {sessionsExpanded ? "收起" : "展开"}
             </span>
           </button>
@@ -518,13 +520,13 @@ export default function PetCard({
                       borderRadius: 6,
                       border: "1px solid",
                       borderColor: isFocused
-                        ? "rgba(99,102,241,0.4)"
+                        ? "color-mix(in srgb, var(--pet-state-thinking) 40%, transparent)"
                         : "transparent",
                       background: isFocused
-                        ? "rgba(99,102,241,0.1)"
+                        ? "color-mix(in srgb, var(--pet-state-thinking) 10%, transparent)"
                         : "transparent",
-                      color: "#d1d5db",
-                      fontSize: 11,
+                      color: "var(--pet-text)",
+                      fontSize: "var(--text-xs)",
                       cursor: "pointer",
                       textAlign: "left",
                     }}
@@ -551,8 +553,8 @@ export default function PetCard({
                     </span>
                     <span
                       style={{
-                        color: "#6b7280",
-                        fontSize: 10,
+                        color: "var(--pet-text-dim)",
+                        fontSize: "var(--text-xs)",
                         flexShrink: 0,
                       }}
                     >

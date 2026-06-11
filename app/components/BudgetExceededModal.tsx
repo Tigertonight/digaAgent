@@ -47,7 +47,7 @@ export function BudgetExceededModal({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.55)" }}
+      style={{ background: "var(--color-overlay)" }}
       onClick={onClose}
     >
       <div
@@ -63,12 +63,12 @@ export function BudgetExceededModal({
           className="px-4 py-2.5 border-b"
           style={{ borderColor: "var(--border-soft)" }}
         >
-          <h2 className="text-sm font-semibold" style={{ color: "#ef4444" }}>
+          <h2 className="text-token-body font-semibold" style={{ color: "var(--color-danger)" }}>
             Budget 已触发，会话已暂停
           </h2>
         </div>
 
-        <div className="px-4 py-3 text-[13px] leading-relaxed">
+        <div className="px-4 py-3 text-token-ui leading-relaxed">
           <p style={{ color: "var(--text-muted)" }}>
             本会话命中了以下 Budget 维度，已自动 abort：
           </p>
@@ -91,7 +91,7 @@ export function BudgetExceededModal({
             ))}
           </ul>
           <p
-            className="mt-3 text-[12px]"
+            className="mt-3 text-token-sm"
             style={{ color: "var(--text-muted)" }}
           >
             选择「提高上限并继续」会把当前 Budget 各维度 × 2 写入本会话的临时 override，

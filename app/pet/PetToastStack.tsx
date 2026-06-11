@@ -43,16 +43,16 @@ function ToastItem({ toast }: { toast: PetToast }) {
       role="status"
       style={{
         maxWidth: 240,
-        background: "rgba(17,24,39,0.94)",
+        background: "var(--pet-surface)",
         border: `1px solid ${toast.color}`,
         borderLeft: `3px solid ${toast.color}`,
-        borderRadius: 10,
+        borderRadius: "var(--radius-md)",
         padding: "6px 10px",
         backdropFilter: "blur(14px)",
-        boxShadow: `0 4px 16px rgba(0,0,0,0.45), 0 0 0 2px ${toast.color}22`,
-        fontSize: 11,
-        color: "#f9fafb",
-        lineHeight: 1.4,
+        boxShadow: `var(--pet-shadow), 0 0 0 2px color-mix(in srgb, ${toast.color} 13%, transparent)`,
+        fontSize: "var(--text-xs)",
+        color: "var(--pet-text)",
+        lineHeight: "var(--line-ui)",
         // 入场动画
         animation: "pet-toast-in 220ms ease-out",
       }}
@@ -62,8 +62,8 @@ function ToastItem({ toast }: { toast: PetToast }) {
         <div
           style={{
             marginTop: 2,
-            color: "#9ca3af",
-            fontSize: 10,
+            color: "var(--pet-text-muted)",
+            fontSize: "var(--text-xs)",
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",

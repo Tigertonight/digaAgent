@@ -425,7 +425,7 @@ function WorkbenchTabButton({
       <button
         type="button"
         onClick={onSelect}
-        className="flex min-w-0 flex-1 items-center gap-1.5 px-2 text-left text-[11px]"
+        className="flex min-w-0 flex-1 items-center gap-1.5 px-2 text-left text-token-xs"
         title={tab.subtitle ? `${tab.title}\n${tab.subtitle}` : tab.title}
       >
         <Icon size={13} className="shrink-0" />
@@ -501,7 +501,7 @@ function WorkbenchCreateMenu({
         />
       </div>
       <div className="my-2 h-px" style={{ background: "var(--border-soft)" }} />
-      <div className="px-1 pb-1 text-[10px] font-medium" style={{ color: "var(--text-muted)" }}>
+      <div className="px-1 pb-1 text-token-xs font-medium" style={{ color: "var(--text-muted)" }}>
         推荐
       </div>
       <div className="max-h-56 space-y-1 overflow-auto">
@@ -541,7 +541,7 @@ function CreateMenuButton({
       </span>
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {shortcut ? (
-        <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+        <span className="text-token-xs" style={{ color: "var(--text-muted)" }}>
           {shortcut}
         </span>
       ) : null}
@@ -597,7 +597,7 @@ function WorkbenchHomeLauncher({
         />
       </div>
       <div className="space-y-1">
-        <div className="px-1 text-[11px] font-medium" style={{ color: "var(--text-muted)" }}>
+        <div className="px-1 text-token-xs font-medium" style={{ color: "var(--text-muted)" }}>
           推荐
         </div>
         {recommendations.length > 0 ? (
@@ -650,7 +650,7 @@ function LauncherTile({
       </span>
       <span className="block w-full truncate text-xs font-medium">{title}</span>
       <span
-        className="block w-full text-[11px] leading-snug"
+        className="block w-full text-token-xs leading-snug"
         style={{
           color: "var(--text-muted)",
           display: "-webkit-box",
@@ -695,7 +695,7 @@ function RecommendationButton({
       <span className="min-w-0 flex-1">
         <span className="block truncate text-xs font-medium">{item.title}</span>
         {!compact ? (
-          <span className="block truncate text-[11px]" style={{ color: "var(--text-muted)" }}>
+          <span className="block truncate text-token-xs" style={{ color: "var(--text-muted)" }}>
             {item.subtitle}
           </span>
         ) : null}
@@ -735,7 +735,7 @@ function BrowserLauncherPanel({
         </span>
         <span className="min-w-0 flex-1">
           <span className="block text-xs font-medium">打开空白页</span>
-          <span className="block text-[11px]" style={{ color: "var(--text-muted)" }}>
+          <span className="block text-token-xs" style={{ color: "var(--text-muted)" }}>
             进入可接管的 in-app browser
           </span>
         </span>
@@ -775,7 +775,7 @@ function TerminalLauncherPanel({ cwd }: { cwd: string }) {
         body="v1 先作为常用命令和任务入口，不创建独立 PTY。需要执行时，把命令发给 agent 处理。"
       />
       <div className="space-y-1">
-        <div className="px-1 text-[11px]" style={{ color: "var(--text-muted)" }}>
+        <div className="px-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
           cwd: {cwd || "n/a"}
         </div>
         {commands.map((command) => (
@@ -1032,7 +1032,7 @@ function OverviewSection({
         <button
           type="button"
           onClick={onToggle}
-          className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-1 text-left text-[11px] font-medium hover:bg-[color:var(--bg-hover)]"
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-1 text-left text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
           style={{ color: "var(--text-muted)" }}
           aria-expanded={open}
           data-testid={`workbench-section-${id}-toggle`}
@@ -1049,7 +1049,7 @@ function OverviewSection({
           {summary ? (
             // 讯讷：徽章有最大宽限制，极窄时自身也 truncate，不再跳出表格。
             <span
-              className="max-w-[40%] shrink truncate rounded px-1.5 py-0.5 text-[10px]"
+              className="max-w-[40%] shrink truncate rounded px-1.5 py-0.5 text-token-xs"
               style={{ background: "var(--bg-selected)", color: "var(--text-muted)" }}
               title={summary}
             >
@@ -1061,7 +1061,7 @@ function OverviewSection({
           <button
             type="button"
             onClick={onAction}
-            className="shrink-0 rounded px-1.5 py-0.5 text-[10px] hover:bg-[color:var(--bg-hover)]"
+            className="shrink-0 rounded px-1.5 py-0.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
             style={{ color: "var(--text-muted)" }}
             data-testid={`workbench-section-${id}-action`}
           >
@@ -1096,7 +1096,7 @@ function OverviewLine({
   tone?: "running" | "done" | "error";
 }) {
   const color =
-    tone === "error" ? "#fca5a5" : tone === "running" ? "#f59e0b" : "var(--text-muted)";
+    tone === "error" ? "var(--color-danger)" : tone === "running" ? "var(--color-warning)" : "var(--text-muted)";
   return (
     <div className="flex min-w-0 items-start gap-1.5 text-xs">
       {checked != null ? (
@@ -1115,7 +1115,7 @@ function OverviewLine({
           {primary}
         </span>
         {secondary ? (
-          <span className="block truncate text-[11px]" title={secondary} style={{ color }}>
+          <span className="block truncate text-token-xs" title={secondary} style={{ color }}>
             {secondary}
           </span>
         ) : null}
@@ -1207,7 +1207,7 @@ function OutputsDetail({
       {Object.entries(grouped).map(([kind, items]) => (
         <section key={kind} className="space-y-1.5">
           <div
-            className="flex items-center gap-2 text-[11px] font-medium"
+            className="flex items-center gap-2 text-token-xs font-medium"
             style={{ color: "var(--text-muted)" }}
           >
             <span>{artifactKindLabel(kind)}</span>
@@ -1237,7 +1237,7 @@ function OutputsDetail({
                   <span className="min-w-0 flex-1 truncate text-xs font-medium">
                     {artifact.title}
                   </span>
-                  <span className="shrink-0 text-[10px]" style={{ color: "var(--text-muted)" }}>
+                  <span className="shrink-0 text-token-xs" style={{ color: "var(--text-muted)" }}>
                     {target?.type === "browser"
                       ? "打开 Browser"
                       : target?.type === "files"
@@ -1246,7 +1246,7 @@ function OutputsDetail({
                   </span>
                 </span>
                 {(artifact.href || artifact.summary) && (
-                  <span className="mt-0.5 block truncate pl-5 text-[10px]" style={{ color: "var(--text-muted)" }}>
+                  <span className="mt-0.5 block truncate pl-5 text-token-xs" style={{ color: "var(--text-muted)" }}>
                     {artifact.href ?? artifact.summary}
                   </span>
                 )}

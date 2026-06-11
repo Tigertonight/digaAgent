@@ -40,7 +40,7 @@ export function ModelConfigRow({
           type="button"
           onClick={() => onRunTest(providerKey, m)}
           disabled={testing}
-          className="px-1.5 py-0.5 text-[10px] rounded border hover:opacity-80 disabled:opacity-50"
+          className="rounded-token-sm border px-1.5 py-0.5 text-token-xs hover:opacity-80 disabled:opacity-50"
           style={{ borderColor: "var(--border)" }}
           title="测试模型连接"
         >
@@ -49,10 +49,10 @@ export function ModelConfigRow({
         <button
           type="button"
           onClick={() => onRemove(providerKey, m.id)}
-          className="px-1.5 py-0.5 text-[10px] rounded border hover:opacity-80"
+          className="rounded-token-sm border px-1.5 py-0.5 text-token-xs hover:opacity-80"
           style={{
             borderColor: "var(--border)",
-            color: "#fca5a5",
+            color: "var(--color-danger)",
           }}
         >
           ✕
@@ -94,7 +94,7 @@ export function ModelConfigRow({
             })
           }
         />
-        <label className="flex items-center gap-1 text-[10px] cursor-pointer mt-3">
+        <label className="mt-3 flex cursor-pointer items-center gap-1 text-token-xs">
           <input
             type="checkbox"
             checked={!!m.reasoning}
@@ -110,8 +110,10 @@ export function ModelConfigRow({
       </div>
       {t && (
         <div
-          className="mt-1 text-[10px]"
-          style={{ color: t.ok ? "#86efac" : "#fca5a5" }}
+          className="mt-1 text-token-xs"
+          style={{
+            color: t.ok ? "var(--color-success)" : "var(--color-danger)",
+          }}
         >
           {t.ok
             ? `✓ OK${t.latencyMs ? ` · ${t.latencyMs}ms` : ""}${

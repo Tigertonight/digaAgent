@@ -5,18 +5,18 @@ import type { PetAnimState, PetBubbleText } from "./use-pet-state";
 
 /** state → 主色（光点/边框） */
 const STATE_COLOR: Record<PetAnimState, string> = {
-  idle: "#6b7280", // gray-500 —— 从未开始
-  complete: "#10b981", // emerald-500 —— 已完成（已读历史回复）
-  approval: "#f59e0b", // amber-500 —— 等待用户授权
-  clarification: "#14b8a6", // teal-500 —— 等待用户确认下一步
-  budget_warning: "#eab308", // yellow-500 —— 接近预算
-  budget_blocked: "#f97316", // orange-500 —— 预算暂停
-  thinking: "#6366f1", // indigo-500
-  running: "#a855f7", // purple-500
-  attention: "#6366f1", // indigo-500（与 thinking 同色，靠"红/蓝点"形态区分）
-  done: "#10b981", // emerald-500 —— 流式刚结束 2s 过渡
-  error: "#dc2626", // red-600
-  offline: "#9ca3af", // gray-400
+  idle: "var(--pet-state-idle)",
+  complete: "var(--pet-state-complete)",
+  approval: "var(--pet-state-approval)",
+  clarification: "var(--pet-state-clarification)",
+  budget_warning: "var(--pet-state-budget-warning)",
+  budget_blocked: "var(--pet-state-budget-blocked)",
+  thinking: "var(--pet-state-thinking)",
+  running: "var(--pet-state-running)",
+  attention: "var(--pet-state-thinking)",
+  done: "var(--pet-state-complete)",
+  error: "var(--pet-state-error)",
+  offline: "var(--pet-state-offline)",
 };
 
 interface Props {
@@ -40,19 +40,19 @@ export default function PetBubble({ animState, bubbleText }: Props) {
       style={{
         position: "relative",
         maxWidth: 240,
-        background: "rgba(17,24,39,0.92)", // slate-900/92
+        background: "var(--pet-surface)",
         border: isHighPriority
           ? `1px solid ${color}`
-          : "1px solid rgba(255,255,255,0.08)",
-        borderRadius: 12,
+          : "1px solid var(--pet-border)",
+        borderRadius: "var(--radius-lg)",
         padding: "8px 12px",
         backdropFilter: "blur(14px)",
         boxShadow: isHighPriority
-          ? `0 4px 24px rgba(0,0,0,0.5), 0 0 0 3px ${color}22`
-          : "0 4px 24px rgba(0,0,0,0.5)",
-        fontSize: 12,
-        color: "#f9fafb", // gray-50
-        lineHeight: 1.4,
+          ? `var(--pet-shadow), 0 0 0 3px color-mix(in srgb, ${color} 13%, transparent)`
+          : "var(--pet-shadow)",
+        fontSize: "var(--text-sm)",
+        color: "var(--pet-text)",
+        lineHeight: "var(--line-ui)",
       }}
     >
       {/* 主文案行：色点 + 文字 */}
@@ -93,8 +93,8 @@ export default function PetBubble({ animState, bubbleText }: Props) {
           style={{
             marginTop: 4,
             paddingLeft: 14, // 与色点对齐
-            color: "#9ca3af", // gray-400
-            fontSize: 11,
+            color: "var(--pet-text-muted)",
+            fontSize: "var(--text-xs)",
             maxHeight: 80,
             overflowY: "auto",
             overflowX: "hidden",
@@ -114,7 +114,7 @@ export default function PetBubble({ animState, bubbleText }: Props) {
           right: 24,
           width: 10,
           height: 6,
-          background: "rgba(17,24,39,0.92)",
+          background: "var(--pet-surface)",
           clipPath: "polygon(0 0, 100% 0, 50% 100%)",
         }}
       />

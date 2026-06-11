@@ -161,7 +161,7 @@ export const MessageView = memo(function MessageView({
               return (
                 <div
                   key={i}
-                  className="rounded-2xl px-3.5 py-2 text-sm whitespace-pre-wrap inline-block"
+                  className="inline-block whitespace-pre-wrap rounded-token-lg px-3.5 py-2 text-sm"
                   style={{
                     background: "var(--user-bg)",
                     color: "var(--text)",
@@ -176,7 +176,7 @@ export const MessageView = memo(function MessageView({
               return (
                 <div
                   key={i}
-                  className="rounded-2xl overflow-hidden inline-block"
+                  className="inline-block overflow-hidden rounded-token-lg"
                   style={{
                     background: "var(--user-bg)",
                   }}
@@ -200,7 +200,7 @@ export const MessageView = memo(function MessageView({
 
         {/* 时间戳 + hover 操作行（Copy / Edit from here / New session） */}
         <div
-          className="text-[11px] mt-1 flex items-center gap-2"
+          className="text-token-xs mt-1 flex items-center gap-2"
           style={{ color: "var(--text-muted)" }}
         >
           {!isForking && (
@@ -248,7 +248,7 @@ export const MessageView = memo(function MessageView({
           )}
           {msg.timestamp && (
             <span
-              className="ml-auto text-[10px]"
+              className="ml-auto text-token-xs"
               style={{ color: "var(--fg-faint)" }}
             >
               {formatMessageTime(msg.timestamp)}
@@ -267,7 +267,7 @@ export const MessageView = memo(function MessageView({
               }}
             >
               <div
-                className="text-[10px]"
+                className="text-token-xs"
                 style={{ color: "var(--fg-faint)" }}
               >
                 Fork from entry {msg.entryId.slice(0, 8)} · 提交后此后所有消息将被丢弃
@@ -336,7 +336,7 @@ export const MessageView = memo(function MessageView({
     <div className="group">
       {showAssistantChrome && (
         <div
-          className="text-[11px] mb-1 flex items-center gap-2"
+          className="text-token-xs mb-1 flex items-center gap-2"
           style={{ color: "var(--text-muted)" }}
         >
           <span>{captionText}</span>
@@ -471,7 +471,7 @@ export const MessageView = memo(function MessageView({
       </div>
       {showAssistantChrome && (
         <div
-          className="text-[11px] mt-2 flex items-center gap-2"
+          className="text-token-xs mt-2 flex items-center gap-2"
           style={{ color: "var(--text-muted)" }}
         >
           {meta && (
@@ -494,7 +494,7 @@ export const MessageView = memo(function MessageView({
           <CopyButton text={plainText} />
           {msg.timestamp && (
             <span
-              className="ml-auto text-[10px]"
+              className="ml-auto text-token-xs"
               style={{ color: "var(--fg-faint)" }}
             >
               {formatMessageTime(msg.timestamp)}
@@ -560,12 +560,12 @@ function AssistantStreamMeta({
     tps == null
       ? null
       : tps >= 50
-      ? "#53b3cb"
+      ? "var(--color-info)"
       : tps >= 30
-      ? "#9bc53d"
+      ? "var(--color-success)"
       : tps >= 15
-      ? "#f9c22e"
-      : "#e01a4f";
+      ? "var(--color-warning)"
+      : "var(--color-danger)";
 
   return (
     <span className="inline-flex items-center gap-2">
@@ -576,10 +576,10 @@ function AssistantStreamMeta({
       )}
       {tps != null && pillBg && (
         <span
-          className="px-1.5 py-0.5 rounded text-[10px] font-medium"
+          className="px-1.5 py-0.5 rounded text-token-xs font-medium"
           style={{
             background: pillBg,
-            color: "#fff",
+            color: "var(--color-bg)",
             fontVariantNumeric: "tabular-nums",
           }}
           title="预估 token 速率（chars/4/elapsed）"
@@ -659,12 +659,12 @@ function CollapsedPartProcessGroup({ parts }: { parts: MessagePart[] }) {
           <span className="block truncate font-medium" style={{ color: "var(--text)" }}>
             {summary.title}
           </span>
-          <span className="block truncate text-[11px]" style={{ color: "var(--text-muted)" }}>
+          <span className="block truncate text-token-xs" style={{ color: "var(--text-muted)" }}>
             {summary.detail}
           </span>
         </span>
         <span
-          className="shrink-0 text-[11px] opacity-0 transition-opacity group-hover:opacity-100"
+          className="shrink-0 text-token-xs opacity-0 transition-opacity group-hover:opacity-100"
           style={{ color: "var(--text-muted)" }}
         >
           {open ? "收起 ▾" : "展开细节 ▸"}
@@ -965,9 +965,9 @@ function WorkflowRunCard({
     <div className="space-y-2" style={{ color: "var(--text)" }}>
       <div className="flex items-center gap-2 text-xs">
         {part.status === "completed" ? (
-          <CheckCircle2 size={13} style={{ color: "#16a34a" }} />
+          <CheckCircle2 size={13} style={{ color: "var(--color-success)" }} />
         ) : failed ? (
-          <XCircle size={13} style={{ color: "#dc2626" }} />
+          <XCircle size={13} style={{ color: "var(--color-danger)" }} />
         ) : running ? (
           <Loader2
             size={13}
@@ -982,7 +982,7 @@ function WorkflowRunCard({
           {part.objective}
         </span>
         <span
-          className="ml-auto shrink-0 text-[11px]"
+          className="ml-auto shrink-0 text-token-xs"
           style={{ color: "var(--text-muted)" }}
         >
           {part.status}
@@ -991,11 +991,11 @@ function WorkflowRunCard({
         {canResume && (
           <button
             type="button"
-            className="inline-flex h-6 shrink-0 items-center gap-1 rounded border px-1.5 text-[11px] hover:opacity-85"
+            className="inline-flex h-6 shrink-0 items-center gap-1 rounded border px-1.5 text-token-xs hover:opacity-85"
             style={{
               borderColor: "var(--border-soft)",
               color: "var(--text-muted)",
-              background: "rgba(255,255,255,0.02)",
+              background: "var(--bg-subtle)",
             }}
             title="Resume this workflow from its latest checkpoint/artifacts"
             onClick={() => onResumeWorkflow?.(part.id, part.objective)}
@@ -1012,7 +1012,7 @@ function WorkflowRunCard({
       )}
       {part.manifest && (
         <div
-          className="flex flex-wrap gap-x-3 gap-y-1 text-[11px]"
+          className="flex flex-wrap gap-x-3 gap-y-1 text-token-xs"
           style={{ color: "var(--text-muted)" }}
         >
           {part.resumedFromWorkflowId && (
@@ -1029,10 +1029,10 @@ function WorkflowRunCard({
           className="rounded-md border px-3 py-2"
           style={{
             borderColor: "var(--border-soft)",
-            background: "rgba(255,255,255,0.018)",
+            background: "var(--bg-subtle)",
           }}
         >
-          <div className="mb-1 text-[11px] font-semibold">Checkpoints</div>
+          <div className="mb-1 text-token-xs font-semibold">Checkpoints</div>
           {part.checkpoints.length ? (
             <div className="space-y-1">
               {part.checkpoints.slice(-4).map((checkpoint, index) => (
@@ -1041,7 +1041,7 @@ function WorkflowRunCard({
                     {checkpoint.name}
                   </summary>
                   <pre
-                    className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-[11px]"
+                    className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-token-xs"
                     style={{ color: "var(--text-muted)" }}
                   >
                     {shortJson(checkpoint.value)}
@@ -1059,10 +1059,10 @@ function WorkflowRunCard({
           className="rounded-md border px-3 py-2"
           style={{
             borderColor: "var(--border-soft)",
-            background: "rgba(255,255,255,0.018)",
+            background: "var(--bg-subtle)",
           }}
         >
-          <div className="mb-1 text-[11px] font-semibold">Artifacts</div>
+          <div className="mb-1 text-token-xs font-semibold">Artifacts</div>
           {part.artifacts.length ? (
             <div className="space-y-1">
               {part.artifacts.slice(-4).map((artifact, index) => (
@@ -1071,7 +1071,7 @@ function WorkflowRunCard({
                     {artifact.name}
                   </summary>
                   <pre
-                    className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-[11px]"
+                    className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-token-xs"
                     style={{ color: "var(--text-muted)" }}
                   >
                     {shortJson(artifact.value)}
@@ -1091,10 +1091,10 @@ function WorkflowRunCard({
           className="rounded-md border px-3 py-2 text-xs"
           style={{
             borderColor: "var(--border-soft)",
-            background: "rgba(255,255,255,0.018)",
+            background: "var(--bg-subtle)",
           }}
         >
-          <div className="mb-1 text-[11px] font-semibold">Worktrees</div>
+          <div className="mb-1 text-token-xs font-semibold">Worktrees</div>
           <div className="space-y-1.5">
             {worktreeStates.map(({ kind, worktree, lastError }) => {
               return (
@@ -1110,9 +1110,9 @@ function WorkflowRunCard({
                       style={{
                         color:
                           kind === "failed"
-                            ? "#dc2626"
+                            ? "var(--color-danger)"
                             : kind === "merged"
-                              ? "#16a34a"
+                              ? "var(--color-success)"
                               : "var(--text-muted)",
                       }}
                     />
@@ -1127,14 +1127,14 @@ function WorkflowRunCard({
                               : "Created worktree"}
                       </div>
                       <div
-                        className="truncate text-[11px]"
+                        className="truncate text-token-xs"
                         style={{ color: "var(--text-muted)" }}
                         title={worktree.path}
                       >
                         {worktree.branchName} · {worktree.path}
                       </div>
                       {lastError && (
-                        <div className="mt-0.5 truncate text-[11px] text-red-500" title={lastError}>
+                        <div className="mt-0.5 truncate text-token-xs text-[color:var(--color-danger)]" title={lastError}>
                           {lastError}
                         </div>
                       )}
@@ -1144,7 +1144,7 @@ function WorkflowRunCard({
                         {kind === "failed" && (
                           <button
                             type="button"
-                            className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-60"
+                            className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-token-xs hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-60"
                             style={{
                               borderColor: "var(--border-soft)",
                               color: "var(--text-muted)",
@@ -1161,7 +1161,7 @@ function WorkflowRunCard({
                         {kind !== "cleaned" && (
                           <button
                             type="button"
-                            className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-60"
+                            className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-token-xs hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-60"
                             style={{
                               borderColor: "var(--border-soft)",
                               color: "var(--text-muted)",
@@ -1184,18 +1184,18 @@ function WorkflowRunCard({
           </div>
           {worktreeNotice && (
             <div
-              className="mt-2 rounded border px-2 py-1 text-[11px]"
+              className="mt-2 rounded border px-2 py-1 text-token-xs"
               style={{
                 borderColor:
                   worktreeNotice.tone === "success"
-                    ? "rgba(22,163,74,0.35)"
-                    : "rgba(220,38,38,0.35)",
+                    ? "var(--color-success)"
+                    : "var(--color-danger)",
                 color:
-                  worktreeNotice.tone === "success" ? "#16a34a" : "#dc2626",
+                  worktreeNotice.tone === "success" ? "var(--color-success)" : "var(--color-danger)",
                 background:
                   worktreeNotice.tone === "success"
-                    ? "rgba(22,163,74,0.08)"
-                    : "rgba(220,38,38,0.08)",
+                    ? "var(--color-success-bg)"
+                    : "var(--color-danger-bg)",
               }}
             >
               {worktreeNotice.text}
@@ -1208,11 +1208,11 @@ function WorkflowRunCard({
           className="rounded-md border px-3 py-2 text-xs"
           style={{
             borderColor: "var(--border-soft)",
-            background: "rgba(255,255,255,0.018)",
+            background: "var(--bg-subtle)",
           }}
         >
           {part.error && (
-            <div className="mb-1" style={{ color: "#dc2626" }}>
+            <div className="mb-1" style={{ color: "var(--color-danger)" }}>
               {part.error}
             </div>
           )}
@@ -1265,11 +1265,11 @@ function SubagentBatchCard({
       : null;
   const verificationColor =
     part.verification?.status === "passed"
-      ? "#16a34a"
+      ? "var(--color-success)"
       : part.verification?.status === "warning"
-      ? "#d97706"
+      ? "var(--color-warning)"
       : part.verification?.status === "failed"
-      ? "#dc2626"
+      ? "var(--color-danger)"
       : "var(--text-muted)";
 
   return (
@@ -1284,7 +1284,7 @@ function SubagentBatchCard({
         {running && <Loader2 size={13} className="animate-spin" />}
         {part.verification && (
           <span
-            className="inline-flex h-6 items-center gap-1 rounded border px-1.5 text-[11px]"
+            className="inline-flex h-6 items-center gap-1 rounded border px-1.5 text-token-xs"
             style={{
               borderColor: "var(--border-soft)",
               color: verificationColor,
@@ -1308,7 +1308,7 @@ function SubagentBatchCard({
                 setResuming(false);
               }
             }}
-            className="inline-flex h-6 items-center gap-1 rounded border px-1.5 text-[11px] hover:bg-[color:var(--bg-hover)] disabled:cursor-not-allowed disabled:opacity-45"
+            className="inline-flex h-6 items-center gap-1 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)] disabled:cursor-not-allowed disabled:opacity-45"
             style={{ borderColor: "var(--border-soft)" }}
             title="继续执行未完成的 subagent tasks"
             aria-label="继续执行未完成的 subagent tasks"
@@ -1322,7 +1322,7 @@ function SubagentBatchCard({
           </button>
         )}
         <span
-          className="ml-auto text-[11px]"
+          className="ml-auto text-token-xs"
           style={{ color: "var(--text-muted)" }}
         >
           {completed}/{part.tasks.length}
@@ -1335,10 +1335,10 @@ function SubagentBatchCard({
       </div>
       {part.planning && (
         <div
-          className="rounded border px-2.5 py-2 text-[11px]"
+          className="rounded border px-2.5 py-2 text-token-xs"
           style={{
             borderColor: "var(--border-soft)",
-            background: "rgba(255,255,255,0.018)",
+            background: "var(--bg-subtle)",
             color: "var(--text-muted)",
           }}
           title={part.planning.warnings.join("\n")}
@@ -1357,10 +1357,10 @@ function SubagentBatchCard({
       )}
       {part.synthesis && (
         <div
-          className="rounded border px-2.5 py-2 text-[11px]"
+          className="rounded border px-2.5 py-2 text-token-xs"
           style={{
             borderColor: "var(--border-soft)",
-            background: "rgba(255,255,255,0.018)",
+            background: "var(--bg-subtle)",
             color: "var(--text-muted)",
           }}
           title={part.synthesis.instructions}
@@ -1380,14 +1380,14 @@ function SubagentBatchCard({
       )}
       {part.auditEvents && part.auditEvents.length > 0 && (
         <details
-          className="rounded border px-2.5 py-2 text-[11px]"
+          className="rounded border px-2.5 py-2 text-token-xs"
           style={{
             borderColor: "var(--border-soft)",
-            background: "rgba(255,255,255,0.018)",
+            background: "var(--bg-subtle)",
             color: "var(--text-muted)",
           }}
         >
-          <summary className="cursor-pointer list-none font-semibold text-[11px] [&::-webkit-details-marker]:hidden">
+          <summary className="cursor-pointer list-none font-semibold text-token-xs [&::-webkit-details-marker]:hidden">
             <span style={{ color: "var(--text)" }}>
               Audit: {part.auditEvents.length} events
             </span>
@@ -1448,11 +1448,11 @@ function SubagentBatchCard({
               : null;
           const taskVerificationColor =
             task.verification?.status === "passed"
-              ? "#16a34a"
+              ? "var(--color-success)"
               : task.verification?.status === "warning"
-              ? "#d97706"
+              ? "var(--color-warning)"
               : task.verification?.status === "failed"
-              ? "#dc2626"
+              ? "var(--color-danger)"
               : "var(--text-muted)";
           const openByDefault =
             isRunning || (index === 0 && Boolean(answer || task.error));
@@ -1465,9 +1465,9 @@ function SubagentBatchCard({
               <summary className="grid cursor-pointer list-none grid-cols-[18px_minmax(0,1fr)] gap-2 rounded px-1.5 py-1 hover:bg-[color:var(--bg-hover)] [&::-webkit-details-marker]:hidden">
                 <span className="pt-0.5">
                   {isDone ? (
-                    <CheckCircle2 size={13} style={{ color: "#16a34a" }} />
+                    <CheckCircle2 size={13} style={{ color: "var(--color-success)" }} />
                   ) : isFailed ? (
-                    <XCircle size={13} style={{ color: "#dc2626" }} />
+                    <XCircle size={13} style={{ color: "var(--color-danger)" }} />
                   ) : isRunning ? (
                     <Loader2
                       size={13}
@@ -1501,7 +1501,7 @@ function SubagentBatchCard({
                 style={{ borderColor: "var(--border-soft)" }}
               >
                 <div
-                  className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]"
+                  className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-token-xs"
                   style={{ color: "var(--text-muted)" }}
                 >
                   <span>
@@ -1563,11 +1563,11 @@ function SubagentBatchCard({
                   className="max-h-[520px] overflow-auto rounded-md border px-3 py-3"
                   style={{
                     borderColor: "var(--border-soft)",
-                    background: "rgba(255,255,255,0.018)",
+                    background: "var(--bg-subtle)",
                   }}
                 >
                   {task.error ? (
-                    <div className="text-xs" style={{ color: "#dc2626" }}>
+                    <div className="text-xs" style={{ color: "var(--color-danger)" }}>
                       {task.error}
                     </div>
                   ) : answer ? (
@@ -1588,7 +1588,7 @@ function SubagentBatchCard({
                 </div>
                 {task.sessionFile && (
                   <div
-                    className="mt-1 flex items-center gap-1 text-[10px]"
+                    className="mt-1 flex items-center gap-1 text-token-xs"
                     style={{ color: "var(--fg-faint)" }}
                     title={task.sessionFile}
                   >

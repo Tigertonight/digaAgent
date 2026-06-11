@@ -50,6 +50,7 @@
     "build:electron": "next build --webpack && node scripts/copy-standalone-assets.mjs",
     "start": "next start -p 3000",
     "lint": "eslint .",
+    "design-tokens:check": "node scripts/check-design-tokens.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "workflow:sandbox:check": "node scripts/check-workflow-sandbox.mjs",

@@ -64,9 +64,9 @@ export function ConfirmButton({
         armed
           ? {
               ...style,
-              borderColor: "rgba(248,113,113,0.55)",
-              background: "rgba(248,113,113,0.12)",
-              color: "#fca5a5",
+              borderColor: "var(--color-danger)",
+              background: "var(--color-danger-bg)",
+              color: "var(--color-danger)",
             }
           : style
       }

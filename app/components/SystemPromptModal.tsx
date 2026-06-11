@@ -19,7 +19,7 @@ export function SystemPromptModal({ text, onClose }: SystemPromptModalProps) {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.55)" }}
+      style={{ background: "var(--color-overlay)" }}
       onClick={onClose}
     >
       <div
@@ -69,7 +69,7 @@ export function SystemPromptModal({ text, onClose }: SystemPromptModalProps) {
             </div>
           ) : (
             <pre
-              className="text-[12px] whitespace-pre-wrap font-mono leading-[1.45]"
+              className="whitespace-pre-wrap font-mono text-token-sm leading-[1.45]"
               style={{ color: "var(--fg)" }}
             >
               {text}
