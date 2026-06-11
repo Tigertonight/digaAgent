@@ -1,5 +1,6 @@
 import ChatApp from "./ChatApp";
 import { listAllSessions } from "@/lib/sessions";
+import { ensureLongTaskScheduler } from "@/lib/tasks/scheduler";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +15,7 @@ export default async function Home({
     return <ChatApp initialSessions={[]} defaultCwd="/tmp/e2e-cwd" />;
   }
 
+  ensureLongTaskScheduler();
   const sessions = await listAllSessions();
   // Electron 打包后 process.cwd() 落在 .app/Contents/Resources/app.asar.unpacked/.next/standalone,
   // 既不是用户家目录、也会被 /api/files 的 MINI_PI_WEB_ROOT 守门拒掉。
