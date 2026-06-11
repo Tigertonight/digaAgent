@@ -25,7 +25,7 @@ export const ClarificationCard = memo(function ClarificationCard({
 
   const originBadge = part.taskTitle ? (
     <span
-      className="rounded px-1.5 py-0.5 text-[10px] font-medium"
+      className="rounded-token-sm px-1.5 py-0.5 text-token-xs font-medium"
       style={{
         background: "color-mix(in srgb, var(--accent) 16%, var(--bg-panel))",
         color: "var(--accent)",
@@ -56,7 +56,7 @@ export const ClarificationCard = memo(function ClarificationCard({
         </div>
         {part.customText && (
           <div
-            className="mt-1 ml-5 text-[11px] whitespace-pre-wrap"
+            className="ml-5 mt-1 whitespace-pre-wrap text-token-xs"
             style={{ color: "var(--text-dim)" }}
           >
             {part.customText}
@@ -126,10 +126,10 @@ export const ClarificationCard = memo(function ClarificationCard({
               <div className="flex items-center gap-2">
                 {recommended && (
                   <span
-                    className="rounded px-1.5 py-0.5 text-[10px] font-semibold"
+                    className="rounded-token-sm px-1.5 py-0.5 text-token-xs font-semibold"
                     style={{
                       background: "var(--accent)",
-                      color: "#fff",
+                      color: "var(--color-bg)",
                     }}
                   >
                     推荐
@@ -171,8 +171,8 @@ export const ClarificationCard = memo(function ClarificationCard({
             setCustomText("");
           }}
           disabled={!customText.trim()}
-          className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs text-white disabled:opacity-50"
-          style={{ background: "var(--accent)" }}
+          className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs disabled:opacity-50"
+          style={{ background: "var(--accent)", color: "var(--color-bg)" }}
         >
           <Send size={12} />
           发送

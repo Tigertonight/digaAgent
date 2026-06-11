@@ -7,7 +7,6 @@ const OWNER = "Tigertonight";
 const REPO = "digaAgent";
 const LATEST_RELEASE_URL = `https://api.github.com/repos/${OWNER}/${REPO}/releases/latest`;
 const RELEASES_URL = `https://github.com/${OWNER}/${REPO}/releases`;
-const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 let electronApp = null;
 let electronShell = null;
@@ -189,9 +188,7 @@ async function checkForUpdates({ manual = false } = {}) {
 
 function shouldAutoCheck() {
   const prefs = readPrefs();
-  if (prefs.autoCheckEnabled === false) return false;
-  if (!prefs.lastCheckedAt) return true;
-  return Date.now() - prefs.lastCheckedAt > CHECK_INTERVAL_MS;
+  return prefs.autoCheckEnabled !== false;
 }
 
 function checkOnStartup() {

@@ -126,7 +126,7 @@ export default function ImageLightbox() {
         position: "fixed",
         inset: 0,
         zIndex: 9999,
-        background: "rgba(0,0,0,0.85)",
+        background: "var(--image-lightbox-bg)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -146,9 +146,9 @@ export default function ImageLightbox() {
           justifyContent: "space-between",
           alignItems: "center",
           gap: 12,
-          color: "#fff",
-          fontSize: 12,
-          fontFamily: "var(--font-mono)",
+          color: "var(--image-lightbox-text)",
+          fontSize: "var(--text-sm)",
+          fontFamily: "var(--font-mono-stack)",
           pointerEvents: "auto",
         }}
       >
@@ -183,8 +183,8 @@ export default function ImageLightbox() {
           transformOrigin: "center center",
           transition: draggingRef.current ? "none" : "transform 0.12s ease",
           cursor: scale > 1 ? (draggingRef.current ? "grabbing" : "grab") : "zoom-in",
-          boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
-          borderRadius: 4,
+          boxShadow: "var(--image-lightbox-shadow)",
+          borderRadius: "var(--radius-xs)",
         }}
       />
 
@@ -196,9 +196,9 @@ export default function ImageLightbox() {
           left: 0,
           right: 0,
           textAlign: "center",
-          color: "rgba(255,255,255,0.55)",
-          fontSize: 11,
-          fontFamily: "var(--font-mono)",
+          color: "var(--image-lightbox-text-muted)",
+          fontSize: "var(--text-xs)",
+          fontFamily: "var(--font-mono-stack)",
           pointerEvents: "none",
         }}
       >
@@ -223,14 +223,14 @@ function ToolbarBtn({
       onClick={onClick}
       title={title}
       style={{
-        background: "rgba(255,255,255,0.12)",
-        border: "1px solid rgba(255,255,255,0.18)",
-        color: "#fff",
+        background: "var(--image-lightbox-control-bg)",
+        border: "1px solid var(--image-lightbox-control-border)",
+        color: "var(--image-lightbox-text)",
         cursor: "pointer",
-        fontSize: 12,
-        fontFamily: "var(--font-mono)",
+        fontSize: "var(--text-sm)",
+        fontFamily: "var(--font-mono-stack)",
         padding: "4px 10px",
-        borderRadius: 4,
+        borderRadius: "var(--radius-xs)",
         minWidth: 32,
       }}
     >

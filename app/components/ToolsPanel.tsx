@@ -192,7 +192,7 @@ export default function ToolsPanel({ agentId, onClose }: Props) {
         </span>
         <div className="flex items-center gap-1">
           <span
-            className="text-[10px]"
+            className="text-token-xs"
             style={{ color: "var(--fg-faint)" }}
             title="启用 / 总数"
           >
@@ -241,7 +241,7 @@ export default function ToolsPanel({ agentId, onClose }: Props) {
             type="button"
             onClick={enableAll}
             disabled={saving || tools.length === 0}
-            className="px-2 py-0.5 text-[11px] rounded border hover:opacity-80 disabled:opacity-50"
+            className="px-2 py-0.5 text-token-xs rounded border hover:opacity-80 disabled:opacity-50"
             style={{ borderColor: "var(--border)" }}
             title="启用全部工具"
           >
@@ -251,7 +251,7 @@ export default function ToolsPanel({ agentId, onClose }: Props) {
             type="button"
             onClick={disableAll}
             disabled={saving || activeCount === 0}
-            className="px-2 py-0.5 text-[11px] rounded border hover:opacity-80 disabled:opacity-50"
+            className="px-2 py-0.5 text-token-xs rounded border hover:opacity-80 disabled:opacity-50"
             style={{ borderColor: "var(--border)" }}
             title="禁用全部工具"
           >
@@ -261,7 +261,7 @@ export default function ToolsPanel({ agentId, onClose }: Props) {
             type="button"
             onClick={enableBuiltinOnly}
             disabled={saving}
-            className="px-2 py-0.5 text-[11px] rounded border hover:opacity-80 disabled:opacity-50"
+            className="px-2 py-0.5 text-token-xs rounded border hover:opacity-80 disabled:opacity-50"
             style={{ borderColor: "var(--border)" }}
             title="仅保留 builtin 工具"
           >
@@ -269,25 +269,25 @@ export default function ToolsPanel({ agentId, onClose }: Props) {
           </button>
           {saving && (
             <span
-              className="text-[10px] self-center"
+              className="text-token-xs self-center"
               style={{ color: "var(--fg-faint)" }}
             >
               保存中…
             </span>
           )}
         </div>
-        <div className="text-[10px]" style={{ color: "var(--fg-faint)" }}>
+        <div className="text-token-xs" style={{ color: "var(--fg-faint)" }}>
           切换在<b>下一轮</b>对话生效。
         </div>
       </div>
 
       {error && (
         <div
-          className="px-3 py-2 text-[11px] border-b"
+          className="px-3 py-2 text-token-xs border-b"
           style={{
-            color: "#fca5a5",
+            color: "var(--color-danger)",
             borderColor: "var(--border-soft)",
-            background: "rgba(220, 38, 38, 0.08)",
+            background: "var(--color-danger-bg)",
           }}
         >
           {error}
@@ -307,7 +307,7 @@ export default function ToolsPanel({ agentId, onClose }: Props) {
         {grouped.map(([src, list]) => (
           <section key={src} className="space-y-1">
             <div
-              className="text-[10px] uppercase tracking-wider px-1"
+              className="text-token-xs uppercase tracking-wider px-1"
               style={{ color: "var(--fg-faint)" }}
             >
               {src} · {list.length}
@@ -340,7 +340,7 @@ export default function ToolsPanel({ agentId, onClose }: Props) {
                       </div>
                       {t.description && (
                         <div
-                          className="text-[10px] leading-tight mt-0.5"
+                          className="text-token-xs leading-tight mt-0.5"
                           style={{ color: "var(--fg-muted)" }}
                         >
                           {t.description.length > 200
@@ -351,7 +351,7 @@ export default function ToolsPanel({ agentId, onClose }: Props) {
                       {t.sourceInfo?.scope &&
                         t.sourceInfo.scope !== "temporary" && (
                           <div
-                            className="text-[10px] mt-0.5"
+                            className="text-token-xs mt-0.5"
                             style={{ color: "var(--fg-faint)" }}
                           >
                             scope: {t.sourceInfo.scope}

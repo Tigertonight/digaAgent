@@ -237,7 +237,7 @@ function DirNode({
               e.stopPropagation();
               void load();
             }}
-            className="ml-auto text-[10px] px-1"
+            className="ml-auto px-1 text-token-xs"
             style={{ color: "var(--fg-faint)" }}
             title="reload"
           >
@@ -249,7 +249,7 @@ function DirNode({
         <div>
           {loading && (
             <div
-              className="text-[10px] px-2 py-0.5"
+              className="px-2 py-0.5 text-token-xs"
               style={{ ...indent, paddingLeft: (level + 1) * 12, color: "var(--fg-faint)" }}
             >
               loading…
@@ -257,7 +257,7 @@ function DirNode({
           )}
           {err && (
             <div
-              className="text-[10px] px-2 py-0.5 text-red-400"
+              className="px-2 py-0.5 text-token-xs text-[color:var(--color-danger)]"
               style={{ paddingLeft: (level + 1) * 12 }}
             >
               {err}
@@ -317,7 +317,7 @@ function DirNode({
                         ev.stopPropagation();
                         onPickPath(child);
                       }}
-                      className="px-1 text-[10px] opacity-70 hover:opacity-100"
+                      className="px-1 text-token-xs opacity-70 hover:opacity-100"
                       style={{ color: "var(--fg-faint)" }}
                       title="Insert path into chat"
                     >
@@ -329,7 +329,7 @@ function DirNode({
             })}
           {entries && entries.length === 0 && (
             <div
-              className="text-[10px] px-2 py-0.5"
+              className="px-2 py-0.5 text-token-xs"
               style={{ paddingLeft: (level + 1) * 12, color: "var(--fg-faint)" }}
             >
               (empty)
@@ -360,7 +360,7 @@ function SearchResultList({
   if (loading && hits.length === 0) {
     return (
       <div
-        className="px-2 py-1 text-[11px]"
+        className="px-2 py-1 text-token-xs"
         style={{ color: "var(--fg-faint)" }}
       >
         searching…
@@ -370,7 +370,7 @@ function SearchResultList({
   if (hits.length === 0) {
     return (
       <div
-        className="px-2 py-1 text-[11px]"
+        className="px-2 py-1 text-token-xs"
         style={{ color: "var(--fg-faint)" }}
       >
         无匹配 “{query}”
@@ -397,7 +397,7 @@ function SearchResultList({
             <span className="truncate">{h.name}</span>
           </span>
           <span
-            className="truncate text-[10px]"
+            className="truncate text-token-xs"
             style={{ color: "var(--fg-faint)", paddingLeft: 14 }}
           >
             {h.path}
@@ -406,7 +406,7 @@ function SearchResultList({
       ))}
       {truncated && (
         <div
-          className="px-2 py-1 text-[10px]"
+          className="px-2 py-1 text-token-xs"
           style={{ color: "var(--fg-faint)" }}
         >
           只显示前 200 条,精确关键词以缩小范围
@@ -619,7 +619,7 @@ function FileViewer({
           </div>
         )}
         {err && (
-          <div className="p-3 text-xs text-red-400">{err}</div>
+          <div className="p-3 text-xs text-[color:var(--color-danger)]">{err}</div>
         )}
         {!loading && !err && file && !editing && (
           isImage ? (
@@ -662,7 +662,7 @@ function FileViewer({
                 style={{ width: "100%", maxWidth: 480 }}
               />
               <div
-                className="text-[10px]"
+                className="text-token-xs"
                 style={{ color: "var(--fg-faint)" }}
               >
                 {file.mime} · {file.size}B
@@ -677,12 +677,12 @@ function FileViewer({
                 width: "100%",
                 height: "100%",
                 border: "none",
-                background: "#fff",
+                background: "var(--bg)",
               }}
             />
           ) : isText ? (
             language ? (
-              <div className="p-2 text-[12px]">
+              <div className="p-2 text-token-sm">
                 <Markdown
                   size="small"
                   text={`\`\`\`${language}\n${text}\n\`\`\``}
@@ -692,8 +692,8 @@ function FileViewer({
               <pre
                 className={
                   wrap
-                    ? "p-3 text-[12px] whitespace-pre-wrap break-words"
-                    : "p-3 text-[12px] whitespace-pre"
+                    ? "p-3 text-token-sm whitespace-pre-wrap break-words"
+                    : "p-3 text-token-sm whitespace-pre"
                 }
                 style={{ color: "var(--fg)" }}
               >
@@ -710,7 +710,7 @@ function FileViewer({
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            className="w-full h-full p-2 text-[12px] font-mono outline-none resize-none"
+            className="w-full h-full p-2 text-token-sm font-mono outline-none resize-none"
             style={{
               background: "var(--bg-panel)",
               color: "var(--fg)",
@@ -774,7 +774,7 @@ function HtmlPreviewViewer({
       <div className="flex-1 min-h-0 overflow-auto">
         {showSource ? (
           <pre
-            className="p-3 text-[12px] whitespace-pre-wrap break-words"
+            className="p-3 text-token-sm whitespace-pre-wrap break-words"
             style={{ color: "var(--fg)" }}
           >
             {content}
@@ -788,7 +788,7 @@ function HtmlPreviewViewer({
               width: "100%",
               height: "100%",
               border: "none",
-              background: "#fff",
+              background: "var(--browser-preview-bg)",
             }}
           />
         )}
@@ -882,8 +882,8 @@ function UrlPreviewViewer({
               href={href}
               target="_blank"
               rel="noopener noreferrer"
-              className="px-3 py-1 rounded text-white"
-              style={{ background: "var(--accent)" }}
+              className="rounded px-3 py-1"
+              style={{ background: "var(--accent)", color: "var(--color-bg)" }}
             >
               在浏览器打开
             </a>
@@ -902,7 +902,7 @@ function UrlPreviewViewer({
               width: "100%",
               height: "100%",
               border: "none",
-              background: "#fff",
+              background: "var(--browser-preview-bg)",
             }}
           />
         )}
@@ -1361,7 +1361,7 @@ export default function FileBrowser({
               if (e.key === "Enter") applyDraft();
             }}
             onBlur={applyDraft}
-            className="w-full text-[11px] px-1 py-0.5 rounded border outline-none"
+            className="w-full rounded border px-1 py-0.5 text-token-xs outline-none"
             style={{
               background: "var(--bg-panel)",
               borderColor: "var(--border)",
@@ -1385,7 +1385,7 @@ export default function FileBrowser({
                   setPathDraft(p);
                   pushRecentRoot(p);
                 }}
-                className="px-1.5 py-0.5 text-[10px] rounded border hover:bg-[color:var(--bg-hover)] truncate max-w-[180px]"
+                className="max-w-[180px] truncate rounded border px-1.5 py-0.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
                 style={{
                   borderColor: "var(--border)",
                   color: p === root ? "var(--fg)" : "var(--fg-muted)",
@@ -1408,7 +1408,7 @@ export default function FileBrowser({
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               placeholder="搜索文件名(≥2 字符递归)…"
-              className="w-full text-[11px] px-1 py-0.5 rounded border outline-none"
+              className="w-full rounded border px-1 py-0.5 text-token-xs outline-none"
               style={{
                 background: "var(--bg-panel)",
                 borderColor: "var(--border)",

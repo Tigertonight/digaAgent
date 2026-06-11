@@ -5,12 +5,15 @@ import Link from "next/link";
 import {
   Archive,
   ArrowLeft,
-  Bell,
+  AlertTriangle,
   CalendarClock,
   CheckCircle2,
   Clock3,
+  ClipboardCheck,
   Inbox,
+  ListChecks,
   Loader2,
+  Network,
   Pause,
   Play,
   Plus,
@@ -18,6 +21,7 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-react";
+import { Badge, Button, FieldInput, StatusPill } from "@/app/components/DesignPrimitives";
 import type {
   LongTaskCadence,
   LongTaskDashboard,
@@ -25,10 +29,12 @@ import type {
   LongTaskRun,
   LongTaskStatus,
   TaskFinding,
+  TaskFindingSeverity,
   TaskFindingStatus,
 } from "@/lib/tasks/types";
 import type { ProvidersResponse } from "@/lib/types";
 import { curateProviderModels } from "@/lib/default-model";
+import { userFacingMessage } from "@/lib/user-facing-error";
 
 type Draft = {
   title: string;
@@ -66,6 +72,23 @@ const STATUS_LABEL: Record<LongTaskStatus, string> = {
   failed: "失败",
   paused: "已暂停",
   archived: "已归档",
+};
+
+const STATUS_HELP: Record<LongTaskStatus, string> = {
+  idle: "还没有安排自动运行，可以手动启动。",
+  scheduled: "任务已布置，会按节奏自动检查。",
+  running: "Agent 正在处理这个任务。",
+  waiting_user: "需要你确认、授权或补充信息。",
+  completed: "最近一次运行已经完成。",
+  failed: "最近一次运行没有完成，需要查看原因。",
+  paused: "任务已暂停，不会自动运行。",
+  archived: "任务已归档，不再显示为活跃任务。",
+};
+
+const CADENCE_HELP: Record<LongTaskCadence, string> = {
+  manual: "只在你点击运行时执行",
+  daily: "每天自动检查一次",
+  weekly: "每周自动检查一次",
 };
 
 function nowDraft(): Draft {
@@ -109,13 +132,37 @@ function formatTime(value?: number) {
 }
 
 function statusTone(status: LongTaskStatus) {
-  if (status === "running") return "text-blue-600 dark:text-blue-300";
-  if (status === "waiting_user") return "text-amber-600 dark:text-amber-300";
-  if (status === "failed") return "text-red-600 dark:text-red-300";
+  if (status === "running") return "text-[color:var(--color-info)]";
+  if (status === "waiting_user") return "text-[color:var(--color-warning)]";
+  if (status === "failed") return "text-[color:var(--color-danger)]";
   if (status === "completed" || status === "scheduled") {
-    return "text-emerald-600 dark:text-emerald-300";
+    return "text-[color:var(--color-success)]";
   }
   return "text-[color:var(--text-muted)]";
+}
+
+function statusBadgeTone(status: LongTaskStatus): "default" | "success" | "warning" | "danger" | "info" {
+  if (status === "running") return "info";
+  if (status === "waiting_user") return "warning";
+  if (status === "failed") return "danger";
+  if (status === "completed" || status === "scheduled") return "success";
+  return "default";
+}
+
+function findingTone(severity: TaskFindingSeverity): "info" | "warning" | "danger" {
+  if (severity === "critical") return "danger";
+  if (severity === "warning") return "warning";
+  return "info";
+}
+
+function severityLabel(severity: TaskFindingSeverity) {
+  if (severity === "critical") return "高优先级";
+  if (severity === "warning") return "需关注";
+  return "信息";
+}
+
+function latestRunOf(runs: LongTaskRun[]) {
+  return [...runs].sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
 }
 
 export default function TaskWorkbench() {
@@ -149,6 +196,13 @@ export default function TaskWorkbench() {
   const selectedFindingTask = selectedFinding
     ? dashboard.tasks.find((task) => task.id === selectedFinding.taskId) ?? null
     : null;
+  const latestRun = latestRunOf(selectedRuns);
+  const activeTaskCount = dashboard.tasks.filter(
+    (task) => task.status !== "archived"
+  ).length;
+  const waitingTaskCount = dashboard.tasks.filter(
+    (task) => task.status === "waiting_user"
+  ).length;
   const curatedProviders = curateProviderModels(providers).filter((p) => p.hasAuth);
   const currentProvider =
     curatedProviders.find((provider) => provider.provider === draft.provider) ??
@@ -202,7 +256,7 @@ export default function TaskWorkbench() {
         });
       }
     } catch (e) {
-      setError((e as Error).message);
+      setError(userFacingMessage(e, { context: "settings" }));
     } finally {
       setLoading(false);
     }
@@ -242,7 +296,7 @@ export default function TaskWorkbench() {
             setDraft(draftFromTask(json.task));
           }
         } catch (e) {
-          setError((e as Error).message);
+          setError(userFacingMessage(e, { context: "settings" }));
         }
       })();
     });
@@ -279,73 +333,60 @@ export default function TaskWorkbench() {
 
   return (
     <main className="flex h-screen min-w-0 bg-[color:var(--bg)] text-[color:var(--text)]">
-      <aside className="flex w-[330px] shrink-0 flex-col border-r border-[color:var(--border)] bg-[color:var(--bg-panel)]">
-        <div className="border-b border-[color:var(--border)] p-4">
+      <aside className="flex w-[360px] shrink-0 flex-col border-r border-[color:var(--border)] bg-[color:var(--bg-panel)]">
+        <div className="border-b border-[color:var(--border)] px-5 py-4">
           <Link
             href="/"
-            className="mb-4 inline-flex items-center gap-2 text-sm text-[color:var(--text-muted)] hover:text-[color:var(--text)]"
+            className="mb-5 inline-flex items-center gap-2 text-token-ui text-[color:var(--text-muted)] hover:text-[color:var(--text)]"
           >
             <ArrowLeft size={16} />
             返回应用
           </Link>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h1 className="text-xl font-semibold">长期任务</h1>
-              <p className="mt-1 text-sm text-[color:var(--text-muted)]">
-                盯事、跑事、汇报事，等你决策。
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h1 className="text-token-title font-semibold">任务指挥台</h1>
+              <p className="mt-1 text-token-ui leading-5 text-[color:var(--text-muted)]">
+                把需要持续关注的工作交给 Agent，结果和阻塞点回到这里处理。
               </p>
+            </div>
+            <Button onClick={newTask} size="sm" variant="outline" leading={<Plus size={15} />}>
+              新建
+            </Button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 border-b border-[color:var(--border)] p-3">
+          <Metric label="活跃任务" value={activeTaskCount} />
+          <Metric label="待处理" value={dashboard.inboxCount} tone="text-[color:var(--color-warning)]" />
+          <Metric label="待运行" value={dashboard.dueTasks.length} tone="text-[color:var(--color-info)]" />
+          <Metric label="需确认" value={waitingTaskCount} tone="text-[color:var(--color-warning)]" />
+        </div>
+
+        <div className="border-b border-[color:var(--border)] p-3">
+          <SchedulerCard dashboard={dashboard} />
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-auto p-3">
+          <div className="mb-2 flex items-center justify-between px-1">
+            <div className="text-token-xs font-semibold uppercase tracking-normal text-[color:var(--text-dim)]">
+              任务队列
             </div>
             <button
               type="button"
-              onClick={newTask}
-              className="inline-flex h-9 w-9 items-center justify-center rounded border border-[color:var(--border)] bg-[color:var(--bg)]"
-              title="新建任务"
+              onClick={() => void loadAll()}
+              className="inline-flex items-center gap-1 text-token-xs text-[color:var(--text-muted)] hover:text-[color:var(--text)]"
             >
-              <Plus size={17} />
+              <RefreshCw size={12} />
+              刷新
             </button>
           </div>
-        </div>
-
-        <div className="grid grid-cols-3 gap-2 border-b border-[color:var(--border)] p-3 text-center text-xs">
-          <Metric label="任务" value={dashboard.tasks.length} />
-          <Metric label="待处理" value={dashboard.inboxCount} tone="text-amber-600 dark:text-amber-300" />
-          <Metric label="到期" value={dashboard.dueTasks.length} tone="text-blue-600 dark:text-blue-300" />
-        </div>
-
-        <div className="border-b border-[color:var(--border)] px-3 py-2 text-xs text-[color:var(--text-muted)]">
-          <div className="flex items-center justify-between gap-2 rounded border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-3 py-2">
-            <span className="inline-flex items-center gap-2">
-              <span
-                className={
-                  dashboard.scheduler?.enabled
-                    ? "text-emerald-500"
-                    : "text-[color:var(--text-muted)]"
-                }
-              >
-                ●
-              </span>
-              自动盯事
-            </span>
-            <span className="truncate">
-              {dashboard.scheduler?.running
-                ? "检查中"
-                : dashboard.scheduler?.lastCheckedAt
-                  ? `上次 ${formatTime(dashboard.scheduler.lastCheckedAt)}`
-                  : "待启动"}
-            </span>
-          </div>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-auto p-2">
           {loading ? (
-            <div className="flex items-center gap-2 p-3 text-sm text-[color:var(--text-muted)]">
+            <div className="flex items-center gap-2 rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-3 text-token-ui text-[color:var(--text-muted)]">
               <Loader2 size={14} className="animate-spin" />
               正在加载任务…
             </div>
           ) : dashboard.tasks.length === 0 ? (
-            <div className="p-4 text-sm text-[color:var(--text-muted)]">
-              还没有长期任务。创建一个任务，让 Diga 定期帮你检查。
-            </div>
+            <EmptyLine text="还没有任务。新建一个任务，让 Agent 按你的节奏持续检查。" />
           ) : (
             dashboard.tasks.map((task) => (
               <button
@@ -355,28 +396,33 @@ export default function TaskWorkbench() {
                   setSelectedId(task.id);
                   setDraft(draftFromTask(task));
                 }}
-                className={`mb-2 block w-full rounded border p-3 text-left ${
+                className={`mb-2 block w-full rounded-token border px-3 py-3 text-left transition-colors ${
                   selected?.id === task.id
                     ? "border-[color:var(--accent)] bg-[color:var(--bg-selected)]"
                     : "border-[color:var(--border-soft)] hover:bg-[color:var(--bg-hover)]"
                 }`}
               >
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className={`text-xs ${statusTone(task.status)}`}>
-                    ●
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                <div className="flex min-w-0 items-start gap-2">
+                  <span className={`mt-1 text-token-xs ${statusTone(task.status)}`}>●</span>
+                  <span className="min-w-0 flex-1 truncate text-token-ui font-semibold">
                     {task.title}
                   </span>
+                  <Badge tone={statusBadgeTone(task.status)} className="shrink-0">
+                    {STATUS_LABEL[task.status]}
+                  </Badge>
                 </div>
-                <div className="mt-1 flex items-center gap-2 text-xs text-[color:var(--text-muted)]">
+                <div className="mt-2 flex min-w-0 items-center gap-2 text-token-xs text-[color:var(--text-muted)]">
                   <span>{CADENCE_LABEL[task.cadence]}</span>
                   <span>·</span>
-                  <span>{STATUS_LABEL[task.status]}</span>
+                  <span className="truncate">
+                    {task.nextRunAt ? `下次 ${formatTime(task.nextRunAt)}` : "手动触发"}
+                  </span>
                 </div>
-                <div className="mt-1 truncate text-xs text-[color:var(--text-muted)]">
-                  下次：{task.nextRunAt ? formatTime(task.nextRunAt) : "手动触发"}
-                </div>
+                {task.lastSummary || task.failureReason ? (
+                  <div className="mt-2 line-clamp-2 text-token-xs leading-5 text-[color:var(--text-dim)]">
+                    {task.failureReason || task.lastSummary}
+                  </div>
+                ) : null}
               </button>
             ))
           )}
@@ -384,35 +430,37 @@ export default function TaskWorkbench() {
       </aside>
 
       <section className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center justify-between border-b border-[color:var(--border)] bg-[color:var(--bg-panel)] px-5 py-3">
+        <div className="flex items-center justify-between border-b border-[color:var(--border)] bg-[color:var(--bg-panel)] px-6 py-4">
           <div className="min-w-0">
-            <div className="text-sm text-[color:var(--text-muted)]">任务控制台</div>
-            <div className="truncate text-lg font-semibold">
+            <div className="text-token-ui text-[color:var(--text-muted)]">任务控制台</div>
+            <div className="mt-0.5 truncate text-token-title font-semibold">
               {selected ? selected.title : "新建长期任务"}
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button className="task-btn" onClick={() => void loadAll()} type="button">
-              <RefreshCw size={15} />
+            <Button onClick={() => void loadAll()} type="button" variant="outline" leading={<RefreshCw size={15} />}>
               刷新
-            </button>
+            </Button>
             {selected ? (
               <>
-                <button
-                  className="task-btn task-btn-primary"
+                <Button
+                  variant="solid"
+                  tone="accent"
                   onClick={() => taskAction({ type: "run", id: selected.id })}
                   disabled={isPending || selected.status === "running"}
                   type="button"
+                  leading={
+                    selected.status === "running" ? (
+                      <Loader2 size={15} className="animate-spin" />
+                    ) : (
+                      <Play size={15} />
+                    )
+                  }
                 >
-                  {selected.status === "running" ? (
-                    <Loader2 size={15} className="animate-spin" />
-                  ) : (
-                    <Play size={15} />
-                  )}
                   立即运行
-                </button>
-                <button
-                  className="task-btn"
+                </Button>
+                <Button
+                  variant="outline"
                   onClick={() =>
                     taskAction({
                       type: "update",
@@ -428,25 +476,25 @@ export default function TaskWorkbench() {
                     })
                   }
                   type="button"
+                  leading={<Pause size={15} />}
                 >
-                  <Pause size={15} />
                   {selected.status === "paused" ? "恢复" : "暂停"}
-                </button>
+                </Button>
               </>
             ) : null}
           </div>
         </div>
 
         {error ? (
-          <div className="border-b border-red-500/30 bg-red-500/10 px-5 py-2 text-sm text-red-700 dark:text-red-200">
+          <div className="border-b border-[color:var(--color-danger)] bg-[color:var(--color-danger-bg)] px-5 py-2 text-token-body text-[color:var(--color-danger)]">
             {error}
           </div>
         ) : null}
 
         {selected?.status === "waiting_user" ? (
-          <div className="border-b border-amber-500/30 bg-amber-500/10 px-5 py-3 text-sm text-amber-800 dark:text-amber-100">
+          <div className="border-b border-[color:var(--color-warning)] bg-[color:var(--color-warning-bg)] px-5 py-3 text-token-body text-[color:var(--color-warning)]">
             <div className="font-medium">这个任务正在等待你决策</div>
-            <div className="mt-1 text-amber-700 dark:text-amber-200">
+            <div className="mt-1 text-[color:var(--color-warning)]">
               {selectedRuns[0]?.waitingReason ||
                 selectedRuns[0]?.summary ||
                 "请回到对应会话处理授权、确认或补充问题。"}
@@ -454,148 +502,190 @@ export default function TaskWorkbench() {
           </div>
         ) : null}
 
-        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_360px] overflow-hidden">
+        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_380px] overflow-hidden">
           <div className="min-w-0 overflow-auto px-6 py-5">
-            <section className="max-w-4xl">
+            <section className="max-w-5xl">
+              <TaskOverview
+                selected={selected}
+                draft={draft}
+                latestRun={latestRun}
+                selectedFindings={selectedFindings}
+              />
+            </section>
+
+            <section className="mt-6 max-w-5xl">
               <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-base font-semibold">任务配置</h2>
-                <button
-                  className="task-btn task-btn-primary"
+                <div>
+                  <h2 className="text-token-title font-semibold">布置任务</h2>
+                  <p className="mt-1 text-token-ui text-[color:var(--text-muted)]">
+                    用目标、节奏和安全边界定义 Agent 该如何持续工作。
+                  </p>
+                </div>
+                <Button
+                  variant="solid"
+                  tone="accent"
                   type="button"
                   onClick={saveTask}
                   disabled={isPending}
+                  leading={isPending ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
                 >
-                  {isPending ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />}
                   保存任务
-                </button>
+                </Button>
               </div>
-              <div className="grid gap-4">
-                <Field label="任务名称">
-                  <input
-                    className="task-input"
-                    value={draft.title}
-                    onChange={(e) => setDraft((cur) => ({ ...cur, title: e.target.value }))}
-                    placeholder="例如：每日检查 CI 和高优先级反馈"
-                  />
-                </Field>
-                <Field label="任务目标">
-                  <textarea
-                    className="task-input min-h-[150px] resize-y"
-                    value={draft.prompt}
-                    onChange={(e) => setDraft((cur) => ({ ...cur, prompt: e.target.value }))}
-                    placeholder="告诉 Diga 需要持续关注什么、什么情况下需要汇报、什么时候等待你确认。"
-                  />
-                </Field>
-                <div className="grid grid-cols-2 gap-4">
-                  <Field label="项目路径">
-                    <input
-                      className="task-input"
-                      value={draft.projectPath}
-                      onChange={(e) =>
-                        setDraft((cur) => ({ ...cur, projectPath: e.target.value }))
-                      }
-                    />
-                  </Field>
-                  <Field label="运行频率">
-                    <select
-                      className="task-input"
-                      value={draft.cadence}
-                      onChange={(e) =>
+              <div className="space-y-4">
+                <TaskFormSection
+                  index="1"
+                  title="交代任务"
+                  description="告诉 Agent 需要长期关注什么、什么时候汇报，以及哪些情况必须等你决策。"
+                >
+                  <div className="grid gap-4">
+                    <Field label="任务名称">
+                      <FieldInput
+                        className="w-full"
+                        value={draft.title}
+                        onChange={(e) => setDraft((cur) => ({ ...cur, title: e.target.value }))}
+                        placeholder="例如：每日检查 CI 和高优先级反馈"
+                      />
+                    </Field>
+                    <Field label="任务目标">
+                      <textarea
+                        className="w-full resize-y rounded-[var(--field-radius)] border border-[color:var(--color-border)] bg-[color:var(--color-bg)] px-3 py-2 text-token-body text-[color:var(--color-text)] outline-none placeholder:text-[color:var(--color-text-dim)] focus:border-[color:var(--color-accent)]"
+                        style={{ minHeight: 150 }}
+                        value={draft.prompt}
+                        onChange={(e) => setDraft((cur) => ({ ...cur, prompt: e.target.value }))}
+                        placeholder="告诉 Diga 需要持续关注什么、什么情况下需要汇报、什么时候等待你确认。"
+                      />
+                    </Field>
+                    <Field label="工作目录">
+                      <FieldInput
+                        className="w-full"
+                        value={draft.projectPath}
+                        onChange={(e) =>
+                          setDraft((cur) => ({ ...cur, projectPath: e.target.value }))
+                        }
+                        placeholder="/path/to/project"
+                      />
+                    </Field>
+                  </div>
+                </TaskFormSection>
+
+                <TaskFormSection
+                  index="2"
+                  title="运行方式"
+                  description="选择任务节奏和模型。手动任务适合一次性检查，定期任务适合持续盯进展。"
+                >
+                  <div className="grid grid-cols-3 gap-4">
+                    <Field label="运行频率">
+                      <SelectField
+                        value={draft.cadence}
+                        onChange={(e) =>
+                          setDraft((cur) => ({
+                            ...cur,
+                            cadence: e.target.value as LongTaskCadence,
+                          }))
+                        }
+                      >
+                        <option value="manual">手动</option>
+                        <option value="daily">每天</option>
+                        <option value="weekly">每周</option>
+                      </SelectField>
+                      <div className="mt-1 text-token-xs text-[color:var(--text-dim)]">
+                        {CADENCE_HELP[draft.cadence]}
+                      </div>
+                    </Field>
+                    <Field label="模型服务商">
+                      <SelectField
+                        value={draft.provider}
+                        onChange={(e) => {
+                          const provider = curatedProviders.find(
+                            (item) => item.provider === e.target.value
+                          );
+                          setDraft((cur) => ({
+                            ...cur,
+                            provider: e.target.value,
+                            modelId: provider?.models[0]?.id ?? "",
+                          }));
+                        }}
+                      >
+                        {curatedProviders.map((provider) => (
+                          <option key={provider.provider} value={provider.provider}>
+                            {provider.displayName || provider.provider}
+                          </option>
+                        ))}
+                      </SelectField>
+                    </Field>
+                    <Field label="模型">
+                      <SelectField
+                        value={draft.modelId}
+                        onChange={(e) =>
+                          setDraft((cur) => ({ ...cur, modelId: e.target.value }))
+                        }
+                      >
+                        {(currentProvider?.models ?? []).map((model) => (
+                          <option key={model.id} value={model.id}>
+                            {model.name || model.id}
+                          </option>
+                        ))}
+                      </SelectField>
+                    </Field>
+                  </div>
+                </TaskFormSection>
+
+                <TaskFormSection
+                  index="3"
+                  title="安全边界"
+                  description="长期任务可以自己跑，但写文件、联网和长时间执行必须有清晰边界。"
+                >
+                  <div className="grid grid-cols-3 gap-3">
+                    <ToggleField
+                      icon={<ShieldCheck size={16} />}
+                      title="写入前确认"
+                      description="修改代码或文件前先等你允许。"
+                      checked={draft.requireApprovalBeforeWrite}
+                      onChange={(checked) =>
                         setDraft((cur) => ({
                           ...cur,
-                          cadence: e.target.value as LongTaskCadence,
-                        }))
-                      }
-                    >
-                      <option value="manual">手动</option>
-                      <option value="daily">每天</option>
-                      <option value="weekly">每周</option>
-                    </select>
-                  </Field>
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <Field label="模型服务">
-                    <select
-                      className="task-input"
-                      value={draft.provider}
-                      onChange={(e) => {
-                        const provider = curatedProviders.find(
-                          (item) => item.provider === e.target.value
-                        );
-                        setDraft((cur) => ({
-                          ...cur,
-                          provider: e.target.value,
-                          modelId: provider?.models[0]?.id ?? "",
-                        }));
-                      }}
-                    >
-                      {curatedProviders.map((provider) => (
-                        <option key={provider.provider} value={provider.provider}>
-                          {provider.displayName || provider.provider}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                  <Field label="模型">
-                    <select
-                      className="task-input"
-                      value={draft.modelId}
-                      onChange={(e) =>
-                        setDraft((cur) => ({ ...cur, modelId: e.target.value }))
-                      }
-                    >
-                      {(currentProvider?.models ?? []).map((model) => (
-                        <option key={model.id} value={model.id}>
-                          {model.name || model.id}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                </div>
-                <div className="grid grid-cols-3 gap-3">
-                  <ToggleField
-                    icon={<ShieldCheck size={16} />}
-                    title="写入前确认"
-                    checked={draft.requireApprovalBeforeWrite}
-                    onChange={(checked) =>
-                      setDraft((cur) => ({
-                        ...cur,
-                        requireApprovalBeforeWrite: checked,
-                      }))
-                    }
-                  />
-                  <ToggleField
-                    icon={<Bell size={16} />}
-                    title="联网前确认"
-                    checked={draft.requireApprovalBeforeNetwork}
-                    onChange={(checked) =>
-                      setDraft((cur) => ({
-                        ...cur,
-                        requireApprovalBeforeNetwork: checked,
-                      }))
-                    }
-                  />
-                  <Field label="最长运行">
-                    <input
-                      className="task-input"
-                      type="number"
-                      min={5}
-                      max={1440}
-                      value={draft.maxDurationMinutes}
-                      onChange={(e) =>
-                        setDraft((cur) => ({
-                          ...cur,
-                          maxDurationMinutes: Number(e.target.value),
+                          requireApprovalBeforeWrite: checked,
                         }))
                       }
                     />
-                  </Field>
-                </div>
+                    <ToggleField
+                      icon={<Network size={16} />}
+                      title="联网前确认"
+                      description="访问外部网络前先等你允许。"
+                      checked={draft.requireApprovalBeforeNetwork}
+                      onChange={(checked) =>
+                        setDraft((cur) => ({
+                          ...cur,
+                          requireApprovalBeforeNetwork: checked,
+                        }))
+                      }
+                    />
+                    <Field label="最长运行">
+                      <FieldInput
+                        className="w-full"
+                        type="number"
+                        min={5}
+                        max={1440}
+                        value={draft.maxDurationMinutes}
+                        onChange={(e) =>
+                          setDraft((cur) => ({
+                            ...cur,
+                            maxDurationMinutes: Number(e.target.value),
+                          }))
+                        }
+                      />
+                      <div className="mt-1 text-token-xs text-[color:var(--text-dim)]">
+                        超时后任务会停止并留下运行记录。
+                      </div>
+                    </Field>
+                  </div>
+                </TaskFormSection>
               </div>
             </section>
 
-            <section className="mt-8 max-w-4xl">
-              <h2 className="mb-3 text-base font-semibold">运行历史</h2>
+            <section className="mt-8 max-w-5xl">
+              <h2 className="mb-3 text-token-title font-semibold">运行历史</h2>
               {selectedRuns.length === 0 ? (
                 <EmptyLine text="这个任务还没有运行记录。" />
               ) : (
@@ -611,21 +701,24 @@ export default function TaskWorkbench() {
           <aside className="min-h-0 overflow-auto border-l border-[color:var(--border)] bg-[color:var(--bg-panel)] p-4">
             <div className="mb-4 flex items-center justify-between">
               <div>
-                <h2 className="text-base font-semibold">收件箱</h2>
-                <p className="text-xs text-[color:var(--text-muted)]">
+                <h2 className="text-token-title font-semibold">决策收件箱</h2>
+                <p className="mt-1 text-token-xs text-[color:var(--text-muted)]">
                   只放需要你处理或确认的事项。
                 </p>
               </div>
-              <Inbox size={18} className="text-[color:var(--text-muted)]" />
+              <span className="inline-flex h-9 w-9 items-center justify-center rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg)] text-[color:var(--text-muted)]">
+                <Inbox size={17} />
+              </span>
             </div>
-            <button
+            <Button
               type="button"
               onClick={() => taskAction({ type: "run_due" })}
-              className="mb-4 flex w-full items-center justify-center gap-2 rounded border border-[color:var(--border)] bg-[color:var(--bg)] px-3 py-2 text-sm"
+              className="mb-4 w-full"
+              variant="outline"
+              leading={<CalendarClock size={15} />}
             >
-              <CalendarClock size={15} />
               运行到期任务
-            </button>
+            </Button>
             {inbox.length === 0 ? (
               <EmptyLine text="当前没有需要你处理的新事项。" />
             ) : (
@@ -649,7 +742,7 @@ export default function TaskWorkbench() {
 
             {selectedFindings.length > inbox.length ? (
               <div className="mt-8">
-                <h3 className="mb-2 text-sm font-semibold">当前任务已处理事项</h3>
+                <h3 className="mb-2 text-token-ui font-semibold">当前任务已处理事项</h3>
                 <div className="space-y-2">
                   {selectedFindings
                     .filter((finding) => finding.status !== "unread")
@@ -689,17 +782,19 @@ export default function TaskWorkbench() {
             ) : null}
 
             {selected ? (
-              <button
+              <Button
                 type="button"
                 onClick={() => {
                   taskAction({ type: "delete", id: selected.id });
                   newTask();
                 }}
-                className="mt-8 flex w-full items-center justify-center gap-2 rounded border border-red-500/40 px-3 py-2 text-sm text-red-600 dark:text-red-300"
+                className="mt-8 w-full"
+                variant="outline"
+                tone="danger"
+                leading={<Trash2 size={15} />}
               >
-                <Trash2 size={15} />
                 删除当前任务
-              </button>
+              </Button>
             ) : null}
           </aside>
         </div>
@@ -718,17 +813,157 @@ function Metric({
   tone?: string;
 }) {
   return (
-    <div className="rounded border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-2 py-2">
-      <div className={`text-lg font-semibold ${tone}`}>{value}</div>
-      <div className="text-[11px] text-[color:var(--text-muted)]">{label}</div>
+    <div className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-3 py-2">
+      <div className={`text-token-title font-semibold ${tone}`}>{value}</div>
+      <div className="mt-0.5 text-token-xs text-[color:var(--text-muted)]">{label}</div>
     </div>
+  );
+}
+
+function SchedulerCard({ dashboard }: { dashboard: LongTaskDashboard }) {
+  const scheduler = dashboard.scheduler;
+  const enabled = Boolean(scheduler?.enabled);
+  const label = scheduler?.running
+    ? "正在检查"
+    : scheduler?.lastCheckedAt
+      ? `上次 ${formatTime(scheduler.lastCheckedAt)}`
+      : "待启动";
+  return (
+    <div className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-3 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-token-ui font-semibold">
+            <ListChecks size={15} className="text-[color:var(--text-muted)]" />
+            自动检查
+          </div>
+          <div className="mt-1 truncate text-token-xs text-[color:var(--text-muted)]">
+            {label}
+          </div>
+        </div>
+        <StatusPill tone={enabled ? "success" : "default"}>
+          {enabled ? "已开启" : "未开启"}
+        </StatusPill>
+      </div>
+      {scheduler?.lastError ? (
+        <div className="mt-2 line-clamp-2 text-token-xs text-[color:var(--color-danger)]">
+          {scheduler.lastError}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function TaskOverview({
+  selected,
+  draft,
+  latestRun,
+  selectedFindings,
+}: {
+  selected: LongTaskDefinition | null;
+  draft: Draft;
+  latestRun: LongTaskRun | null;
+  selectedFindings: TaskFinding[];
+}) {
+  const openFindings = selectedFindings.filter((finding) => finding.status === "unread");
+  const status = selected?.status ?? "idle";
+  return (
+    <div className="grid grid-cols-4 gap-3">
+      <OverviewCard
+        icon={<ClipboardCheck size={16} />}
+        label="当前状态"
+        title={selected ? STATUS_LABEL[status] : "正在布置"}
+        tone={statusBadgeTone(status)}
+        description={selected ? STATUS_HELP[status] : "保存后即可手动运行或按节奏执行。"}
+      />
+      <OverviewCard
+        icon={<CalendarClock size={16} />}
+        label="运行节奏"
+        title={CADENCE_LABEL[draft.cadence]}
+        description={
+          selected?.nextRunAt
+            ? `下次 ${formatTime(selected.nextRunAt)}`
+            : CADENCE_HELP[draft.cadence]
+        }
+      />
+      <OverviewCard
+        icon={<AlertTriangle size={16} />}
+        label="待处理"
+        title={`${openFindings.length} 项`}
+        tone={openFindings.length > 0 ? "warning" : "success"}
+        description={openFindings.length > 0 ? "有结果需要你查看。" : "当前没有新的阻塞点。"}
+      />
+      <OverviewCard
+        icon={<Clock3 size={16} />}
+        label="最近运行"
+        title={latestRun ? runStatusLabel(latestRun.status) : "尚未运行"}
+        description={latestRun ? formatTime(latestRun.startedAt) : "运行后会生成报告和时间线。"}
+      />
+    </div>
+  );
+}
+
+function OverviewCard({
+  icon,
+  label,
+  title,
+  description,
+  tone = "default",
+}: {
+  icon: React.ReactNode;
+  label: string;
+  title: string;
+  description: string;
+  tone?: "default" | "success" | "warning" | "danger" | "info";
+}) {
+  return (
+    <div className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] p-4">
+      <div className="flex items-center justify-between gap-3">
+        <span className="inline-flex h-8 w-8 items-center justify-center rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg)] text-[color:var(--text-muted)]">
+          {icon}
+        </span>
+        <Badge tone={tone}>{label}</Badge>
+      </div>
+      <div className="mt-3 text-token-title font-semibold">{title}</div>
+      <p className="mt-1 line-clamp-2 text-token-xs leading-5 text-[color:var(--text-muted)]">
+        {description}
+      </p>
+    </div>
+  );
+}
+
+function TaskFormSection({
+  index,
+  title,
+  description,
+  children,
+}: {
+  index: string;
+  title: string;
+  description: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] p-4">
+      <div className="mb-4 flex items-start gap-3">
+        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[color:var(--color-surface-subtle)] text-token-xs font-semibold text-[color:var(--text-muted)]">
+          {index}
+        </span>
+        <div className="min-w-0">
+          <h3 className="text-token-body font-semibold">{title}</h3>
+          <p className="mt-1 text-token-xs leading-5 text-[color:var(--text-muted)]">
+            {description}
+          </p>
+        </div>
+      </div>
+      {children}
+    </section>
   );
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-sm font-medium text-[color:var(--text-muted)]">
+      <span className="mb-1 block text-token-ui font-medium text-[color:var(--text-muted)]">
         {label}
       </span>
       {children}
@@ -736,21 +971,42 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+function SelectField({
+  children,
+  ...props
+}: React.SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <select
+      className="h-[var(--field-height)] w-full rounded-[var(--field-radius)] border border-[color:var(--color-border)] bg-[color:var(--color-bg)] px-3 text-token-ui text-[color:var(--color-text)] outline-none focus:border-[color:var(--color-accent)]"
+      {...props}
+    >
+      {children}
+    </select>
+  );
+}
+
 function ToggleField({
   icon,
   title,
+  description,
   checked,
   onChange,
 }: {
   icon: React.ReactNode;
   title: string;
+  description: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="flex items-center gap-3 rounded border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] px-3 py-3">
+    <label className="flex items-start gap-3 rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-3 py-3" style={{ minHeight: 88 }}>
       <span className="text-[color:var(--text-muted)]">{icon}</span>
-      <span className="min-w-0 flex-1 text-sm font-medium">{title}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-token-ui font-semibold">{title}</span>
+        <span className="mt-1 block text-token-xs leading-5 text-[color:var(--text-muted)]">
+          {description}
+        </span>
+      </span>
       <input
         type="checkbox"
         checked={checked}
@@ -762,7 +1018,7 @@ function ToggleField({
 
 function EmptyLine({ text }: { text: string }) {
   return (
-    <div className="rounded border border-dashed border-[color:var(--border-soft)] px-3 py-5 text-center text-sm text-[color:var(--text-muted)]">
+    <div className="rounded-token border border-dashed border-[color:var(--border-soft)] px-3 py-5 text-center text-token-ui text-[color:var(--text-muted)]">
       {text}
     </div>
   );
@@ -770,16 +1026,16 @@ function EmptyLine({ text }: { text: string }) {
 
 function RunRow({ run }: { run: LongTaskRun }) {
   return (
-    <div className="flex items-start gap-3 rounded border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] px-3 py-3">
+    <div className="flex items-start gap-3 rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] px-3 py-3">
       <Clock3 size={16} className="mt-0.5 text-[color:var(--text-muted)]" />
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 text-sm font-medium">
+        <div className="flex items-center gap-2 text-token-ui font-medium">
           <span>{runStatusLabel(run.status)}</span>
-          <span className="text-xs text-[color:var(--text-muted)]">
+          <span className="text-token-xs text-[color:var(--text-muted)]">
             {formatTime(run.startedAt)}
           </span>
         </div>
-        <p className="mt-1 line-clamp-2 text-sm text-[color:var(--text-muted)]">
+        <p className="mt-1 line-clamp-2 text-token-ui leading-5 text-[color:var(--text-muted)]">
           {run.waitingReason ||
             run.summary ||
             run.error ||
@@ -790,7 +1046,7 @@ function RunRow({ run }: { run: LongTaskRun }) {
             {run.checkpoints.slice(-4).map((checkpoint) => (
               <div
                 key={checkpoint.id}
-                className="grid grid-cols-[88px_minmax(0,1fr)] gap-2 text-xs"
+                className="grid grid-cols-[88px_minmax(0,1fr)] gap-2 text-token-xs"
               >
                 <span className="text-[color:var(--text-muted)]">
                   {formatTime(checkpoint.createdAt)}
@@ -810,7 +1066,7 @@ function RunRow({ run }: { run: LongTaskRun }) {
       </div>
       {run.agentId ? (
         <Link
-          className="shrink-0 rounded border border-[color:var(--border)] px-2 py-1 text-xs"
+          className="shrink-0 rounded-token border border-[color:var(--border)] px-2 py-1 text-token-xs hover:bg-[color:var(--bg-hover)]"
           href="/"
         >
           查看会话
@@ -832,36 +1088,37 @@ function FindingCard({
   onStatus: (status: TaskFindingStatus) => void;
 }) {
   return (
-    <div className="rounded border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-3">
+    <div className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-3">
       <div className="flex items-start gap-2">
-        <span className={severityClass(finding.severity)}>●</span>
+        <Badge tone={findingTone(finding.severity)} className="shrink-0">
+          {severityLabel(finding.severity)}
+        </Badge>
         <div className="min-w-0 flex-1">
-          <div className="line-clamp-2 text-sm font-semibold">{finding.title}</div>
+          <div className="line-clamp-2 text-token-ui font-semibold">{finding.title}</div>
           {!compact ? (
-            <p className="mt-2 line-clamp-5 whitespace-pre-wrap text-sm leading-6 text-[color:var(--text-muted)]">
+            <p className="mt-2 line-clamp-5 whitespace-pre-wrap text-token-ui leading-6 text-[color:var(--text-muted)]">
               {finding.body}
             </p>
           ) : null}
         </div>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
-        <button className="task-mini-btn" onClick={onOpen} type="button">
+        <Button size="xs" variant="outline" onClick={onOpen} type="button">
           查看报告
-        </button>
+        </Button>
         {finding.status === "unread" ? (
           <>
-            <button className="task-mini-btn" onClick={() => onStatus("reviewed")} type="button">
+            <Button size="xs" variant="outline" onClick={() => onStatus("reviewed")} type="button">
               已读
-            </button>
-            <button className="task-mini-btn" onClick={() => onStatus("resolved")} type="button">
+            </Button>
+            <Button size="xs" variant="outline" onClick={() => onStatus("resolved")} type="button">
               已解决
-            </button>
+            </Button>
           </>
         ) : null}
-        <button className="task-mini-btn" onClick={() => onStatus("archived")} type="button">
-          <Archive size={13} />
+        <Button size="xs" variant="outline" onClick={() => onStatus("archived")} type="button" leading={<Archive size={13} />}>
           归档
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -884,33 +1141,35 @@ function TaskReportPanel({
   return (
     <section
       data-testid="task-report-panel"
-      className="mt-6 rounded border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-4"
+      className="mt-6 rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-4"
     >
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-xs font-medium text-[color:var(--text-muted)]">
+          <div className="text-token-xs font-medium text-[color:var(--text-muted)]">
             任务报告详情
           </div>
-          <h3 className="mt-1 text-base font-semibold leading-6">{finding.title}</h3>
+          <h3 className="mt-1 text-token-body font-semibold leading-6">{finding.title}</h3>
         </div>
-        <button
+        <Button
           type="button"
           onClick={onClose}
-          className="task-mini-btn shrink-0"
+          size="xs"
+          variant="outline"
+          className="shrink-0"
         >
           收起
-        </button>
+        </Button>
       </div>
 
-      <div className="space-y-3 text-sm">
-        <div className="grid grid-cols-2 gap-2 text-xs text-[color:var(--text-muted)]">
-          <div className="rounded border border-[color:var(--border-soft)] px-2 py-2">
+      <div className="space-y-3 text-token-ui">
+        <div className="grid grid-cols-2 gap-2 text-token-xs text-[color:var(--text-muted)]">
+          <div className="rounded-token border border-[color:var(--border-soft)] px-2 py-2">
             <div>关联任务</div>
             <div className="mt-1 truncate font-medium text-[color:var(--text)]">
               {task?.title ?? finding.taskId}
             </div>
           </div>
-          <div className="rounded border border-[color:var(--border-soft)] px-2 py-2">
+          <div className="rounded-token border border-[color:var(--border-soft)] px-2 py-2">
             <div>运行状态</div>
             <div className="mt-1 font-medium text-[color:var(--text)]">
               {run ? runStatusLabel(run.status) : "未找到运行记录"}
@@ -919,37 +1178,37 @@ function TaskReportPanel({
         </div>
 
         <div>
-          <div className="mb-1 text-xs font-medium text-[color:var(--text-muted)]">
+          <div className="mb-1 text-token-xs font-medium text-[color:var(--text-muted)]">
             报告内容
           </div>
-          <div className="whitespace-pre-wrap rounded border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] px-3 py-2 leading-6">
+          <div className="whitespace-pre-wrap rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] px-3 py-2 leading-6">
             {finding.body}
           </div>
         </div>
 
         {run?.summary || run?.waitingReason || run?.error ? (
           <div>
-            <div className="mb-1 text-xs font-medium text-[color:var(--text-muted)]">
+            <div className="mb-1 text-token-xs font-medium text-[color:var(--text-muted)]">
               本次运行结论
             </div>
-            <div className="whitespace-pre-wrap rounded border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] px-3 py-2 leading-6">
+            <div className="whitespace-pre-wrap rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] px-3 py-2 leading-6">
               {run.waitingReason || run.summary || run.error}
             </div>
           </div>
         ) : null}
 
         <div>
-          <div className="mb-1 text-xs font-medium text-[color:var(--text-muted)]">
+          <div className="mb-1 text-token-xs font-medium text-[color:var(--text-muted)]">
             执行时间线
           </div>
           {checkpoints.length === 0 ? (
             <EmptyLine text="这个报告没有 checkpoint 记录。" />
           ) : (
-            <div className="space-y-2 rounded border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] p-3">
+            <div className="space-y-2 rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] p-3">
               {checkpoints.map((checkpoint) => (
                 <div
                   key={checkpoint.id}
-                  className="grid grid-cols-[86px_minmax(0,1fr)] gap-2 text-xs"
+                  className="grid grid-cols-[86px_minmax(0,1fr)] gap-2 text-token-xs"
                 >
                   <span className="text-[color:var(--text-muted)]">
                     {formatTime(checkpoint.createdAt)}
@@ -972,21 +1231,20 @@ function TaskReportPanel({
       <div className="mt-4 flex flex-wrap gap-2">
         {finding.status === "unread" ? (
           <>
-            <button className="task-mini-btn" type="button" onClick={() => onStatus("reviewed")}>
+            <Button size="xs" variant="outline" type="button" onClick={() => onStatus("reviewed")}>
               标记已读
-            </button>
-            <button className="task-mini-btn" type="button" onClick={() => onStatus("resolved")}>
+            </Button>
+            <Button size="xs" variant="outline" type="button" onClick={() => onStatus("resolved")}>
               标记已解决
-            </button>
+            </Button>
           </>
         ) : null}
-        <button className="task-mini-btn" type="button" onClick={() => onStatus("archived")}>
-          <Archive size={13} />
+        <Button size="xs" variant="outline" type="button" onClick={() => onStatus("archived")} leading={<Archive size={13} />}>
           归档
-        </button>
+        </Button>
         {run?.sessionFile ? (
           <Link
-            className="task-mini-btn"
+            className="inline-flex h-[var(--control-xs)] items-center justify-center rounded-[var(--button-radius)] border border-[color:var(--color-border)] bg-[color:var(--color-bg)] px-2 text-token-xs font-medium hover:bg-[color:var(--color-surface-hover)]"
             href="/"
           >
             查看会话
@@ -1005,10 +1263,4 @@ function runStatusLabel(status: LongTaskRun["status"]) {
   if (status === "completed_empty") return "无新事项";
   if (status === "failed") return "失败";
   return "已中止";
-}
-
-function severityClass(severity: TaskFinding["severity"]) {
-  if (severity === "critical") return "mt-0.5 text-red-500";
-  if (severity === "warning") return "mt-0.5 text-amber-500";
-  return "mt-0.5 text-blue-500";
 }

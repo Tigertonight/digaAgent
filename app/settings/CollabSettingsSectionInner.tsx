@@ -37,13 +37,13 @@ export default function CollabSettingsSectionInner() {
   }, []);
 
   return (
-    <section className="mb-6 border border-neutral-800 rounded p-4">
-      <h2 className="text-sm font-semibold mb-1">工具操作确认</h2>
-      <p className="text-xs text-neutral-500 mb-4">
+    <section className="mb-6 rounded-token border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-4">
+      <h2 className="mb-1 text-token-body font-semibold">工具操作确认</h2>
+      <p className="mb-4 text-token-sm text-[color:var(--text-muted)]">
         开启后，删除文件、重置 Git、执行高风险命令等操作前会先询问你。关闭后将自动允许这些操作。
       </p>
 
-      <div className="flex flex-col gap-3 text-sm">
+      <div className="flex flex-col gap-3 text-token-body">
         <label className="flex items-center gap-2">
           <input
             type="checkbox"
@@ -51,13 +51,13 @@ export default function CollabSettingsSectionInner() {
             onChange={(e) => onToggle(e.target.checked)}
           />
           <span>高风险操作前先询问</span>
-          <span className="text-xs text-neutral-500 ml-2">
+          <span className="ml-2 text-token-sm text-[color:var(--text-muted)]">
             （关闭后不再弹出确认）
           </span>
         </label>
       </div>
 
-      <p className="mt-4 text-[11px] text-neutral-600 leading-relaxed">
+      <p className="mt-4 text-token-xs leading-relaxed text-[color:var(--text-dim)]">
         提示：「本会话不再问」只对当前会话生效；这里的总开关会跨会话保留。哪些操作需要确认由内置安全规则决定。
       </p>
     </section>

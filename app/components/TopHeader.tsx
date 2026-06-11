@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import QRCode from "qrcode";
 import { BrandLogo } from "./BrandLogo";
+import { Button, TokenIconButton } from "./DesignPrimitives";
 import { IconButton, iconSizeMap } from "./IconButton";
 import { HudMeter } from "./HudMeter";
 import { BudgetIndicator } from "./BudgetIndicator";
@@ -149,8 +150,8 @@ function MobilePairDialog({
       margin: 1,
       width: 360,
       color: {
-        dark: "#101114",
-        light: "#ffffff",
+        dark: "black",
+        light: "white",
       },
     });
 
@@ -306,55 +307,55 @@ function MobilePairDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[color:var(--color-overlay)] p-4"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <section className="relative flex max-h-[min(680px,88vh)] w-full max-w-[520px] flex-col overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--bg-panel)] text-[color:var(--text)] shadow-2xl">
+      <section className="relative flex max-h-[min(660px,88vh)] w-full max-w-[500px] flex-col overflow-hidden rounded-token-lg border border-[color:var(--border)] bg-[color:var(--bg-panel)] text-[color:var(--text)] shadow-modal">
         <header className="absolute right-3 top-3 z-10 flex items-center gap-2">
-          <button
+          <TokenIconButton
             type="button"
             onClick={() => void (canPair ? startPairing(status) : loadStatus())}
             disabled={busy}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[color:var(--border-soft)] bg-[color:var(--bg)] text-[color:var(--text-muted)] hover:bg-[color:var(--bg-hover)] disabled:opacity-50"
+            size="md"
+            variant="outline"
+            icon={busy ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
             title="刷新二维码"
-          >
-            {busy ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
-          </button>
-          <button
+          />
+          <TokenIconButton
             type="button"
             onClick={onClose}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[color:var(--border-soft)] bg-[color:var(--bg)] text-[color:var(--text-muted)] hover:bg-[color:var(--bg-hover)]"
+            size="md"
+            variant="outline"
+            icon={<X size={15} />}
             title="关闭"
-          >
-            <X size={15} />
-          </button>
+          />
         </header>
 
         <div className="flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 pb-6 pt-14 text-center">
-          <div className="text-2xl font-semibold tracking-tight">Diga Agent 移动版</div>
-          <p className="mt-2 max-w-sm text-sm text-[color:var(--text-muted)]">
+          <div className="text-token-title font-semibold tracking-tight">Diga Agent 移动版</div>
+          <p className="mt-2 max-w-sm text-token-body text-[color:var(--text-muted)]">
             扫描二维码以设置新手机或管理现有连接
           </p>
 
           {error ? (
-            <div className="mt-4 w-full max-w-[420px] rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-left text-xs text-red-600 dark:text-red-200">
+            <div className="mt-4 w-full max-w-[420px] rounded-token border border-[color:var(--color-danger)] bg-[color:var(--color-danger-bg)] px-3 py-2 text-left text-token-sm text-[color:var(--color-danger)]">
               {error}
             </div>
           ) : null}
 
-          <div className="mt-6 w-full max-w-[360px] rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-5 py-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+          <div className="mt-6 w-full max-w-[360px] rounded-token-lg border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-5 py-5">
             {pair && qr ? (
               <div className="mx-auto max-w-[250px]">
-                <div className="relative rounded-[24px] border border-[color:var(--border-soft)] bg-white p-4 shadow-[0_18px_48px_rgba(0,0,0,0.12)]">
-                  <span className="absolute left-3 top-3 h-6 w-6 rounded-tl-[14px] border-l-2 border-t-2 border-[color:var(--accent)]" />
-                  <span className="absolute right-3 top-3 h-6 w-6 rounded-tr-[14px] border-r-2 border-t-2 border-[color:var(--accent)]" />
-                  <span className="absolute bottom-3 left-3 h-6 w-6 rounded-bl-[14px] border-b-2 border-l-2 border-[color:var(--accent)]" />
-                  <span className="absolute bottom-3 right-3 h-6 w-6 rounded-br-[14px] border-b-2 border-r-2 border-[color:var(--accent)]" />
+                <div className="relative rounded-sheet border border-[color:var(--border-soft)] bg-[color:var(--color-bg)] p-4 shadow-popover">
+                  <span className="absolute left-3 top-3 h-6 w-6 rounded-tl-[var(--radius-lg)] border-l-2 border-t-2 border-[color:var(--accent)]" />
+                  <span className="absolute right-3 top-3 h-6 w-6 rounded-tr-[var(--radius-lg)] border-r-2 border-t-2 border-[color:var(--accent)]" />
+                  <span className="absolute bottom-3 left-3 h-6 w-6 rounded-bl-[var(--radius-lg)] border-b-2 border-l-2 border-[color:var(--accent)]" />
+                  <span className="absolute bottom-3 right-3 h-6 w-6 rounded-br-[var(--radius-lg)] border-b-2 border-r-2 border-[color:var(--accent)]" />
                   {/* eslint-disable-next-line @next/next/no-img-element -- QR code is generated as a local data URL. */}
                   <img src={qr} alt="手机扫码配对二维码" className="h-auto w-full" />
-                  <span className="absolute left-1/2 top-1/2 inline-flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-2xl border border-white bg-[color:var(--accent)] shadow-lg">
+                  <span className="absolute left-1/2 top-1/2 inline-flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-token-lg border border-[color:var(--color-bg)] bg-[color:var(--accent)] shadow-popover">
                     <BrandLogo size={28} />
                   </span>
                 </div>
@@ -371,7 +372,7 @@ function MobilePairDialog({
                           key={base}
                           type="button"
                           onClick={() => void applyPairTarget(pair, base, pairBaseOptions)}
-                          className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors ${
+                          className={`rounded-full border px-2.5 py-1 text-token-xs transition-colors ${
                             selected
                               ? "border-[color:var(--accent)] bg-[color:var(--bg-selected)] text-[color:var(--accent)]"
                               : "border-[color:var(--border-soft)] text-[color:var(--text-muted)] hover:bg-[color:var(--bg-hover)]"
@@ -392,29 +393,33 @@ function MobilePairDialog({
               </div>
             ) : (
               <div className="flex min-h-[272px] flex-col items-center justify-center gap-3">
-                <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] text-[color:var(--text-muted)]">
+                <div className="inline-flex h-12 w-12 items-center justify-center rounded-token-lg border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] text-[color:var(--text-muted)]">
                   <Smartphone size={26} />
                 </div>
                 <div className="text-base font-medium">远程访问未开启</div>
                 <p className="max-w-xs text-xs leading-5 text-[color:var(--text-muted)]">
                   开启 VPN、同一 Wi-Fi 或公网连接后，小手机入口会直接展示扫码二维码。
                 </p>
-                <button
+                <Button
                   type="button"
                   disabled={busy}
                   onClick={() => void startPublicTunnelAndPair()}
-                  className="mt-1 inline-flex items-center gap-2 rounded-full border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] px-3 py-1.5 text-xs text-[color:var(--text)] hover:bg-[color:var(--bg-hover)] disabled:opacity-50"
+                  size="sm"
+                  variant="outline"
+                  leading={busy ? <Loader2 size={15} className="animate-spin" /> : <Globe2 size={15} />}
                 >
-                  {busy ? <Loader2 size={15} className="animate-spin" /> : <Globe2 size={15} />}
                   开启公网
-                </button>
+                </Button>
               </div>
             )}
           </div>
 
           <div className="mt-5 flex w-full max-w-[420px] flex-col items-center gap-2 text-xs text-[color:var(--text-muted)]">
             <div className="flex max-w-full items-center gap-2">
-              <span className={`h-2 w-2 rounded-full ${canPair ? "bg-emerald-500" : "bg-[color:var(--text-dim)]"}`} />
+              <span
+                className="h-2 w-2 rounded-full"
+                style={{ background: canPair ? "var(--color-success)" : "var(--text-dim)" }}
+              />
               <span className="truncate">
                 {status ? `${status.hostName} · ${modeLabel}` : "正在读取远程访问状态"}
               </span>
@@ -453,6 +458,8 @@ export function TopHeader({
   sseStatus,
   showTools,
   showWorkbench,
+  updateStatus,
+  updateLatestVersion,
   electronApi,
   hasSessionContext,
   budget,
@@ -466,6 +473,7 @@ export function TopHeader({
   onOpenBranches,
   onOpenSystemPrompt,
   onOpenSettings,
+  onCheckForUpdates,
 }: TopHeaderProps) {
   const [hydrated, setHydrated] = useState(false);
   const [mobilePairOpen, setMobilePairOpen] = useState(false);
@@ -524,7 +532,7 @@ export function TopHeader({
               type="button"
               onClick={onOpenBranches}
               disabled={!sessionActionsEnabled}
-              className="inline-flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2 text-[12px] text-[color:var(--text-muted)] transition-colors hover:bg-[color:var(--bg-hover)] hover:text-[color:var(--text)] disabled:cursor-not-allowed disabled:text-[color:var(--text-dim)] disabled:hover:bg-transparent disabled:hover:text-[color:var(--text-dim)]"
+              className="inline-flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2 text-token-sm text-[color:var(--text-muted)] transition-colors hover:bg-[color:var(--bg-hover)] hover:text-[color:var(--text)] disabled:cursor-not-allowed disabled:text-[color:var(--text-dim)] disabled:hover:bg-transparent disabled:hover:text-[color:var(--text-dim)]"
               title={sessionActionsEnabled ? "查看 / 切换分支" : "需先选择 session"}
             >
               <GitBranch size={13} className="shrink-0" />
@@ -534,7 +542,7 @@ export function TopHeader({
               type="button"
               onClick={onOpenSystemPrompt}
               disabled={!sessionActionsEnabled}
-              className="inline-flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2 text-[12px] text-[color:var(--text-muted)] transition-colors hover:bg-[color:var(--bg-hover)] hover:text-[color:var(--text)] disabled:cursor-not-allowed disabled:text-[color:var(--text-dim)] disabled:hover:bg-transparent disabled:hover:text-[color:var(--text-dim)]"
+              className="inline-flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2 text-token-sm text-[color:var(--text-muted)] transition-colors hover:bg-[color:var(--bg-hover)] hover:text-[color:var(--text)] disabled:cursor-not-allowed disabled:text-[color:var(--text-dim)] disabled:hover:bg-transparent disabled:hover:text-[color:var(--text-dim)]"
               title={sessionActionsEnabled ? "查看当前会话系统提示" : "需先选择 session"}
             >
               <FileText size={13} className="shrink-0" />
@@ -559,13 +567,13 @@ export function TopHeader({
             style={{
               borderColor:
                 sseStatus === "active"
-                  ? "rgba(34,197,94,0.45)"
-                  : "rgba(239,68,68,0.45)",
-              color: sseStatus === "active" ? "#86efac" : "#fca5a5",
+                  ? "var(--color-success)"
+                  : "var(--color-danger)",
+              color: sseStatus === "active" ? "var(--color-success)" : "var(--color-danger)",
               background:
                 sseStatus === "active"
-                  ? "rgba(34,197,94,0.10)"
-                  : "rgba(239,68,68,0.10)",
+                  ? "var(--color-success-bg)"
+                  : "var(--color-danger-bg)",
             }}
             title={
               sseStatus === "active"
@@ -576,7 +584,7 @@ export function TopHeader({
             <span
               className="inline-block h-1.5 w-1.5 rounded-full"
               style={{
-                background: sseStatus === "active" ? "#22c55e" : "#ef4444",
+                background: sseStatus === "active" ? "var(--color-success)" : "var(--color-danger)",
               }}
             />
             <span>{sseLabel}</span>
@@ -593,6 +601,27 @@ export function TopHeader({
         )}
         {hydrated && (
           <>
+            {onCheckForUpdates ? (
+              <IconButton
+                onClick={onCheckForUpdates}
+                disabled={updateStatus === "checking"}
+                title={
+                  updateStatus === "available" && updateLatestVersion
+                    ? `发现新版本 ${updateLatestVersion}`
+                    : updateStatus === "checking"
+                      ? "正在检查更新"
+                      : "检查更新"
+                }
+                aria-label="检查更新"
+                icon={
+                  updateStatus === "checking" ? (
+                    <Loader2 size={iconSizeMap.sm} className="animate-spin" />
+                  ) : (
+                    <RefreshCw size={iconSizeMap.sm} />
+                  )
+                }
+              />
+            ) : null}
             <IconButton
               onClick={() => setMobilePairOpen(true)}
               title="手机扫码连接"

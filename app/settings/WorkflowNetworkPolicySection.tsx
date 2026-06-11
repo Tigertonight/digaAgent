@@ -6,6 +6,7 @@ import type {
   WorkflowNetworkPolicy,
 } from "@/lib/workflows/types";
 import { userFacingMessage } from "@/lib/user-facing-error";
+import { Badge, Button, FieldInput } from "@/app/components/DesignPrimitives";
 
 function linesToList(value: string): string[] | undefined {
   const out = value
@@ -184,37 +185,39 @@ export function WorkflowNetworkPolicySection() {
   );
 
   return (
-    <section className="mb-6 border border-neutral-800 rounded p-4">
+    <section className="mb-6 rounded-token border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-4">
       <div className="flex items-start justify-between gap-3">
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
           className="min-w-0 flex-1 text-left"
         >
-          <h2 className="text-sm font-semibold mb-1">
+          <h2 className="mb-1 text-token-body font-semibold">
             工作流网络访问规则
           </h2>
-          <p className="text-xs text-neutral-500 mb-4">
+          <p className="mb-4 text-token-sm text-[color:var(--text-muted)]">
             高级安全配置。用于限制工作流能访问哪些域名和 URL；禁止规则优先生效。
           </p>
         </button>
         <div className="flex shrink-0 items-center gap-2">
-          <button
+          <Button
             type="button"
             onClick={() => setOpen((v) => !v)}
-            className="px-2 py-1 text-xs border border-neutral-700 rounded hover:bg-neutral-900"
+            size="sm"
+            variant="outline"
           >
             {open ? "收起" : "展开"}
-          </button>
+          </Button>
           {open ? (
-            <button
+            <Button
               type="button"
               onClick={() => void load()}
               disabled={loading || saving}
-              className="px-2 py-1 text-xs border border-neutral-700 rounded hover:bg-neutral-900 disabled:opacity-50"
+              size="sm"
+              variant="outline"
             >
               {loading ? "加载中" : "刷新"}
-            </button>
+            </Button>
           ) : null}
         </div>
       </div>
@@ -248,8 +251,8 @@ export function WorkflowNetworkPolicySection() {
         />
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-4 text-sm">
-        <span className="text-xs text-neutral-500">允许的请求方法</span>
+      <div className="mt-3 flex flex-wrap items-center gap-4 text-token-body">
+        <span className="text-token-sm text-[color:var(--text-muted)]">允许的请求方法</span>
         <label className="flex items-center gap-2">
           <input
             type="checkbox"
@@ -266,51 +269,54 @@ export function WorkflowNetworkPolicySection() {
           />
           POST
         </label>
-        <span className="text-[11px] text-neutral-600">
+        <span className="text-token-xs text-[color:var(--text-dim)]">
           都不勾选时不限制请求方法。
         </span>
       </div>
 
       <div className="mt-4 flex items-center justify-between gap-3">
-        <p className="text-[11px] text-neutral-600 leading-relaxed">
+        <p className="text-token-xs leading-relaxed text-[color:var(--text-dim)]">
           规则保存到本机配置文件，下一次工作流运行时自动生效。
         </p>
-        <button
+        <Button
           type="button"
           onClick={() => void save()}
           disabled={loading || saving}
-          className="px-3 py-1 text-xs bg-blue-700 hover:bg-blue-600 rounded disabled:bg-neutral-800 disabled:text-neutral-600"
+          size="sm"
+          tone="accent"
+          variant="soft"
         >
           {saving ? "保存中" : "保存策略"}
-        </button>
+        </Button>
       </div>
-      {status ? <div className="mt-2 text-xs text-neutral-500">{status}</div> : null}
-      <div className="mt-5 border-t border-neutral-800 pt-4">
+      {status ? <div className="mt-2 text-token-sm text-[color:var(--text-muted)]">{status}</div> : null}
+      <div className="mt-5 border-t border-[color:var(--border-soft)] pt-4">
         <div className="mb-2 flex items-center justify-between gap-2">
-          <h3 className="text-xs font-semibold text-neutral-300">
+          <h3 className="text-token-sm font-semibold text-[color:var(--text)]">
             网络访问记录
           </h3>
-          <button
+          <Button
             type="button"
             onClick={() => void load()}
             disabled={loading || saving}
-            className="px-2 py-0.5 text-[11px] border border-neutral-700 rounded hover:bg-neutral-900 disabled:opacity-50"
+            size="xs"
+            variant="outline"
           >
             刷新审计
-          </button>
+          </Button>
         </div>
         <div className="mb-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_90px]">
-          <input
+          <FieldInput
             value={auditWorkflowId}
             onChange={(e) => setAuditWorkflowId(e.target.value)}
             placeholder="工作流 ID"
-            className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-xs text-neutral-200 outline-none focus:border-neutral-600"
+            className="font-mono"
           />
-          <input
+          <FieldInput
             value={auditOrigin}
             onChange={(e) => setAuditOrigin(e.target.value)}
             placeholder="域名，例如 https://api.example.com"
-            className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-xs text-neutral-200 outline-none focus:border-neutral-600"
+            className="font-mono"
           />
           <select
             value={auditOutcome}
@@ -323,7 +329,7 @@ export function WorkflowNetworkPolicySection() {
                   : ""
               )
             }
-            className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-xs text-neutral-200 outline-none focus:border-neutral-600"
+            className="h-[var(--field-height)] rounded-[var(--field-radius)] border border-[color:var(--border)] bg-[color:var(--bg)] px-2 text-token-sm text-[color:var(--text)] outline-none focus:border-[color:var(--accent)]"
           >
             <option value="">全部状态</option>
             <option value="allowed">已允许</option>
@@ -333,22 +339,22 @@ export function WorkflowNetworkPolicySection() {
           <select
             value={auditLimit}
             onChange={(e) => setAuditLimit(Number(e.target.value))}
-            className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-xs text-neutral-200 outline-none focus:border-neutral-600"
+            className="h-[var(--field-height)] rounded-[var(--field-radius)] border border-[color:var(--border)] bg-[color:var(--bg)] px-2 text-token-sm text-[color:var(--text)] outline-none focus:border-[color:var(--accent)]"
           >
             <option value={25}>25</option>
             <option value={50}>50</option>
             <option value={100}>100</option>
             <option value={200}>200</option>
           </select>
-          <input
+          <FieldInput
             value={auditSearch}
             onChange={(e) => setAuditSearch(e.target.value)}
             placeholder="搜索 URL、原因或状态"
-            className="rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-xs text-neutral-200 outline-none focus:border-neutral-600 md:col-span-4"
+            className="font-mono md:col-span-4"
           />
         </div>
         {audits.length === 0 ? (
-          <div className="text-xs text-neutral-600">
+          <div className="text-token-sm text-[color:var(--text-dim)]">
             没有匹配的工作流网络请求记录。
           </div>
         ) : (
@@ -403,67 +409,70 @@ function AuditRow({
   onDenyOrigin: () => void | Promise<void>;
   onDenyPattern: () => void | Promise<void>;
 }) {
-  const color =
+  const tone =
     entry.outcome === "allowed"
-      ? "text-emerald-300"
+      ? "success"
       : entry.outcome === "denied"
-        ? "text-amber-300"
-        : "text-red-300";
+        ? "warning"
+        : "danger";
   return (
-    <div className="rounded border border-neutral-800 bg-neutral-950/70 p-2">
+    <div className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-3">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2 text-[11px]">
-            <span className={color}>
+          <div className="flex flex-wrap items-center gap-2 text-token-sm">
+            <Badge tone={tone} variant="soft">
               {entry.outcome === "allowed"
                 ? "已允许"
                 : entry.outcome === "denied"
                   ? "已拒绝"
                   : "请求失败"}
-            </span>
-            <span className="text-neutral-500">{entry.method}</span>
-            {entry.status ? <span className="text-neutral-500">{entry.status}</span> : null}
-            <span className="font-mono text-neutral-600" title={entry.workflowId}>
+            </Badge>
+            <span className="text-[color:var(--text-muted)]">{entry.method}</span>
+            {entry.status ? <span className="text-[color:var(--text-muted)]">{entry.status}</span> : null}
+            <span className="font-mono text-[color:var(--text-dim)]" title={entry.workflowId}>
               {entry.workflowId.slice(0, 8)}
             </span>
-            <span className="text-neutral-600">
+            <span className="text-[color:var(--text-dim)]">
               {new Date(entry.createdAt).toLocaleString()}
             </span>
           </div>
-          <div className="mt-1 truncate font-mono text-xs text-neutral-300" title={entry.url}>
+          <div className="mt-1 truncate font-mono text-token-sm text-[color:var(--text)]" title={entry.url}>
             {entry.url}
           </div>
           {entry.reason ? (
-            <div className="mt-1 truncate text-[11px] text-neutral-600" title={entry.reason}>
+            <div className="mt-1 truncate text-token-xs text-[color:var(--text-dim)]" title={entry.reason}>
               {entry.reason}
             </div>
           ) : null}
         </div>
         <div className="flex shrink-0 flex-col gap-1">
-          <button
+          <Button
             type="button"
             disabled={disabled}
             onClick={() => void onAllowOrigin()}
-            className="rounded border border-neutral-700 px-1.5 py-0.5 text-[11px] text-neutral-300 hover:bg-neutral-900 disabled:opacity-50"
+            size="xs"
+            variant="outline"
           >
             允许该域名
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             disabled={disabled}
             onClick={() => void onDenyOrigin()}
-            className="rounded border border-neutral-700 px-1.5 py-0.5 text-[11px] text-neutral-300 hover:bg-neutral-900 disabled:opacity-50"
+            size="xs"
+            variant="outline"
           >
             禁止该域名
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             disabled={disabled}
             onClick={() => void onDenyPattern()}
-            className="rounded border border-neutral-700 px-1.5 py-0.5 text-[11px] text-neutral-300 hover:bg-neutral-900 disabled:opacity-50"
+            size="xs"
+            variant="outline"
           >
             禁止该路径
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -483,13 +492,13 @@ function PolicyTextarea({
 }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-xs text-neutral-500">{label}</span>
+      <span className="mb-1 block text-token-sm text-[color:var(--text-muted)]">{label}</span>
       <textarea
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         rows={4}
-        className="w-full resize-y rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 font-mono text-xs text-neutral-200 outline-none focus:border-neutral-600"
+        className="w-full resize-y rounded-[var(--field-radius)] border border-[color:var(--border)] bg-[color:var(--bg)] px-3 py-2 font-mono text-token-sm text-[color:var(--text)] outline-none placeholder:text-[color:var(--text-dim)] focus:border-[color:var(--accent)]"
       />
     </label>
   );

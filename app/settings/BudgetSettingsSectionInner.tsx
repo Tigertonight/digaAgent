@@ -18,6 +18,7 @@ import {
   saveGlobalBudget,
 } from "@/lib/budget";
 import type { SessionBudget } from "@/lib/budget/types";
+import { FieldInput } from "@/app/components/DesignPrimitives";
 
 interface DimState {
   enabled: boolean;
@@ -74,18 +75,14 @@ export default function BudgetSettingsSectionInner() {
     [cost, turns, dur, action]
   );
 
-  // 通用 input 风格：复用两个 panel 共有的深色配色（class 简洁，避免主题侵入）
-  const inputCls =
-    "bg-neutral-950 border border-neutral-800 rounded px-2 py-1 text-sm font-mono focus:outline-none focus:border-neutral-600 w-32 disabled:opacity-50";
-
   return (
-    <section className="mb-6 border border-neutral-800 rounded p-4">
-      <h2 className="text-sm font-semibold mb-1">任务用量保护</h2>
-      <p className="text-xs text-neutral-500 mb-4">
+    <section className="mb-6 rounded-token border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-4">
+      <h2 className="mb-1 text-token-body font-semibold">任务用量保护</h2>
+      <p className="mb-4 text-token-sm text-[color:var(--text-muted)]">
         防止单次任务消耗过多时间或费用。达到任一启用上限后，会按你的选择暂停或停止。
       </p>
 
-      <div className="flex flex-col gap-3 text-sm">
+      <div className="flex flex-col gap-3 text-token-body">
         {/* Cost */}
         <div className="flex items-center gap-3">
           <label className="flex items-center gap-2 w-32">
@@ -100,7 +97,7 @@ export default function BudgetSettingsSectionInner() {
             />
             <span>最高费用</span>
           </label>
-          <input
+          <FieldInput
             type="number"
             min={0}
             step={0.1}
@@ -111,9 +108,9 @@ export default function BudgetSettingsSectionInner() {
               setCost(next);
               persist({ c: next });
             }}
-            className={inputCls}
+            className="w-32 font-mono disabled:opacity-50"
           />
-          <span className="text-neutral-500 text-xs">美元</span>
+          <span className="text-token-sm text-[color:var(--text-muted)]">美元</span>
         </div>
 
         {/* Turns */}
@@ -130,7 +127,7 @@ export default function BudgetSettingsSectionInner() {
             />
             <span>最多轮数</span>
           </label>
-          <input
+          <FieldInput
             type="number"
             min={0}
             step={1}
@@ -141,9 +138,9 @@ export default function BudgetSettingsSectionInner() {
               setTurns(next);
               persist({ t: next });
             }}
-            className={inputCls}
+            className="w-32 font-mono disabled:opacity-50"
           />
-          <span className="text-neutral-500 text-xs">轮</span>
+          <span className="text-token-sm text-[color:var(--text-muted)]">轮</span>
         </div>
 
         {/* Duration */}
@@ -160,7 +157,7 @@ export default function BudgetSettingsSectionInner() {
             />
             <span>最长时间</span>
           </label>
-          <input
+          <FieldInput
             type="number"
             min={0}
             step={10}
@@ -171,13 +168,13 @@ export default function BudgetSettingsSectionInner() {
               setDur(next);
               persist({ d: next });
             }}
-            className={inputCls}
+            className="w-32 font-mono disabled:opacity-50"
           />
-          <span className="text-neutral-500 text-xs">秒</span>
+          <span className="text-token-sm text-[color:var(--text-muted)]">秒</span>
         </div>
 
         {/* Action */}
-        <div className="flex items-center gap-3 pt-2 border-t border-neutral-800 mt-2">
+        <div className="mt-2 flex items-center gap-3 border-t border-[color:var(--border-soft)] pt-2">
           <span className="w-32">达到上限后</span>
           <label className="flex items-center gap-1.5">
             <input

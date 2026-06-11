@@ -88,7 +88,7 @@ export default function SidebarExplorer({
   }, [collapsed, load, refreshKey]);
 
   return (
-    <div className="text-[12px]" style={{ color: "var(--text)" }}>
+    <div className="text-token-sm" style={{ color: "var(--text)" }}>
       <div
         className="flex items-center justify-between px-2 py-1.5 sticky top-0 z-10"
         style={{
@@ -99,7 +99,7 @@ export default function SidebarExplorer({
         <button
           type="button"
           onClick={() => setCollapsed((v) => !v)}
-          className="inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide hover:text-[color:var(--text)]"
+          className="inline-flex items-center gap-1 text-token-xs font-semibold uppercase tracking-wide hover:opacity-80"
           aria-expanded={!collapsed}
         >
           {collapsed ? (
@@ -135,7 +135,7 @@ export default function SidebarExplorer({
         <div>
           {loading && entries === null && (
             <div
-              className="px-2 py-1 text-[11px]"
+              className="px-2 py-1 text-token-xs"
               style={{ color: "var(--text-muted)" }}
             >
               loading…
@@ -143,8 +143,8 @@ export default function SidebarExplorer({
           )}
           {err && (
             <div
-              className="px-2 py-1 text-[11px]"
-              style={{ color: "#ef4444" }}
+              className="px-2 py-1 text-token-xs"
+              style={{ color: "var(--color-danger)" }}
               title={err}
             >
               {err}
@@ -174,7 +174,7 @@ export default function SidebarExplorer({
           })}
           {entries && entries.length === 0 && !loading && !err && (
             <div
-              className="px-2 py-1 text-[11px]"
+              className="px-2 py-1 text-token-xs"
               style={{ color: "var(--text-muted)" }}
             >
               (empty)
@@ -211,7 +211,7 @@ function FileRow({
     >
       <span className="truncate flex-1 min-w-0">{name}</span>
       <span
-        className="hidden group-hover:inline-flex shrink-0 items-center gap-0.5 text-[10px] px-1.5 py-[1px] rounded font-medium"
+        className="hidden group-hover:inline-flex shrink-0 items-center gap-0.5 text-token-xs px-1.5 py-[1px] rounded font-medium"
         style={{
           color: "var(--accent)",
           background: "color-mix(in srgb, var(--accent) 12%, transparent)",
@@ -287,7 +287,7 @@ function DirNode({
             e.stopPropagation();
             onPickPath(path);
           }}
-          className="hidden group-hover:inline-flex shrink-0 items-center gap-0.5 text-[10px] ml-1 px-1.5 py-[1px] rounded font-medium hover:opacity-80"
+          className="hidden group-hover:inline-flex shrink-0 items-center gap-0.5 text-token-xs ml-1 px-1.5 py-[1px] rounded font-medium hover:opacity-80"
           style={{
             color: "var(--accent)",
             background: "color-mix(in srgb, var(--accent) 12%, transparent)",
@@ -301,7 +301,7 @@ function DirNode({
         <div>
           {loading && (
             <div
-              className="px-2 py-0.5 text-[11px]"
+              className="px-2 py-0.5 text-token-xs"
               style={{
                 paddingLeft: 8 + (depth + 1) * 12,
                 color: "var(--text-muted)",
@@ -312,10 +312,10 @@ function DirNode({
           )}
           {err && (
             <div
-              className="px-2 py-0.5 text-[11px]"
+              className="px-2 py-0.5 text-token-xs"
               style={{
                 paddingLeft: 8 + (depth + 1) * 12,
-                color: "#ef4444",
+                color: "var(--color-danger)",
               }}
               title={err}
             >

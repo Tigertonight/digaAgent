@@ -88,6 +88,7 @@ import {
 import type { FilesLayout } from "./components/RightPanelContainer";
 import { ChatModals } from "./components/ChatModals";
 import { BudgetExceededModal } from "./components/BudgetExceededModal";
+import { Button, TokenIconButton } from "./components/DesignPrimitives";
 import { resolveRuntimeIdentity } from "@/lib/runtime/identity";
 
 interface Props {
@@ -166,58 +167,38 @@ function UpdateNotice({
 }) {
   const latest = state.latestVersion ?? state.releaseName ?? "新版本";
   return (
-    <div
-      className="absolute right-4 top-12 z-40 w-[300px] rounded-lg border p-2.5 shadow-xl"
-      style={{
-        borderColor: "var(--border)",
-        background: "var(--bg-panel)",
-        color: "var(--text)",
-      }}
-    >
+    <div className="absolute right-4 top-12 z-40 w-[300px] rounded-token-lg border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-2.5 text-[color:var(--text)] shadow-popover">
       <div className="flex items-start gap-3">
-        <span
-          className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border"
-          style={{
-            borderColor: "rgba(37,99,235,0.35)",
-            background: "rgba(37,99,235,0.12)",
-            color: "#60a5fa",
-          }}
-        >
+        <span className="mt-0.5 inline-flex h-[var(--control-sm)] w-[var(--control-sm)] shrink-0 items-center justify-center rounded-token border border-[color:var(--color-info)] bg-[color:var(--color-info-bg)] text-[color:var(--color-info)]">
           <Download size={15} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-semibold">
+          <div className="text-token-ui font-semibold">
             Diga Agent {latest} 可安装
           </div>
-          <div className="mt-0.5 text-[12px]" style={{ color: "var(--text-muted)" }}>
+          <div className="mt-0.5 text-token-sm text-[color:var(--text-muted)]">
             当前版本 {state.currentVersion}
           </div>
           <div className="mt-2 flex items-center gap-2">
-            <button
-              type="button"
+            <Button
               onClick={onView}
-              className="inline-flex h-7 items-center gap-1.5 rounded border px-2.5 text-[12px] font-medium"
-              style={{
-                borderColor: "rgba(37,99,235,0.45)",
-                background: "rgba(37,99,235,0.12)",
-                color: "#60a5fa",
-              }}
+              tone="info"
+              variant="soft"
+              size="sm"
+              leading={<Download size={13} />}
             >
-              <Download size={13} />
               查看
-            </button>
+            </Button>
           </div>
         </div>
-        <button
-          type="button"
+        <TokenIconButton
           onClick={onClose}
-          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-[color:var(--bg-hover)]"
+          icon={<X size={14} />}
+          size="xs"
+          variant="ghost"
           title="关闭"
           aria-label="关闭更新提醒"
-          style={{ color: "var(--text-muted)" }}
-        >
-          <X size={14} />
-        </button>
+        />
       </div>
     </div>
   );
@@ -231,41 +212,25 @@ function UpdateLatestNotice({
   onClose: () => void;
 }) {
   return (
-    <div
-      className="absolute right-4 top-12 z-40 w-[300px] rounded-lg border p-2.5 shadow-xl"
-      style={{
-        borderColor: "var(--border)",
-        background: "var(--bg-panel)",
-        color: "var(--text)",
-      }}
-    >
+    <div className="absolute right-4 top-12 z-40 w-[300px] rounded-token-lg border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-2.5 text-[color:var(--text)] shadow-popover">
       <div className="flex items-start gap-3">
-        <span
-          className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border"
-          style={{
-            borderColor: "rgba(34,197,94,0.35)",
-            background: "rgba(34,197,94,0.10)",
-            color: "#22c55e",
-          }}
-        >
+        <span className="mt-0.5 inline-flex h-[var(--control-sm)] w-[var(--control-sm)] shrink-0 items-center justify-center rounded-token border border-[color:var(--color-success)] bg-[color:var(--color-success-bg)] text-[color:var(--color-success)]">
           <CheckCircle2 size={15} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-semibold">当前已经是最新版本</div>
-          <div className="mt-0.5 text-[12px]" style={{ color: "var(--text-muted)" }}>
+          <div className="text-token-ui font-semibold">当前已经是最新版本</div>
+          <div className="mt-0.5 text-token-sm text-[color:var(--text-muted)]">
             Diga Agent {state.currentVersion}
           </div>
         </div>
-        <button
-          type="button"
+        <TokenIconButton
           onClick={onClose}
-          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-[color:var(--bg-hover)]"
+          icon={<X size={14} />}
+          size="xs"
+          variant="ghost"
           title="关闭"
           aria-label="关闭更新状态提示"
-          style={{ color: "var(--text-muted)" }}
-        >
-          <X size={14} />
-        </button>
+        />
       </div>
     </div>
   );
@@ -328,7 +293,7 @@ function WorkflowDebugInspector({
       <div className="mb-3 flex items-center gap-2">
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold">Workflow inspector</div>
-          <div className="truncate text-[11px]" style={{ color: "var(--text-muted)" }}>
+          <div className="truncate text-token-xs text-[color:var(--text-muted)]">
             Trace, logs, artifacts, checkpoints, and script
           </div>
         </div>
@@ -349,7 +314,7 @@ function WorkflowDebugInspector({
           Loading debug bundle
         </div>
       ) : error ? (
-        <div className="rounded border px-3 py-2 text-xs text-red-500" style={{ borderColor: "rgba(220,38,38,0.35)" }}>
+        <div className="rounded-token border border-[color:var(--color-danger)] bg-[color:var(--color-danger-bg)] px-3 py-2 text-token-sm text-[color:var(--color-danger)]">
           {error}
         </div>
       ) : !bundle ? (
@@ -357,10 +322,10 @@ function WorkflowDebugInspector({
           Select a workflow to inspect
         </div>
       ) : (
-        <div className="space-y-3 text-xs">
-          <section className="rounded border px-3 py-2" style={{ borderColor: "var(--border-soft)", background: "rgba(255,255,255,0.018)" }}>
+        <div className="space-y-3 text-token-sm">
+          <section className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg-subtle)] px-3 py-2">
             <div className="truncate font-semibold">{bundle.workflow.objective}</div>
-            <div className="mt-1 grid gap-1 text-[11px]" style={{ color: "var(--text-muted)" }}>
+            <div className="mt-1 grid gap-1 text-token-xs text-[color:var(--text-muted)]">
               <span>{bundle.workflow.status} · {formatWorkflowTime(bundle.workflow.createdAt)}</span>
               <span>
                 {bundle.counts.traceEvents} trace · {bundle.counts.logs} logs · {bundle.counts.artifacts} artifacts · {bundle.counts.checkpoints} checkpoints
@@ -369,35 +334,35 @@ function WorkflowDebugInspector({
             </div>
           </section>
 
-          <section className="rounded border px-3 py-2" style={{ borderColor: "var(--border-soft)", background: "rgba(255,255,255,0.018)" }}>
+          <section className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg-subtle)] px-3 py-2">
             <div className="mb-1 font-semibold">Trace</div>
             {bundle.traceEvents.length ? (
               <div className="space-y-1">
                 {bundle.traceEvents.map((event, index) => (
-                  <div key={`${event.type}-${index}`} className="rounded border px-2 py-1" style={{ borderColor: "var(--border-soft)" }}>
+                  <div key={`${event.type}-${index}`} className="rounded-token-sm border border-[color:var(--border-soft)] px-2 py-1">
                     <div className="flex gap-2">
                       <span className="shrink-0 font-medium">{event.type}</span>
-                      <span className="min-w-0 truncate" style={{ color: "var(--text-muted)" }}>
+                      <span className="min-w-0 truncate text-[color:var(--text-muted)]">
                         {workflowTraceSummary(event)}
                       </span>
                     </div>
-                    <div className="mt-0.5 text-[11px]" style={{ color: "var(--text-muted)" }}>
+                    <div className="mt-0.5 text-token-xs text-[color:var(--text-muted)]">
                       {formatWorkflowTime(event.createdAt)}
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
-              <div style={{ color: "var(--text-muted)" }}>No trace events</div>
+              <div className="text-[color:var(--text-muted)]">No trace events</div>
             )}
           </section>
 
           {bundle.logs.length > 0 && (
-            <section className="rounded border px-3 py-2" style={{ borderColor: "var(--border-soft)", background: "rgba(255,255,255,0.018)" }}>
+            <section className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg-subtle)] px-3 py-2">
               <div className="mb-1 font-semibold">Logs</div>
               <div className="space-y-1">
                 {bundle.logs.slice(-20).map((log, index) => (
-                  <div key={index} style={{ color: "var(--text-muted)" }}>
+                  <div key={index} className="text-[color:var(--text-muted)]">
                     [{log.level}] {log.message}
                   </div>
                 ))}
@@ -405,7 +370,7 @@ function WorkflowDebugInspector({
             </section>
           )}
 
-          <section className="rounded border px-3 py-2" style={{ borderColor: "var(--border-soft)", background: "rgba(255,255,255,0.018)" }}>
+          <section className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg-subtle)] px-3 py-2">
             <div className="mb-1 font-semibold">Artifacts & checkpoints</div>
             {[...bundle.artifacts, ...bundle.checkpoints].length ? (
               <div className="space-y-1">
@@ -414,22 +379,22 @@ function WorkflowDebugInspector({
                     <summary className="cursor-pointer list-none truncate [&::-webkit-details-marker]:hidden">
                       {item.name}
                     </summary>
-                    <pre className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap text-[11px]" style={{ color: "var(--text-muted)" }}>
+                    <pre className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap text-token-xs text-[color:var(--text-muted)]">
                       {shortWorkflowJson(item.value)}
                     </pre>
                   </details>
                 ))}
               </div>
             ) : (
-              <div style={{ color: "var(--text-muted)" }}>No artifacts or checkpoints</div>
+              <div className="text-[color:var(--text-muted)]">No artifacts or checkpoints</div>
             )}
           </section>
 
-          <details className="rounded border px-3 py-2" style={{ borderColor: "var(--border-soft)", background: "rgba(255,255,255,0.018)" }}>
+          <details className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg-subtle)] px-3 py-2">
             <summary className="cursor-pointer list-none font-semibold [&::-webkit-details-marker]:hidden">
               Script
             </summary>
-            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-[11px]" style={{ color: "var(--text-muted)" }}>
+            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-token-xs text-[color:var(--text-muted)]">
               {bundle.script}
             </pre>
           </details>
@@ -467,7 +432,10 @@ function WorkflowHistoryPanel({
     Record<string, string>
   >({});
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/35 px-4 pt-12">
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-12"
+      style={{ background: "var(--color-overlay)" }}
+    >
       <div
         className="flex max-h-[82vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border shadow-2xl"
         style={{
@@ -482,7 +450,7 @@ function WorkflowHistoryPanel({
         >
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-semibold">Workflow history</div>
-            <div className="truncate text-[11px]" style={{ color: "var(--text-muted)" }}>
+            <div className="truncate text-token-xs" style={{ color: "var(--text-muted)" }}>
               Resume from persisted checkpoints and artifacts
             </div>
           </div>
@@ -526,7 +494,7 @@ function WorkflowHistoryPanel({
                     className="rounded border px-3 py-2"
                     style={{
                       borderColor: "var(--border-soft)",
-                      background: "rgba(255,255,255,0.02)",
+                      background: "color-mix(in srgb, var(--text) 2%, transparent)",
                     }}
                   >
                     <div className="flex items-start gap-3">
@@ -534,7 +502,7 @@ function WorkflowHistoryPanel({
                       <div className="truncate text-sm font-medium">
                         {item.objective || item.workflowId}
                       </div>
-                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px]" style={{ color: "var(--text-muted)" }}>
+                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
                         <span>{item.status}</span>
                         <span>{item.checkpointNames.length} checkpoints</span>
                         <span>{item.artifactNames.length} artifacts</span>
@@ -544,12 +512,12 @@ function WorkflowHistoryPanel({
                         <span>{formatWorkflowTime(item.lastCheckpoint?.createdAt)}</span>
                       </div>
                       {!item.canResume && item.reason ? (
-                        <div className="mt-1 text-[11px]" style={{ color: "var(--text-muted)" }}>
+                        <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
                           {item.reason}
                         </div>
                       ) : null}
                       {item.canResume && item.checkpointNames.length > 1 ? (
-                        <label className="mt-2 flex max-w-sm items-center gap-2 text-[11px]" style={{ color: "var(--text-muted)" }}>
+                        <label className="mt-2 flex max-w-sm items-center gap-2 text-token-xs" style={{ color: "var(--text-muted)" }}>
                           <span className="shrink-0">Checkpoint</span>
                           <select
                             value={
@@ -564,7 +532,7 @@ function WorkflowHistoryPanel({
                                 [item.workflowId]: event.target.value,
                               }))
                             }
-                            className="min-w-0 flex-1 rounded border bg-transparent px-2 py-1 text-[11px] outline-none"
+                            className="min-w-0 flex-1 rounded border bg-transparent px-2 py-1 text-token-xs outline-none"
                             style={{
                               borderColor: "var(--border-soft)",
                               color: "var(--text)",
@@ -581,7 +549,7 @@ function WorkflowHistoryPanel({
                       {(item.checkpointSummaries.at(-1)?.preview ||
                         item.artifactSummaries.at(-1)?.preview) && (
                         <div
-                          className="mt-2 line-clamp-2 text-[11px]"
+                          className="mt-2 line-clamp-2 text-token-xs"
                           style={{ color: "var(--text-muted)" }}
                           title={
                             item.checkpointSummaries.at(-1)?.preview ??
@@ -1200,6 +1168,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     const onClick = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && t.closest("[data-session-menu]")) return;
+      if (t && t.closest("[data-floating-layer]")) return;
       setMenuFor(null);
     };
     document.addEventListener("mousedown", onClick);

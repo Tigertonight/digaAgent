@@ -183,19 +183,19 @@ interface Props {
 }
 
 const KINDS: { kind: MockKind; label: string; color: string }[] = [
-  { kind: "idle", label: "Idle", color: "#9ca3af" },
-  { kind: "thinking", label: "Thinking", color: "#a78bfa" },
-  { kind: "running", label: "Running", color: "#818cf8" },
-  { kind: "attention", label: "Attention", color: "#60a5fa" },
-  { kind: "complete", label: "Complete", color: "#4ade80" },
-  { kind: "offline", label: "Offline", color: "#f87171" },
-  { kind: "error", label: "Error", color: "#fb7185" },
-  { kind: "retry", label: "Retry", color: "#fbbf24" },
-  { kind: "compacting", label: "Compacting", color: "#fcd34d" },
-  { kind: "approval", label: "Approval", color: "#f59e0b" },
-  { kind: "clarification", label: "Clarify", color: "#14b8a6" },
-  { kind: "budget_warning", label: "Budget Warn", color: "#eab308" },
-  { kind: "budget_blocked", label: "Budget Stop", color: "#f97316" },
+  { kind: "idle", label: "Idle", color: "var(--pet-state-offline)" },
+  { kind: "thinking", label: "Thinking", color: "var(--pet-state-thinking)" },
+  { kind: "running", label: "Running", color: "var(--pet-state-running)" },
+  { kind: "attention", label: "Attention", color: "var(--color-info)" },
+  { kind: "complete", label: "Complete", color: "var(--pet-state-complete)" },
+  { kind: "offline", label: "Offline", color: "var(--pet-state-error)" },
+  { kind: "error", label: "Error", color: "var(--pet-state-error)" },
+  { kind: "retry", label: "Retry", color: "var(--pet-state-approval)" },
+  { kind: "compacting", label: "Compacting", color: "var(--pet-state-budget-warning)" },
+  { kind: "approval", label: "Approval", color: "var(--pet-state-approval)" },
+  { kind: "clarification", label: "Clarify", color: "var(--pet-state-clarification)" },
+  { kind: "budget_warning", label: "Budget Warn", color: "var(--pet-state-budget-warning)" },
+  { kind: "budget_blocked", label: "Budget Stop", color: "var(--pet-state-budget-blocked)" },
 ];
 
 export default function PetMockPanel({ onInject }: Props) {
@@ -234,12 +234,12 @@ export default function PetMockPanel({ onInject }: Props) {
           top: 8,
           left: 8,
           zIndex: 9999,
-          background: "rgba(17,24,39,0.85)",
-          border: "1px solid rgba(99,102,241,0.4)",
-          borderRadius: 6,
+          background: "var(--pet-surface)",
+          border: "1px solid color-mix(in srgb, var(--pet-state-thinking) 40%, transparent)",
+          borderRadius: "var(--radius-sm)",
           padding: "4px 8px",
-          color: "#a5b4fc",
-          fontSize: 10,
+          color: "var(--pet-state-thinking)",
+          fontSize: "var(--text-xs)",
           cursor: "pointer",
           pointerEvents: "auto",
         }}
@@ -258,15 +258,14 @@ export default function PetMockPanel({ onInject }: Props) {
         left: 8,
         zIndex: 9999,
         width: 180,
-        background: "rgba(17,24,39,0.92)",
-        border: "1px solid rgba(99,102,241,0.4)",
-        borderRadius: 8,
+        background: "var(--pet-surface)",
+        border: "1px solid color-mix(in srgb, var(--pet-state-thinking) 40%, transparent)",
+        borderRadius: "var(--radius-md)",
         padding: 8,
-        color: "#e5e7eb",
-        fontSize: 10,
-        fontFamily:
-          "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-        boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
+        color: "var(--pet-text)",
+        fontSize: "var(--text-xs)",
+        fontFamily: "var(--font-sans)",
+        boxShadow: "var(--pet-shadow)",
         pointerEvents: "auto",
       }}
     >
@@ -278,7 +277,7 @@ export default function PetMockPanel({ onInject }: Props) {
           marginBottom: 6,
         }}
       >
-        <div style={{ fontWeight: 600, color: "#a5b4fc" }}>
+        <div style={{ fontWeight: 600, color: "var(--pet-state-thinking)" }}>
           🛠 Pet Mock (dev)
         </div>
         <button
@@ -286,9 +285,9 @@ export default function PetMockPanel({ onInject }: Props) {
           style={{
             background: "transparent",
             border: "none",
-            color: "#9ca3af",
+            color: "var(--pet-text-muted)",
             cursor: "pointer",
-            fontSize: 12,
+            fontSize: "var(--text-sm)",
             lineHeight: 1,
             padding: 2,
           }}
@@ -299,7 +298,7 @@ export default function PetMockPanel({ onInject }: Props) {
       </div>
       <div
         style={{
-          color: "#9ca3af",
+          color: "var(--pet-text-muted)",
           marginBottom: 8,
           lineHeight: 1.4,
         }}
@@ -322,12 +321,12 @@ export default function PetMockPanel({ onInject }: Props) {
               key={kind}
               onClick={() => handlePick(kind)}
               style={{
-                background: isActive ? color : "rgba(255,255,255,0.06)",
-                border: `1px solid ${isActive ? color : "rgba(255,255,255,0.1)"}`,
-                borderRadius: 4,
+                background: isActive ? color : "var(--pet-surface-soft)",
+                border: `1px solid ${isActive ? color : "var(--pet-border)"}`,
+                borderRadius: "var(--radius-xs)",
                 padding: "4px 0",
-                color: isActive ? "#0f172a" : color,
-                fontSize: 10,
+                color: isActive ? "var(--pet-contrast)" : color,
+                fontSize: "var(--text-xs)",
                 fontWeight: isActive ? 700 : 500,
                 cursor: "pointer",
               }}

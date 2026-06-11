@@ -7,8 +7,8 @@
  *
  * 存储位置：~/.mini-pi/sessions/{id}.meta.json（单 session 一个文件）。
  *
- * v0 Phase A 仅落地 id / title / pinned 三个字段实际使用；其他字段类型先声明，
- * 给 Phase B（summary / cost / turns）/ Phase C（labels / lastSeenAt / noAutoSummary）
+ * v0 Phase A 落地 id / title / pinned / lastSeenAt；其他字段类型先声明，
+ * 给 Phase B（summary / cost / turns）/ Phase C（labels / noAutoSummary）
  * 预留 schema 锚点，避免后续 breaking change。
  */
 
@@ -30,7 +30,7 @@ export interface SessionMeta {
   /** Phase B：用户打的标签 */
   labels?: string[];
 
-  /** Phase C：最后查看时间（v0 仍用 localStorage 实现，未迁移） */
+  /** 最后已读到的 session modified 时间戳。用于跨安装恢复蓝点状态。 */
   lastSeenAt?: number;
 
   /** Phase B：累计花费（聚合自 turn_end） */
@@ -47,7 +47,7 @@ export interface SessionMeta {
 }
 
 /** v0 实际启用字段的白名单，PATCH 路由用于过滤 body */
-export const META_WRITABLE_FIELDS_V0 = ["title", "pinned"] as const;
+export const META_WRITABLE_FIELDS_V0 = ["title", "pinned", "lastSeenAt"] as const;
 export type MetaWritableFieldV0 = (typeof META_WRITABLE_FIELDS_V0)[number];
 
 /**

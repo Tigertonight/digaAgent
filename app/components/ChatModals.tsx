@@ -96,7 +96,7 @@ export function ChatModals({
       {showCwdPicker && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ background: "rgba(0,0,0,0.4)" }}
+          style={{ background: "var(--color-overlay)" }}
           onClick={onCloseCwdPicker}
         >
           <div
@@ -108,7 +108,7 @@ export function ChatModals({
               maxHeight: "85vh",
               background: "var(--bg)",
               border: "1px solid var(--border)",
-              boxShadow: "0 10px 40px rgba(0,0,0,0.25)",
+              boxShadow: "var(--shadow-modal)",
             }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -124,7 +124,7 @@ export function ChatModals({
       {showFilePicker && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ background: "rgba(0,0,0,0.4)" }}
+          style={{ background: "var(--color-overlay)" }}
           onClick={onCloseFilePicker}
         >
           <div
@@ -136,7 +136,7 @@ export function ChatModals({
               maxHeight: "85vh",
               background: "var(--bg)",
               border: "1px solid var(--border)",
-              boxShadow: "0 10px 40px rgba(0,0,0,0.25)",
+              boxShadow: "var(--shadow-modal)",
             }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -153,7 +153,7 @@ export function ChatModals({
       {showTools && agentId && (
         <div
           className="fixed inset-0 z-50 flex justify-end"
-          style={{ background: "rgba(0,0,0,0.4)" }}
+          style={{ background: "var(--color-overlay)" }}
           onClick={onCloseTools}
         >
           <div

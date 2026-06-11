@@ -56,9 +56,15 @@ function getMessagePreview(msg: ChatMessage): string {
 
 function getNodeColor(msg: ChatMessage): { bg: string; border: string } {
   if (msg.role === "user") {
-    return { bg: "rgba(37,99,235,0.18)", border: "rgba(37,99,235,0.7)" };
+    return {
+      bg: "color-mix(in srgb, var(--accent) 18%, transparent)",
+      border: "color-mix(in srgb, var(--accent) 70%, transparent)",
+    };
   }
-  return { bg: "rgba(107,114,128,0.12)", border: "rgba(107,114,128,0.5)" };
+  return {
+    bg: "color-mix(in srgb, var(--text-muted) 12%, transparent)",
+    border: "color-mix(in srgb, var(--text-muted) 50%, transparent)",
+  };
 }
 
 function hasRenderableContent(msg: ChatMessage): boolean {
@@ -304,9 +310,9 @@ export function ChatMinimap({
           right: 0,
           top: `${viewportBoxTop}%`,
           height: `${viewportBoxHeight}%`,
-          background: "rgba(100,100,100,0.1)",
-          borderTop: "1px solid rgba(100,100,100,0.2)",
-          borderBottom: "1px solid rgba(100,100,100,0.2)",
+          background: "color-mix(in srgb, var(--text-muted) 10%, transparent)",
+          borderTop: "1px solid color-mix(in srgb, var(--text-muted) 20%, transparent)",
+          borderBottom: "1px solid color-mix(in srgb, var(--text-muted) 20%, transparent)",
           pointerEvents: "none",
           zIndex: 1,
         }}

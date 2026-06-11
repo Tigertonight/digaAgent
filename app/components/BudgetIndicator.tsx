@@ -71,8 +71,8 @@ function buildDims(budget: SessionBudget, spent: BudgetSpent, status: BudgetStat
 }
 
 function ratioColor(ratio: number): string {
-  if (ratio >= 1) return "#ef4444";
-  if (ratio >= 0.85) return "#eab308";
+  if (ratio >= 1) return "var(--color-danger)";
+  if (ratio >= 0.85) return "var(--color-warning)";
   return "var(--accent)";
 }
 
@@ -117,7 +117,7 @@ export function BudgetIndicator({
       onMouseLeave={() => setOpen(false)}
       aria-label={`Budget ${peak.label} ${peakPct}%`}
     >
-      <span className="text-[11px]">⏱</span>
+      <span className="text-token-xs">⏱</span>
       <span
         className="inline-block rounded-full overflow-hidden"
         style={{ width: 28, height: 3, background: "var(--bg-hover)" }}
@@ -136,7 +136,7 @@ export function BudgetIndicator({
       </span>
       {hasOverride && (
         <span
-          className="text-[10px] px-1 rounded"
+          className="rounded-token-xs px-1 text-token-xs"
           style={{
             background: "var(--bg-hover)",
             color: "var(--text-muted)",
@@ -149,7 +149,7 @@ export function BudgetIndicator({
 
       {open && (
         <div
-          className="absolute right-0 top-full mt-1.5 z-50 rounded-md shadow-lg text-[11px] whitespace-nowrap"
+          className="absolute right-0 top-full z-50 mt-1.5 whitespace-nowrap rounded-token shadow-popover text-token-xs"
           style={{
             background: "var(--bg-panel)",
             border: "1px solid var(--border)",
@@ -179,7 +179,7 @@ export function BudgetIndicator({
                     {d.display}
                   </span>
                   {d.triggered && (
-                    <span style={{ marginLeft: 6, color: "#ef4444" }}>!</span>
+                    <span style={{ marginLeft: 6, color: "var(--color-danger)" }}>!</span>
                   )}
                 </span>
               </div>
@@ -190,7 +190,7 @@ export function BudgetIndicator({
               className="mt-2 pt-1.5"
               style={{
                 borderTop: "1px solid var(--border)",
-                color: "#ef4444",
+                color: "var(--color-danger)",
               }}
             >
               已触发：{status.triggered.join(", ")}

@@ -96,7 +96,7 @@ function MergeWorktreePreview({ input }: { input: Record<string, unknown> }) {
   return (
     <div className="space-y-2">
       <div
-        className="rounded border px-2 py-1.5 text-[11px]"
+        className="rounded border px-2 py-1.5 text-token-xs"
         style={{
           borderColor: "var(--border)",
           background: "var(--bg-panel)",
@@ -139,7 +139,7 @@ function MergeWorktreePreview({ input }: { input: Record<string, unknown> }) {
       {diffPreview ? (
         <details>
           <summary
-            className="cursor-pointer text-[11px]"
+            className="cursor-pointer text-token-xs"
             style={{ color: "var(--text-muted)" }}
           >
             Diff preview
@@ -205,10 +205,10 @@ export const ApprovalBubble = memo(function ApprovalBubble({
         style={{
           background: "var(--bg-panel-2)",
           color: "var(--text-muted)",
-          borderLeft: "3px solid #9bc53d",
+          borderLeft: "3px solid var(--color-success)",
         }}
       >
-        <Check size={12} style={{ color: "#9bc53d" }} />
+        <Check size={12} style={{ color: "var(--color-success)" }} />
         <span>
           已允许 {part.toolName}
           {part.resolvedBy === "timeout" && "（超时默认）"}
@@ -224,11 +224,11 @@ export const ApprovalBubble = memo(function ApprovalBubble({
         style={{
           background: "var(--bg-panel-2)",
           color: "var(--text-muted)",
-          borderLeft: "3px solid #e01a4f",
+          borderLeft: "3px solid var(--color-danger)",
         }}
       >
         <div className="inline-flex items-center gap-2">
-          <X size={12} style={{ color: "#e01a4f" }} />
+          <X size={12} style={{ color: "var(--color-danger)" }} />
           <span>
             已拒绝 {part.toolName}
             {part.resolvedBy === "timeout" && "（超时默认）"}
@@ -236,7 +236,7 @@ export const ApprovalBubble = memo(function ApprovalBubble({
         </div>
         {part.denyReason && (
           <div
-            className="mt-1 ml-5 text-[11px]"
+            className="mt-1 ml-5 text-token-xs"
             style={{ color: "var(--text-dim)" }}
           >
             {part.denyReason}
@@ -252,14 +252,14 @@ export const ApprovalBubble = memo(function ApprovalBubble({
       className="rounded-md p-3 text-sm space-y-2"
       style={{
         background: "var(--bg-panel-2)",
-        borderLeft: "3px solid #f9c22e",
+        borderLeft: "3px solid var(--color-warning)",
       }}
     >
       <div
         className="flex items-center gap-2 text-xs"
         style={{ color: "var(--text-muted)" }}
       >
-        <ShieldAlert size={13} style={{ color: "#f9c22e" }} />
+        <ShieldAlert size={13} style={{ color: "var(--color-warning)" }} />
         <span>
           需要确认：{part.toolName}
           {part.ruleId && (
@@ -272,7 +272,7 @@ export const ApprovalBubble = memo(function ApprovalBubble({
           )}
         </span>
         <span
-          className="ml-auto tabular-nums text-[11px]"
+          className="ml-auto tabular-nums text-token-xs"
           style={{ color: "var(--fg-faint)" }}
           title="审批超时时间——超过自动按默认决策（deny）结算"
         >
@@ -299,7 +299,7 @@ export const ApprovalBubble = memo(function ApprovalBubble({
       <div className="flex items-center justify-between gap-2">
         {part.ruleId ? (
           <label
-            className="flex items-center gap-1.5 text-[11px] select-none cursor-pointer"
+            className="flex items-center gap-1.5 text-token-xs select-none cursor-pointer"
             style={{ color: "var(--text-muted)" }}
             title="勾选后本会话内同类操作不再询问；新建/重启会话后失效"
           >
@@ -335,7 +335,7 @@ export const ApprovalBubble = memo(function ApprovalBubble({
                   : undefined
               )
             }
-            className="px-2.5 py-1 rounded text-xs text-white hover:opacity-90"
+            className="rounded px-2.5 py-1 text-xs text-[color:var(--color-bg)] hover:opacity-90"
             style={{ background: "var(--accent)" }}
           >
             Allow

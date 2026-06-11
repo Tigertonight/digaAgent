@@ -26,6 +26,7 @@ import {
   type SettingsApi,
 } from "@/lib/electron-bridge";
 import { ConfirmButton } from "@/app/components/ConfirmButton";
+import { Badge, Button, FieldInput } from "@/app/components/DesignPrimitives";
 import SkillsPanel from "@/app/components/SkillsPanel";
 import { BudgetSettingsSection } from "./BudgetSettingsSection";
 import { CollabSettingsSection } from "./CollabSettingsSection";
@@ -191,21 +192,21 @@ function SettingsShell({
     <div
       className="settings-page flex h-screen overflow-hidden bg-[color:var(--bg)] text-[color:var(--text)]"
     >
-      <aside className="flex w-[340px] shrink-0 flex-col border-r border-[color:var(--border)] bg-[color:var(--bg-panel)] px-5 py-6">
+      <aside className="flex w-[280px] shrink-0 flex-col border-r border-[color:var(--border)] bg-[color:var(--bg-panel)] px-4 py-5">
         <Link
           href="/"
-          className="mb-7 inline-flex items-center gap-2 text-base font-semibold text-[color:var(--text-muted)] hover:text-[color:var(--text)]"
+          className="mb-6 inline-flex items-center gap-2 text-token-body font-semibold text-[color:var(--text-muted)] hover:text-[color:var(--text)]"
         >
-          <ArrowLeft size={22} />
+          <ArrowLeft size={17} />
           返回应用
         </Link>
         <nav className="min-h-0 flex-1 overflow-y-auto pr-1">
           {(["核心", "工具与集成", "桌面与访问"] as const).map((group) => (
-            <div key={group} className="mb-8">
-              <div className="mb-3 px-3 text-base font-semibold text-[color:var(--text-dim)]">
+            <div key={group} className="mb-6">
+              <div className="mb-2 px-3 text-token-sm font-semibold text-[color:var(--text-dim)]">
                 {group}
               </div>
-              <div className="space-y-1.5">
+              <div className="space-y-1">
                 {SETTINGS_SECTIONS.filter((item) => item.group === group).map(
                   (item) => {
                     const Icon = item.icon;
@@ -215,13 +216,13 @@ function SettingsShell({
                         key={item.id}
                         type="button"
                         onClick={() => onSectionChange(item.id)}
-                        className={`flex w-full items-center gap-4 rounded-xl px-4 py-3 text-left text-lg transition ${
+                        className={`flex h-10 w-full items-center gap-2.5 rounded-token px-3 text-left text-token-body font-medium transition ${
                           selected
                             ? "bg-[color:var(--bg-selected)] text-[color:var(--text)]"
                             : "text-[color:var(--text-muted)] hover:bg-[color:var(--bg-hover)] hover:text-[color:var(--text)]"
                         }`}
                       >
-                        <Icon size={22} />
+                        <Icon size={17} className="shrink-0" />
                         <span>{item.label}</span>
                       </button>
                     );
@@ -234,38 +235,41 @@ function SettingsShell({
       </aside>
 
       <main className="min-w-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-5xl px-12 py-14">
-          <header className="mb-12 flex items-start justify-between gap-4">
+        <div className="mx-auto max-w-5xl px-10 py-10">
+          <header className="mb-8 flex items-start justify-between gap-4">
             <div>
-              <h1 className="text-5xl font-semibold tracking-normal">
+              <h1 className="text-token-page-title font-semibold tracking-normal">
                 {active.label}
               </h1>
-              <p className="mt-4 text-lg text-[color:var(--text-muted)]">
+              <p className="mt-2 text-token-body text-[color:var(--text-muted)]">
                 {active.description}
               </p>
             </div>
             <div className="flex items-center gap-2 text-xs">
-              <button
+              <Button
                 onClick={onRefresh}
                 disabled={refreshDisabled}
-                className="inline-flex items-center gap-1 rounded-md border border-[color:var(--border)] px-3 py-1.5 text-[color:var(--text-muted)] hover:bg-[color:var(--bg-hover)] disabled:opacity-50"
+                size="sm"
+                variant="outline"
+                leading={<RefreshCw size={14} />}
               >
-                <RefreshCw size={13} />
                 刷新
-              </button>
+              </Button>
               {onReloadServer ? (
-                <button
+                <Button
                   onClick={onReloadServer}
                   disabled={reloadDisabled}
-                  className="inline-flex items-center gap-1 rounded-md border border-[color:var(--accent)] bg-[color:var(--bg-subtle)] px-3 py-1.5 text-[color:var(--accent)] hover:bg-[color:var(--bg-hover)] disabled:opacity-50"
+                  size="sm"
+                  tone="accent"
+                  variant="soft"
+                  leading={<RotateCw size={14} />}
                 >
-                  <RotateCw size={13} />
                   重启服务
-                </button>
+                </Button>
               ) : null}
             </div>
           </header>
-          <div className="space-y-6">{children}</div>
+          <div className="space-y-5">{children}</div>
         </div>
       </main>
     </div>
@@ -384,14 +388,9 @@ function BrowserPolicySection() {
             控制 Agent 浏览器可以直接访问哪些外部站点。未记录的外部站点会在首次访问时请求确认。
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => void load()}
-          disabled={loading || saving}
-          className="rounded-md border border-[color:var(--border)] px-2 py-1 text-xs hover:bg-[color:var(--bg-hover)] disabled:opacity-50"
-        >
+        <Button onClick={() => void load()} disabled={loading || saving} variant="outline" size="sm">
           {loading ? "加载中" : "刷新"}
-        </button>
+        </Button>
       </div>
 
       <div className="mt-5 grid gap-4 md:grid-cols-2">
@@ -415,46 +414,52 @@ function BrowserPolicySection() {
 
       <div className="mt-5 grid gap-3 md:grid-cols-2">
         <div className="flex gap-2">
-          <input
+          <FieldInput
             value={allowDraft}
             onChange={(e) => setAllowDraft(e.target.value)}
             placeholder="https://example.com"
-            className="min-w-0 flex-1 rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-sm font-mono outline-none focus:border-neutral-600"
+            className="min-w-0 flex-1 font-mono"
           />
-          <button
-            type="button"
+          <Button
             onClick={() => {
               void update("allow", allowDraft);
               setAllowDraft("");
             }}
             disabled={saving || !allowDraft.trim()}
-            className="rounded bg-blue-700 px-3 py-1 text-xs hover:bg-blue-600 disabled:bg-neutral-800 disabled:text-neutral-600"
+            tone="accent"
+            variant="soft"
+            size="sm"
           >
             允许
-          </button>
+          </Button>
         </div>
         <div className="flex gap-2">
-          <input
+          <FieldInput
             value={blockDraft}
             onChange={(e) => setBlockDraft(e.target.value)}
             placeholder="https://example.com"
-            className="min-w-0 flex-1 rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-sm font-mono outline-none focus:border-neutral-600"
+            className="min-w-0 flex-1 font-mono"
           />
-          <button
-            type="button"
+          <Button
             onClick={() => {
               void update("block", blockDraft);
               setBlockDraft("");
             }}
             disabled={saving || !blockDraft.trim()}
-            className="rounded border border-red-800 px-3 py-1 text-xs text-red-300 hover:bg-red-900/30 disabled:opacity-50"
+            tone="danger"
+            variant="soft"
+            size="sm"
           >
             禁止
-          </button>
+          </Button>
         </div>
       </div>
 
-      {status ? <div className="mt-3 text-xs text-neutral-500">{status}</div> : null}
+      {status ? (
+        <div className="mt-3 text-token-sm text-[color:var(--text-muted)]">
+          {status}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -475,28 +480,29 @@ function BrowserPolicyList({
   onRemove: (origin: string) => void;
 }) {
   return (
-    <div className="rounded-md border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-3">
-      <div className="mb-2 text-xs font-semibold text-neutral-300">{title}</div>
+    <div className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-3">
+      <div className="mb-2 text-token-sm font-semibold text-[color:var(--text)]">{title}</div>
       {items.length === 0 ? (
-        <div className="text-xs text-neutral-600">{emptyText}</div>
+        <div className="text-token-sm text-[color:var(--text-dim)]">{emptyText}</div>
       ) : (
         <div className="space-y-2">
           {items.map((origin) => (
             <div
               key={origin}
-              className="flex items-center justify-between gap-2 rounded border border-neutral-800 px-2 py-1.5"
+              className="flex items-center justify-between gap-2 rounded-token-sm border border-[color:var(--border-soft)] px-2 py-1.5"
             >
-              <span className="min-w-0 truncate font-mono text-xs text-neutral-300">
+              <span className="min-w-0 truncate font-mono text-token-sm text-[color:var(--text)]">
                 {origin}
               </span>
-              <button
-                type="button"
+              <Button
                 disabled={disabled}
                 onClick={() => onRemove(origin)}
-                className="shrink-0 rounded border border-neutral-700 px-1.5 py-0.5 text-[11px] text-neutral-400 hover:bg-neutral-900 disabled:opacity-50"
+                className="shrink-0"
+                size="xs"
+                variant="outline"
               >
                 {removeLabel}
-              </button>
+              </Button>
             </div>
           ))}
         </div>
@@ -607,7 +613,7 @@ function WebSettingsPanel() {
       refreshDisabled={loading || busy !== null}
     >
       {error ? (
-        <div className="rounded-md border border-red-800 bg-red-900/40 p-3 text-sm text-red-200">
+        <div className="rounded-token border border-[color:var(--color-danger)] bg-[color:var(--color-danger-bg)] p-3 text-token-body text-[color:var(--color-danger)]">
           {error}
         </div>
       ) : null}
@@ -621,7 +627,7 @@ function WebSettingsPanel() {
             </p>
           </section>
           {loading ? (
-            <div className="text-sm text-neutral-500">加载中…</div>
+            <div className="text-token-body text-[color:var(--text-muted)]">加载中…</div>
           ) : (
             <div className="space-y-2">
               {data?.providers
@@ -638,42 +644,36 @@ function WebSettingsPanel() {
                   return (
                     <div
                       key={p.provider}
-                      className="flex flex-col gap-2 rounded-md border border-neutral-800 p-3"
+                      className="flex flex-col gap-2 rounded-token border border-[color:var(--border)] bg-[color:var(--bg)] p-3"
                     >
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex min-w-0 flex-wrap items-center gap-2">
                           <span className="font-mono text-sm">{p.provider}</span>
-                          <span className="text-xs text-neutral-500">
+                          <span className="text-token-sm text-[color:var(--text-muted)]">
                             {p.displayName}
                           </span>
-                          <span
-                            className={`rounded border px-1.5 py-0.5 text-xs ${
-                              p.hasAuth
-                                ? "border-emerald-700 bg-emerald-900/40 text-emerald-300"
-                                : "border-neutral-700 bg-neutral-800 text-neutral-500"
-                            }`}
-                          >
+                          <Badge tone={p.hasAuth ? "success" : "default"} variant={p.hasAuth ? "soft" : "outline"}>
                             {p.hasAuth ? "已保存" : "未配置"}
-                          </span>
+                          </Badge>
                           {p.status.source ? (
                             <span
-                              className="truncate text-xs text-neutral-600"
+                              className="truncate text-token-sm text-[color:var(--text-dim)]"
                               title={p.status.label ?? p.status.source}
                             >
                               来源：{p.status.source}
                             </span>
                           ) : null}
                           {p.supportsOAuth && !isOAuth ? (
-                            <span className="rounded border border-amber-700 px-1 py-0.5 text-xs text-amber-300">
+                            <Badge tone="warning" variant="outline">
                               支持 OAuth
-                            </span>
+                            </Badge>
                           ) : null}
                         </div>
                         {p.hasAuth ? (
                           <ConfirmButton
                             onConfirm={() => void deleteKey(p.provider)}
                             disabled={isBusy}
-                            className="inline-flex shrink-0 items-center gap-1 rounded border border-red-800 px-2 py-0.5 text-xs text-red-300 hover:bg-red-900/40 disabled:opacity-50"
+                            className="inline-flex h-[var(--control-sm)] shrink-0 items-center gap-1 rounded-[var(--button-radius)] border border-[color:var(--color-danger)] px-2.5 text-token-sm text-[color:var(--color-danger)] hover:bg-[color:var(--color-danger-bg)] disabled:opacity-50"
                             title={`删除 ${p.provider} 的凭证`}
                           >
                             <Trash2 size={12} />
@@ -683,7 +683,7 @@ function WebSettingsPanel() {
                       </div>
                       {!isOAuth ? (
                         <div className="flex items-center gap-2">
-                          <input
+                          <FieldInput
                             type="password"
                             value={editVal}
                             onChange={(e) =>
@@ -697,15 +697,17 @@ function WebSettingsPanel() {
                                 ? "粘贴新密钥以替换当前密钥"
                                 : "粘贴 API 密钥…"
                             }
-                            className="flex-1 rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-sm font-mono focus:border-neutral-600 focus:outline-none"
+                            className="min-w-0 flex-1 font-mono"
                           />
-                          <button
+                          <Button
                             onClick={() => void saveKey(p.provider, editVal)}
                             disabled={!editVal.trim() || isBusy}
-                            className="rounded bg-blue-700 px-3 py-1 text-xs hover:bg-blue-600 disabled:bg-neutral-800 disabled:text-neutral-600"
+                            size="sm"
+                            tone="accent"
+                            variant="soft"
                           >
                             {isBusy ? "…" : "保存"}
-                          </button>
+                          </Button>
                         </div>
                       ) : null}
                     </div>
@@ -715,7 +717,7 @@ function WebSettingsPanel() {
                 <button
                   type="button"
                   onClick={() => setShowAllProviders((v) => !v)}
-                  className="w-full rounded-md border border-neutral-800 px-2 py-1.5 text-xs text-neutral-500 hover:bg-neutral-900 hover:text-neutral-300"
+                  className="w-full rounded-token border border-[color:var(--border)] px-3 py-2 text-token-sm text-[color:var(--text-muted)] hover:bg-[color:var(--bg-hover)] hover:text-[color:var(--text)]"
                 >
                   {showAllProviders
                     ? "收起不常用服务商"
@@ -724,52 +726,54 @@ function WebSettingsPanel() {
               ) : null}
             </div>
           )}
-          <section className="space-y-2 rounded-md border border-dashed border-neutral-700 p-3">
+          <section className="space-y-2 rounded-token border border-dashed border-[color:var(--border)] p-3">
             <button
               type="button"
               onClick={() => setShowCustomProvider((v) => !v)}
-              className="text-xs text-neutral-400 hover:text-neutral-200"
+              className="text-token-sm text-[color:var(--text-muted)] hover:text-[color:var(--text)]"
             >
               {showCustomProvider ? "收起自定义服务商" : "高级：添加自定义服务商"}
             </button>
             {showCustomProvider ? (
               <>
-                <div className="text-xs text-neutral-500">
+                <div className="text-token-sm text-[color:var(--text-muted)]">
                   适用于列表中没有的模型服务。需要填写 SDK 识别的服务商标识和对应 API 密钥。
                 </div>
                 <div className="flex gap-2">
-                  <input
+                  <FieldInput
                     value={newProvider}
                     onChange={(e) => setNewProvider(e.target.value)}
                     placeholder="服务商标识"
-                    className="w-48 rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-sm font-mono focus:border-neutral-600 focus:outline-none"
+                    className="w-48 font-mono"
                   />
-                  <input
+                  <FieldInput
                     type="password"
                     value={newKey}
                     onChange={(e) => setNewKey(e.target.value)}
                     placeholder="API 密钥"
-                    className="flex-1 rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-sm font-mono focus:border-neutral-600 focus:outline-none"
+                    className="min-w-0 flex-1 font-mono"
                   />
-                  <button
+                  <Button
                     onClick={() => void addNew()}
                     disabled={!newProvider.trim() || !newKey.trim()}
-                    className="inline-flex items-center gap-1 rounded bg-[color:var(--accent)] px-3 py-1 text-xs text-white hover:bg-[color:var(--accent-hover)] disabled:bg-neutral-800 disabled:text-neutral-600"
+                    size="sm"
+                    tone="accent"
+                    variant="solid"
+                    leading={<Plus size={14} />}
                   >
-                    <Plus size={13} />
                     添加
-                  </button>
+                  </Button>
                 </div>
               </>
             ) : null}
           </section>
-          <section className="text-xs leading-relaxed text-neutral-500">
+          <section className="text-token-sm leading-relaxed text-[color:var(--text-muted)]">
             Web 模式下密钥写到{" "}
-            <code className="text-neutral-400">
+            <code className="text-[color:var(--text)]">
               {data?.authPath ?? "~/.pi/auth.json"}
             </code>
             。OAuth 登录请走 CLI：
-            <code className="ml-1 text-neutral-400">pi login &lt;provider&gt;</code>。
+            <code className="ml-1 text-[color:var(--text)]">pi login &lt;provider&gt;</code>。
           </section>
         </>
       ) : null}
@@ -856,25 +860,25 @@ function remoteDeviceConnection(device: RemoteDeviceView, now = Date.now()) {
   if (device.revokedAt) {
     return {
       label: "已撤销",
-      tone: "border-neutral-700 bg-neutral-900/30 text-neutral-500",
+      tone: "default" as const,
     };
   }
   const last = device.lastSeenAt;
   if (last && now - last <= REMOTE_DEVICE_ONLINE_MS) {
     return {
       label: "在线",
-      tone: "border-emerald-800 bg-emerald-950/30 text-emerald-200",
+      tone: "success" as const,
     };
   }
   if (last && now - last <= REMOTE_DEVICE_RECENT_MS) {
     return {
       label: "刚刚在线",
-      tone: "border-blue-800 bg-blue-950/30 text-blue-200",
+      tone: "info" as const,
     };
   }
   return {
     label: "离线",
-    tone: "border-neutral-700 bg-neutral-900/30 text-neutral-400",
+    tone: "default" as const,
   };
 }
 
@@ -1010,8 +1014,8 @@ function RemoteAccessSection({
       margin: 1,
       width: 220,
       color: {
-        dark: "#101114",
-        light: "#ffffff",
+        dark: "black",
+        light: "white",
       },
     });
 
@@ -1202,18 +1206,18 @@ function RemoteAccessSection({
       ? {
           title: "未开启",
           description: "手机暂时不能连接这台电脑。",
-          tone: "border-neutral-700 bg-neutral-900/20 text-neutral-400",
+          tone: "default" as const,
         }
       : mode === "vpn"
         ? {
             title: "仅 VPN 可访问",
             description: "适合 Tailscale、ZeroTier 等私有网络。",
-            tone: "border-blue-800 bg-blue-950/20 text-blue-200",
+            tone: "info" as const,
           }
         : {
             title: "局域网可访问",
             description: "同一 Wi-Fi 下的设备可以扫码连接。",
-            tone: "border-emerald-800 bg-emerald-950/20 text-emerald-200",
+            tone: "success" as const,
           };
 
   const revokeDuplicateDevices = async () => {
@@ -1236,22 +1240,26 @@ function RemoteAccessSection({
   };
 
   return (
-    <section className="rounded border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-4">
+    <section className="rounded-token border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className="text-sm font-semibold">手机访问电脑端</h2>
-          <p className="mt-1 max-w-2xl text-xs leading-relaxed text-[color:var(--text-muted)]">
+          <h2 className="text-token-body font-semibold">手机访问电脑端</h2>
+          <p className="mt-1 max-w-2xl text-token-sm leading-relaxed text-[color:var(--text-muted)]">
             需要用手机访问电脑上的 Agent 时开启。个人使用建议优先选择仅 VPN；局域网模式只适合可信网络。
           </p>
         </div>
-        <div className="inline-flex rounded border border-[color:var(--border)] p-0.5 text-xs">
+        <div className="inline-flex rounded-[var(--button-radius)] border border-[color:var(--border)] p-0.5 text-token-sm">
           {(["off", "vpn", "lan"] as const).map((item) => (
             <button
               key={item}
               type="button"
               disabled={disabled || busy}
               onClick={() => void saveMode(item)}
-              className={`rounded px-2 py-1 ${mode === item ? "bg-[color:var(--bg-selected)] text-[color:var(--accent)]" : "hover:bg-[color:var(--bg-hover)]"}`}
+              className={`h-[var(--control-xs)] rounded-[var(--button-radius)] px-2 transition-colors ${
+                mode === item
+                  ? "bg-[color:var(--bg-selected)] text-[color:var(--accent)]"
+                  : "text-[color:var(--text-muted)] hover:bg-[color:var(--bg-hover)] hover:text-[color:var(--text)]"
+              }`}
             >
               {item === "off" ? "关闭" : item === "vpn" ? "仅 VPN" : "局域网"}
             </button>
@@ -1260,31 +1268,37 @@ function RemoteAccessSection({
       </div>
 
       <div className="mt-4 grid gap-2 md:grid-cols-3">
-        <div className={`rounded border p-3 text-xs ${modeStatus.tone}`}>
+        <div className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-3 text-token-sm">
           <div className="flex items-center gap-2 font-medium">
-            <span className="h-2 w-2 rounded-full bg-current" />
+            <span
+              className={`h-2 w-2 rounded-full ${
+                modeStatus.tone === "success"
+                  ? "bg-[color:var(--color-success)]"
+                  : modeStatus.tone === "info"
+                    ? "bg-[color:var(--color-info)]"
+                    : "bg-[color:var(--text-dim)]"
+              }`}
+            />
             {modeStatus.title}
           </div>
           <div className="mt-1 leading-relaxed text-[color:var(--text-muted)]">
             {modeStatus.description}
           </div>
         </div>
-        <div
-          className={`rounded border p-3 text-xs ${
-            tunnel?.url
-              ? "border-emerald-800 bg-emerald-950/20 text-emerald-200"
-              : "border-neutral-700 bg-neutral-900/20 text-neutral-400"
-          }`}
-        >
+        <div className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-3 text-token-sm">
           <div className="flex items-center gap-2 font-medium">
-            <span className="h-2 w-2 rounded-full bg-current" />
+            <span
+              className={`h-2 w-2 rounded-full ${
+                tunnel?.url ? "bg-[color:var(--color-success)]" : "bg-[color:var(--text-dim)]"
+              }`}
+            />
             {tunnel?.url ? "公网已连接" : "公网未开启"}
           </div>
           <div className="mt-1 truncate text-[color:var(--text-muted)]">
             {tunnel?.url ?? "默认自动开启；手动关闭后保持关闭。"}
           </div>
         </div>
-        <div className="rounded border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-3 text-xs">
+        <div className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-3 text-token-sm">
           <div className="font-medium">设备状态</div>
           <div className="mt-1 text-[color:var(--text-muted)]">
             {dedupedActiveDevices.length} 台已授权 · {onlineCount > 0 ? `${onlineCount} 台在线` : recentCount > 0 ? `${recentCount} 台刚刚在线` : "暂无在线设备"}
@@ -1292,46 +1306,45 @@ function RemoteAccessSection({
         </div>
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-token-sm">
         <label className="flex items-center gap-2">
           <span className="text-[color:var(--text-muted)]">端口</span>
-          <input
+          <FieldInput
             type="number"
             min={1024}
             max={65535}
             value={port}
             onChange={(e) => setPort(Number(e.target.value))}
-            className="w-24 rounded border border-[color:var(--border)] bg-[color:var(--bg)] px-2 py-1"
+            className="w-24"
           />
         </label>
-        <button
-          type="button"
+        <Button
           disabled={disabled || busy}
           onClick={() => void savePort()}
-          className="rounded border border-[color:var(--border)] px-2 py-1 hover:bg-[color:var(--bg-hover)] disabled:opacity-50"
+          variant="outline"
+          size="sm"
         >
           保存端口并重启
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
           disabled={disabled || busy || (mode === "off" && !tunnel?.url)}
           onClick={() => void startPairing()}
-          className="rounded bg-[color:var(--accent)] px-3 py-1 text-white hover:bg-[color:var(--accent-hover)] disabled:bg-neutral-800 disabled:text-neutral-500"
+          tone="accent"
+          variant="solid"
+          size="sm"
         >
           生成扫码配对
-        </button>
+        </Button>
       </div>
 
-      <div className="mt-3 rounded border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-3 text-xs">
+      <div className="mt-3 rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-3 text-token-sm">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 font-medium">
               <Globe2 size={14} />
               高级：公网访问
               {tunnel?.url ? (
-                <span className="rounded border border-emerald-800 bg-emerald-950/30 px-1.5 py-0.5 text-[11px] text-emerald-200">
-                  已开启
-                </span>
+                <Badge tone="success">已开启</Badge>
               ) : null}
             </div>
             <p className="mt-1 leading-relaxed text-[color:var(--text-muted)]">
@@ -1340,23 +1353,25 @@ function RemoteAccessSection({
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {tunnel?.url ? (
-              <button
-                type="button"
+              <Button
                 disabled={disabled || busy}
                 onClick={() => void stopTunnel()}
-                className="rounded border border-red-800 px-2 py-1 text-red-300 hover:bg-red-900/30 disabled:opacity-50"
+                tone="danger"
+                variant="outline"
+                size="sm"
               >
                 关闭公网
-              </button>
+              </Button>
             ) : (
-              <button
-                type="button"
+              <Button
                 disabled={disabled || busy}
                 onClick={() => void startTunnel()}
-                className="rounded border border-[color:var(--accent)] bg-[color:var(--bg-selected)] px-2 py-1 text-[color:var(--accent)] hover:bg-[color:var(--bg-hover)] disabled:opacity-50"
+                tone="accent"
+                variant="soft"
+                size="sm"
               >
                 开启公网
-              </button>
+              </Button>
             )}
           </div>
         </div>
@@ -1371,24 +1386,24 @@ function RemoteAccessSection({
       </div>
 
       {error ? (
-        <div className="mt-3 rounded border border-red-800 bg-red-900/30 p-2 text-xs text-red-200">
+        <div className="mt-3 rounded-token border border-[color:var(--color-danger)] bg-[color:var(--color-danger-bg)] p-2 text-token-sm text-[color:var(--color-danger)]">
           {error}
         </div>
       ) : null}
 
       {pair ? (
         <div className="mt-4 grid gap-4 md:grid-cols-[240px_minmax(0,1fr)]">
-          <div className="rounded border border-[color:var(--border-soft)] bg-white p-2">
+          <div className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--qr-code-bg)] p-2">
             {/* eslint-disable-next-line @next/next/no-img-element -- QR code is a local data URL generated at runtime. */}
             {qr ? <img src={qr} alt="移动端配对二维码" className="h-auto w-full" /> : null}
           </div>
-          <div className="min-w-0 space-y-2 text-xs">
+          <div className="min-w-0 space-y-2 text-token-sm">
             <div className="text-[color:var(--text-muted)]">
               二维码 {new Date(pair.expiresAt).toLocaleTimeString()} 过期。用手机系统相机扫码会自动打开配对页，进入后点击“开始配对”。
             </div>
             {pairUrl ? (
               <div
-                className="truncate rounded border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-2 py-1 font-mono text-[11px]"
+                className="truncate rounded-token-sm border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-2 py-1 font-mono text-token-xs"
                 title={pairUrl}
               >
                 扫码链接：{pairUrl}
@@ -1403,7 +1418,7 @@ function RemoteAccessSection({
                       key={base}
                       type="button"
                       onClick={() => void applyPairTarget(pair, base, pairBaseOptions)}
-                      className={`rounded border px-2 py-1 text-[11px] ${
+                      className={`h-[var(--control-xs)] rounded-[var(--button-radius)] border px-2 text-token-xs ${
                         selected
                           ? "border-[color:var(--accent)] bg-[color:var(--bg-selected)] text-[color:var(--accent)]"
                           : "border-[color:var(--border)] text-[color:var(--text-muted)] hover:bg-[color:var(--bg-hover)]"
@@ -1436,42 +1451,41 @@ function RemoteAccessSection({
 
       <div className="mt-4 space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="text-xs font-medium text-[color:var(--text-muted)]">
+          <div className="text-token-sm font-medium text-[color:var(--text-muted)]">
             已配对设备
           </div>
           {duplicateCount > 0 ? (
-            <button
-              type="button"
+            <Button
               disabled={busy}
               onClick={() => void revokeDuplicateDevices()}
-              className="rounded border border-amber-700 px-2 py-1 text-xs text-amber-300 hover:bg-amber-950/30 disabled:opacity-50"
+              tone="warning"
+              variant="outline"
+              size="sm"
             >
               清理重复授权（{duplicateCount}）
-            </button>
+            </Button>
           ) : null}
         </div>
         {visibleDevices.length === 0 ? (
-          <div className="text-xs text-[color:var(--text-muted)]">暂无设备。</div>
+          <div className="text-token-sm text-[color:var(--text-muted)]">暂无设备。</div>
         ) : (
           visibleDevices.map((device) => {
             const connection = remoteDeviceConnection(device, statusNow);
             return (
             <div
               key={device.id}
-              className="flex items-center justify-between gap-2 rounded border border-[color:var(--border-soft)] px-3 py-2 text-xs"
+              className="flex items-center justify-between gap-2 rounded-token border border-[color:var(--border-soft)] px-3 py-2 text-token-sm"
             >
               <div className="min-w-0">
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <span className="truncate font-medium">{device.name}</span>
-                  <span
-                    className={`shrink-0 rounded border px-1.5 py-0.5 text-[11px] ${connection.tone}`}
-                  >
+                  <Badge tone={connection.tone} className="shrink-0">
                     {connection.label}
-                  </span>
+                  </Badge>
                   {device.duplicateCount > 0 ? (
-                    <span className="shrink-0 rounded border border-amber-700 bg-amber-950/20 px-1.5 py-0.5 text-[11px] text-amber-300">
+                    <Badge tone="warning" className="shrink-0">
                       已合并 {device.duplicateCount} 条重复授权
-                    </span>
+                    </Badge>
                   ) : null}
                 </div>
                 <div className="truncate text-[color:var(--text-muted)]">
@@ -1481,29 +1495,31 @@ function RemoteAccessSection({
                 </div>
               </div>
               {!device.revokedAt ? (
-                <button
-                  type="button"
+                <Button
                   disabled={busy}
                   onClick={() => void revoke(device.id)}
-                  className="shrink-0 rounded border border-red-800 px-2 py-1 text-red-300 hover:bg-red-900/30"
+                  tone="danger"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
                 >
                   撤销
-                </button>
+                </Button>
               ) : null}
             </div>
           );
           })
         )}
         {revokedCount > 0 ? (
-          <button
-            type="button"
+          <Button
             onClick={() => setShowRevokedDevices((v) => !v)}
-            className="rounded border border-[color:var(--border)] px-2 py-1 text-xs text-[color:var(--text-muted)] hover:bg-[color:var(--bg-hover)]"
+            variant="outline"
+            size="sm"
           >
             {showRevokedDevices
               ? "隐藏已撤销设备"
               : `显示已撤销设备（${revokedCount}）`}
-          </button>
+          </Button>
         ) : null}
       </div>
     </section>
@@ -1681,7 +1697,7 @@ export default function SettingsPanel() {
       reloadDisabled={busy !== null}
     >
       {error ? (
-        <div className="rounded-md border border-red-800 bg-red-900/40 p-3 text-sm text-red-200">
+        <div className="rounded-token border border-[color:var(--color-danger)] bg-[color:var(--color-danger-bg)] p-3 text-token-body text-[color:var(--color-danger)]">
           {error}
         </div>
       ) : null}
@@ -1695,7 +1711,7 @@ export default function SettingsPanel() {
             </p>
           </section>
           {loading ? (
-            <div className="text-sm text-neutral-500">加载中…</div>
+            <div className="text-token-body text-[color:var(--text-muted)]">加载中…</div>
           ) : (
             <div className="space-y-2">
               {rows
@@ -1712,23 +1728,17 @@ export default function SettingsPanel() {
                   return (
                     <div
                       key={row.provider}
-                      className="flex flex-col gap-2 rounded-md border border-neutral-800 p-3"
+                      className="flex flex-col gap-2 rounded-token border border-[color:var(--border)] bg-[color:var(--bg)] p-3"
                     >
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex min-w-0 items-center gap-2">
                           <span className="font-mono text-sm">{row.provider}</span>
-                          <span
-                            className={`rounded border px-1.5 py-0.5 text-xs ${
-                              row.hasKey
-                                ? "border-emerald-700 bg-emerald-900/40 text-emerald-300"
-                                : "border-neutral-700 bg-neutral-800 text-neutral-500"
-                            }`}
-                          >
+                          <Badge tone={row.hasKey ? "success" : "default"} variant={row.hasKey ? "soft" : "outline"}>
                             {row.hasKey ? "已保存" : "未配置"}
-                          </span>
+                          </Badge>
                           {row.envNames.length > 0 ? (
                             <span
-                              className="truncate text-xs text-neutral-600"
+                              className="truncate text-token-sm text-[color:var(--text-dim)]"
                               title={row.envNames.join(", ")}
                             >
                               来源：{row.envNames.join(" / ")}
@@ -1737,18 +1747,19 @@ export default function SettingsPanel() {
                         </div>
                         {row.hasKey ? (
                           <div className="flex shrink-0 items-center gap-1 text-xs">
-                            <button
+                            <Button
                               onClick={() => void revealKey(row.provider)}
                               disabled={isBusy}
-                              className="inline-flex items-center gap-1 rounded border border-neutral-700 px-2 py-0.5 hover:bg-neutral-900 disabled:opacity-50"
+                              size="sm"
+                              variant="outline"
+                              leading={<Eye size={14} />}
                             >
-                              <Eye size={12} />
                               查看摘要
-                            </button>
+                            </Button>
                             <ConfirmButton
                               onConfirm={() => void deleteKey(row.provider)}
                               disabled={isBusy}
-                              className="inline-flex items-center gap-1 rounded border border-red-800 px-2 py-0.5 text-red-300 hover:bg-red-900/40 disabled:opacity-50"
+                              className="inline-flex h-[var(--control-sm)] items-center gap-1 rounded-[var(--button-radius)] border border-[color:var(--color-danger)] px-2.5 text-token-sm text-[color:var(--color-danger)] hover:bg-[color:var(--color-danger-bg)] disabled:opacity-50"
                               title={`删除 ${row.provider} 的密钥`}
                             >
                               <Trash2 size={12} />
@@ -1758,12 +1769,12 @@ export default function SettingsPanel() {
                         ) : null}
                       </div>
                       {showVal !== undefined ? (
-                        <div className="break-all rounded border border-neutral-800 bg-neutral-950 px-2 py-1 font-mono text-xs text-neutral-400">
+                        <div className="break-all rounded-token-sm border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] px-2 py-1 font-mono text-token-sm text-[color:var(--text-muted)]">
                           {showVal ? mask(showVal) : "(empty)"}
                         </div>
                       ) : null}
                       <div className="flex items-center gap-2">
-                        <input
+                        <FieldInput
                           type="password"
                           value={editVal}
                           onChange={(e) =>
@@ -1777,15 +1788,17 @@ export default function SettingsPanel() {
                               ? "粘贴新密钥以替换当前密钥"
                               : "粘贴 API 密钥…"
                           }
-                          className="flex-1 rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-sm font-mono focus:border-neutral-600 focus:outline-none"
+                          className="min-w-0 flex-1 font-mono"
                         />
-                        <button
+                        <Button
                           onClick={() => void saveKey(row.provider, editVal)}
                           disabled={!editVal.trim() || isBusy}
-                          className="rounded bg-blue-700 px-3 py-1 text-xs hover:bg-blue-600 disabled:bg-neutral-800 disabled:text-neutral-600"
+                          size="sm"
+                          tone="accent"
+                          variant="soft"
                         >
                           保存
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   );
@@ -1794,7 +1807,7 @@ export default function SettingsPanel() {
                 <button
                   type="button"
                   onClick={() => setShowAllProviders((v) => !v)}
-                  className="w-full rounded-md border border-neutral-800 px-2 py-1.5 text-xs text-neutral-500 hover:bg-neutral-900 hover:text-neutral-300"
+                  className="w-full rounded-token border border-[color:var(--border)] px-3 py-2 text-token-sm text-[color:var(--text-muted)] hover:bg-[color:var(--bg-hover)] hover:text-[color:var(--text)]"
                 >
                   {showAllProviders
                     ? "收起不常用服务商"
@@ -1803,53 +1816,55 @@ export default function SettingsPanel() {
               ) : null}
             </div>
           )}
-          <section className="space-y-2 rounded-md border border-dashed border-neutral-700 p-3">
+          <section className="space-y-2 rounded-token border border-dashed border-[color:var(--border)] p-3">
             <button
               type="button"
               onClick={() => setShowCustomProvider((v) => !v)}
-              className="text-xs text-neutral-400 hover:text-neutral-200"
+              className="text-token-sm text-[color:var(--text-muted)] hover:text-[color:var(--text)]"
             >
               {showCustomProvider ? "收起自定义服务商" : "高级：添加自定义服务商"}
             </button>
             {showCustomProvider ? (
               <>
-                <div className="text-xs text-neutral-500">
+                <div className="text-token-sm text-[color:var(--text-muted)]">
                   适用于列表中没有的模型服务。需要填写 SDK 识别的服务商标识和对应 API 密钥。
                 </div>
                 <div className="flex gap-2">
-                  <input
+                  <FieldInput
                     value={newProvider}
                     onChange={(e) => setNewProvider(e.target.value)}
                     placeholder="服务商标识"
                     list="known-providers"
-                    className="w-48 rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-sm font-mono focus:border-neutral-600 focus:outline-none"
+                    className="w-48 font-mono"
                   />
                   <datalist id="known-providers">
                     {knownProviderList.map((p) => (
                       <option key={p} value={p} />
                     ))}
                   </datalist>
-                  <input
+                  <FieldInput
                     type="password"
                     value={newKey}
                     onChange={(e) => setNewKey(e.target.value)}
                     placeholder="API 密钥"
-                    className="flex-1 rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-sm font-mono focus:border-neutral-600 focus:outline-none"
+                    className="min-w-0 flex-1 font-mono"
                   />
-                  <button
+                  <Button
                     onClick={() => void addNew()}
                     disabled={!newProvider.trim() || !newKey.trim()}
-                    className="inline-flex items-center gap-1 rounded bg-[color:var(--accent)] px-3 py-1 text-xs text-white hover:bg-[color:var(--accent-hover)] disabled:bg-neutral-800 disabled:text-neutral-600"
+                    size="sm"
+                    tone="accent"
+                    variant="solid"
+                    leading={<Plus size={14} />}
                   >
-                    <Plus size={13} />
                     添加
-                  </button>
+                  </Button>
                 </div>
               </>
             ) : null}
           </section>
-          <section className="text-xs leading-relaxed text-neutral-500">
-            修改密钥后，点击顶部的 <code>重启服务</code> 让后台服务读取新配置。
+          <section className="text-token-sm leading-relaxed text-[color:var(--text-muted)]">
+            修改密钥后，点击顶部的 <code className="text-[color:var(--text)]">重启服务</code> 让后台服务读取新配置。
           </section>
         </>
       ) : null}

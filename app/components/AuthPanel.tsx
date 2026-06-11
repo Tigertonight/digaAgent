@@ -184,7 +184,7 @@ export default function AuthPanel({ onClose, initialProvider, onChanged }: Props
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.55)" }}
+      style={{ background: "var(--color-overlay)" }}
       onClick={onClose}
     >
       <div
@@ -255,9 +255,9 @@ export default function AuthPanel({ onClose, initialProvider, onChanged }: Props
           <div
             className="m-3 p-2 rounded text-xs"
             style={{
-              background: "rgba(220,38,38,0.15)",
-              border: "1px solid rgba(220,38,38,0.5)",
-              color: "#fca5a5",
+              background: "var(--color-danger-bg)",
+              border: "1px solid var(--color-danger)",
+              color: "var(--color-danger)",
             }}
           >
             {error}
@@ -301,7 +301,7 @@ export default function AuthPanel({ onClose, initialProvider, onChanged }: Props
 
         {data?.authPath && (
           <div
-            className="px-4 py-2 border-t text-[10px]"
+            className="border-t px-4 py-2 text-token-xs"
             style={{
               borderColor: "var(--border-soft)",
               color: "var(--fg-faint)",

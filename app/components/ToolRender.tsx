@@ -57,9 +57,9 @@ export default function ToolRender({ tool }: Props) {
 function StatusDot({ status }: { status: ToolPart["status"] }) {
   const color =
     status === "running"
-      ? "#a3a3a3"
+      ? "var(--text-muted)"
       : status === "error"
-        ? "#ef4444"
+        ? "var(--color-danger)"
         : "var(--text-dim)";
   return (
     <span
@@ -101,12 +101,12 @@ function ToolFrame({
       >
         <StatusDot status={tool.status} />
         <span className="min-w-0 flex-1">
-          <div className="text-[12px] leading-5" style={{ color: "var(--fg)" }}>
+          <div className="text-token-sm leading-5" style={{ color: "var(--fg)" }}>
             {narration.primary}
           </div>
           {narration.secondary ? (
             <div
-              className="mt-0.5 text-[11px] leading-4"
+              className="mt-0.5 text-token-xs leading-4"
               style={{ color: "var(--fg-faint)" }}
             >
               {narration.secondary}
@@ -114,7 +114,7 @@ function ToolFrame({
           ) : null}
           {narration.recovery ? (
             <div
-              className="mt-0.5 text-[11px] leading-4"
+              className="mt-0.5 text-token-xs leading-4"
               style={{
                 color: "var(--text-muted)",
               }}
@@ -124,7 +124,7 @@ function ToolFrame({
           ) : null}
         </span>
         <span
-          className="mt-0.5 flex shrink-0 items-center gap-1 text-[10px] opacity-0 transition-opacity group-hover/tool:opacity-100"
+          className="mt-0.5 flex shrink-0 items-center gap-1 text-token-xs opacity-0 transition-opacity group-hover/tool:opacity-100"
           style={{ color: "var(--text-muted)" }}
         >
           {open ? "收起" : "详情"}
@@ -137,7 +137,7 @@ function ToolFrame({
           style={{ borderColor: "var(--border-soft)" }}
           data-testid="tool-detail"
         >
-          <div className="mb-1 flex items-center gap-2 text-[10px]" style={{ color: "var(--text-muted)" }}>
+          <div className="mb-1 flex items-center gap-2 text-token-xs" style={{ color: "var(--text-muted)" }}>
             <span className="font-mono">{tool.toolName}</span>
             <span>{tool.status}</span>
             {subtitle ? <span className="truncate">{subtitle}</span> : null}
@@ -366,7 +366,7 @@ function CodeBlock({
 }) {
   return (
     <pre
-      className="text-[11px] leading-[1.45] overflow-auto rounded p-2 whitespace-pre"
+      className="text-token-xs leading-[1.45] overflow-auto rounded p-2 whitespace-pre"
       style={{
         background: "var(--bg-app)",
         maxHeight,
@@ -396,7 +396,7 @@ function ViewModeSwitch({
           key={m.id}
           type="button"
           onClick={() => onChange(m.id)}
-          className="px-1.5 py-0.5 rounded text-[10px] border"
+          className="px-1.5 py-0.5 rounded text-token-xs border"
           style={{
             borderColor: "var(--border-soft)",
             background:
@@ -414,7 +414,7 @@ function ViewModeSwitch({
 function DiffView({ lines }: { lines: DiffLine[] }) {
   return (
     <div
-      className="rounded overflow-auto text-[11px] leading-[1.45]"
+      className="rounded overflow-auto text-token-xs leading-[1.45]"
       style={{
         background: "var(--bg-app)",
         maxHeight: 360,
@@ -425,15 +425,15 @@ function DiffView({ lines }: { lines: DiffLine[] }) {
       {lines.map((l, i) => {
         const bg =
           l.kind === "add"
-            ? "rgba(34,197,94,0.10)"
+            ? "var(--color-success-bg)"
             : l.kind === "del"
-            ? "rgba(239,68,68,0.10)"
+            ? "var(--color-danger-bg)"
             : "transparent";
         const fg =
           l.kind === "add"
-            ? "rgb(134,239,172)"
+            ? "var(--color-success)"
             : l.kind === "del"
-            ? "rgb(252,165,165)"
+            ? "var(--color-danger)"
             : "var(--fg-faint)";
         const prefix =
           l.kind === "add" ? "+" : l.kind === "del" ? "-" : " ";
@@ -489,7 +489,7 @@ function getArg(args: unknown, ...keys: string[]): unknown {
 function errorBanner(tool: ToolPart) {
   if (!tool.isError) return null;
   return (
-    <div className="mb-1 px-1.5 py-1 rounded text-[11px] text-red-200 bg-red-900/30 border border-red-700">
+    <div className="mb-1 rounded-[var(--radius-sm)] border border-[color:var(--color-danger)] bg-[color:var(--color-danger-bg)] px-1.5 py-1 text-token-xs text-[color:var(--color-danger)]">
       tool error
     </div>
   );
@@ -623,7 +623,7 @@ function EditTool({ tool }: { tool: ToolPart }) {
       {mode === "diff" &&
         (noChange ? (
           <div
-            className="text-[11px] px-2 py-1 rounded"
+            className="text-token-xs px-2 py-1 rounded"
             style={{ background: "var(--bg-app)", color: "var(--fg-faint)" }}
           >
             No changes
@@ -633,23 +633,23 @@ function EditTool({ tool }: { tool: ToolPart }) {
         ))}
       {mode === "code" && (
         <div className="space-y-1">
-          <div className="text-[10px] opacity-60">- old</div>
+          <div className="text-token-xs opacity-60">- old</div>
           <pre
-            className="text-[11px] overflow-auto rounded p-2 whitespace-pre"
+            className="text-token-xs overflow-auto rounded p-2 whitespace-pre"
             style={{
-              background: "rgba(239,68,68,0.08)",
-              border: "1px solid rgba(239,68,68,0.25)",
+              background: "var(--color-danger-bg)",
+              border: "1px solid var(--color-danger)",
               maxHeight: 200,
             }}
           >
             {oldStr || "(empty)"}
           </pre>
-          <div className="text-[10px] opacity-60">+ new</div>
+          <div className="text-token-xs opacity-60">+ new</div>
           <pre
-            className="text-[11px] overflow-auto rounded p-2 whitespace-pre"
+            className="text-token-xs overflow-auto rounded p-2 whitespace-pre"
             style={{
-              background: "rgba(34,197,94,0.08)",
-              border: "1px solid rgba(34,197,94,0.25)",
+              background: "var(--color-success-bg)",
+              border: "1px solid var(--color-success)",
               maxHeight: 200,
             }}
           >
@@ -700,8 +700,8 @@ function WriteTool({ tool }: { tool: ToolPart }) {
             width: "100%",
             height: 320,
             border: "1px solid var(--border-soft)",
-            background: "#fff",
-            borderRadius: 4,
+            background: "var(--browser-preview-bg)",
+            borderRadius: "var(--radius-xs)",
           }}
         />
       )}
@@ -802,13 +802,13 @@ function GenericTool({ tool }: { tool: ToolPart }) {
       <ToolImages tool={tool} />
       {argsStr && argsStr !== "{}" && (
         <>
-          <div className="text-[10px] opacity-60 mb-1">args</div>
+          <div className="text-token-xs opacity-60 mb-1">args</div>
           <CodeBlock text={argsStr} maxHeight={160} />
         </>
       )}
       {resultStr && (
         <>
-          <div className="text-[10px] opacity-60 mt-1 mb-1">result</div>
+          <div className="text-token-xs opacity-60 mt-1 mb-1">result</div>
           <CodeBlock text={resultStr} />
         </>
       )}

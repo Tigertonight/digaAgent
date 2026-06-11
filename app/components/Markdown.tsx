@@ -310,7 +310,7 @@ function MarkdownInner({
                         }
                       : undefined
                   }
-                  className="text-blue-500 hover:underline"
+                  className="text-[color:var(--accent)] hover:underline"
                 >
                   {children}
                 </a>
@@ -482,7 +482,7 @@ function CodeBlockWithHeader({
             width: "100%",
             height: 360,
             border: "none",
-            background: "#fff",
+            background: "var(--browser-preview-bg)",
             display: "block",
           }}
         />

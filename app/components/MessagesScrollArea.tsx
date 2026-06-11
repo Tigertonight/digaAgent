@@ -135,7 +135,14 @@ export function MessagesScrollArea({
       >
         <div className="mx-auto w-full max-w-[820px] px-4 py-5 space-y-4">
           {error && (
-            <div className="p-3 rounded bg-red-900/40 border border-red-700 text-sm text-red-200">
+            <div
+              className="rounded-token border p-3 text-token-sm"
+              style={{
+                background: "var(--color-danger-bg)",
+                borderColor: "var(--color-danger)",
+                color: "var(--color-danger)",
+              }}
+            >
               {error}
             </div>
           )}
@@ -339,17 +346,17 @@ function ContextCompactionDivider({
         style={{
           background:
             tone === "error"
-              ? "rgba(248,113,113,0.42)"
+              ? "var(--color-danger)"
               : "var(--border-soft)",
         }}
       />
       <div
-        className="inline-flex max-w-[70%] items-center gap-2 rounded-full border px-3 py-1 text-[11px]"
+        className="inline-flex max-w-[70%] items-center gap-2 rounded-full border px-3 py-1 text-token-xs"
         style={{
           borderColor:
-            tone === "error" ? "rgba(248,113,113,0.48)" : "var(--border-soft)",
+            tone === "error" ? "var(--color-danger)" : "var(--border-soft)",
           background: "var(--bg)",
-          color: tone === "error" ? "#ef4444" : "var(--text-muted)",
+          color: tone === "error" ? "var(--color-danger)" : "var(--text-muted)",
         }}
         title={error ?? undefined}
       >
@@ -371,7 +378,7 @@ function ContextCompactionDivider({
         style={{
           background:
             tone === "error"
-              ? "rgba(248,113,113,0.42)"
+              ? "var(--color-danger)"
               : "var(--border-soft)",
         }}
       />
@@ -549,12 +556,12 @@ function CollapsedProcessGroup({
           <span className="inline truncate font-medium" style={{ color: "var(--text)" }}>
             {summary.title}
           </span>
-          <span className="ml-2 inline truncate text-[11px]" style={{ color: "var(--text-muted)" }}>
+          <span className="ml-2 inline truncate text-token-xs" style={{ color: "var(--text-muted)" }}>
             {summary.detail}
           </span>
         </span>
         <span
-          className="shrink-0 text-[11px] opacity-0 transition-opacity group-hover:opacity-100"
+          className="shrink-0 text-token-xs opacity-0 transition-opacity group-hover:opacity-100"
           style={{ color: "var(--text-muted)" }}
         >
           {open ? "收起 ▾" : "展开细节 ▸"}

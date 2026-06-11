@@ -108,7 +108,7 @@ function Toggle({
           height: 16,
           borderRadius: "50%",
           background: "var(--bg)",
-          boxShadow: "0 1px 4px rgba(0,0,0,0.22)",
+          boxShadow: "0 1px 4px var(--color-shadow-control)",
           transition: "left 0.18s cubic-bezier(.4,0,.2,1)",
         }}
       />
@@ -151,11 +151,11 @@ function SkillDetail({
             flexShrink: 0,
             background:
               label === "project"
-                ? "rgba(99,102,241,0.12)"
-                : "rgba(120,120,120,0.12)",
+                ? "var(--color-accent-bg)"
+                : "var(--bg-subtle)",
             color:
               label === "project"
-                ? "rgba(99,102,241,0.9)"
+                ? "var(--accent)"
                 : "var(--text-muted)",
           }}
         >
@@ -183,7 +183,7 @@ function SkillDetail({
       </div>
 
       {saveError && (
-        <div style={{ fontSize: 12, color: "#f87171" }}>{saveError}</div>
+        <div style={{ fontSize: 12, color: "var(--color-danger)" }}>{saveError}</div>
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
@@ -478,7 +478,7 @@ function AddSkillPanel({
                 borderRadius: 6,
                 border: "none",
                 background: "var(--accent)",
-                color: "#fff",
+                color: "var(--color-bg)",
                 cursor:
                   searching || !query.trim() ? "not-allowed" : "pointer",
                 opacity: searching || !query.trim() ? 0.5 : 1,
@@ -519,7 +519,7 @@ function AddSkillPanel({
                 borderRadius: 6,
                 border: "none",
                 background: "var(--accent)",
-                color: "#fff",
+                color: "var(--color-bg)",
                 cursor:
                   installing !== null || !manualSrc.trim()
                     ? "not-allowed"
@@ -535,13 +535,13 @@ function AddSkillPanel({
         )}
 
         {searchError && (
-          <div style={{ fontSize: 12, color: "#f87171" }}>{searchError}</div>
+          <div style={{ fontSize: 12, color: "var(--color-danger)" }}>{searchError}</div>
         )}
         {installError && (
           <div
             style={{
               fontSize: 12,
-              color: "#f87171",
+              color: "var(--color-danger)",
               wordBreak: "break-word",
             }}
           >
@@ -645,10 +645,10 @@ function AddSkillPanel({
                         ? "not-allowed"
                         : "pointer",
                     background: isInstalled
-                      ? "rgba(34,197,94,0.1)"
+                      ? "var(--color-success-bg)"
                       : "transparent",
                     color: isInstalled
-                      ? "#16a34a"
+                      ? "var(--color-success)"
                       : isInstalling
                       ? "var(--accent)"
                       : "var(--text-muted)",
@@ -840,7 +840,7 @@ function PackagesSection({
                   borderRadius: 3,
                   border: "1px solid var(--border)",
                   background: "transparent",
-                  color: "#fca5a5",
+                  color: "var(--color-danger)",
                 }}
                 title={`移除 ${p.source} (${p.scope})`}
               >
@@ -1014,7 +1014,7 @@ export default function SkillsPanel({ cwd, onClose, embedded = false }: Props) {
         position: embedded ? "relative" : "fixed",
         inset: embedded ? undefined : 0,
         zIndex: embedded ? undefined : 1000,
-        background: embedded ? "transparent" : "rgba(0,0,0,0.4)",
+        background: embedded ? "transparent" : "var(--color-overlay)",
         display: "flex",
         alignItems: embedded ? "stretch" : "center",
         justifyContent: "center",
@@ -1035,7 +1035,7 @@ export default function SkillsPanel({ cwd, onClose, embedded = false }: Props) {
           borderRadius: 10,
           display: "flex",
           flexDirection: "column",
-          boxShadow: embedded ? "none" : "0 8px 32px rgba(0,0,0,0.22)",
+          boxShadow: embedded ? "none" : "0 8px 32px var(--color-shadow-control)",
           overflow: "hidden",
         }}
         onClick={(e) => e.stopPropagation()}
@@ -1140,7 +1140,7 @@ export default function SkillsPanel({ cwd, onClose, embedded = false }: Props) {
                   style={{
                     padding: "10px 8px",
                     fontSize: 11,
-                    color: "#f87171",
+                    color: "var(--color-danger)",
                     wordBreak: "break-word",
                   }}
                 >
@@ -1344,7 +1344,7 @@ export default function SkillsPanel({ cwd, onClose, embedded = false }: Props) {
           >
             <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
               {data && data.diagnostics.length > 0 && (
-                <span style={{ color: "#fde68a" }}>
+                <span style={{ color: "var(--color-warning)" }}>
                   ⚠ {data.diagnostics.length} diagnostic(s)
                 </span>
               )}
@@ -1372,7 +1372,7 @@ export default function SkillsPanel({ cwd, onClose, embedded = false }: Props) {
               borderTop: "1px solid var(--border)",
               flexShrink: 0,
               fontSize: 11,
-              color: "#fde68a",
+              color: "var(--color-warning)",
             }}
           >
             ⚠ {data.diagnostics.length} diagnostic(s)

@@ -205,7 +205,7 @@ export function OAuthLoginModal({
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.7)" }}
+      style={{ background: "var(--color-overlay)" }}
       onClick={onClose}
     >
       <div
@@ -240,12 +240,15 @@ export function OAuthLoginModal({
             {status === "connecting" && "连接中…"}
             {status === "running" && "进行中…"}
             {status === "done" && (
-              <span className="inline-flex items-center gap-1 text-green-700 dark:text-green-400">
+              <span
+                className="inline-flex items-center gap-1"
+                style={{ color: "var(--color-success)" }}
+              >
                 <Check size={12} /> 登录成功，凭证已保存
               </span>
             )}
             {status === "error" && (
-              <span className="text-red-600 dark:text-red-400">失败</span>
+              <span style={{ color: "var(--color-danger)" }}>失败</span>
             )}
             {status === "cancelled" && "已取消"}
           </div>
@@ -314,7 +317,7 @@ export function OAuthLoginModal({
 
           {progressMessages.length > 0 && (
             <div
-              className="text-[11px] font-mono space-y-0.5"
+              className="space-y-0.5 text-token-xs font-mono"
               style={{ color: "var(--fg-faint)" }}
             >
               {progressMessages.slice(-5).map((p, i) => (
@@ -373,8 +376,11 @@ export function OAuthLoginModal({
                     type="button"
                     onClick={() => void submit(answer.trim())}
                     disabled={submitting || !answer.trim()}
-                    className="px-2 py-1 text-xs rounded text-white disabled:opacity-50"
-                    style={{ background: "var(--accent)" }}
+                    className="rounded px-2 py-1 text-xs disabled:opacity-50"
+                    style={{
+                      background: "var(--accent)",
+                      color: "var(--color-bg)",
+                    }}
                   >
                     {submitting ? "…" : "提交"}
                   </button>
@@ -384,7 +390,7 @@ export function OAuthLoginModal({
                 type="button"
                 onClick={() => void submit(undefined, true)}
                 disabled={submitting}
-                className="text-[10px] underline opacity-70 hover:opacity-100"
+                className="text-token-xs underline opacity-70 hover:opacity-100"
                 style={{ color: "var(--fg-faint)" }}
               >
                 取消这一步
@@ -396,9 +402,9 @@ export function OAuthLoginModal({
             <div
               className="p-2 rounded text-xs"
               style={{
-                background: "rgba(220,38,38,0.15)",
-                border: "1px solid rgba(220,38,38,0.5)",
-                color: "#fca5a5",
+                background: "var(--color-danger-bg)",
+                border: "1px solid var(--color-danger)",
+                color: "var(--color-danger)",
               }}
             >
               {errorMsg}

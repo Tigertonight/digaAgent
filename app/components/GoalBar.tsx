@@ -24,9 +24,12 @@ export interface GoalBarProps {
 }
 
 function statusTone(goal: AgentGoal) {
-  if (goal.status === "complete") return { color: "#16a34a", icon: CheckCircle2 };
-  if (goal.status === "blocked") return { color: "#dc2626", icon: XCircle };
-  if (goal.status === "paused") return { color: "#ca8a04", icon: Pause };
+  if (goal.status === "complete")
+    return { color: "var(--color-success)", icon: CheckCircle2 };
+  if (goal.status === "blocked")
+    return { color: "var(--color-danger)", icon: XCircle };
+  if (goal.status === "paused")
+    return { color: "var(--color-warning)", icon: Pause };
   return { color: "var(--accent)", icon: Target };
 }
 
@@ -80,7 +83,7 @@ export function GoalBar({
         <span className="min-w-0 flex-1 truncate" title={goal.objective}>
           {goal.objective}
         </span>
-        <span className="shrink-0 text-[11px]" style={{ color: "var(--text-muted)" }}>
+        <span className="shrink-0 text-token-xs" style={{ color: "var(--text-muted)" }}>
           {goal.turns} turns
         </span>
         {canPause && (
@@ -122,11 +125,11 @@ export function GoalBar({
       {/* Structured blocked detail: category + concrete unblock action. */}
       {blocked && goal.status === "blocked" && !blocked.resolvedAt && (
         <div
-          className="mt-1 rounded-md border px-2.5 py-1.5 text-[11px]"
+          className="mt-1 rounded-token border px-2.5 py-1.5 text-token-xs"
           style={{
-            background: "rgba(220,38,38,0.08)",
-            borderColor: "rgba(220,38,38,0.35)",
-            color: "#b91c1c",
+            background: "var(--color-danger-bg)",
+            borderColor: "var(--color-danger)",
+            color: "var(--color-danger)",
           }}
           data-testid="goal-blocked-detail"
         >
@@ -137,8 +140,8 @@ export function GoalBar({
             </span>
             {blocked.repeatedCount > 1 && (
               <span
-                className="rounded px-1 py-0.5 text-[10px]"
-                style={{ background: "rgba(220,38,38,0.15)" }}
+                className="rounded-token-sm px-1 py-0.5 text-token-xs"
+                style={{ background: "var(--color-danger-bg)" }}
               >
                 ×{blocked.repeatedCount}
               </span>

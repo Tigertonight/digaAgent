@@ -134,7 +134,7 @@ function ProgressGroupBlock({
         <span className="font-medium">
           {showLabel ? `任务组 ${group.index}` : "进度"}
         </span>
-        <span className="ml-auto text-[11px]" style={{ color: "var(--text-muted)" }}>
+        <span className="ml-auto text-token-xs" style={{ color: "var(--text-muted)" }}>
           {completed}/{group.steps.length}
         </span>
       </button>
@@ -157,7 +157,7 @@ function ProgressStepRow({ step, order }: { step: ProgressStep; order: number })
   return (
     <div className="flex min-w-0 items-start gap-2">
       <span
-        className="mt-0.5 w-4 shrink-0 text-right text-[11px] tabular-nums"
+        className="mt-0.5 w-4 shrink-0 text-right text-token-xs tabular-nums"
         style={{ color: "var(--text-muted)" }}
       >
         {order}.
@@ -173,7 +173,7 @@ function ProgressStepRow({ step, order }: { step: ProgressStep; order: number })
         </div>
         {step.summary && (
           <div
-            className="mt-0.5 line-clamp-2 text-[11px]"
+            className="mt-0.5 line-clamp-2 text-token-xs"
             style={{ color: "var(--text-muted)" }}
             title={step.summary}
           >
@@ -245,9 +245,9 @@ function stepIcon(status: ProgressStep["status"]) {
 }
 
 function stepTone(status: ProgressStep["status"]) {
-  if (status === "completed") return "#16a34a";
+  if (status === "completed") return "var(--color-success)";
   if (status === "running") return "var(--accent)";
-  if (status === "blocked" || status === "failed") return "#dc2626";
+  if (status === "blocked" || status === "failed") return "var(--color-danger)";
   return "var(--text-muted)";
 }
 

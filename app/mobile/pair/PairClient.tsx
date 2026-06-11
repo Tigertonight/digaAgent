@@ -153,8 +153,8 @@ export default function MobilePairClient({
     <main className="min-h-screen bg-[color:var(--bg)] px-5 py-8 text-[color:var(--text)]">
       <section className="mx-auto max-w-md space-y-5">
         <div>
-          <h1 className="text-xl font-semibold">连接 Diga Agent</h1>
-          <p className="mt-2 text-sm leading-relaxed text-[color:var(--text-muted)]">
+          <h1 className="text-token-title font-semibold">连接 Diga Agent</h1>
+          <p className="mt-2 text-token-body leading-relaxed text-[color:var(--text-muted)]">
             扫码配对后，这台移动设备会保存一个长期设备令牌。你可以在桌面端设置里随时撤销。
           </p>
         </div>
@@ -166,8 +166,8 @@ export default function MobilePairClient({
                 <Camera size={17} />
               </span>
               <div className="min-w-0">
-                <div className="text-sm font-medium">如何扫码</div>
-                <ol className="mt-2 list-decimal space-y-1 pl-4 text-xs leading-relaxed text-[color:var(--text-muted)]">
+                <div className="text-token-body font-medium">如何扫码</div>
+                <ol className="mt-2 list-decimal space-y-1 pl-4 text-token-xs leading-relaxed text-[color:var(--text-muted)]">
                   <li>回到电脑端，刷新设置页或扫码弹窗。</li>
                   <li>重新点击“生成扫码配对”。</li>
                   <li>用手机系统相机扫描新的二维码。</li>
@@ -176,30 +176,45 @@ export default function MobilePairClient({
               </div>
             </div>
 
-            <div className="rounded border border-amber-800 bg-amber-950/20 p-3 text-xs leading-relaxed text-amber-200">
+            <div
+              className="rounded-token border p-3 text-token-xs leading-relaxed"
+              style={{
+                background: "var(--color-warning-bg)",
+                borderColor: "var(--color-warning)",
+                color: "var(--color-warning)",
+              }}
+            >
               当前打开的链接缺少配对码，无法自动连接。请不要粘贴 payload，直接重新生成二维码再扫码。
             </div>
           </div>
         ) : !payload ? (
           <div className="space-y-4 rounded border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-4">
-            <div className="flex items-center gap-2 text-sm text-[color:var(--text-muted)]">
+            <div className="flex items-center gap-2 text-token-body text-[color:var(--text-muted)]">
               <Loader2 size={15} className="animate-spin" />
               正在读取二维码里的配对信息…
             </div>
           </div>
         ) : code ? (
           <div className="space-y-4 rounded border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-4">
-            <div className="space-y-1 text-sm">
+            <div className="space-y-1 text-token-body">
               <div className="font-medium">{payload.hostName}</div>
-              <div className="text-xs text-[color:var(--text-muted)]">
+              <div className="text-token-xs text-[color:var(--text-muted)]">
                 instance {payload.instanceId}
               </div>
             </div>
-            <div className="flex items-center gap-2 rounded border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-3 py-2 text-sm text-[color:var(--text-muted)]">
+            <div className="flex items-center gap-2 rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-3 py-2 text-token-body text-[color:var(--text-muted)]">
               {status === "done" ? (
-                <Check size={15} className="shrink-0 text-emerald-500" />
+                <Check
+                  size={15}
+                  className="shrink-0"
+                  style={{ color: "var(--color-success)" }}
+                />
               ) : status === "error" ? (
-                <WifiOff size={15} className="shrink-0 text-red-300" />
+                <WifiOff
+                  size={15}
+                  className="shrink-0"
+                  style={{ color: "var(--color-danger)" }}
+                />
               ) : (
                 <Loader2 size={15} className="shrink-0 animate-spin" />
               )}
@@ -215,7 +230,8 @@ export default function MobilePairClient({
               <button
                 type="button"
                 onClick={() => void pair()}
-                className="inline-flex w-full items-center justify-center gap-2 rounded bg-[color:var(--accent)] px-3 py-2 text-sm font-medium text-white"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-token bg-[color:var(--accent)] px-3 py-2 text-token-body font-medium"
+                style={{ color: "var(--color-bg)" }}
               >
                 重试自动配对
               </button>
@@ -223,9 +239,9 @@ export default function MobilePairClient({
           </div>
         ) : (
           <div className="space-y-4 rounded border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-4">
-            <div className="space-y-1 text-sm">
+            <div className="space-y-1 text-token-body">
               <div className="font-medium">{payload.hostName}</div>
-              <div className="text-xs text-[color:var(--text-muted)]">
+              <div className="text-token-xs text-[color:var(--text-muted)]">
                 instance {payload.instanceId}
               </div>
             </div>
@@ -233,7 +249,7 @@ export default function MobilePairClient({
               {payload.candidates.map((candidate) => (
                 <div
                   key={candidate}
-                  className="truncate rounded border border-[color:var(--border-soft)] px-2 py-1 font-mono text-xs"
+                  className="truncate rounded-token border border-[color:var(--border-soft)] px-2 py-1 font-mono text-token-xs"
                 >
                   {candidate}
                 </div>
@@ -243,7 +259,8 @@ export default function MobilePairClient({
               type="button"
               onClick={() => void pair()}
               disabled={status === "pairing" || status === "done"}
-              className="inline-flex w-full items-center justify-center gap-2 rounded bg-[color:var(--accent)] px-3 py-2 text-sm font-medium text-white disabled:bg-neutral-800 disabled:text-neutral-500"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-token bg-[color:var(--accent)] px-3 py-2 text-token-body font-medium disabled:opacity-50"
+              style={{ color: "var(--color-bg)" }}
             >
               {status === "pairing" ? <Loader2 size={15} className="animate-spin" /> : status === "done" ? <Check size={15} /> : null}
               开始配对
@@ -253,11 +270,20 @@ export default function MobilePairClient({
 
         {message && (!code || status === "error") ? (
           <div
-            className={`flex items-start gap-2 rounded border p-3 text-sm ${
+            className={`flex items-start gap-2 rounded-token border p-3 text-token-body ${
               status === "error"
-                ? "border-red-800 bg-red-900/30 text-red-200"
+                ? ""
                 : "border-[color:var(--border)] bg-[color:var(--bg-panel)] text-[color:var(--text-muted)]"
             }`}
+            style={
+              status === "error"
+                ? {
+                    background: "var(--color-danger-bg)",
+                    borderColor: "var(--color-danger)",
+                    color: "var(--color-danger)",
+                  }
+                : undefined
+            }
           >
             {status === "error" ? <WifiOff size={15} className="mt-0.5 shrink-0" /> : null}
             <span>{message}</span>

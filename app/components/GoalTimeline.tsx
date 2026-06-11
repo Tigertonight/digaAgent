@@ -26,11 +26,11 @@ interface TimelinePayload {
 function turnTone(status: GoalTurn["status"]) {
   switch (status) {
     case "completed":
-      return { color: "#16a34a", Icon: CheckCircle2 };
+      return { color: "var(--color-success)", Icon: CheckCircle2 };
     case "blocked":
-      return { color: "#dc2626", Icon: XCircle };
+      return { color: "var(--color-danger)", Icon: XCircle };
     case "failed":
-      return { color: "#dc2626", Icon: AlertTriangle };
+      return { color: "var(--color-danger)", Icon: AlertTriangle };
     default:
       return { color: "var(--accent)", Icon: CircleDot };
   }
@@ -111,7 +111,10 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
       )}
 
       {error && (
-        <div className="flex items-center gap-1.5" style={{ color: "#dc2626" }}>
+        <div
+          className="flex items-center gap-1.5"
+          style={{ color: "var(--color-danger)" }}
+        >
           <AlertTriangle size={12} />
           {error}
           <button
@@ -135,7 +138,7 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
           {data.turns.length > 0 && (
             <div className="mb-2">
               <div
-                className="mb-1 font-medium uppercase tracking-wide text-[10px]"
+                className="mb-1 font-medium uppercase tracking-wide text-token-xs"
                 style={{ color: "var(--text-muted)" }}
               >
                 Turns ({data.turns.length})
@@ -158,7 +161,7 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
                           <span className="font-medium">#{turn.turnNumber}</span>
                           <span style={{ color }}>{turn.status}</span>
                           <span
-                            className="text-[10px]"
+                            className="text-token-xs"
                             style={{ color: "var(--text-muted)" }}
                           >
                             {formatTime(turn.startedAt)}
@@ -180,7 +183,7 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
                           <div
                             className="truncate"
                             title={turn.blockedReason}
-                            style={{ color: "#dc2626" }}
+                            style={{ color: "var(--color-danger)" }}
                           >
                             blocked: {turn.blockedReason}
                           </div>
@@ -196,7 +199,7 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
           {data.evidence.length > 0 && (
             <div>
               <div
-                className="mb-1 font-medium uppercase tracking-wide text-[10px]"
+                className="mb-1 font-medium uppercase tracking-wide text-token-xs"
                 style={{ color: "var(--text-muted)" }}
               >
                 Evidence ({data.evidence.length})
@@ -211,7 +214,7 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
                     />
                     <div className="min-w-0 flex-1">
                       <span
-                        className="mr-1 rounded px-1 py-0.5 text-[10px] uppercase"
+                        className="mr-1 rounded-token-sm px-1 py-0.5 text-token-xs uppercase"
                         style={{
                           background: "var(--bg-selected)",
                           color: "var(--text-muted)",

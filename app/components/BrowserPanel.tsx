@@ -34,6 +34,7 @@ import { InAppBrowserSurface } from "./InAppBrowserSurface";
 import { RuntimeTimeline } from "./RuntimeTimeline";
 import { WebviewPocPanel } from "./WebviewPocPanel";
 import { userFacingMessage } from "@/lib/user-facing-error";
+import { Button, TokenIconButton } from "./DesignPrimitives";
 
 /** [PoC] 是否在 Electron 桌面环境（webview PoC 仅此环境可用） */
 function isElectronEnv(): boolean {
@@ -528,18 +529,18 @@ export function BrowserPanel({
         >
           <FlaskConical size={14} style={{ color: "var(--accent)" }} />
           <span className="text-xs font-medium">Webview 容器实验 (PoC)</span>
-          <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>
+          <span className="text-token-xs" style={{ color: "var(--text-muted)" }}>
             CDP 控制原生 webview
           </span>
-          <button
-            type="button"
+          <Button
             onClick={() => setPocMode(false)}
-            className="ml-auto h-7 rounded-full border px-2.5 text-[11px]"
-            style={{ borderColor: "var(--border)", color: "var(--text)" }}
+            className="ml-auto rounded-full"
+            size="sm"
+            variant="outline"
             title="返回截图流面板"
           >
             返回
-          </button>
+          </Button>
           <IconBtn onClick={onClose} title="关闭面板">
             <X size={13} />
           </IconBtn>
@@ -607,8 +608,7 @@ export function BrowserPanel({
         </form>
 
         {/* 接管：Electron in-app 模式下页面就在面板里；非 Electron 才回退真实窗口/截图流。 */}
-        <button
-          type="button"
+        <Button
           onClick={() => {
             if (electronEnv) {
               setTakeover((v) => !v);
@@ -620,13 +620,11 @@ export function BrowserPanel({
               void bringBrowserToFront();
             }
           }}
-          className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full border px-2.5 text-[11px] font-medium disabled:opacity-50"
-          style={{
-            borderColor:
-              !headless || takeover ? "rgba(59,130,246,0.7)" : "var(--border)",
-            color: !headless || takeover ? "#fff" : "var(--text)",
-            background: !headless || takeover ? "var(--accent)" : "transparent",
-          }}
+          className="rounded-full"
+          size="sm"
+          tone={!headless || takeover ? "accent" : "default"}
+          variant={!headless || takeover ? "solid" : "outline"}
+          leading={<Hand size={13} />}
           title={
             electronEnv
               ? takeover
@@ -639,7 +637,6 @@ export function BrowserPanel({
               : "接管：把真实浏览器窗口带到前台，直接用鼠标操作（过验证码等）"
           }
         >
-          <Hand size={13} />
           {electronEnv
             ? takeover
               ? "接管中"
@@ -649,20 +646,20 @@ export function BrowserPanel({
                 ? "接管中"
                 : "接管"
               : "接管窗口"}
-        </button>
+        </Button>
 
         {/* [PoC] webview 容器实验入口：仅 Electron 桌面环境显示 */}
         {electronEnv && (
-          <button
-            type="button"
+          <Button
             onClick={() => setPocMode(true)}
-            className="inline-flex h-7 shrink-0 items-center gap-1 rounded-full border px-2.5 text-[11px] font-medium"
-            style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}
+            className="rounded-full"
+            size="sm"
+            variant="outline"
+            leading={<FlaskConical size={13} />}
             title="打开 webview/CDP 诊断面板"
           >
-            <FlaskConical size={13} />
             诊断
-          </button>
+          </Button>
         )}
 
         {/* 次要操作：刷新 / 截图 / 近实时 / 关闭会话 / 关闭面板 */}
@@ -683,7 +680,6 @@ export function BrowserPanel({
           </IconBtn>
           <IconBtn
             active={live}
-            activeColor="#86efac"
             onClick={() => setLive((v) => !v)}
             title={live ? "停止近实时刷新" : "开启近实时刷新"}
           >
@@ -715,7 +711,7 @@ export function BrowserPanel({
       </div>
 
       <div
-        className="shrink-0 border-b px-2.5 py-1.5 flex items-center gap-2 text-[11px]"
+        className="shrink-0 border-b px-2.5 py-1.5 flex items-center gap-2 text-token-xs"
         style={{ borderColor: "var(--border-soft)" }}
       >
         <span
@@ -799,9 +795,9 @@ export function BrowserPanel({
         <div
           className="mx-2 mt-2 rounded border px-2 py-1.5 text-xs"
           style={{
-            borderColor: "rgba(239,68,68,0.45)",
-            color: "#fca5a5",
-            background: "rgba(239,68,68,0.10)",
+            borderColor: "var(--color-danger)",
+            color: "var(--color-danger)",
+            background: "var(--color-danger-bg)",
           }}
         >
           {error ?? effectiveSnapshot.error}
@@ -815,7 +811,7 @@ export function BrowserPanel({
         {showScreenshotSurface ? (
           <div
             className="relative h-full w-full overflow-hidden"
-            style={{ background: "#0b0b0c" }}
+            style={{ background: "var(--browser-canvas-bg)" }}
             onMouseDown={startAnnotation}
             onMouseMove={moveAnnotation}
             onMouseUp={finishAnnotation}
@@ -846,7 +842,7 @@ export function BrowserPanel({
                   width: `${dragRect!.w * 100}%`,
                   height: `${dragRect!.h * 100}%`,
                   borderColor: "var(--accent)",
-                  background: "rgba(59,130,246,0.12)",
+                  background: "var(--color-accent-bg)",
                 }}
               />
             )}
@@ -855,8 +851,8 @@ export function BrowserPanel({
               const resolved = a.status === "resolved";
               const active = activeAnnotationId === a.id;
               const stroke = resolved
-                ? "rgba(34,197,94,0.85)"
-                : "rgba(245,158,11,0.95)";
+                ? "var(--color-success)"
+                : "var(--color-warning)";
               return (
                 <button
                   key={a.id}
@@ -874,20 +870,20 @@ export function BrowserPanel({
                     border: `2px solid ${stroke}`,
                     background: active
                       ? resolved
-                        ? "rgba(34,197,94,0.22)"
-                        : "rgba(245,158,11,0.24)"
+                        ? "var(--color-success-bg)"
+                        : "var(--color-warning-bg)"
                       : resolved
-                        ? "rgba(34,197,94,0.10)"
-                        : "rgba(245,158,11,0.12)",
+                        ? "color-mix(in srgb, var(--color-success) 8%, transparent)"
+                        : "color-mix(in srgb, var(--color-warning) 8%, transparent)",
                     boxShadow: active ? `0 0 0 2px ${stroke}` : "none",
                   }}
                   title={a.comment}
                 >
                   <span
-                    className="absolute -left-2 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-bold shadow"
+                    className="absolute -left-2 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-token-xs font-bold shadow"
                     style={{
-                      background: resolved ? "#22c55e" : "#f59e0b",
-                      color: "#111827",
+                      background: resolved ? "var(--color-success)" : "var(--color-warning)",
+                      color: "var(--color-status-contrast)",
                     }}
                   >
                     {i + 1}
@@ -937,30 +933,25 @@ export function BrowserPanel({
             }}
             placeholder="对框选区域留言，回车添加批注…"
           />
-          <button
-            type="button"
+          <Button
             onClick={() => void submitAnnotation()}
             disabled={busy || !draftComment.trim()}
-            className="inline-flex h-7 items-center gap-1 rounded border px-2 text-xs font-medium disabled:opacity-40"
-            style={{
-              borderColor: "rgba(59,130,246,0.6)",
-              background: "var(--accent)",
-              color: "#fff",
-            }}
+            tone="accent"
+            variant="solid"
+            size="sm"
           >
             添加
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
             onClick={() => {
               setDragRect(null);
               setDraftComment("");
             }}
-            className="h-7 rounded border px-2 text-xs"
-            style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}
+            variant="outline"
+            size="sm"
           >
             取消
-          </button>
+          </Button>
         </div>
       )}
 
@@ -968,7 +959,7 @@ export function BrowserPanel({
       {annotations.length > 0 && (
         <div className="shrink-0 border-t" style={{ borderColor: "var(--border-soft)" }}>
           <div
-            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-[11px]"
+            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-token-xs"
             style={{ color: "var(--text-muted)" }}
           >
             <button
@@ -985,22 +976,19 @@ export function BrowserPanel({
               </span>
             </button>
             {openAnnotationCount > 0 && (
-              <button
-                type="button"
+              <Button
                 onClick={() => sendAnnotations()}
-                className="inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium"
-                style={{
-                  borderColor: "rgba(59,130,246,0.6)",
-                  background: "var(--accent)",
-                  color: "#fff",
-                }}
+                className="shrink-0"
+                tone="accent"
+                variant="solid"
+                size="xs"
+                leading={<Send size={10} />}
                 title="把所有未处理批注作为任务喂给 agent"
               >
-                <Send size={10} /> 全部喂给 agent
-              </button>
+                全部喂给 agent
+              </Button>
             )}
-            <button
-              type="button"
+            <Button
               onClick={() => {
                 void fetch(`/api/browser/${browserId}`, {
                   method: "POST",
@@ -1013,12 +1001,13 @@ export function BrowserPanel({
                   })
                   .catch(() => {});
               }}
-              className="shrink-0 rounded border px-1.5 py-0.5 text-[10px]"
-              style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}
+              className="shrink-0"
+              variant="outline"
+              size="xs"
               title="清空全部批注"
             >
               清空
-            </button>
+            </Button>
           </div>
 
           {showAnnotations && (
@@ -1045,19 +1034,19 @@ export function BrowserPanel({
                   >
                     <div className="flex items-start gap-1.5">
                       <span
-                        className="mt-0.5 inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full px-1 text-[9px] font-bold"
+                        className="mt-0.5 inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full px-1 text-token-xs font-bold"
                         style={{
                           background: resolved
-                            ? "rgba(34,197,94,0.85)"
-                            : "rgba(245,158,11,0.95)",
-                          color: "#0b0b0c",
+                            ? "var(--color-success)"
+                            : "var(--color-warning)",
+                          color: "var(--color-status-contrast)",
                         }}
                       >
                         {i + 1}
                       </span>
                       <div className="min-w-0 flex-1">
                         <div
-                          className="text-[11px]"
+                          className="text-token-xs"
                           style={{
                             color: "var(--text)",
                             textDecoration: resolved ? "line-through" : "none",
@@ -1067,7 +1056,7 @@ export function BrowserPanel({
                         </div>
                         {a.url && (
                           <div
-                            className="truncate text-[10px]"
+                            className="truncate text-token-xs"
                             style={{ color: "var(--fg-faint)" }}
                             title={a.url}
                           >
@@ -1092,7 +1081,7 @@ export function BrowserPanel({
                           }
                           className="inline-flex h-5 w-5 items-center justify-center rounded hover:bg-[color:var(--bg-hover)]"
                           style={{
-                            color: resolved ? "#86efac" : "var(--text-muted)",
+                            color: resolved ? "var(--color-success)" : "var(--text-muted)",
                           }}
                           title={resolved ? "重新打开" : "标记已处理"}
                         >
@@ -1122,7 +1111,7 @@ export function BrowserPanel({
         <button
           type="button"
           onClick={() => setShowDetails((v) => !v)}
-          className="flex w-full items-center gap-2 px-2.5 py-1.5 text-[11px] hover:bg-[color:var(--bg-hover)]"
+          className="flex w-full items-center gap-2 px-2.5 py-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
           style={{ color: "var(--text-muted)" }}
         >
           {showDetails ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
@@ -1135,16 +1124,16 @@ export function BrowserPanel({
             <span className="flex shrink-0 items-center gap-1">
               {verifyStats.passed > 0 && (
                 <span
-                  className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium"
-                  style={{ background: "rgba(34,197,94,0.14)", color: "#86efac" }}
+                  className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-token-xs font-medium"
+                  style={{ background: "var(--color-success-bg)", color: "var(--color-success)" }}
                 >
                   <CheckCircle2 size={10} /> {verifyStats.passed}
                 </span>
               )}
               {verifyStats.failed > 0 && (
                 <span
-                  className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium"
-                  style={{ background: "rgba(239,68,68,0.14)", color: "#fca5a5" }}
+                  className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-token-xs font-medium"
+                  style={{ background: "var(--color-danger-bg)", color: "var(--color-danger)" }}
                 >
                   <XCircle size={10} /> {verifyStats.failed}
                 </span>
@@ -1189,7 +1178,7 @@ export function BrowserPanel({
                     className="border-b px-2.5 py-2"
                     style={{ borderColor: "var(--border-soft)", background: "var(--bg-panel-2)" }}
                   >
-                    <div className="mb-1.5 flex items-center gap-2 text-[11px]">
+                    <div className="mb-1.5 flex items-center gap-2 text-token-xs">
                       <span
                         className="font-medium"
                         style={{ color: "var(--text)" }}
@@ -1206,7 +1195,7 @@ export function BrowserPanel({
                           setSelectedStepId(null);
                           setScreenshotReview(false);
                         }}
-                        className="ml-auto rounded border px-1.5 py-0.5 text-[10px]"
+                        className="ml-auto rounded border px-1.5 py-0.5 text-token-xs"
                         style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}
                         title="取消选中，回到实时画面"
                       >
@@ -1214,7 +1203,7 @@ export function BrowserPanel({
                       </button>
                     </div>
                     {selectedStep.url && (
-                      <div className="mb-1 flex items-center gap-1 text-[10px]" style={{ color: "var(--text-muted)" }}>
+                      <div className="mb-1 flex items-center gap-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
                         <Globe size={10} className="shrink-0" />
                         <span className="truncate" title={selectedStep.url}>
                           {selectedStep.url}
@@ -1222,13 +1211,13 @@ export function BrowserPanel({
                       </div>
                     )}
                     {selectedStep.error && (
-                      <div className="mb-1 text-[11px]" style={{ color: "#fca5a5" }}>
+                      <div className="mb-1 text-token-xs" style={{ color: "var(--color-danger)" }}>
                         {selectedStep.error}
                       </div>
                     )}
                     {selectedStep.extractedText && (
                       <div
-                        className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap rounded border px-1.5 py-1 text-[10px] leading-relaxed"
+                        className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap rounded border px-1.5 py-1 text-token-xs leading-relaxed"
                         style={{
                           borderColor: "var(--border-soft)",
                           color: "var(--text-muted)",
@@ -1261,7 +1250,7 @@ export function BrowserPanel({
                             ? "var(--accent)"
                             : "var(--border-soft)",
                           background: isSelected
-                            ? "rgba(59,130,246,0.08)"
+                            ? "var(--color-accent-bg)"
                             : "var(--bg-panel-2)",
                         }}
                         title={step.label}
@@ -1269,7 +1258,7 @@ export function BrowserPanel({
                         {/* 缩略图 */}
                         <div
                           className="h-9 w-12 shrink-0 overflow-hidden rounded border"
-                          style={{ borderColor: "var(--border-soft)", background: "#fff" }}
+                          style={{ borderColor: "var(--border-soft)", background: "var(--browser-preview-bg)" }}
                         >
                           {step.screenshotDataUrl && (
                             <Image
@@ -1284,7 +1273,7 @@ export function BrowserPanel({
                         </div>
                         {/* 文字证据 */}
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5 text-[11px]">
+                          <div className="flex items-center gap-1.5 text-token-xs">
                             <span
                               className="shrink-0"
                               style={{ color: statusColor(step.status) }}
@@ -1295,21 +1284,21 @@ export function BrowserPanel({
                               {actionLabel(step.action)}
                             </span>
                             <VerdictBadge step={step} />
-                            <span className="ml-auto shrink-0 text-[10px]" style={{ color: "var(--fg-faint)" }}>
+                            <span className="ml-auto shrink-0 text-token-xs" style={{ color: "var(--fg-faint)" }}>
                               {formatStepTime(step.createdAt)}
                             </span>
                           </div>
-                          <div className="mt-0.5 truncate text-[10px]" style={{ color: "var(--text-muted)" }}>
+                          <div className="mt-0.5 truncate text-token-xs" style={{ color: "var(--text-muted)" }}>
                             {step.taskId ? `${shortTaskId(step.taskId)} · ` : ""}
                             {step.label}
                           </div>
                           {step.url && (
-                            <div className="truncate text-[10px]" style={{ color: "var(--fg-faint)" }}>
+                            <div className="truncate text-token-xs" style={{ color: "var(--fg-faint)" }}>
                               {step.url}
                             </div>
                           )}
                           {step.error && (
-                            <div className="mt-0.5 truncate text-[10px]" style={{ color: "#fca5a5" }}>
+                            <div className="mt-0.5 truncate text-token-xs" style={{ color: "var(--color-danger)" }}>
                               {step.error}
                             </div>
                           )}
@@ -1334,26 +1323,23 @@ function IconBtn({
   disabled,
   title,
   active,
-  activeColor,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   disabled?: boolean;
   title?: string;
   active?: boolean;
-  activeColor?: string;
 }) {
   return (
-    <button
-      type="button"
+    <TokenIconButton
       disabled={disabled}
       onClick={onClick}
       title={title}
-      className="inline-flex h-7 w-7 items-center justify-center rounded-md hover:bg-[color:var(--bg-hover)] disabled:opacity-40"
-      style={{ color: active ? activeColor ?? "var(--accent)" : "inherit" }}
-    >
-      {children}
-    </button>
+      icon={children}
+      size="sm"
+      variant="ghost"
+      tone={active ? "accent" : "default"}
+    />
   );
 }
 
@@ -1397,7 +1383,7 @@ function VirtualPointer({
           y1={from.y * 100}
           x2={trail.to.x * 100}
           y2={trail.to.y * 100}
-          stroke="rgba(59,130,246,0.75)"
+          stroke="var(--browser-pointer-line)"
           strokeWidth="0.45"
           strokeDasharray="1.4 1.2"
           vectorEffect="non-scaling-stroke"
@@ -1410,19 +1396,19 @@ function VirtualPointer({
         <div className="relative">
           <MousePointer2
             size={24}
-            fill="rgba(59,130,246,0.95)"
+            fill="var(--browser-pointer-fill)"
             strokeWidth={2.4}
             style={{
-              color: "#eff6ff",
-              filter: "drop-shadow(0 2px 5px rgba(15,23,42,0.45))",
+              color: "var(--browser-pointer-text)",
+              filter: "var(--browser-pointer-shadow)",
             }}
           />
           <span
-            className="absolute left-5 top-4 whitespace-nowrap rounded border px-1.5 py-0.5 text-[10px] font-medium"
+            className="absolute left-5 top-4 whitespace-nowrap rounded border px-1.5 py-0.5 text-token-xs font-medium"
             style={{
-              borderColor: "rgba(59,130,246,0.40)",
-              background: "rgba(15,23,42,0.86)",
-              color: "#dbeafe",
+              borderColor: "var(--browser-pointer-border)",
+              background: "var(--browser-pointer-surface)",
+              color: "var(--browser-pointer-text)",
             }}
           >
             {pointer.action}
@@ -1481,15 +1467,15 @@ function VerdictBadge({ step }: { step: BrowserStepSnapshot }) {
   if (step.passed === undefined) return null;
   return step.passed ? (
     <span
-      className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium"
-      style={{ background: "rgba(34,197,94,0.16)", color: "#86efac" }}
+      className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-token-xs font-medium"
+      style={{ background: "var(--color-success-bg)", color: "var(--color-success)" }}
     >
       <CheckCircle2 size={10} /> PASS
     </span>
   ) : (
     <span
-      className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium"
-      style={{ background: "rgba(239,68,68,0.16)", color: "#fca5a5" }}
+      className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-token-xs font-medium"
+      style={{ background: "var(--color-danger-bg)", color: "var(--color-danger)" }}
     >
       <XCircle size={10} /> FAIL
     </span>
@@ -1497,30 +1483,30 @@ function VerdictBadge({ step }: { step: BrowserStepSnapshot }) {
 }
 
 function statusColor(status: string) {
-  if (status === "ready" || status === "done") return "#22c55e";
+  if (status === "ready" || status === "done") return "var(--color-success)";
   if (status === "busy" || status === "launching" || status === "running")
-    return "#f59e0b";
-  if (status === "error") return "#ef4444";
-  return "#737373";
+    return "var(--color-warning)";
+  if (status === "error") return "var(--color-danger)";
+  return "var(--text-dim)";
 }
 
 function siteColor(decision?: string) {
-  if (decision === "local" || decision === "allowed") return "#86efac";
-  if (decision === "blocked") return "#fca5a5";
-  if (decision === "unknown") return "#fcd34d";
+  if (decision === "local" || decision === "allowed") return "var(--color-success)";
+  if (decision === "blocked") return "var(--color-danger)";
+  if (decision === "unknown") return "var(--color-warning)";
   return "var(--text-muted)";
 }
 
 function siteBorder(decision?: string) {
-  if (decision === "local" || decision === "allowed") return "rgba(34,197,94,0.45)";
-  if (decision === "blocked") return "rgba(239,68,68,0.45)";
-  if (decision === "unknown") return "rgba(245,158,11,0.50)";
+  if (decision === "local" || decision === "allowed") return "var(--color-success)";
+  if (decision === "blocked") return "var(--color-danger)";
+  if (decision === "unknown") return "var(--color-warning)";
   return "var(--border)";
 }
 
 function siteBg(decision?: string) {
-  if (decision === "local" || decision === "allowed") return "rgba(34,197,94,0.10)";
-  if (decision === "blocked") return "rgba(239,68,68,0.10)";
-  if (decision === "unknown") return "rgba(245,158,11,0.10)";
+  if (decision === "local" || decision === "allowed") return "var(--color-success-bg)";
+  if (decision === "blocked") return "var(--color-danger-bg)";
+  if (decision === "unknown") return "var(--color-warning-bg)";
   return "transparent";
 }

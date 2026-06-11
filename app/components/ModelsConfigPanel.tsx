@@ -249,7 +249,7 @@ export default function ModelsConfigPanel({ onClose, onChanged }: Props) {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.55)" }}
+      style={{ background: "var(--color-overlay)" }}
       onClick={onClose}
     >
       <div
@@ -284,8 +284,8 @@ export default function ModelsConfigPanel({ onClose, onChanged }: Props) {
               type="button"
               onClick={() => void save()}
               disabled={!dirty || saving || loading}
-              className="px-2 py-0.5 text-xs rounded text-white disabled:opacity-50"
-              style={{ background: "var(--accent)" }}
+              className="rounded px-2 py-0.5 text-xs disabled:opacity-50"
+              style={{ background: "var(--accent)", color: "var(--color-bg)" }}
               title="写入 models.json"
             >
               {saving ? "保存中…" : dirty ? "保存 *" : "保存"}
@@ -305,9 +305,9 @@ export default function ModelsConfigPanel({ onClose, onChanged }: Props) {
           <div
             className="m-3 p-2 rounded text-xs"
             style={{
-              background: "rgba(220,38,38,0.15)",
-              border: "1px solid rgba(220,38,38,0.5)",
-              color: "#fca5a5",
+              background: "var(--color-danger-bg)",
+              border: "1px solid var(--color-danger)",
+              color: "var(--color-danger)",
             }}
           >
             {err}
@@ -388,8 +388,8 @@ export default function ModelsConfigPanel({ onClose, onChanged }: Props) {
                   type="button"
                   onClick={addProvider}
                   disabled={!newProvName.trim()}
-                  className="px-2 py-1 text-xs rounded text-white disabled:opacity-50"
-                  style={{ background: "var(--accent)" }}
+                  className="rounded px-2 py-1 text-xs disabled:opacity-50"
+                  style={{ background: "var(--accent)", color: "var(--color-bg)" }}
                 >
                   添加
                 </button>
@@ -423,14 +423,14 @@ export default function ModelsConfigPanel({ onClose, onChanged }: Props) {
 
         {path && (
           <div
-            className="px-4 py-2 border-t text-[10px] flex justify-between"
+            className="flex justify-between border-t px-4 py-2 text-token-xs"
             style={{
               borderColor: "var(--border-soft)",
               color: "var(--fg-faint)",
             }}
           >
             <span>存储位置：{path}</span>
-            {dirty && <span style={{ color: "#fbbf24" }}>有未保存改动</span>}
+            {dirty && <span style={{ color: "var(--color-warning)" }}>有未保存改动</span>}
           </div>
         )}
       </div>

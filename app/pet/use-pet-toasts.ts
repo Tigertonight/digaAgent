@@ -94,7 +94,7 @@ export function usePetToasts(petState: PetState | null) {
           primary: `自动重试 (${snap.retryAttempt}/${s.retry?.maxAttempts ?? "?"})`,
           secondary: s.retry?.errorMessage?.slice(0, 60) ?? null,
           durationMs: 3000,
-          color: "#f59e0b", // amber-500
+          color: "var(--pet-state-approval)",
           sessionId: s.id,
         });
       }
@@ -107,7 +107,7 @@ export function usePetToasts(petState: PetState | null) {
             primary: "重试成功",
             secondary: null,
             durationMs: 2500,
-            color: "#10b981", // emerald-500
+            color: "var(--pet-state-complete)",
             sessionId: s.id,
           });
         } else {
@@ -116,7 +116,7 @@ export function usePetToasts(petState: PetState | null) {
             primary: "重试失败",
             secondary: snap.error.slice(0, 60),
             durationMs: 5000,
-            color: "#dc2626", // red-600
+            color: "var(--pet-state-error)",
             sessionId: s.id,
           });
         }
@@ -129,7 +129,7 @@ export function usePetToasts(petState: PetState | null) {
           primary: "上下文压缩完成",
           secondary: null,
           durationMs: 2500,
-          color: "#6366f1", // indigo-500
+          color: "var(--pet-state-thinking)",
           sessionId: s.id,
         });
       }
@@ -141,7 +141,7 @@ export function usePetToasts(petState: PetState | null) {
           primary: "出错了",
           secondary: snap.error.slice(0, 80),
           durationMs: 5000,
-          color: "#dc2626",
+          color: "var(--pet-state-error)",
           sessionId: s.id,
         });
       }

@@ -4,6 +4,7 @@ import { Check } from "lucide-react";
 import type { AuthProviderStatus } from "@/app/hooks/useProviderStatus";
 import { ProviderIcon } from "../ProviderIcon";
 import { ConfirmButton } from "../ConfirmButton";
+import { Button, FieldInput } from "../DesignPrimitives";
 
 export interface AuthTestResult {
   ok: boolean;
@@ -45,13 +46,7 @@ export function AuthProviderRow({
   onCancelEdit,
 }: AuthProviderRowProps) {
   return (
-    <div
-      className="rounded px-2 py-1.5 text-xs"
-      style={{
-        background: "var(--bg-panel-2)",
-        border: "1px solid var(--border-soft)",
-      }}
-    >
+    <div className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg-selected)] px-2 py-1.5 text-token-sm">
       <div className="flex items-center gap-2">
         <span
           className="relative inline-flex items-center justify-center"
@@ -64,7 +59,7 @@ export function AuthProviderRow({
               className="absolute -bottom-1 -right-1 rounded-full"
               style={{
                 background: "var(--accent)",
-                color: "white",
+                color: "var(--color-bg)",
                 padding: 1,
               }}
             />
@@ -73,7 +68,7 @@ export function AuthProviderRow({
         <span className="flex-1 min-w-0">
           <div className="font-medium truncate">{p.displayName}</div>
           <div
-            className="text-[10px] truncate"
+            className="truncate text-token-xs"
             style={{ color: "var(--fg-faint)" }}
           >
             {p.provider}
@@ -84,7 +79,7 @@ export function AuthProviderRow({
           </div>
           {p.provider === "openai-codex" && (
             <div
-              className="mt-0.5 text-[10px]"
+              className="mt-0.5 text-token-xs"
               style={{ color: "var(--fg-faint)" }}
             >
               ChatGPT/Codex OAuth uses your ChatGPT subscription session, not an
@@ -93,7 +88,7 @@ export function AuthProviderRow({
           )}
           {p.provider === "openai" && (
             <div
-              className="mt-0.5 text-[10px]"
+              className="mt-0.5 text-token-xs"
               style={{ color: "var(--fg-faint)" }}
             >
               Standard OpenAI API provider. Use an OpenAI Platform API key here.
@@ -102,41 +97,35 @@ export function AuthProviderRow({
         </span>
         {!isEditing && (
           <div className="flex items-center gap-1 shrink-0">
-            <button
-              type="button"
+            <Button
               onClick={() => onStartEdit(p.provider)}
               disabled={isBusy}
-              className="px-1.5 py-0.5 text-[10px] rounded border hover:opacity-80 disabled:opacity-50"
-              style={{ borderColor: "var(--border)" }}
+              size="xs"
+              variant="outline"
               title={
                 p.credentialType === "api_key" ? "替换 API key" : "设置 API key"
               }
             >
               {p.credentialType === "api_key" ? "Replace" : "Set"}
-            </button>
+            </Button>
             {(p.credentialType === "api_key" ||
               p.credentialType === "oauth") && (
-              <button
-                type="button"
+              <Button
                 onClick={() => onTestAuth(p.provider)}
                 disabled={isBusy || isTesting}
-                className="px-1.5 py-0.5 text-[10px] rounded border hover:opacity-80 disabled:opacity-50"
-                style={{ borderColor: "var(--border)" }}
+                size="xs"
+                variant="outline"
                 title={`验证 ${p.provider} 凭证是否可调用模型`}
               >
                 {isTesting ? "…" : "Test"}
-              </button>
+              </Button>
             )}
             {(p.credentialType === "api_key" ||
               p.credentialType === "oauth") && (
               <ConfirmButton
                 onConfirm={() => onRemoveKey(p.provider)}
                 disabled={isBusy}
-                className="px-1.5 py-0.5 text-[10px] rounded border hover:opacity-80 disabled:opacity-50"
-                style={{
-                  borderColor: "var(--border)",
-                  color: "#fca5a5",
-                }}
+                className="rounded-token-sm border border-[color:var(--color-danger)] px-1.5 py-0.5 text-token-xs text-[color:var(--color-danger)] hover:bg-[color:var(--color-danger-bg)] disabled:opacity-50"
                 title={`删除 ${p.provider} 的凭证`}
               >
                 ✕
@@ -147,15 +136,15 @@ export function AuthProviderRow({
       </div>
       {result && (
         <div
-          className="mt-2 rounded border px-2 py-1 text-[10px]"
+          className="mt-2 rounded-token-sm border px-2 py-1 text-token-xs"
           style={{
             borderColor: result.ok
-              ? "rgba(34,197,94,0.45)"
-              : "rgba(248,113,113,0.45)",
+              ? "var(--color-success)"
+              : "var(--color-danger)",
             background: result.ok
-              ? "rgba(34,197,94,0.10)"
-              : "rgba(248,113,113,0.10)",
-            color: result.ok ? "#86efac" : "#fca5a5",
+              ? "var(--color-success-bg)"
+              : "var(--color-danger-bg)",
+            color: result.ok ? "var(--color-success)" : "var(--color-danger)",
           }}
         >
           {result.ok
@@ -167,12 +156,12 @@ export function AuthProviderRow({
       )}
       {p.supportsOAuth && !isEditing && (
         <div className="mt-2 flex items-center gap-2">
-          <button
-            type="button"
+          <Button
             onClick={() => onOpenOAuth(p.provider)}
             disabled={isBusy}
-            className="px-2 py-1 text-[11px] rounded text-white disabled:opacity-50"
-            style={{ background: "var(--accent)" }}
+            size="sm"
+            tone="accent"
+            variant="solid"
             title={
               p.credentialType === "oauth"
                 ? "Re-login to refresh tokens"
@@ -180,8 +169,8 @@ export function AuthProviderRow({
             }
           >
             🔐 {p.credentialType === "oauth" ? "Re-login" : "Login"}
-          </button>
-          <span className="text-[10px]" style={{ color: "var(--fg-faint)" }}>
+          </Button>
+          <span className="text-token-xs" style={{ color: "var(--fg-faint)" }}>
             {p.credentialType === "oauth"
               ? "Already connected. You can re-login or disconnect."
               : "OAuth"}
@@ -190,42 +179,36 @@ export function AuthProviderRow({
       )}
       {isEditing && (
         <div className="flex items-center gap-1 mt-2">
-          <input
+          <FieldInput
             type="password"
             value={keyInput}
             onChange={(e) => onKeyInputChange(e.target.value)}
             placeholder="API key"
             autoFocus
             disabled={isBusy}
-            className="flex-1 rounded px-2 py-1 text-xs border outline-none font-mono"
-            style={{
-              background: "var(--bg-panel)",
-              borderColor: "var(--border)",
-              color: "var(--fg)",
-            }}
+            className="flex-1 font-mono"
             onKeyDown={(e) => {
               if (e.key === "Enter") onSaveKey(p.provider);
               if (e.key === "Escape") onCancelEdit();
             }}
           />
-          <button
-            type="button"
+          <Button
             onClick={() => onSaveKey(p.provider)}
             disabled={isBusy || !keyInput.trim()}
-            className="px-2 py-1 text-xs rounded text-white disabled:opacity-50"
-            style={{ background: "var(--accent)" }}
+            size="sm"
+            tone="accent"
+            variant="solid"
           >
             {isBusy ? "…" : "Save"}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
             onClick={onCancelEdit}
             disabled={isBusy}
-            className="px-2 py-1 text-xs rounded border hover:opacity-80 disabled:opacity-50"
-            style={{ borderColor: "var(--border)" }}
+            size="sm"
+            variant="outline"
           >
             Cancel
-          </button>
+          </Button>
         </div>
       )}
     </div>

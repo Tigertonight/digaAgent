@@ -14,8 +14,8 @@ interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const sizeMap: Record<Size, string> = {
-  sm: "h-7 px-1.5 text-xs gap-1",
-  md: "h-8 px-2 text-sm gap-1.5",
+  sm: "h-[var(--control-sm)] px-1.5 text-token-sm gap-1",
+  md: "h-[var(--control-md)] px-2 text-token-ui gap-1.5",
 };
 
 const iconSizeMap: Record<Size, number> = {
@@ -39,7 +39,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
     ref,
   ) {
     const base =
-      "inline-flex items-center justify-center rounded border transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
+      "inline-flex items-center justify-center rounded-[var(--button-radius)] border transition-colors disabled:cursor-not-allowed disabled:opacity-50";
 
     const variantStyle: Record<Variant, string> = {
       ghost: active

@@ -15,7 +15,7 @@ export function LabeledInput({
 }) {
   return (
     <div className="flex flex-col gap-0.5">
-      <span className="text-[10px]" style={{ color: "var(--fg-faint)" }}>
+      <span className="text-token-xs" style={{ color: "var(--fg-faint)" }}>
         {label}
       </span>
       <input
@@ -47,7 +47,7 @@ export function LabeledNumber({
 }) {
   return (
     <div className="flex flex-col gap-0.5">
-      <span className="text-[10px]" style={{ color: "var(--fg-faint)" }}>
+      <span className="text-token-xs" style={{ color: "var(--fg-faint)" }}>
         {label}
       </span>
       <input

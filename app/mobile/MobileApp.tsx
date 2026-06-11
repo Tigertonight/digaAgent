@@ -419,10 +419,10 @@ function getPendingMobileBlockers(messages: ReducerState["messages"]): {
 
 function statusTone(status: string): string {
   if (status === "done" || status === "completed" || status === "allowed") {
-    return "text-emerald-600";
+    return "text-[color:var(--color-success)]";
   }
   if (status === "error" || status === "failed" || status === "denied") {
-    return "text-red-600";
+    return "text-[color:var(--color-danger)]";
   }
   return "text-[color:var(--text-muted)]";
 }
@@ -463,7 +463,7 @@ function MobileDisclosure({
     });
   };
   return (
-    <div className="overflow-hidden rounded-xl border border-[color:var(--border-soft)] bg-[color:var(--bg-subtle)]">
+    <div className="overflow-hidden rounded-token-lg border border-[color:var(--border-soft)] bg-[color:var(--bg-subtle)]">
       <button
         type="button"
         onClick={(event) => toggleOpen(event.currentTarget)}
@@ -472,7 +472,7 @@ function MobileDisclosure({
         }`}
       >
         <span
-          className={`inline-flex shrink-0 items-center justify-center rounded-lg bg-[color:var(--bg-panel)] text-[color:var(--text-muted)] ${
+          className={`inline-flex shrink-0 items-center justify-center rounded-token bg-[color:var(--bg-panel)] text-[color:var(--text-muted)] ${
             compact ? "h-6 w-6" : "h-7 w-7"
           }`}
         >
@@ -481,7 +481,7 @@ function MobileDisclosure({
         <span className="min-w-0 flex-1">
           <span className="block truncate text-xs font-medium">{title}</span>
           {subtitle ? (
-            <span className="block truncate text-[11px] text-[color:var(--text-muted)]">
+            <span className="block truncate text-token-xs text-[color:var(--text-muted)]">
               {subtitle}
             </span>
           ) : null}
@@ -511,8 +511,8 @@ function MobileAutocompletePanel({
   onHover: (index: number) => void;
 }) {
   return (
-    <div className="mb-2 overflow-hidden rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--bg)] shadow-lg">
-      <div className="flex items-center gap-2 border-b border-[color:var(--border-soft)] px-3 py-2 text-[11px] text-[color:var(--text-muted)]">
+    <div className="mb-2 overflow-hidden rounded-token-lg border border-[color:var(--border-soft)] bg-[color:var(--bg)] shadow-popover">
+      <div className="flex items-center gap-2 border-b border-[color:var(--border-soft)] px-3 py-2 text-token-xs text-[color:var(--text-muted)]">
         <span className="font-mono text-[color:var(--text)]">{mode}</span>
         <span>{mode === "@" ? "引用当前项目文件" : "快捷命令"}</span>
       </div>
@@ -531,7 +531,7 @@ function MobileAutocompletePanel({
                 onMouseDown={(event) => event.preventDefault()}
                 onPointerEnter={() => onHover(index)}
                 onClick={() => onPick(item)}
-                className={`flex w-full min-w-0 items-center gap-2 rounded-xl px-3 py-2 text-left text-sm ${
+                className={`flex w-full min-w-0 items-center gap-2 rounded-token px-3 py-2 text-left text-sm ${
                   active ? "bg-[color:var(--bg-selected)]" : "active:bg-[color:var(--bg-hover)]"
                 }`}
               >
@@ -539,7 +539,7 @@ function MobileAutocompletePanel({
                   {item.label}
                 </span>
                 {item.hint ? (
-                  <span className="max-w-[42%] shrink-0 truncate text-[11px] text-[color:var(--text-muted)]">
+                  <span className="max-w-[42%] shrink-0 truncate text-token-xs text-[color:var(--text-muted)]">
                     {item.hint}
                   </span>
                 ) : null}
@@ -563,9 +563,9 @@ function mobileTaskStatusLabel(task: LongTaskDefinition): string {
 }
 
 function mobileSeverityTone(severity: TaskFinding["severity"]): string {
-  if (severity === "critical") return "text-red-600 dark:text-red-300";
-  if (severity === "warning") return "text-amber-600 dark:text-amber-300";
-  return "text-blue-600 dark:text-blue-300";
+  if (severity === "critical") return "text-[color:var(--color-danger)]";
+  if (severity === "warning") return "text-[color:var(--color-warning)]";
+  return "text-[color:var(--color-info)]";
 }
 
 function MobileTaskInbox({
@@ -600,14 +600,14 @@ function MobileTaskInbox({
     dashboard.runs.find((run) => run.id === task.lastRunId);
 
   return (
-    <section className="space-y-2 rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] p-3 text-left">
+    <section className="space-y-2 rounded-token-lg border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] p-3 text-left">
       <div className="flex items-center gap-2">
         <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[color:var(--bg)] text-[color:var(--accent)]">
           <ShieldAlert size={14} />
         </span>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold">任务收件箱</div>
-          <div className="truncate text-[11px] text-[color:var(--text-muted)]">
+          <div className="truncate text-token-xs text-[color:var(--text-muted)]">
             {inbox.length} 个待处理事项
             {waitingTasks.length > 0 ? ` · ${waitingTasks.length} 个等待决策` : ""}
           </div>
@@ -621,14 +621,14 @@ function MobileTaskInbox({
         return (
           <div
             key={task.id}
-            className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-2.5"
+            className="rounded-token border border-[color:var(--color-warning)] bg-[color:var(--color-warning-bg)] p-2.5"
           >
             <div className="flex min-w-0 items-center gap-2">
-              <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+              <span className="h-2 w-2 shrink-0 rounded-full bg-[color:var(--color-warning)]" />
               <span className="min-w-0 flex-1 truncate text-sm font-medium">
                 {task.title}
               </span>
-              <span className="shrink-0 text-[11px] text-amber-700 dark:text-amber-200">
+              <span className="shrink-0 text-token-xs text-[color:var(--color-warning)]">
                 {mobileTaskStatusLabel(task)}
               </span>
             </div>
@@ -636,7 +636,7 @@ function MobileTaskInbox({
               {run?.waitingReason || task.lastSummary || "请回到对应会话处理确认。"}
             </div>
             {latestCheckpoint ? (
-              <div className="mt-1 truncate text-[11px] text-[color:var(--text-muted)]">
+              <div className="mt-1 truncate text-token-xs text-[color:var(--text-muted)]">
                 最近状态：{latestCheckpoint.title}
               </div>
             ) : null}
@@ -644,7 +644,7 @@ function MobileTaskInbox({
               <button
                 type="button"
                 onClick={() => onOpenRunSession(run?.sessionFile)}
-                className="mt-2 rounded-full border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-2.5 py-1 text-[11px]"
+                className="mt-2 rounded-full border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-2.5 py-1 text-token-xs"
               >
                 打开会话
               </button>
@@ -660,7 +660,7 @@ function MobileTaskInbox({
         return (
           <div
             key={finding.id}
-            className="rounded-xl border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-2.5"
+            className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-2.5"
           >
             <div className="flex min-w-0 items-center gap-2">
               <span className={`text-xs ${mobileSeverityTone(finding.severity)}`}>
@@ -674,7 +674,7 @@ function MobileTaskInbox({
               {finding.body}
             </div>
             {latestCheckpoint ? (
-              <div className="mt-1 truncate text-[11px] text-[color:var(--text-muted)]">
+              <div className="mt-1 truncate text-token-xs text-[color:var(--text-muted)]">
                 最近状态：{latestCheckpoint.title}
               </div>
             ) : null}
@@ -682,7 +682,7 @@ function MobileTaskInbox({
               <button
                 type="button"
                 onClick={() => setSelectedFindingId(finding.id)}
-                className="rounded-full border border-[color:var(--border-soft)] px-2.5 py-1 text-[11px]"
+                className="rounded-full border border-[color:var(--border-soft)] px-2.5 py-1 text-token-xs"
               >
                 查看报告
               </button>
@@ -690,7 +690,7 @@ function MobileTaskInbox({
                 <button
                   type="button"
                   onClick={() => onOpenRunSession(run?.sessionFile)}
-                  className="rounded-full border border-[color:var(--border-soft)] px-2.5 py-1 text-[11px]"
+                  className="rounded-full border border-[color:var(--border-soft)] px-2.5 py-1 text-token-xs"
                 >
                   打开会话
                 </button>
@@ -698,14 +698,15 @@ function MobileTaskInbox({
               <button
                 type="button"
                 onClick={() => onFindingStatus(finding.id, "reviewed")}
-                className="rounded-full border border-[color:var(--border-soft)] px-2.5 py-1 text-[11px]"
+                className="rounded-full border border-[color:var(--border-soft)] px-2.5 py-1 text-token-xs"
               >
                 已读
               </button>
               <button
                 type="button"
                 onClick={() => onFindingStatus(finding.id, "resolved")}
-                className="rounded-full bg-[color:var(--accent)] px-2.5 py-1 text-[11px] text-white"
+                className="rounded-full bg-[color:var(--accent)] px-2.5 py-1 text-token-xs"
+                style={{ color: "var(--color-bg)" }}
               >
                 已解决
               </button>
@@ -753,7 +754,10 @@ function MobileTaskReportSheet({
 }) {
   const checkpoints = run?.checkpoints ?? [];
   return (
-    <div className="fixed inset-0 z-50 flex items-end bg-black/30 px-3 pb-3 pt-12">
+    <div
+      className="fixed inset-0 z-50 flex items-end px-3 pb-3 pt-12"
+      style={{ background: "var(--color-overlay)" }}
+    >
       <button
         type="button"
         className="absolute inset-0"
@@ -769,7 +773,7 @@ function MobileTaskReportSheet({
             <ShieldAlert size={15} />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="text-[11px] font-medium text-[color:var(--text-muted)]">
+            <div className="text-token-xs font-medium text-[color:var(--text-muted)]">
               任务报告
             </div>
             <h3 className="mt-0.5 text-base font-semibold leading-6">
@@ -874,7 +878,8 @@ function MobileTaskReportSheet({
               <button
                 type="button"
                 onClick={() => onFindingStatus("resolved")}
-                className="rounded-full bg-[color:var(--accent)] px-3 py-1.5 text-xs text-white"
+                className="rounded-full bg-[color:var(--accent)] px-3 py-1.5 text-xs"
+                style={{ color: "var(--color-bg)" }}
               >
                 已解决
               </button>
@@ -1044,12 +1049,12 @@ function MobileMessagePart({
             状态：{part.isError ? "error" : part.status}
           </div>
           {argsText ? (
-            <pre className="max-h-36 overflow-auto whitespace-pre-wrap rounded-lg bg-[color:var(--bg-panel)] p-2 text-[11px] leading-5">
+            <pre className="max-h-36 overflow-auto whitespace-pre-wrap rounded-lg bg-[color:var(--bg-panel)] p-2 text-token-xs leading-5">
               {argsText}
             </pre>
           ) : null}
           {resultText ? (
-            <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-[color:var(--bg-panel)] p-2 text-[11px] leading-5">
+            <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-[color:var(--bg-panel)] p-2 text-token-xs leading-5">
               {resultText}
             </pre>
           ) : null}
@@ -1077,13 +1082,13 @@ function MobileMessagePart({
 
   if (part.kind === "approval") {
     return (
-      <div className="space-y-2 rounded-xl border border-amber-700 bg-amber-950/10 p-3">
-        <div className="flex items-center gap-2 text-xs text-amber-700">
+      <div className="space-y-2 rounded-token-lg border border-[color:var(--color-warning)] bg-[color:var(--color-warning-bg)] p-3">
+        <div className="flex items-center gap-2 text-xs text-[color:var(--color-warning)]">
           <ShieldAlert size={14} />
           <span>需要审批：{part.toolName}</span>
           <span className="ml-auto">{part.status}</span>
         </div>
-        <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-[color:var(--bg)] p-2 text-[11px] leading-5">
+        <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-[color:var(--bg)] p-2 text-token-xs leading-5">
           {JSON.stringify(part.input, null, 2)}
         </pre>
         {part.status === "pending" ? (
@@ -1097,7 +1102,8 @@ function MobileMessagePart({
                   part.ruleId
                 )
               }
-              className="inline-flex items-center gap-1 rounded bg-emerald-700 px-2 py-1 text-xs text-white"
+              className="inline-flex items-center gap-1 rounded-[var(--button-radius)] bg-[color:var(--color-success)] px-2 py-1 text-xs"
+              style={{ color: "var(--color-bg)" }}
             >
               <Check size={12} />
               允许
@@ -1105,7 +1111,7 @@ function MobileMessagePart({
             <button
               type="button"
               onClick={() => void deny(part.toolCallId)}
-              className="inline-flex items-center gap-1 rounded border border-red-800 px-2 py-1 text-xs text-red-700"
+              className="inline-flex items-center gap-1 rounded-[var(--button-radius)] border border-[color:var(--color-danger)] px-2 py-1 text-xs text-[color:var(--color-danger)]"
             >
               <X size={12} />
               拒绝
@@ -1118,7 +1124,7 @@ function MobileMessagePart({
 
   if (part.kind === "clarification") {
     return (
-      <div className="space-y-2 rounded-xl border border-[color:var(--accent)] bg-[color:var(--bg-selected)] p-3">
+      <div className="space-y-2 rounded-token-lg border border-[color:var(--accent)] bg-[color:var(--color-accent-bg)] p-3">
         <div className="font-medium">{part.title}</div>
         <div className="whitespace-pre-wrap text-sm">{part.question}</div>
         {part.status === "pending" ? (
@@ -1214,7 +1220,7 @@ function MobileMessagePart({
             </div>
           </div>
           {part.error ? (
-            <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-lg bg-red-950/10 p-2 text-[11px] text-red-700">
+            <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-token bg-[color:var(--color-danger-bg)] p-2 text-token-xs text-[color:var(--color-danger)]">
               {part.error}
             </pre>
           ) : null}
@@ -1265,7 +1271,7 @@ function MobileChatMessage({
               return (
                 <div
                   key={partIndex}
-                  className="rounded-[20px] rounded-br-md bg-[color:var(--bg-selected)] px-3.5 py-2.5 text-[15px] leading-6 shadow-sm"
+                  className="rounded-sheet rounded-br-md bg-[color:var(--bg-selected)] px-3.5 py-2.5 text-token-mobile leading-6 shadow-sm"
                 >
                   <div className="whitespace-pre-wrap break-words">{part.text}</div>
                 </div>
@@ -1295,11 +1301,11 @@ function MobileChatMessage({
 
   return (
     <article className="min-w-0">
-      <div className="mb-1.5 flex items-center gap-2 px-1 text-[11px] text-[color:var(--text-muted)]">
+      <div className="mb-1.5 flex items-center gap-2 px-1 text-token-xs text-[color:var(--text-muted)]">
         <BrandLogo size={18} />
         <span>Diga</span>
       </div>
-      <div className="min-w-0 space-y-2 text-[15px] leading-7">
+      <div className="min-w-0 space-y-2 text-token-mobile leading-7">
         {(() => {
           const rendered: ReactNode[] = [];
           let index = 0;
@@ -2717,7 +2723,7 @@ export default function MobileApp({
             <div className="min-w-0 overflow-hidden">
               <div className="truncate text-sm font-semibold">Diga Agent Mobile</div>
               <div
-                className="block max-w-full truncate text-[11px] text-[color:var(--text-muted)]"
+                className="block max-w-full truncate text-token-xs text-[color:var(--text-muted)]"
                 title={`${baseUrl || "未连接"} · ${mobileBaseLabel(baseUrl)}`}
               >
                 {baseUrl || "未连接"} · {mobileBaseLabel(baseUrl)}
@@ -2726,14 +2732,14 @@ export default function MobileApp({
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {taskDashboard.inboxCount > 0 ? (
-              <span className="inline-flex max-w-[82px] items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-700 dark:text-amber-200">
+              <span className="inline-flex max-w-[82px] items-center gap-1 rounded-[var(--badge-radius)] border border-[color:var(--color-warning)] bg-[color:var(--color-warning-bg)] px-2 py-1 text-token-xs text-[color:var(--color-warning)]">
                 <ShieldAlert size={12} />
                 <span className="truncate">{taskDashboard.inboxCount} 待办</span>
               </span>
             ) : null}
-            <span className="inline-flex max-w-[92px] items-center gap-1 rounded border border-[color:var(--border-soft)] px-2 py-1 text-[11px]">
+            <span className="inline-flex max-w-[92px] items-center gap-1 rounded border border-[color:var(--border-soft)] px-2 py-1 text-token-xs">
               {connection === "connected" ? (
-                <Circle size={9} className="fill-emerald-500 text-emerald-500" />
+                <Circle size={9} className="fill-[color:var(--color-success)] text-[color:var(--color-success)]" />
               ) : connection === "reconnecting" ? (
                 <Loader2 size={12} className="animate-spin" />
               ) : (
@@ -2758,21 +2764,22 @@ export default function MobileApp({
           type="button"
           aria-label="关闭会话列表"
           onClick={() => setSessionDrawerOpen(false)}
-          className={`fixed inset-0 z-30 bg-black/55 transition-opacity md:hidden ${
+          className={`fixed inset-0 z-30 transition-opacity md:hidden ${
             sessionDrawerOpen
               ? "pointer-events-auto opacity-100"
               : "pointer-events-none opacity-0"
           }`}
+          style={{ background: "var(--color-overlay)" }}
         />
         <aside
-          className={`mobile-safe-drawer fixed inset-y-0 left-0 z-40 flex w-[min(84vw,330px)] min-h-0 flex-col border-r border-[color:var(--border)] bg-[color:var(--bg-panel)] shadow-2xl transition-transform duration-200 ease-out md:static md:z-auto md:w-auto md:translate-x-0 md:shadow-none ${
+          className={`mobile-safe-drawer fixed inset-y-0 left-0 z-40 flex w-[min(84vw,330px)] min-h-0 flex-col border-r border-[color:var(--border)] bg-[color:var(--bg-panel)] shadow-modal transition-transform duration-200 ease-out md:static md:z-auto md:w-auto md:translate-x-0 md:shadow-none ${
             sessionDrawerOpen ? "translate-x-0" : "-translate-x-full"
           }`}
         >
           <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-[color:var(--border)] bg-[color:var(--bg-panel)] px-3 py-2">
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-semibold">会话</div>
-                  <div className="text-[11px] text-[color:var(--text-muted)]">
+                  <div className="text-token-xs text-[color:var(--text-muted)]">
                 {sessions.length} 个历史任务
                 {taskDashboard.inboxCount > 0
                   ? ` · ${taskDashboard.inboxCount} 个待处理`
@@ -2782,7 +2789,8 @@ export default function MobileApp({
             <button
               type="button"
               onClick={startNew}
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded bg-[color:var(--accent)] text-white"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded bg-[color:var(--accent)]"
+              style={{ color: "var(--color-bg)" }}
               title="新建任务"
             >
               <Plus size={15} />
@@ -2815,7 +2823,7 @@ export default function MobileApp({
                 >
                   <div className="flex min-w-0 items-center gap-1">
                     {waitingUser ? (
-                      <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+                      <span className="h-2 w-2 shrink-0 rounded-full bg-[color:var(--color-warning)]" />
                     ) : session.isRunning ? (
                       <Loader2 size={12} className="shrink-0 animate-spin text-[color:var(--accent)]" />
                     ) : null}
@@ -2823,13 +2831,13 @@ export default function MobileApp({
                       {session.meta?.title || session.name || session.firstMessage || "(未命名)"}
                     </span>
                     {waitingUser ? (
-                      <span className="shrink-0 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-200">
+                      <span className="shrink-0 rounded-full bg-[color:var(--color-warning-bg)] px-1.5 py-0.5 text-token-xs text-[color:var(--color-warning)]">
                         需确认
                       </span>
                     ) : null}
                   </div>
                   <div
-                    className="mt-1 truncate text-[11px] text-[color:var(--text-muted)]"
+                    className="mt-1 truncate text-token-xs text-[color:var(--text-muted)]"
                     title={session.cwd}
                   >
                     {compactPath(session.cwd)}
@@ -2855,7 +2863,7 @@ export default function MobileApp({
 
         <section className="relative flex min-h-0 min-w-0 flex-col overflow-hidden">
           {error ? (
-            <div className="border-b border-red-800 bg-red-900/30 px-3 py-2 text-xs text-red-200">
+            <div className="border-b border-[color:var(--color-danger)] bg-[color:var(--color-danger-bg)] px-3 py-2 text-xs text-[color:var(--color-danger)]">
               {error}
             </div>
           ) : null}
@@ -2863,7 +2871,7 @@ export default function MobileApp({
             <button
               type="button"
               onClick={resumeAutoScrollToBottom}
-              className="flex shrink-0 items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 text-left text-xs text-amber-700 dark:text-amber-200"
+              className="flex shrink-0 items-center gap-2 border-b border-[color:var(--color-warning)] bg-[color:var(--color-warning-bg)] px-3 py-2 text-left text-xs text-[color:var(--color-warning)]"
             >
               <ShieldAlert size={14} className="shrink-0" />
               <span className="min-w-0 flex-1 truncate">
@@ -2904,7 +2912,7 @@ export default function MobileApp({
                         <h1 className="text-xl font-semibold tracking-tight">
                           Diga Agent
                         </h1>
-                        <span className="rounded-full border border-[color:var(--border-soft)] px-2 py-0.5 text-[10px] text-[color:var(--text-muted)]">
+                        <span className="rounded-full border border-[color:var(--border-soft)] px-2 py-0.5 text-token-xs text-[color:var(--text-muted)]">
                           Mobile
                         </span>
                       </div>
@@ -2943,7 +2951,7 @@ export default function MobileApp({
                               {starter.body}
                             </span>
                           </span>
-                          <span className="mt-1 shrink-0 rounded-full border border-[color:var(--border-soft)] px-2 py-0.5 text-[10px] text-[color:var(--text-muted)]">
+                          <span className="mt-1 shrink-0 rounded-full border border-[color:var(--border-soft)] px-2 py-0.5 text-token-xs text-[color:var(--text-muted)]">
                             发送
                           </span>
                         </button>
@@ -3036,12 +3044,22 @@ export default function MobileApp({
                     <button
                       type="button"
                       onClick={() => removePendingImage(index)}
-                      className="absolute right-0 top-0 inline-flex h-5 w-5 items-center justify-center bg-black/65 text-[11px] text-white"
+                      className="absolute right-0 top-0 inline-flex h-5 w-5 items-center justify-center text-token-xs"
+                      style={{
+                        background: "color-mix(in srgb, var(--color-overlay) 65%, transparent)",
+                        color: "var(--color-bg)",
+                      }}
                       title="移除图片"
                     >
                       <X size={12} />
                     </button>
-                    <div className="absolute inset-x-0 bottom-0 truncate bg-black/55 px-1 text-[10px] text-white">
+                    <div
+                      className="absolute inset-x-0 bottom-0 truncate px-1 text-token-xs"
+                      style={{
+                        background: "color-mix(in srgb, var(--color-overlay) 55%, transparent)",
+                        color: "var(--color-bg)",
+                      }}
+                    >
                       {formatBytes(approxBase64Bytes(image.data))}
                     </div>
                   </div>
@@ -3049,10 +3067,10 @@ export default function MobileApp({
               </div>
             ) : null}
             <div
-              className={`border border-[color:var(--border)] bg-[color:var(--bg-panel)] shadow-[0_-8px_28px_rgba(0,0,0,0.08)] transition-colors focus-within:border-[color:var(--accent)] ${
+              className={`border border-[color:var(--border)] bg-[color:var(--bg-panel)] shadow-popover transition-colors focus-within:border-[color:var(--accent)] ${
                 composerCompact
-                  ? "rounded-[22px] px-2 py-1.5"
-                  : "rounded-[26px] px-2.5 py-2"
+                  ? "rounded-full px-2 py-1.5"
+                  : "rounded-full px-2.5 py-2"
               }`}
             >
               <input
@@ -3107,7 +3125,7 @@ export default function MobileApp({
                   onBlur={blurComposer}
                   placeholder={selected ? "继续修改、验收反馈或新指令…" : "发布一个新任务…"}
                   rows={1}
-                  className={`w-full resize-none overflow-y-auto bg-transparent px-3 text-[15px] leading-6 outline-none placeholder:text-[color:var(--text-dim)] ${
+                  className={`w-full resize-none overflow-y-auto bg-transparent px-3 text-token-mobile leading-6 outline-none placeholder:text-[color:var(--text-dim)] ${
                     composerCompact
                       ? "max-h-[112px] min-h-9 py-1.5"
                       : "max-h-[180px] min-h-11 py-2.5"
@@ -3119,7 +3137,7 @@ export default function MobileApp({
                   composerCompact ? "mt-0" : "mt-1"
                 }`}
               >
-                <div className="min-w-0 text-[11px]">
+                <div className="min-w-0 text-token-xs">
                   {pendingImages.length > 0 ? (
                     <span className="block truncate text-[color:var(--text-muted)]">
                       {pendingImages.length} 张图片
@@ -3129,7 +3147,7 @@ export default function MobileApp({
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => setModelSheetOpen(true)}
-                      className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-2 py-1 text-[11px] text-[color:var(--text-muted)] active:bg-[color:var(--bg-hover)]"
+                      className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-2 py-1 text-token-xs text-[color:var(--text-muted)] active:bg-[color:var(--bg-hover)]"
                       title="模型配置"
                     >
                       <Settings2 size={12} className="shrink-0" />
@@ -3159,9 +3177,10 @@ export default function MobileApp({
                       (busy || sending || (!input.trim() && pendingImages.length === 0))
                     }
                     onClick={() => void (effectiveAgentRunning ? abort() : send())}
-                    className={`inline-flex shrink-0 items-center justify-center rounded-full bg-[color:var(--accent)] text-white shadow-sm transition-colors disabled:cursor-not-allowed disabled:bg-[color:var(--bg-hover)] disabled:text-[color:var(--text-dim)] disabled:shadow-none ${
+                    className={`inline-flex shrink-0 items-center justify-center rounded-full bg-[color:var(--accent)] shadow-sm transition-colors disabled:cursor-not-allowed disabled:bg-[color:var(--bg-hover)] disabled:text-[color:var(--text-dim)] disabled:shadow-none ${
                       composerCompact ? "h-9 w-9" : "h-10 w-10"
                     }`}
+                    style={{ color: "var(--color-bg)" }}
                     title={effectiveAgentRunning ? "停止" : "发送"}
                   >
                     {(busy || sending) && !effectiveAgentRunning ? (
@@ -3177,14 +3196,17 @@ export default function MobileApp({
             </div>
           </footer>
           {modelSheetOpen ? (
-            <div className="fixed inset-0 z-50 flex items-end bg-black/45">
+            <div
+              className="fixed inset-0 z-50 flex items-end"
+              style={{ background: "var(--color-overlay)" }}
+            >
               <button
                 type="button"
                 aria-label="关闭模型配置"
                 onClick={() => setModelSheetOpen(false)}
                 className="absolute inset-0"
               />
-              <div className="mobile-safe-bottom relative z-10 max-h-[560px] w-full overflow-hidden rounded-t-2xl border border-[color:var(--border)] bg-[color:var(--bg)] shadow-2xl">
+              <div className="mobile-safe-bottom relative z-10 max-h-[560px] w-full overflow-hidden rounded-t-[var(--radius-sheet)] border border-[color:var(--border)] bg-[color:var(--bg)] shadow-modal">
                 <div className="flex items-center gap-2 border-b border-[color:var(--border)] px-4 py-3">
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-semibold">模型配置</div>
@@ -3200,7 +3222,7 @@ export default function MobileApp({
                 </div>
                 <div className="max-h-[420px] overflow-y-auto px-2 py-2">
                   {modelOptions.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-[color:var(--border)] px-3 py-4 text-center text-sm text-[color:var(--text-muted)]">
+                    <div className="rounded-token-lg border border-dashed border-[color:var(--border)] px-3 py-4 text-center text-sm text-[color:var(--text-muted)]">
                       请先在桌面端配置可用模型。
                     </div>
                   ) : (
@@ -3216,7 +3238,7 @@ export default function MobileApp({
                             void changeModel(option.providerId, option.modelId);
                             setModelSheetOpen(false);
                           }}
-                          className={`flex w-full items-center gap-3 rounded-xl border px-3 py-3 text-left ${
+                          className={`flex w-full items-center gap-3 rounded-token-lg border px-3 py-3 text-left ${
                             selectedModel
                               ? "border-[color:var(--accent)] bg-[color:var(--bg-selected)]"
                               : "border-transparent active:bg-[color:var(--bg-hover)]"
@@ -3225,9 +3247,10 @@ export default function MobileApp({
                           <span
                             className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
                               selectedModel
-                                ? "border-[color:var(--accent)] bg-[color:var(--accent)] text-white"
+                                ? "border-[color:var(--accent)] bg-[color:var(--accent)]"
                                 : "border-[color:var(--border)] text-transparent"
                             }`}
+                            style={selectedModel ? { color: "var(--color-bg)" } : undefined}
                           >
                             <Check size={12} />
                           </span>
@@ -3235,7 +3258,7 @@ export default function MobileApp({
                             <span className="block truncate text-sm font-medium">
                               {option.modelLabel}
                             </span>
-                            <span className="mt-0.5 block truncate text-[11px] text-[color:var(--text-muted)]">
+                            <span className="mt-0.5 block truncate text-token-xs text-[color:var(--text-muted)]">
                               {option.providerLabel}
                               {option.reasoning ? " · 支持思考" : ""}
                             </span>
@@ -3249,14 +3272,17 @@ export default function MobileApp({
             </div>
           ) : null}
           {attachmentSheetOpen ? (
-            <div className="fixed inset-0 z-50 flex items-end bg-black/45">
+            <div
+              className="fixed inset-0 z-50 flex items-end"
+              style={{ background: "var(--color-overlay)" }}
+            >
               <button
                 type="button"
                 aria-label="关闭附件"
                 onClick={() => setAttachmentSheetOpen(false)}
                 className="absolute inset-0"
               />
-              <div className="mobile-safe-bottom relative z-10 w-full overflow-hidden rounded-t-2xl border border-[color:var(--border)] bg-[color:var(--bg)] shadow-2xl">
+              <div className="mobile-safe-bottom relative z-10 w-full overflow-hidden rounded-t-[var(--radius-sheet)] border border-[color:var(--border)] bg-[color:var(--bg)] shadow-modal">
                 <div className="flex items-center gap-2 border-b border-[color:var(--border)] px-4 py-3">
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-semibold">添加内容</div>
@@ -3277,7 +3303,7 @@ export default function MobileApp({
                       setAttachmentSheetOpen(false);
                       window.setTimeout(() => fileInputRef.current?.click(), 0);
                     }}
-                    className="flex w-full items-center gap-3 rounded-xl border border-transparent px-3 py-3 text-left active:bg-[color:var(--bg-hover)]"
+                    className="flex w-full items-center gap-3 rounded-token-lg border border-transparent px-3 py-3 text-left active:bg-[color:var(--bg-hover)]"
                   >
                     <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] text-[color:var(--text-muted)]">
                       <Plus size={17} />
@@ -3286,7 +3312,7 @@ export default function MobileApp({
                       <span className="block truncate text-sm font-medium">
                         上传图片
                       </span>
-                      <span className="mt-0.5 block truncate text-[11px] text-[color:var(--text-muted)]">
+                      <span className="mt-0.5 block truncate text-token-xs text-[color:var(--text-muted)]">
                         支持一次选择多张图片
                       </span>
                     </span>

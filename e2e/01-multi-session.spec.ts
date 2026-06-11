@@ -10,7 +10,13 @@
  * 切 runner 用 ChatApp 暴露的诊断钩子(window.__chatAppDiag)直接调,
  * 因为 sidebar 在 streaming 期间不会自动 refresh,无法用点击模拟。
  */
-import { test, expect, pushSseEvent } from "./fixtures";
+import {
+  installApiFixtures,
+  installSseMock,
+  test,
+  expect,
+  pushSseEvent,
+} from "./fixtures";
 import type { Page, Locator } from "@playwright/test";
 
 const editor = (page: Page): Locator => page.locator("textarea").first();
@@ -134,6 +140,48 @@ async function startSessionWith(
   const key = await activeKey(page);
   return { aid, key };
 }
+
+test("sidebar: session more menu opens actions and rename remains clickable", async ({
+  page,
+}) => {
+  const modified = "2026-06-11T08:00:00.000Z";
+  await installSseMock(page);
+  await installApiFixtures(page, {
+    sessionsResponse: {
+      sessions: [
+        {
+          id: "session-menu-1",
+          path: "/tmp/e2e-sessions/session-menu-1.jsonl",
+          cwd: "/tmp/e2e-cwd",
+          name: "Session 1",
+          firstMessage: "Session 1",
+          modified,
+          messageCount: 1,
+          meta: {
+            id: "session-menu-1",
+            lastSeenAt: Date.parse(modified),
+          },
+        },
+      ],
+    },
+  });
+  await page.goto("/?e2e=1");
+  await expect(page.getByText("Session 1")).toBeVisible();
+  const sessionRow = page.getByRole("button", { name: /Session 1/ }).first();
+  await expect(page.getByLabel("有新消息")).not.toBeVisible();
+  await expect(sessionRow).not.toContainText("/tmp/e2e-cwd");
+
+  await page.locator("[data-session-menu]").first().click();
+  await expect(page.getByRole("menu", { name: "会话操作" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: /重命名/ })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: /分享会话/ })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: /^置顶$/ })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: /^删除$/ })).toBeVisible();
+  await expect(page.getByText("给当前会话设置更清晰的标题")).not.toBeVisible();
+
+  await page.getByRole("menuitem", { name: /重命名/ }).click();
+  await expect(page.locator('input[value="Session 1"]')).toBeVisible();
+});
 
 // ---------- 场景 1 ----------
 test("场景 1: A 流式中切到 B,B 输入框可以独立打字", async ({
