@@ -1,6 +1,6 @@
 {
   "name": "mini-pi-web",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Self-hosted UI for pi-coding-agent (mini fork of pi-web). Web + Electron.",
   "license": "MIT",
   "keywords": [
