@@ -15,6 +15,7 @@ interface ApiFixtureOptions {
   authResponse?: unknown;
   modelsConfigResponse?: unknown;
   sessionsResponse?: unknown;
+  tasksResponse?: unknown;
 }
 
 const defaultProvidersResponse = {
@@ -137,6 +138,149 @@ export async function installApiFixtures(
     }
     if (pathname.endsWith("/api/files")) {
       return route.fulfill({ json: { entries: [] } });
+    }
+    if (pathname.endsWith("/api/tasks")) {
+      if (options.tasksResponse) {
+        return route.fulfill({ json: options.tasksResponse });
+      }
+      const taskWorkbenchDashboard = await page.evaluate(() => {
+        const w = window as unknown as { __tasksDashboard?: unknown };
+        return w.__tasksDashboard;
+      }).catch(() => null);
+      if (taskWorkbenchDashboard && method === "GET") {
+        return route.fulfill({ json: taskWorkbenchDashboard });
+      }
+      if (taskWorkbenchDashboard && method === "POST") {
+        const body = JSON.parse(route.request().postData() ?? "{}") as Record<
+          string,
+          unknown
+        >;
+        const next = await page.evaluate((input) => {
+          const w = window as unknown as {
+            __tasksDashboard: {
+              tasks: Array<Record<string, unknown>>;
+              runs: Array<Record<string, unknown>>;
+              findings: Array<Record<string, unknown>>;
+              dueTasks: Array<Record<string, unknown>>;
+              inboxCount: number;
+            };
+          };
+          const dash = w.__tasksDashboard;
+          const now = Date.now();
+          if (input.type === "create") {
+            const task = {
+              id: "task-1",
+              title: String(input.title),
+              prompt: String(input.prompt),
+              projectPath: String(input.projectPath),
+              provider: String(input.provider),
+              modelId: String(input.modelId),
+              cadence: input.cadence === "daily" ? "daily" : "manual",
+              enabled: true,
+              skillIds: [],
+              permissionPolicy: {
+                requireApprovalBeforeWrite: true,
+                requireApprovalBeforeNetwork: true,
+                maxDurationMinutes: 60,
+              },
+              status: "scheduled",
+              createdAt: now,
+              updatedAt: now,
+              nextRunAt: now - 1000,
+            };
+            dash.tasks = [task];
+            dash.dueTasks = [task];
+            return { task, dashboard: dash };
+          }
+          if (input.type === "run_due" || input.type === "run") {
+            const task = dash.tasks[0];
+            const run = {
+              id: "run-1",
+              taskId: task.id,
+              status: "completed_with_findings",
+              startedAt: now,
+              updatedAt: now,
+              endedAt: now,
+              summary: "发现 1 个需要你处理的新事项。",
+              findingIds: ["finding-1"],
+            };
+            const finding = {
+              id: "finding-1",
+              taskId: task.id,
+              runId: run.id,
+              title: "CI 连续失败",
+              body: "主分支 CI 在登录流程上连续失败，需要你确认是否优先处理。",
+              severity: "critical",
+              status: "unread",
+              createdAt: now,
+              updatedAt: now,
+            };
+            dash.runs = [run];
+            dash.findings = [finding];
+            dash.inboxCount = 1;
+            dash.dueTasks = [];
+            dash.tasks = [{ ...task, status: "completed", lastRunId: run.id }];
+            return { dashboard: dash };
+          }
+          if (input.type === "finding_status") {
+            dash.findings = dash.findings.map((finding) =>
+              finding.id === input.id
+                ? { ...finding, status: String(input.status) }
+                : finding
+            );
+            dash.inboxCount = dash.findings.filter(
+              (finding) => finding.status === "unread"
+            ).length;
+            return { dashboard: dash };
+          }
+          return { dashboard: dash };
+        }, body);
+        return route.fulfill({ json: { ok: true, ...next } });
+      }
+      const dashboard = await page.evaluate(() => {
+        const w = window as unknown as { __mobileTasks?: unknown };
+        return w.__mobileTasks;
+      }).catch(() => null);
+      if (dashboard && method === "GET") {
+        return route.fulfill({ json: dashboard });
+      }
+      if (dashboard && method === "POST") {
+        const body = JSON.parse(route.request().postData() ?? "{}") as {
+          type?: string;
+          id?: string;
+          status?: string;
+        };
+        const nextDashboard = await page.evaluate((input) => {
+          const w = window as unknown as {
+            __mobileTasks?: {
+              findings?: Array<{ id: string; status: string }>;
+              inboxCount?: number;
+            };
+          };
+          if (w.__mobileTasks && input.type === "finding_status") {
+            w.__mobileTasks.findings = (w.__mobileTasks.findings ?? []).map(
+              (finding) =>
+                finding.id === input.id
+                  ? { ...finding, status: input.status ?? finding.status }
+                  : finding
+            );
+            w.__mobileTasks.inboxCount = (w.__mobileTasks.findings ?? []).filter(
+              (finding) => finding.status === "unread"
+            ).length;
+          }
+          return w.__mobileTasks;
+        }, body);
+        return route.fulfill({ json: { ok: true, dashboard: nextDashboard } });
+      }
+      return route.fulfill({
+        json: {
+          tasks: [],
+          runs: [],
+          findings: [],
+          dueTasks: [],
+          inboxCount: 0,
+        },
+      });
     }
 
     // === Agent 创建：每次返回一个递增 fakeId + sessionFile ===

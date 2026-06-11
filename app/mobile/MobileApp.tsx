@@ -64,6 +64,12 @@ import {
 } from "@/lib/default-model";
 import { buildProcessSummary } from "@/lib/process-summary";
 import { toUserFacingError, userFacingMessage } from "@/lib/user-facing-error";
+import type {
+  LongTaskDashboard,
+  LongTaskDefinition,
+  TaskFinding,
+  TaskFindingStatus,
+} from "@/lib/tasks/types";
 
 interface RemoteStorage {
   token: string;
@@ -81,6 +87,14 @@ interface RemoteStatus {
   defaultModelId?: string;
   activeAgents?: SessionRuntimeState[];
 }
+
+const EMPTY_TASK_DASHBOARD: LongTaskDashboard = {
+  tasks: [],
+  runs: [],
+  findings: [],
+  dueTasks: [],
+  inboxCount: 0,
+};
 
 type ConnectionState = "connected" | "reconnecting" | "offline" | "idle";
 type MobileContextMessages = Parameters<typeof ctxToMessages>[0];
@@ -537,6 +551,142 @@ function MobileAutocompletePanel({
   );
 }
 
+function mobileTaskStatusLabel(task: LongTaskDefinition): string {
+  if (task.status === "waiting_user") return "等待你决策";
+  if (task.status === "running") return "执行中";
+  if (task.status === "failed") return "执行失败";
+  if (task.status === "scheduled") return "已计划";
+  if (task.status === "completed") return "已完成";
+  if (task.status === "paused") return "已暂停";
+  return "空闲";
+}
+
+function mobileSeverityTone(severity: TaskFinding["severity"]): string {
+  if (severity === "critical") return "text-red-600 dark:text-red-300";
+  if (severity === "warning") return "text-amber-600 dark:text-amber-300";
+  return "text-blue-600 dark:text-blue-300";
+}
+
+function MobileTaskInbox({
+  dashboard,
+  sessions,
+  onFindingStatus,
+  onOpenRunSession,
+}: {
+  dashboard: LongTaskDashboard;
+  sessions: SessionInfoLite[];
+  onFindingStatus: (id: string, status: TaskFindingStatus) => void;
+  onOpenRunSession: (sessionFile?: string | null) => void;
+}) {
+  const inbox = dashboard.findings.filter((finding) => finding.status === "unread");
+  const waitingTasks = dashboard.tasks.filter((task) => task.status === "waiting_user");
+  if (inbox.length === 0 && waitingTasks.length === 0) return null;
+
+  const sessionFiles = new Set(sessions.map((session) => session.path));
+  const runForFinding = (finding: TaskFinding) =>
+    dashboard.runs.find((run) => run.id === finding.runId);
+  const runForTask = (task: LongTaskDefinition) =>
+    dashboard.runs.find((run) => run.id === task.lastRunId);
+
+  return (
+    <section className="space-y-2 rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] p-3 text-left">
+      <div className="flex items-center gap-2">
+        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[color:var(--bg)] text-[color:var(--accent)]">
+          <ShieldAlert size={14} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold">任务收件箱</div>
+          <div className="truncate text-[11px] text-[color:var(--text-muted)]">
+            {inbox.length} 个待处理事项
+            {waitingTasks.length > 0 ? ` · ${waitingTasks.length} 个等待决策` : ""}
+          </div>
+        </div>
+      </div>
+
+      {waitingTasks.slice(0, 2).map((task) => {
+        const run = runForTask(task);
+        const canOpen = Boolean(run?.sessionFile && sessionFiles.has(run.sessionFile));
+        return (
+          <div
+            key={task.id}
+            className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-2.5"
+          >
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+              <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                {task.title}
+              </span>
+              <span className="shrink-0 text-[11px] text-amber-700 dark:text-amber-200">
+                {mobileTaskStatusLabel(task)}
+              </span>
+            </div>
+            <div className="mt-1 line-clamp-2 text-xs leading-5 text-[color:var(--text-muted)]">
+              {run?.waitingReason || task.lastSummary || "请回到对应会话处理确认。"}
+            </div>
+            {canOpen ? (
+              <button
+                type="button"
+                onClick={() => onOpenRunSession(run?.sessionFile)}
+                className="mt-2 rounded-full border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-2.5 py-1 text-[11px]"
+              >
+                打开会话
+              </button>
+            ) : null}
+          </div>
+        );
+      })}
+
+      {inbox.slice(0, 3).map((finding) => {
+        const run = runForFinding(finding);
+        const canOpen = Boolean(run?.sessionFile && sessionFiles.has(run.sessionFile));
+        return (
+          <div
+            key={finding.id}
+            className="rounded-xl border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-2.5"
+          >
+            <div className="flex min-w-0 items-center gap-2">
+              <span className={`text-xs ${mobileSeverityTone(finding.severity)}`}>
+                ●
+              </span>
+              <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                {finding.title}
+              </span>
+            </div>
+            <div className="mt-1 line-clamp-3 text-xs leading-5 text-[color:var(--text-muted)]">
+              {finding.body}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {canOpen ? (
+                <button
+                  type="button"
+                  onClick={() => onOpenRunSession(run?.sessionFile)}
+                  className="rounded-full border border-[color:var(--border-soft)] px-2.5 py-1 text-[11px]"
+                >
+                  打开会话
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => onFindingStatus(finding.id, "reviewed")}
+                className="rounded-full border border-[color:var(--border-soft)] px-2.5 py-1 text-[11px]"
+              >
+                已读
+              </button>
+              <button
+                type="button"
+                onClick={() => onFindingStatus(finding.id, "resolved")}
+                className="rounded-full bg-[color:var(--accent)] px-2.5 py-1 text-[11px] text-white"
+              >
+                已解决
+              </button>
+            </div>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
 function isMobileProcessPart(part: MessagePart): boolean {
   return (
     part.kind === "thinking" ||
@@ -977,6 +1127,8 @@ export default function MobileApp({
   const [baseUrl, setBaseUrl] = useState("");
   const [connection, setConnection] = useState<ConnectionState>("idle");
   const [status, setStatus] = useState<RemoteStatus | null>(null);
+  const [taskDashboard, setTaskDashboard] =
+    useState<LongTaskDashboard>(EMPTY_TASK_DASHBOARD);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [providerId, setProviderId] = useState("");
   const [modelId, setModelId] = useState("");
@@ -1147,10 +1299,11 @@ export default function MobileApp({
     if (!baseUrl) return;
     setError(null);
     try {
-      const [statusRes, sessionsRes, providersRes] = await Promise.all([
+      const [statusRes, sessionsRes, providersRes, tasksRes] = await Promise.all([
         apiFetch("/api/remote/status"),
         apiFetch("/api/sessions"),
         apiFetch("/api/providers"),
+        apiFetch("/api/tasks"),
       ]);
       if (sessionsRes.status === 401 || providersRes.status === 401) {
         try {
@@ -1174,6 +1327,20 @@ export default function MobileApp({
         sessions?: SessionInfoLite[];
       };
       const providersJson = (await providersRes.json()) as ProvidersResponse;
+      const tasksJson = tasksRes.ok
+        ? ((await tasksRes.json().catch(() => ({}))) as Partial<LongTaskDashboard>)
+        : {};
+      const nextTaskDashboard: LongTaskDashboard = {
+        ...EMPTY_TASK_DASHBOARD,
+        ...tasksJson,
+        tasks: Array.isArray(tasksJson.tasks) ? tasksJson.tasks : [],
+        runs: Array.isArray(tasksJson.runs) ? tasksJson.runs : [],
+        findings: Array.isArray(tasksJson.findings) ? tasksJson.findings : [],
+        dueTasks: Array.isArray(tasksJson.dueTasks) ? tasksJson.dueTasks : [],
+        inboxCount:
+          typeof tasksJson.inboxCount === "number" ? tasksJson.inboxCount : 0,
+        scheduler: tasksJson.scheduler,
+      };
       const nextProviders = Array.isArray(providersJson.providers)
         ? providersJson.providers
         : [];
@@ -1207,6 +1374,7 @@ export default function MobileApp({
         preferredModel
       );
       setStatus(statusJson);
+      setTaskDashboard(nextTaskDashboard);
       setProviders(nextProviders);
       setProviderId(selection.providerId);
       setModelId(selection.modelId);
@@ -1971,6 +2139,51 @@ export default function MobileApp({
     scheduleReconcileSelectedSession("clarification", 600);
   };
 
+  const updateFindingStatus = async (
+    findingId: string,
+    nextStatus: TaskFindingStatus
+  ) => {
+    setError(null);
+    try {
+      const res = await apiFetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "finding_status",
+          id: findingId,
+          status: nextStatus,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        dashboard?: LongTaskDashboard;
+      };
+      if (!res.ok || data.error) throw new Error(data.error ?? res.statusText);
+      if (data.dashboard) setTaskDashboard(data.dashboard);
+      void loadAll();
+    } catch (e) {
+      setError(
+        userFacingMessage(e, {
+          baseUrl: baseUrlRef.current || baseUrl,
+          context: "remote",
+        })
+      );
+    }
+  };
+
+  const openTaskRunSession = (sessionFile?: string | null) => {
+    if (!sessionFile) {
+      setError("这个任务还没有可打开的会话记录。");
+      return;
+    }
+    const session = sessions.find((item) => item.path === sessionFile);
+    if (!session) {
+      setError("对应会话暂未同步到移动端，请稍后刷新。");
+      return;
+    }
+    void selectSession(session);
+  };
+
   const closeAutocomplete = useCallback(() => {
     setAcMode(null);
     setAcItems([]);
@@ -2286,6 +2499,12 @@ export default function MobileApp({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            {taskDashboard.inboxCount > 0 ? (
+              <span className="inline-flex max-w-[82px] items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-700 dark:text-amber-200">
+                <ShieldAlert size={12} />
+                <span className="truncate">{taskDashboard.inboxCount} 待办</span>
+              </span>
+            ) : null}
             <span className="inline-flex max-w-[92px] items-center gap-1 rounded border border-[color:var(--border-soft)] px-2 py-1 text-[11px]">
               {connection === "connected" ? (
                 <Circle size={9} className="fill-emerald-500 text-emerald-500" />
@@ -2327,8 +2546,11 @@ export default function MobileApp({
           <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-[color:var(--border)] bg-[color:var(--bg-panel)] px-3 py-2">
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-semibold">会话</div>
-              <div className="text-[11px] text-[color:var(--text-muted)]">
+                  <div className="text-[11px] text-[color:var(--text-muted)]">
                 {sessions.length} 个历史任务
+                {taskDashboard.inboxCount > 0
+                  ? ` · ${taskDashboard.inboxCount} 个待处理`
+                  : ""}
               </div>
             </div>
             <button
@@ -2463,6 +2685,15 @@ export default function MobileApp({
                     </div>
                   </div>
 
+                  <MobileTaskInbox
+                    dashboard={taskDashboard}
+                    sessions={sessions}
+                    onFindingStatus={(id, nextStatus) =>
+                      void updateFindingStatus(id, nextStatus)
+                    }
+                    onOpenRunSession={openTaskRunSession}
+                  />
+
                   <div className="grid gap-2">
                     {MOBILE_STARTERS.map((starter, index) => {
                       const Icon =
@@ -2497,6 +2728,14 @@ export default function MobileApp({
               </div>
             ) : (
               <>
+                <MobileTaskInbox
+                  dashboard={taskDashboard}
+                  sessions={sessions}
+                  onFindingStatus={(id, nextStatus) =>
+                    void updateFindingStatus(id, nextStatus)
+                  }
+                  onOpenRunSession={openTaskRunSession}
+                />
                 {hiddenBeforeCount > 0 || hasMoreHistoryBefore ? (
                   <button
                     type="button"
