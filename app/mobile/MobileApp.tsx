@@ -67,6 +67,7 @@ import { toUserFacingError, userFacingMessage } from "@/lib/user-facing-error";
 import type {
   LongTaskDashboard,
   LongTaskDefinition,
+  LongTaskRun,
   TaskFinding,
   TaskFindingStatus,
 } from "@/lib/tasks/types";
@@ -580,9 +581,19 @@ function MobileTaskInbox({
 }) {
   const inbox = dashboard.findings.filter((finding) => finding.status === "unread");
   const waitingTasks = dashboard.tasks.filter((task) => task.status === "waiting_user");
+  const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
   if (inbox.length === 0 && waitingTasks.length === 0) return null;
 
   const sessionFiles = new Set(sessions.map((session) => session.path));
+  const selectedFinding = selectedFindingId
+    ? dashboard.findings.find((finding) => finding.id === selectedFindingId) ?? null
+    : null;
+  const selectedRun = selectedFinding
+    ? dashboard.runs.find((run) => run.id === selectedFinding.runId) ?? null
+    : null;
+  const selectedTask = selectedFinding
+    ? dashboard.tasks.find((task) => task.id === selectedFinding.taskId) ?? null
+    : null;
   const runForFinding = (finding: TaskFinding) =>
     dashboard.runs.find((run) => run.id === finding.runId);
   const runForTask = (task: LongTaskDefinition) =>
@@ -668,6 +679,13 @@ function MobileTaskInbox({
               </div>
             ) : null}
             <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedFindingId(finding.id)}
+                className="rounded-full border border-[color:var(--border-soft)] px-2.5 py-1 text-[11px]"
+              >
+                查看报告
+              </button>
               {canOpen ? (
                 <button
                   type="button"
@@ -695,8 +713,204 @@ function MobileTaskInbox({
           </div>
         );
       })}
+
+      {selectedFinding ? (
+        <MobileTaskReportSheet
+          finding={selectedFinding}
+          run={selectedRun}
+          task={selectedTask}
+          canOpenSession={Boolean(
+            selectedRun?.sessionFile && sessionFiles.has(selectedRun.sessionFile)
+          )}
+          onClose={() => setSelectedFindingId(null)}
+          onFindingStatus={(status) => {
+            onFindingStatus(selectedFinding.id, status);
+            setSelectedFindingId(null);
+          }}
+          onOpenRunSession={() => onOpenRunSession(selectedRun?.sessionFile)}
+        />
+      ) : null}
     </section>
   );
+}
+
+function MobileTaskReportSheet({
+  finding,
+  run,
+  task,
+  canOpenSession,
+  onClose,
+  onFindingStatus,
+  onOpenRunSession,
+}: {
+  finding: TaskFinding;
+  run?: LongTaskRun | null;
+  task?: LongTaskDefinition | null;
+  canOpenSession: boolean;
+  onClose: () => void;
+  onFindingStatus: (status: TaskFindingStatus) => void;
+  onOpenRunSession: () => void;
+}) {
+  const checkpoints = run?.checkpoints ?? [];
+  return (
+    <div className="fixed inset-0 z-50 flex items-end bg-black/30 px-3 pb-3 pt-12">
+      <button
+        type="button"
+        className="absolute inset-0"
+        aria-label="关闭任务报告"
+        onClick={onClose}
+      />
+      <section
+        data-testid="mobile-task-report-sheet"
+        className="relative max-h-[82vh] w-full overflow-hidden rounded-3xl border border-[color:var(--border-soft)] bg-[color:var(--bg)] shadow-2xl"
+      >
+        <div className="flex items-start gap-3 border-b border-[color:var(--border-soft)] px-4 py-3">
+          <span className="mt-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[color:var(--bg-panel)] text-[color:var(--accent)]">
+            <ShieldAlert size={15} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] font-medium text-[color:var(--text-muted)]">
+              任务报告
+            </div>
+            <h3 className="mt-0.5 text-base font-semibold leading-6">
+              {finding.title}
+            </h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)]"
+            aria-label="关闭"
+          >
+            <X size={15} />
+          </button>
+        </div>
+
+        <div className="max-h-[calc(82vh-132px)] space-y-3 overflow-y-auto px-4 py-3 text-sm">
+          <div className="grid grid-cols-2 gap-2 text-xs text-[color:var(--text-muted)]">
+            <div className="rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] px-3 py-2">
+              <div>关联任务</div>
+              <div className="mt-1 truncate font-medium text-[color:var(--text)]">
+                {task?.title ?? finding.taskId}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] px-3 py-2">
+              <div>运行状态</div>
+              <div className="mt-1 font-medium text-[color:var(--text)]">
+                {run ? mobileRunStatusLabel(run.status) : "未找到运行记录"}
+              </div>
+            </div>
+          </div>
+
+          <section>
+            <div className="mb-1 text-xs font-medium text-[color:var(--text-muted)]">
+              报告内容
+            </div>
+            <div className="whitespace-pre-wrap rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] px-3 py-2 leading-6">
+              {finding.body}
+            </div>
+          </section>
+
+          {run?.summary || run?.waitingReason || run?.error ? (
+            <section>
+              <div className="mb-1 text-xs font-medium text-[color:var(--text-muted)]">
+                本次运行结论
+              </div>
+              <div className="whitespace-pre-wrap rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] px-3 py-2 leading-6">
+                {run.waitingReason || run.summary || run.error}
+              </div>
+            </section>
+          ) : null}
+
+          <section>
+            <div className="mb-1 text-xs font-medium text-[color:var(--text-muted)]">
+              执行时间线
+            </div>
+            {checkpoints.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-[color:var(--border-soft)] px-3 py-4 text-center text-xs text-[color:var(--text-muted)]">
+                这个报告没有 checkpoint 记录。
+              </div>
+            ) : (
+              <div className="space-y-2 rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] p-3">
+                {checkpoints.map((checkpoint) => (
+                  <div key={checkpoint.id} className="flex gap-2 text-xs">
+                    <span className="w-[72px] shrink-0 text-[color:var(--text-muted)]">
+                      {mobileTaskTime(checkpoint.createdAt)}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="font-medium">{checkpoint.title}</span>
+                      {checkpoint.detail ? (
+                        <span className="ml-1 text-[color:var(--text-muted)]">
+                          {checkpoint.detail}
+                        </span>
+                      ) : null}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+
+        <div className="flex flex-wrap gap-2 border-t border-[color:var(--border-soft)] px-4 py-3">
+          {canOpenSession ? (
+            <button
+              type="button"
+              onClick={onOpenRunSession}
+              className="rounded-full border border-[color:var(--border-soft)] px-3 py-1.5 text-xs"
+            >
+              打开会话
+            </button>
+          ) : null}
+          {finding.status === "unread" ? (
+            <>
+              <button
+                type="button"
+                onClick={() => onFindingStatus("reviewed")}
+                className="rounded-full border border-[color:var(--border-soft)] px-3 py-1.5 text-xs"
+              >
+                已读
+              </button>
+              <button
+                type="button"
+                onClick={() => onFindingStatus("resolved")}
+                className="rounded-full bg-[color:var(--accent)] px-3 py-1.5 text-xs text-white"
+              >
+                已解决
+              </button>
+            </>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => onFindingStatus("archived")}
+            className="rounded-full border border-[color:var(--border-soft)] px-3 py-1.5 text-xs"
+          >
+            归档
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function mobileRunStatusLabel(status: LongTaskRun["status"]): string {
+  if (status === "queued") return "排队中";
+  if (status === "running") return "执行中";
+  if (status === "waiting_user") return "等待你决策";
+  if (status === "completed_with_findings") return "已汇报事项";
+  if (status === "completed_empty") return "无新事项";
+  if (status === "failed") return "失败";
+  return "已中止";
+}
+
+function mobileTaskTime(value?: number): string {
+  if (!value) return "尚未运行";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(value);
 }
 
 function isMobileProcessPart(part: MessagePart): boolean {

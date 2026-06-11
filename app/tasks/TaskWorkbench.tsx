@@ -125,6 +125,7 @@ export default function TaskWorkbench() {
   const [draft, setDraft] = useState<Draft>(() => nowDraft());
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   const selected = selectedId
@@ -139,6 +140,15 @@ export default function TaskWorkbench() {
     [dashboard.findings, selected?.id]
   );
   const inbox = dashboard.findings.filter((finding) => finding.status === "unread");
+  const selectedFinding = selectedFindingId
+    ? dashboard.findings.find((finding) => finding.id === selectedFindingId) ?? null
+    : null;
+  const selectedFindingRun = selectedFinding
+    ? dashboard.runs.find((run) => run.id === selectedFinding.runId) ?? null
+    : null;
+  const selectedFindingTask = selectedFinding
+    ? dashboard.tasks.find((task) => task.id === selectedFinding.taskId) ?? null
+    : null;
   const curatedProviders = curateProviderModels(providers).filter((p) => p.hasAuth);
   const currentProvider =
     curatedProviders.find((provider) => provider.provider === draft.provider) ??
@@ -220,6 +230,13 @@ export default function TaskWorkbench() {
           };
           if (!res.ok || json.error) throw new Error(json.error ?? "操作失败");
           if (json.dashboard) setDashboard(json.dashboard);
+          if (
+            selectedFindingId &&
+            json.dashboard &&
+            !json.dashboard.findings.some((finding) => finding.id === selectedFindingId)
+          ) {
+            setSelectedFindingId(null);
+          }
           if (json.task) {
             setSelectedId(json.task.id);
             setDraft(draftFromTask(json.task));
@@ -617,6 +634,7 @@ export default function TaskWorkbench() {
                   <FindingCard
                     key={finding.id}
                     finding={finding}
+                    onOpen={() => setSelectedFindingId(finding.id)}
                     onStatus={(status) =>
                       taskAction({
                         type: "finding_status",
@@ -640,6 +658,7 @@ export default function TaskWorkbench() {
                         key={finding.id}
                         finding={finding}
                         compact
+                        onOpen={() => setSelectedFindingId(finding.id)}
                         onStatus={(status) =>
                           taskAction({
                             type: "finding_status",
@@ -651,6 +670,22 @@ export default function TaskWorkbench() {
                     ))}
                 </div>
               </div>
+            ) : null}
+
+            {selectedFinding ? (
+              <TaskReportPanel
+                finding={selectedFinding}
+                run={selectedFindingRun}
+                task={selectedFindingTask}
+                onClose={() => setSelectedFindingId(null)}
+                onStatus={(status) =>
+                  taskAction({
+                    type: "finding_status",
+                    id: selectedFinding.id,
+                    status,
+                  })
+                }
+              />
             ) : null}
 
             {selected ? (
@@ -788,10 +823,12 @@ function RunRow({ run }: { run: LongTaskRun }) {
 function FindingCard({
   finding,
   compact,
+  onOpen,
   onStatus,
 }: {
   finding: TaskFinding;
   compact?: boolean;
+  onOpen: () => void;
   onStatus: (status: TaskFindingStatus) => void;
 }) {
   return (
@@ -807,7 +844,10 @@ function FindingCard({
           ) : null}
         </div>
       </div>
-      <div className="mt-3 flex gap-2">
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button className="task-mini-btn" onClick={onOpen} type="button">
+          查看报告
+        </button>
         {finding.status === "unread" ? (
           <>
             <button className="task-mini-btn" onClick={() => onStatus("reviewed")} type="button">
@@ -824,6 +864,136 @@ function FindingCard({
         </button>
       </div>
     </div>
+  );
+}
+
+function TaskReportPanel({
+  finding,
+  run,
+  task,
+  onClose,
+  onStatus,
+}: {
+  finding: TaskFinding;
+  run?: LongTaskRun | null;
+  task?: LongTaskDefinition | null;
+  onClose: () => void;
+  onStatus: (status: TaskFindingStatus) => void;
+}) {
+  const checkpoints = run?.checkpoints ?? [];
+  return (
+    <section
+      data-testid="task-report-panel"
+      className="mt-6 rounded border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-4"
+    >
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-xs font-medium text-[color:var(--text-muted)]">
+            任务报告详情
+          </div>
+          <h3 className="mt-1 text-base font-semibold leading-6">{finding.title}</h3>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="task-mini-btn shrink-0"
+        >
+          收起
+        </button>
+      </div>
+
+      <div className="space-y-3 text-sm">
+        <div className="grid grid-cols-2 gap-2 text-xs text-[color:var(--text-muted)]">
+          <div className="rounded border border-[color:var(--border-soft)] px-2 py-2">
+            <div>关联任务</div>
+            <div className="mt-1 truncate font-medium text-[color:var(--text)]">
+              {task?.title ?? finding.taskId}
+            </div>
+          </div>
+          <div className="rounded border border-[color:var(--border-soft)] px-2 py-2">
+            <div>运行状态</div>
+            <div className="mt-1 font-medium text-[color:var(--text)]">
+              {run ? runStatusLabel(run.status) : "未找到运行记录"}
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-1 text-xs font-medium text-[color:var(--text-muted)]">
+            报告内容
+          </div>
+          <div className="whitespace-pre-wrap rounded border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] px-3 py-2 leading-6">
+            {finding.body}
+          </div>
+        </div>
+
+        {run?.summary || run?.waitingReason || run?.error ? (
+          <div>
+            <div className="mb-1 text-xs font-medium text-[color:var(--text-muted)]">
+              本次运行结论
+            </div>
+            <div className="whitespace-pre-wrap rounded border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] px-3 py-2 leading-6">
+              {run.waitingReason || run.summary || run.error}
+            </div>
+          </div>
+        ) : null}
+
+        <div>
+          <div className="mb-1 text-xs font-medium text-[color:var(--text-muted)]">
+            执行时间线
+          </div>
+          {checkpoints.length === 0 ? (
+            <EmptyLine text="这个报告没有 checkpoint 记录。" />
+          ) : (
+            <div className="space-y-2 rounded border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] p-3">
+              {checkpoints.map((checkpoint) => (
+                <div
+                  key={checkpoint.id}
+                  className="grid grid-cols-[86px_minmax(0,1fr)] gap-2 text-xs"
+                >
+                  <span className="text-[color:var(--text-muted)]">
+                    {formatTime(checkpoint.createdAt)}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="font-medium">{checkpoint.title}</span>
+                    {checkpoint.detail ? (
+                      <span className="ml-1 text-[color:var(--text-muted)]">
+                        {checkpoint.detail}
+                      </span>
+                    ) : null}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {finding.status === "unread" ? (
+          <>
+            <button className="task-mini-btn" type="button" onClick={() => onStatus("reviewed")}>
+              标记已读
+            </button>
+            <button className="task-mini-btn" type="button" onClick={() => onStatus("resolved")}>
+              标记已解决
+            </button>
+          </>
+        ) : null}
+        <button className="task-mini-btn" type="button" onClick={() => onStatus("archived")}>
+          <Archive size={13} />
+          归档
+        </button>
+        {run?.sessionFile ? (
+          <Link
+            className="task-mini-btn"
+            href="/"
+          >
+            查看会话
+          </Link>
+        ) : null}
+      </div>
+    </section>
   );
 }
 
