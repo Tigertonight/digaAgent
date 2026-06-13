@@ -856,6 +856,14 @@ function remoteDeviceSeenAt(device: RemoteDeviceView): number {
   return device.lastSeenAt ?? device.createdAt;
 }
 
+function isCloudflaredMissingError(message: string | null): boolean {
+  return Boolean(
+    message &&
+      /cloudflared/i.test(message) &&
+      /(未安装|install|not found|ENOENT)/i.test(message)
+  );
+}
+
 function remoteDeviceConnection(device: RemoteDeviceView, now = Date.now()) {
   if (device.revokedAt) {
     return {
@@ -929,6 +937,7 @@ function RemoteAccessSection({
   const [tunnel, setTunnel] = useState<PublicTunnelStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [installingCloudflared, setInstallingCloudflared] = useState(false);
   const [statusNow, setStatusNow] = useState(0);
 
   const localFetch = useCallback(
@@ -937,7 +946,7 @@ function RemoteAccessSection({
       if (electronApi) {
         try {
           const secret = await electronApi.getLocalSecret();
-          if (secret) headers.set("x-mini-pi-local-secret", secret);
+          if (secret) headers.set("x-diga-agent-local-secret", secret);
         } catch {
           // Browser/dev mode may expose part of the Electron bridge without the
           // local-secret IPC handler. In that case Next's localhost fallback is
@@ -1014,8 +1023,8 @@ function RemoteAccessSection({
       margin: 1,
       width: 220,
       color: {
-        dark: "black",
-        light: "white",
+        dark: "#000000",
+        light: "#ffffff",
       },
     });
 
@@ -1164,6 +1173,29 @@ function RemoteAccessSection({
       setError(userFacingMessage(e, { context: "remote" }));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const installCloudflaredAndRetryTunnel = async () => {
+    if (!electronApi?.dependencies?.installCloudflared) {
+      setError("当前环境无法自动安装 cloudflared，请在终端运行：brew install cloudflared");
+      return;
+    }
+    setInstallingCloudflared(true);
+    setError(null);
+    try {
+      const result = await electronApi.dependencies.installCloudflared();
+      if (!result.ok || !result.installed) {
+        throw new Error(
+          result.error ??
+            "cloudflared 自动安装失败，请在终端运行：brew install cloudflared"
+        );
+      }
+      await startTunnel();
+    } catch (e) {
+      setError(userFacingMessage(e, { context: "remote" }));
+    } finally {
+      setInstallingCloudflared(false);
     }
   };
 
@@ -1387,7 +1419,25 @@ function RemoteAccessSection({
 
       {error ? (
         <div className="mt-3 rounded-token border border-[color:var(--color-danger)] bg-[color:var(--color-danger-bg)] p-2 text-token-sm text-[color:var(--color-danger)]">
-          {error}
+          <div>{error}</div>
+          {isCloudflaredMissingError(error) ? (
+            <Button
+              disabled={disabled || busy || installingCloudflared}
+              onClick={() => void installCloudflaredAndRetryTunnel()}
+              variant="outline"
+              size="sm"
+              className="mt-2"
+              leading={
+                installingCloudflared ? (
+                  <RefreshCw size={14} className="animate-spin" />
+                ) : (
+                  <Hammer size={14} />
+                )
+              }
+            >
+              安装 cloudflared 并重试
+            </Button>
+          ) : null}
         </div>
       ) : null}
 
