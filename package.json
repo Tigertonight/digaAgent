@@ -47,7 +47,8 @@
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "DIGA_AGENT_NO_STANDALONE=1 next build --webpack",
-    "build:electron": "next build --webpack && node scripts/copy-standalone-assets.mjs",
+    "patch:next": "node scripts/patch-next.mjs",
+    "build:electron": "node scripts/patch-next.mjs && next build --webpack && node scripts/copy-standalone-assets.mjs",
     "start": "next start -p 3000",
     "lint": "eslint .",
     "design-tokens:check": "node scripts/check-design-tokens.mjs",
