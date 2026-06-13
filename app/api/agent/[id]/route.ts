@@ -19,6 +19,7 @@
  */
 import { NextResponse } from "next/server";
 import {
+  createAgent,
   getAgent,
   disposeAgent,
   getModelRegistry,
@@ -652,13 +653,22 @@ export async function POST(
             );
           }
           if (!isLocalCodingAssistantAgent(rec)) {
-            return NextResponse.json(
-              {
-                error:
-                  "自研 Coding 助手使用本机 CLI 运行时。请新建会话后再从 API 模型切换到自研 Coding 助手。",
+            const replacement = await createAgent({
+              provider,
+              modelId,
+              cwd: rec.cwd,
+              thinkingLevel: rec.session.thinkingLevel,
+            });
+            disposeAgent(id);
+            return NextResponse.json({
+              ok: true,
+              replacementAgent: replacement,
+              model: {
+                provider: LOCAL_CODING_ASSISTANT_PROVIDER_ID,
+                id: model.id,
+                name: model.name,
               },
-              { status: 409 }
-            );
+            });
           }
           const nextModel = {
             provider: LOCAL_CODING_ASSISTANT_PROVIDER_ID,
@@ -683,13 +693,26 @@ export async function POST(
           });
         }
         if (isLocalCodingAssistantAgent(rec)) {
-          return NextResponse.json(
-            {
-              error:
-                "自研 Coding 助手使用本机 CLI 运行时。请新建会话后再切换到 API 模型。",
-            },
-            { status: 409 }
-          );
+          const mr = getModelRegistry();
+          const model = mr.find(provider, modelId);
+          if (!model) {
+            return NextResponse.json(
+              { error: `model not found: ${provider}/${modelId}` },
+              { status: 404 }
+            );
+          }
+          const replacement = await createAgent({
+            provider,
+            modelId,
+            cwd: rec.cwd,
+            thinkingLevel: rec.session.thinkingLevel,
+          });
+          disposeAgent(id);
+          return NextResponse.json({
+            ok: true,
+            replacementAgent: replacement,
+            model: { provider: model.provider, id: model.id, name: model.name },
+          });
         }
         const mr = getModelRegistry();
         const model = mr.find(provider, modelId);

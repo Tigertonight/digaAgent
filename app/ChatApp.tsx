@@ -2502,13 +2502,37 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       setModelId(mid);
       if (agentId) {
         try {
-          const data = await agentAction(agentId, {
+          const data = (await agentAction(agentId, {
             type: "set_model",
             provider,
             modelId: mid,
-          });
+          })) as {
+            replacementAgent?: {
+              id?: string;
+              sessionId?: string;
+              sessionFile?: string | null;
+            };
+          };
+          const replacement = data?.replacementAgent as
+            | {
+                id?: string;
+                sessionId?: string;
+                sessionFile?: string | null;
+              }
+            | undefined;
+          const nextAgentId = replacement?.id || agentId;
+          if (replacement?.id) {
+            closeSseFor(ownerKey);
+            updateRunner(ownerKey, {
+              agentId: replacement.id,
+              agentSessionId: replacement.sessionId ?? null,
+              sessionFile: replacement.sessionFile ?? null,
+              sseStatus: "idle",
+            });
+            attachSseFor(ownerKey, replacement.id);
+          }
           // 切完模型后,thinking 能力可能变了,重新拉一下(写回触发本次操作的 runner)
-          const meta = await fetch(`/api/agent/${agentId}`).then((r) =>
+          const meta = await fetch(`/api/agent/${nextAgentId}`).then((r) =>
             r.json()
           );
           updateRunner(ownerKey, {
@@ -2532,6 +2556,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       activeKeyRef,
       agentId,
       agentAction,
+      attachSseFor,
+      closeSseFor,
       modelId,
       providerId,
       setModelId,
