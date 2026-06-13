@@ -53,6 +53,7 @@ for the full architecture roadmap.
 | Session list, context inspector, export | ✅ |
 | File picker bound to `DIGA_AGENT_WEB_ROOT` | ✅ |
 | Electron desktop build (`npm run electron:build`) | ✅ |
+| Windows Electron installer build (`npm run electron:build:win`) | ✅ |
 | **Desktop pet widget** (transparent, hover bubble, drag, right-click) | ✅ |
 | **Session metadata**: pin / manual title / unread sync across reload | ✅ |
 | **Full-text session search** (in-memory inverted index over all sessions) | ✅ |
@@ -162,7 +163,40 @@ npm run electron:dev
 
 # Electron build (mac arm64 by default)
 npm run electron:build
+
+# Electron build (Windows x64 installer + portable)
+npm run electron:build:win
+
+# Windows unpacked directory build for faster local packaging checks
+npm run electron:build:win:dir
 ```
+
+### Windows release packaging
+
+Windows installers are generated artifacts, not source files. Do not commit
+`.exe`, `.msi`, `.zip`, `.yml`, or `.blockmap` files to the repository.
+
+Maintainers can build locally with:
+
+```bash
+npm run electron:build:win
+```
+
+The GitHub workflow
+`.github/workflows/windows-electron-build.yml` also builds Windows x64 packages:
+
+- `workflow_dispatch`: manual packaging run, uploaded as a workflow artifact.
+- `v*` tag push: packaging run plus upload of Windows assets to the matching
+  GitHub Release.
+
+Before pushing a release tag, update `package.json` so the package version
+matches the tag without the leading `v` (for example, tag `v0.1.3` requires
+`"version": "0.1.3"`). The Windows release workflow fails fast when they differ.
+
+The in-app updater checks the latest GitHub Release and opens the best download
+asset for the current platform. On Windows it prefers the Setup `.exe`, then
+`.msi`, then other `.exe` or `.zip` assets. On macOS it prefers `.dmg`. This
+flow opens the download page or asset; it does not silently install updates.
 
 ## Architecture
 

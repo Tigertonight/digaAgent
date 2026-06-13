@@ -57,8 +57,12 @@
     "workflow:sandbox:check": "node scripts/check-workflow-sandbox.mjs",
     "electron:dev": "ELECTRON_DEV=1 electron electron/main.js",
     "electron:start": "electron electron/main.js",
-    "clean": "rm -rf dist .next",
-    "electron:build": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --mac --arm64"
+    "clean": "node scripts/clean.mjs",
+    "electron:build": "npm run electron:build:mac",
+    "electron:build:mac": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --mac --arm64",
+    "electron:build:win": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --win --x64",
+    "electron:build:win:dir": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --win --x64 --dir",
+    "electron:build:win:portable": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --win portable --x64"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.78.0",
@@ -157,6 +161,35 @@
       "identity": null,
       "hardenedRuntime": false,
       "gatekeeperAssess": false
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
+    },
+    "nsis": {
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Diga Agent"
+    },
+    "portable": {
+      "artifactName": "${productName}-Portable-${version}-${arch}.${ext}"
     },
     "dmg": {
       "writeUpdateInfo": false,

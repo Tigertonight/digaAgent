@@ -20,6 +20,7 @@ import {
   readFileSync,
   writeFileSync,
   copyFileSync,
+  cpSync,
   readdirSync,
   existsSync,
   mkdirSync,
@@ -48,6 +49,9 @@ function readJson(p) {
 }
 function writeJson(p, obj) {
   writeFileSync(p, JSON.stringify(obj, null, 2) + "\n", "utf8");
+}
+function copyRecursive(src, dst) {
+  cpSync(src, dst, { recursive: true, force: true });
 }
 
 let restored = false;
@@ -170,7 +174,7 @@ patchTurboRuntimes();
 // 它的 dist 同样会被漏掉。
 //
 // 解法：枚举 RUNTIME_DEPS 之外的、从 RUNTIME_DEPS 排除 list 里来的 SDK 包，
-// 把源 dist 目录 cp -R 到所有目标位置。
+// 把源 dist 目录递归复制到所有目标位置。
 function patchSdkDists() {
   // 真正需要补 dist 的 SDK 包（运行时 import 进 next API route）
   const sdkPackages = [
@@ -209,8 +213,7 @@ function patchSdkDists() {
 
     for (const dstDist of targets) {
       if (existsSync(dstDist)) continue;
-      // 用 cp -R 递归复制（够快、保留符号链接）
-      spawnSync("cp", ["-R", srcDist, dstDist], { stdio: "inherit" });
+      copyRecursive(srcDist, dstDist);
       totalPatched++;
       console.log(`[build-electron] patched dist -> ${dstDist}`);
     }
@@ -236,14 +239,14 @@ function patchNextPackage() {
     console.warn("[build-electron] WARN cannot patch next pkg, skip");
     return;
   }
-  // 整包 ditto 镜像复制 next 自身。
+  // 整包镜像复制 next 自身。
   // 原因：next 16 standalone NFT trace 严重不完整，连 dist/server/lib/
   // 同目录下的 sibling 文件（如 cpu-profile.js）都会漏，连补带漏修不完。
   // 整包 ~170M，可接受；裁掉 prod deps 节省的 ~280M 远超这点开销。
-  spawnSync("ditto", [srcNext, dstNext], { stdio: "inherit" });
-  console.log("[build-electron] patched next: full package via ditto");
+  copyRecursive(srcNext, dstNext);
+  console.log("[build-electron] patched next: full package copy");
 
-  // 同时把 next 自身在 package.json 里声明的 direct dependencies 也整包 ditto 进来。
+  // 同时把 next 自身在 package.json 里声明的 direct dependencies 也整包复制进来。
   // 原因：standalone trace 对 next 内部 require('@swc/helpers/_/...') 这类
   // 子路径 import 经常漏，逐个补不完。直接整包带来——这些包都很小（总计 < 10M）。
   let nextDeps = {};
@@ -312,19 +315,28 @@ function patchNextPackage() {
       continue;
     }
     // 已存在的也覆盖（确保完整性）
-    spawnSync("ditto", [srcDep, dstDep], { stdio: "inherit" });
+    copyRecursive(srcDep, dstDep);
     copied++;
   }
   console.log(
-    `[build-electron] patched ${copied} dependencies (next deps + project runtime deps) via ditto`
+    `[build-electron] patched ${copied} dependencies (next deps + project runtime deps)`
   );
 }
 patchNextPackage();
 
 // 跑 electron-builder
-const args = ["electron-builder", ...process.argv.slice(2)];
-console.log(`[build-electron] running: npx ${args.join(" ")}`);
-const result = spawnSync("npx", args, { stdio: "inherit", cwd: root });
+const builderCli = join(root, "node_modules", "electron-builder", "cli.js");
+const builderArgs = process.argv.slice(2);
+console.log(
+  `[build-electron] running: ${process.execPath} ${builderCli} ${builderArgs.join(" ")}`
+);
+const result = spawnSync(process.execPath, [builderCli, ...builderArgs], {
+  stdio: "inherit",
+  cwd: root,
+});
+if (result.error) {
+  console.error("[build-electron] electron-builder spawn failed:", result.error);
+}
 const exitCode = result.status ?? 1;
 console.log(`[build-electron] electron-builder exited with ${exitCode}`);
 

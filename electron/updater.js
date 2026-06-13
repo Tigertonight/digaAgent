@@ -80,16 +80,65 @@ function patchState(patch, notify = true) {
   return state;
 }
 
-function selectDownloadAsset(release) {
-  const assets = Array.isArray(release.assets) ? release.assets : [];
-  const dmgAssets = assets.filter((asset) =>
-    /\.dmg$/i.test(asset.name || asset.browser_download_url || "")
+function assetText(asset) {
+  return `${asset?.name || ""} ${asset?.browser_download_url || ""}`;
+}
+
+function hasReleaseExt(asset, ext) {
+  return new RegExp(`\\.${ext}(?:$|[?#])`, "i").test(assetText(asset));
+}
+
+function preferArch(assets, arch) {
+  if (!assets.length) return null;
+  const archPatterns = {
+    x64: /(x64|amd64)/i,
+    arm64: /(arm64|aarch64)/i,
+    ia32: /(ia32|x86)/i,
+  };
+  const archPattern = archPatterns[arch];
+  const anyArchPattern = /(x64|amd64|arm64|aarch64|ia32|x86)/i;
+  return (
+    (archPattern ? assets.find((asset) => archPattern.test(assetText(asset))) : null) ??
+    assets.find((asset) => !anyArchPattern.test(assetText(asset))) ??
+    assets[0] ??
+    null
   );
-  const preferred =
-    dmgAssets.find((asset) => /arm64/i.test(asset.name || "")) ??
-    dmgAssets[0] ??
-    assets.find((asset) => /\.zip$/i.test(asset.name || "")) ??
-    null;
+}
+
+function selectDownloadAsset(
+  release,
+  { platform = process.platform, arch = process.arch } = {}
+) {
+  const assets = Array.isArray(release.assets) ? release.assets : [];
+  let preferred = null;
+  if (platform === "win32") {
+    const installerExeAssets = assets.filter(
+      (asset) =>
+        hasReleaseExt(asset, "exe") && /(setup|installer)/i.test(assetText(asset))
+    );
+    const msiAssets = assets.filter((asset) => hasReleaseExt(asset, "msi"));
+    const exeAssets = assets.filter((asset) => hasReleaseExt(asset, "exe"));
+    const zipAssets = assets.filter((asset) => hasReleaseExt(asset, "zip"));
+    preferred =
+      preferArch(installerExeAssets, arch) ??
+      preferArch(msiAssets, arch) ??
+      preferArch(exeAssets, arch) ??
+      preferArch(zipAssets, arch);
+  } else if (platform === "darwin") {
+    const dmgAssets = assets.filter((asset) => hasReleaseExt(asset, "dmg"));
+    const zipAssets = assets.filter((asset) => hasReleaseExt(asset, "zip"));
+    preferred = preferArch(dmgAssets, arch) ?? preferArch(zipAssets, arch);
+  } else {
+    const appImageAssets = assets.filter((asset) => hasReleaseExt(asset, "AppImage"));
+    const debAssets = assets.filter((asset) => hasReleaseExt(asset, "deb"));
+    const rpmAssets = assets.filter((asset) => hasReleaseExt(asset, "rpm"));
+    const zipAssets = assets.filter((asset) => hasReleaseExt(asset, "zip"));
+    preferred =
+      preferArch(appImageAssets, arch) ??
+      preferArch(debAssets, arch) ??
+      preferArch(rpmAssets, arch) ??
+      preferArch(zipAssets, arch);
+  }
   return preferred?.browser_download_url ?? release.html_url ?? RELEASES_URL;
 }
 
