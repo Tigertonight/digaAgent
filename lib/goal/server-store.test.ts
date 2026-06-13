@@ -16,8 +16,8 @@ describe("goal server store", () => {
 
   beforeEach(() => {
     // Use a temp root so the facade's disk persistence never touches the real
-    // ~/.mini-pi during tests (修正 5).
-    root = mkdtempSync(path.join(os.tmpdir(), "mini-pi-goals-"));
+    // ~/.diga-agent during tests (修正 5).
+    root = mkdtempSync(path.join(os.tmpdir(), "diga-agent-goals-"));
     __setGoalStoreRootForTest(root);
   });
 

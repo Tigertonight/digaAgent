@@ -338,7 +338,7 @@ streaming 期间 `lastMessage` 变化很频繁，必须节流避免 IPC 堆积�
 ### 8.3 离线/不在 Electron 中
 
 `/pet` 路由在浏览器中打开时（dev 场景）：
-- `window.miniPi` 为 undefined
+- `window.digaAgent` 为 undefined
 - 显示 mock 状态："（非 Electron 环境，仅展示样式）"
 - 所有 IPC 调用 noop
 

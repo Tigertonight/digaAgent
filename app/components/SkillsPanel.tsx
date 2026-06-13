@@ -6,7 +6,7 @@
  * 形态：居中模态（800×78vh），左侧 skill 列表（按 project/global/path 分组 + 圆点指示开关），
  * 右侧详情面板（Name/Description/路径标签 + Toggle）；左下角 "+ Add skill" 切换右侧为安装搜索。
  *
- * mini-pi-web 增强：底部增加 "Configured packages" 区，列出已配置 packages，提供 update / remove。
+ * diga-agent 增强：底部增加 "Configured packages" 区，列出已配置 packages，提供 update / remove。
  *
  * 注意：所有操作都打 /api/skills，cwd 由 parent 传入。
  */
@@ -1282,7 +1282,7 @@ export default function SkillsPanel({ cwd, onClose, embedded = false }: Props) {
               </div>
             </div>
 
-            {/* mini-pi-web 增强：configured packages */}
+            {/* diga-agent 增强：configured packages */}
             {data && (
               <PackagesSection
                 packages={data.packages}

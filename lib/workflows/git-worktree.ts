@@ -88,11 +88,11 @@ export function createGitWorktreeManager(cwd: string): WorkflowWorktreeManager {
       const workflowSegment = cleanSegment(input.workflowId.slice(0, 8), "workflow");
       const nameSegment = cleanSegment(input.name, "worktree");
       const baseRef = input.baseRef?.trim() || "HEAD";
-      const baseDir = path.join(os.tmpdir(), "mini-pi-worktrees");
+      const baseDir = path.join(os.tmpdir(), "diga-agent-worktrees");
       await mkdir(baseDir, { recursive: true });
       const dirPrefix = path.join(baseDir, `${path.basename(root)}-${workflowSegment}-${nameSegment}-`);
       const worktreePath = await mkdtemp(dirPrefix);
-      const branchName = `mini-pi-workflow/${workflowSegment}/${nameSegment}`;
+      const branchName = `diga-agent-workflow/${workflowSegment}/${nameSegment}`;
       await git(root, ["worktree", "add", "-b", branchName, worktreePath, baseRef]);
       return {
         id: `${workflowSegment}-${nameSegment}`,

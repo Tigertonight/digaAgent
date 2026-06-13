@@ -64,7 +64,7 @@ if (detected.length === 0) {
   const recommended = detected[0];
   console.log("\nRecommended environment value:");
   console.log(
-    `MINI_PI_WORKFLOW_WORKER_SANDBOX_ARGV_JSON='${JSON.stringify(
+    `DIGA_AGENT_WORKFLOW_WORKER_SANDBOX_ARGV_JSON='${JSON.stringify(
       recommended.argv
     )}'`
   );

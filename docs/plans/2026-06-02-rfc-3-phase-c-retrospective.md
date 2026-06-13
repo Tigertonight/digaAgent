@@ -13,7 +13,7 @@
 
 ## 0. TL;DR
 
-调研 SDK `@earendil-works/pi-coding-agent` 时发现，**项目级记忆机制已经内建并默认开启**。mini-pi-web 的 `lib/agent-registry.ts:236-241` 早就在用 `DefaultResourceLoader`，等价于用户在项目根创建 `AGENTS.md` 即生效——只是没人知道。
+调研 SDK `@earendil-works/pi-coding-agent` 时发现，**项目级记忆机制已经内建并默认开启**。diga-agent 的 `lib/agent-registry.ts:236-241` 早就在用 `DefaultResourceLoader`，等价于用户在项目根创建 `AGENTS.md` 即生效——只是没人知道。
 
 因此 Phase C v0 **零工程实施**，产出仅：
 - 用户指南 `docs/guides/project-memory.md`
@@ -41,10 +41,10 @@
 
 ### 1.1 原计划（RFC-3 主文）
 
-RFC-3 主文 §3.2.4 设计了 `.mini-pi/` 命名空间：
+RFC-3 主文 §3.2.4 设计了 `.diga-agent/` 命名空间：
 
 ```
-<cwd>/.mini-pi/
+<cwd>/.diga-agent/
   ├── prompts/*.md       # prompt 模板（含 {{var}} 变量）
   ├── memory.md          # 项目级笔记，注入 system prompt
   └── settings.json      # 项目级 settings 覆盖
@@ -62,7 +62,7 @@ RFC-3 主文 §3.2.4 设计了 `.mini-pi/` 命名空间：
 
 进入 Phase C 时，我向用户提了 3 个开放问题：
 
-- **Q1**：记忆文件位置？（a）`<cwd>/.mini-pi/agents.md` （b）`~/.mini-pi/agents.md` （c）两者都支持
+- **Q1**：记忆文件位置？（a）`<cwd>/.diga-agent/agents.md` （b）`~/.diga-agent/agents.md` （c）两者都支持
 - **Q2**：怎么注入到 agent？（a）prepend system prompt （b）`appendSystemPrompt` （c）走 SDK `instructions` 字段
 - **Q3**：v0 是否含 UI 编辑入口？（a）只读 （b）含 UI
 
@@ -93,7 +93,7 @@ const loadedContextFiles = this._resourceLoader.getAgentsFiles().agentsFiles;
 // → buildSystemPrompt({ cwd, skills, contextFiles, customPrompt, appendSystemPrompt, ... })
 ```
 
-**mini-pi-web 当前注入点**（`lib/agent-registry.ts:236-241`）：
+**diga-agent 当前注入点**（`lib/agent-registry.ts:236-241`）：
 ```ts
 const resourceLoader = new DefaultResourceLoader({
   cwd: opts.cwd,
@@ -105,21 +105,21 @@ const resourceLoader = new DefaultResourceLoader({
 
 未传 `noContextFiles`，SDK 默认 `noContextFiles = false`（`resource-loader.js:136`），**即默认开启加载**。
 
-→ 结论：**项目级记忆机制已经在生产生效**，只是 mini-pi-web 没在任何文档里告诉用户怎么用。
+→ 结论：**项目级记忆机制已经在生产生效**，只是 diga-agent 没在任何文档里告诉用户怎么用。
 
 ### 1.4 方案重定向
 
 发现后立即停下来向用户做二次澄清，列三个方案：
 
 - **方案 X**：拥抱 SDK 既有约定（用 `AGENTS.md` 在项目根），零工程
-- **方案 Y**：坚持 `.mini-pi/agents.md` 自己的命名空间，自己读 + `appendSystemPrompt` 注入
+- **方案 Y**：坚持 `.diga-agent/agents.md` 自己的命名空间，自己读 + `appendSystemPrompt` 注入
 - **方案 X+Y**：都支持
 
 推荐 X，理由：
 1. 零工程成本，符合"v0 先跑通"原则
 2. `AGENTS.md` 是行业事实标准（Claude Code / Cursor / Aider 都认）
 3. SDK 的 ancestor chain 比原计划的 global + project 双层还更强
-4. `.mini-pi/agents.md` 后续要加并不被锁死
+4. `.diga-agent/agents.md` 后续要加并不被锁死
 
 用户拍板 **X**。
 
@@ -141,7 +141,7 @@ const resourceLoader = new DefaultResourceLoader({
 | §5 验证方法 | 3 种验证 agent 真的读到了 |
 | §6 注意事项 | 敏感信息 / 长度 / 重复 / 命名大小写 / .gitignore |
 | §7 工具兼容性 | 与 Claude Code / Cursor / Aider 的标准互通 |
-| §8 v0 路线图 | 明示当前不做什么（UI 编辑、抽取、`.mini-pi/` 命名空间） |
+| §8 v0 路线图 | 明示当前不做什么（UI 编辑、抽取、`.diga-agent/` 命名空间） |
 | §9 故障排查 | 4 个常见 FAQ |
 | §10 相关文档 | 回链 RFC + SDK 源码 |
 
@@ -178,7 +178,7 @@ const resourceLoader = new DefaultResourceLoader({
 - 与 SDK 的 `loadProjectContextFiles` 机制并存，需要额外设计：
   - 谁注入优先级高？
   - 是否要 dedup？
-  - 用户写了 `AGENTS.md` **又**写了 `.mini-pi/agents.md` 怎么办？
+  - 用户写了 `AGENTS.md` **又**写了 `.diga-agent/agents.md` 怎么办？
 - 用户认知负担：两套并行的 "项目记忆" 机制
 - 后期维护：SDK 升级影响行为时，自己这一层要持续追
 
@@ -196,14 +196,14 @@ const resourceLoader = new DefaultResourceLoader({
 
 ### 3.3 "拥抱事实标准 > 自创命名空间"
 
-原 RFC-3 起草时设计 `.mini-pi/` 命名空间是出于"不污染项目根"的洁癖。但：
+原 RFC-3 起草时设计 `.diga-agent/` 命名空间是出于"不污染项目根"的洁癖。但：
 
 - `AGENTS.md` 已经被 Claude Code / Cursor / Aider 接受为事实标准
 - 用户的项目里可能**已经**有 `AGENTS.md`（为其他工具准备）
 - 用户切换工具时不用重写
 - "项目根多一个文件"的污染远小于"用户每个工具都要单独维护一份记忆"的痛
 
-`.mini-pi/` 命名空间未来可以作为**可选扩展**（如果有用户反馈"项目根不希望多文件"），但 v0 没必要先做。
+`.diga-agent/` 命名空间未来可以作为**可选扩展**（如果有用户反馈"项目根不希望多文件"），但 v0 没必要先做。
 
 ### 3.4 "0 代码 commit" 也是 commit
 
@@ -223,13 +223,13 @@ const resourceLoader = new DefaultResourceLoader({
 
 ### 4.1 短期可能（看用户反馈）
 
-- **`.mini-pi/agents.md` 作为可选位置**：如果有用户反馈"不喜欢项目根多文件"，加 mini-pi-web 自己读 `.mini-pi/agents.md` 并通过 `appendSystemPrompt` 追加（确保与 SDK 自动加载的 `AGENTS.md` 不重复 dedup）
+- **`.diga-agent/agents.md` 作为可选位置**：如果有用户反馈"不喜欢项目根多文件"，加 diga-agent 自己读 `.diga-agent/agents.md` 并通过 `appendSystemPrompt` 追加（确保与 SDK 自动加载的 `AGENTS.md` 不重复 dedup）
 - **Settings 面板里的 "memory 入口"**：在 settings 加一个 "Project Memory" 区块，显示当前 cwd 下检测到的 `AGENTS.md` 路径 + "在编辑器打开" 按钮（不做内嵌编辑器，避免 race condition）
 - **Sidebar 指示器**：某 session 启动时加载了哪些 memory 文件，hover sidebar 项时小图标提示
 
 ### 4.2 中期（v1+）
 
-- **`.mini-pi/prompts/` 模板系统**：原 RFC-3 §3.2.4 设计的 prompt 模板 + `{{var}}` 变量解析 + ComposerArea 集成
+- **`.diga-agent/prompts/` 模板系统**：原 RFC-3 §3.2.4 设计的 prompt 模板 + `{{var}}` 变量解析 + ComposerArea 集成
 - **"加入 memory" 抽取**：右键 chat message → "提炼到 AGENTS.md"
 - **项目级 settings.json**：与全局 settings 合并显示，优先项目级
 

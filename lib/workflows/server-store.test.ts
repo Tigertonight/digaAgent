@@ -19,17 +19,17 @@ describe("workflow server-store persistence", () => {
 
   beforeEach(async () => {
     originalCompressionThreshold =
-      process.env.MINI_PI_WORKFLOW_ARTIFACT_COMPRESSION_BYTES;
-    process.env.MINI_PI_WORKFLOW_ARTIFACT_COMPRESSION_BYTES = "64";
+      process.env.DIGA_AGENT_WORKFLOW_ARTIFACT_COMPRESSION_BYTES;
+    process.env.DIGA_AGENT_WORKFLOW_ARTIFACT_COMPRESSION_BYTES = "64";
     workflowRoot = await mkdtemp(path.join(os.tmpdir(), "workflow-store-schema-"));
     __setWorkflowStoreRootForTest(workflowRoot);
   });
 
   afterEach(async () => {
     if (originalCompressionThreshold === undefined) {
-      delete process.env.MINI_PI_WORKFLOW_ARTIFACT_COMPRESSION_BYTES;
+      delete process.env.DIGA_AGENT_WORKFLOW_ARTIFACT_COMPRESSION_BYTES;
     } else {
-      process.env.MINI_PI_WORKFLOW_ARTIFACT_COMPRESSION_BYTES =
+      process.env.DIGA_AGENT_WORKFLOW_ARTIFACT_COMPRESSION_BYTES =
         originalCompressionThreshold;
     }
     __setWorkflowStoreRootForTest(null);
@@ -112,7 +112,7 @@ describe("workflow server-store persistence", () => {
     expect(raw.artifactIndex).toEqual([
       expect.objectContaining({ name: "large", compressed: true }),
     ]);
-    expect(raw.run.artifacts[0].value.__miniPiWorkflowCompressedArtifact).toBe(
+    expect(raw.run.artifacts[0].value.__digaAgentWorkflowCompressedArtifact).toBe(
       true
     );
 

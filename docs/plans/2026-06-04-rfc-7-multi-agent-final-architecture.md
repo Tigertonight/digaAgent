@@ -509,7 +509,7 @@ Phase 1 使用 global memory store。
 Phase 2 落盘：
 
 ```text
-~/.mini-pi/subagents/
+~/.diga-agent/subagents/
   batches/
     {batchId}.json
 ```

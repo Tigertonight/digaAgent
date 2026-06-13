@@ -20,8 +20,8 @@ describe("applyGoalUpdate (verifier integration)", () => {
   let workflowRoot: string;
 
   beforeEach(() => {
-    root = mkdtempSync(path.join(os.tmpdir(), "mini-pi-goals-"));
-    workflowRoot = mkdtempSync(path.join(os.tmpdir(), "mini-pi-workflows-"));
+    root = mkdtempSync(path.join(os.tmpdir(), "diga-agent-goals-"));
+    workflowRoot = mkdtempSync(path.join(os.tmpdir(), "diga-agent-workflows-"));
     __setGoalStoreRootForTest(root);
     __setWorkflowStoreRootForTest(workflowRoot);
   });

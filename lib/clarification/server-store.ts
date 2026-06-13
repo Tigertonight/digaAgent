@@ -21,12 +21,12 @@ interface ClarificationStore {
 }
 
 const g = globalThis as unknown as {
-  __miniPiClarification?: ClarificationStore;
+  __digaAgentClarification?: ClarificationStore;
 };
-if (!g.__miniPiClarification) {
-  g.__miniPiClarification = { pending: new Map() };
+if (!g.__digaAgentClarification) {
+  g.__digaAgentClarification = { pending: new Map() };
 }
-const store = g.__miniPiClarification;
+const store = g.__digaAgentClarification;
 
 export function registerPendingClarification(
   req: ClarificationRequest

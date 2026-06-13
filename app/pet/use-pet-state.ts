@@ -296,7 +296,7 @@ export function usePetState() {
   // 订阅 IPC 推送
   useEffect(() => {
     // 兼容 web 模式（无 Electron API 时 noop）
-    const api = window.miniPi;
+    const api = window.digaAgent;
     if (!api?.pet?.onState) return;
     const unsub = api.pet.onState((state) => {
       setPetState(state);
@@ -429,7 +429,7 @@ export function usePetState() {
   /** 聚焦主窗口并切到对应 session */
   const focusMain = useCallback(
     (sessionId?: string) => {
-      window.miniPi?.pet?.focusMain?.(sessionId ?? displaySession?.id);
+      window.digaAgent?.pet?.focusMain?.(sessionId ?? displaySession?.id);
     },
     [displaySession]
   );

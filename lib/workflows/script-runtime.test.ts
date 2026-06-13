@@ -269,7 +269,7 @@ describe("runWorkflowScript", () => {
             return {
               id: `${input.workflowId.slice(0, 4)}-agent`,
               path: "/tmp/workflow-agent",
-              branchName: "mini-pi-workflow/test/agent",
+              branchName: "diga-agent-workflow/test/agent",
               baseRef: input.baseRef ?? "HEAD",
               createdAt: Date.now(),
             };
@@ -819,6 +819,7 @@ describe("runWorkflowScript", () => {
             truncated: false,
           };
         },
+        resolveFetchHost: async () => ["93.184.216.34"],
         runSubagents: async () => ({ batchId: "unused", results: [] }),
       },
       {
@@ -1057,7 +1058,7 @@ describe("runWorkflowScript", () => {
             return {
               id: `${input.workflowId.slice(0, 4)}-ui`,
               path: "/tmp/workflow-ui",
-              branchName: "mini-pi-workflow/test/ui",
+              branchName: "diga-agent-workflow/test/ui",
               baseRef: input.baseRef ?? "HEAD",
               createdAt: Date.now(),
             };
@@ -1102,7 +1103,7 @@ describe("runWorkflowScript", () => {
     expect(result.artifacts.some((artifact) => artifact.name.startsWith("worktree:"))).toBe(true);
     expect(result.returnValue).toMatchObject({
       path: "/tmp/workflow-ui",
-      branchName: "mini-pi-workflow/test/ui",
+      branchName: "diga-agent-workflow/test/ui",
     });
   });
 
@@ -1142,7 +1143,7 @@ describe("runWorkflowScript", () => {
             return {
               id: `${input.workflowId.slice(0, 4)}-feature`,
               path: "/tmp/workflow-feature",
-              branchName: "mini-pi-workflow/test/feature",
+              branchName: "diga-agent-workflow/test/feature",
               baseRef: "HEAD",
               createdAt: Date.now(),
             };
@@ -1212,7 +1213,7 @@ describe("runWorkflowScript", () => {
             return {
               id: `${input.workflowId.slice(0, 4)}-feature`,
               path: "/tmp/workflow-feature",
-              branchName: "mini-pi-workflow/test/feature",
+              branchName: "diga-agent-workflow/test/feature",
               baseRef: "HEAD",
               createdAt: Date.now(),
             };
@@ -1263,7 +1264,7 @@ describe("runWorkflowScript", () => {
             return {
               id: `${input.workflowId.slice(0, 4)}-feature`,
               path: "/tmp/workflow-feature",
-              branchName: "mini-pi-workflow/test/feature",
+              branchName: "diga-agent-workflow/test/feature",
               baseRef: "HEAD",
               createdAt: Date.now(),
             };
@@ -1325,7 +1326,7 @@ describe("runWorkflowScript", () => {
             return {
               id: `${input.workflowId.slice(0, 4)}-feature`,
               path: "/tmp/workflow-feature",
-              branchName: "mini-pi-workflow/test/feature",
+              branchName: "diga-agent-workflow/test/feature",
               baseRef: "HEAD",
               createdAt: Date.now(),
             };
@@ -1365,7 +1366,7 @@ describe("runWorkflowScript", () => {
     );
     expect(failure?.value).toMatchObject({
       error: "patch does not apply cleanly",
-      branchName: "mini-pi-workflow/test/feature",
+      branchName: "diga-agent-workflow/test/feature",
       stat: " a.txt | 1 +",
       truncated: false,
     });

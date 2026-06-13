@@ -15,7 +15,7 @@ describe("subagent memory", () => {
   let root: string;
 
   beforeEach(() => {
-    root = mkdtempSync(path.join(os.tmpdir(), "mini-pi-mem-"));
+    root = mkdtempSync(path.join(os.tmpdir(), "diga-agent-mem-"));
     __setSubagentMemoryRootForTest(root);
   });
 

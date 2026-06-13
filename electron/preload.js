@@ -1,17 +1,17 @@
 /**
  * Renderer 端的安全桥。
  *
- * 通过 contextBridge 暴露 window.miniPi.*，在 sandbox + contextIsolation 下也能用。
+ * 通过 contextBridge 暴露 window.digaAgent.*，在 sandbox + contextIsolation 下也能用。
  * 所有方法都是 thin shim → ipcMain.handle。
  *
  * 设计原则：
  *  - 只暴露 Electron 独有能力（原生 dialog / Finder / OAuth keytar 等）
  *  - 业务 API 继续走 fetch("/api/...")，保证 Web 端代码不分叉
- *  - 渲染进程通过 `if (window.miniPi)` 判断是否在桌面环境
+ *  - 渲染进程通过 `if (window.digaAgent)` 判断是否在桌面环境
  */
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
-contextBridge.exposeInMainWorld("miniPi", {
+contextBridge.exposeInMainWorld("digaAgent", {
   /**
    * 返回拖入的 File 对象在系统上的绝对路径。
    * Electron 32+ 把 File.path 移除了,必须走 webUtils.getPathForFile。
@@ -31,6 +31,13 @@ contextBridge.exposeInMainWorld("miniPi", {
   /** standalone server 的真实 URL（留作未来给 main 进程内部用，renderer 不需要） */
   getApiBase: () => ipcRenderer.invoke("app:getApiBase"),
   getLocalSecret: () => ipcRenderer.invoke("app:getLocalSecret"),
+
+  dependencies: {
+    getCloudflaredStatus: () =>
+      ipcRenderer.invoke("deps:cloudflaredStatus"),
+    installCloudflared: () =>
+      ipcRenderer.invoke("deps:installCloudflared"),
+  },
 
   updater: {
     getState: () => ipcRenderer.invoke("updater:getState"),

@@ -40,16 +40,16 @@ interface MemoryStore {
   cache: Map<string, SubagentMemory>;
 }
 
-const g = globalThis as unknown as { __miniPiSubagentMemory?: MemoryStore };
-if (!g.__miniPiSubagentMemory) {
-  g.__miniPiSubagentMemory = { cache: new Map() };
+const g = globalThis as unknown as { __digaAgentSubagentMemory?: MemoryStore };
+if (!g.__digaAgentSubagentMemory) {
+  g.__digaAgentSubagentMemory = { cache: new Map() };
 }
-const store = g.__miniPiSubagentMemory;
+const store = g.__digaAgentSubagentMemory;
 
 let rootOverride: string | null = null;
 
 function getRoot(): string {
-  return rootOverride ?? path.join(os.homedir(), ".mini-pi");
+  return rootOverride ?? path.join(os.homedir(), ".diga-agent");
 }
 
 function memoryDir(scope: SubagentMemoryScope): string {

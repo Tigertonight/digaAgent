@@ -15,14 +15,14 @@
  *  5. screenshot：能否 CDP 截图（画面采集链路）
  *  6. click：能否 CDP 坐标点击（agent 操控链路）
  *
- * 隔离性：仅在 Electron 环境（window.miniPi 存在）可用；不触碰现有 /api/browser 路径。
+ * 隔离性：仅在 Electron 环境（window.digaAgent 存在）可用；不触碰现有 /api/browser 路径。
  * 这是实验代码，验证完成后应整理为正式方案或移除。
  */
 
 import Image from "next/image";
 import { createElement, useCallback, useEffect, useRef, useState } from "react";
 
-// window.miniPi.webviewPoc 的最小类型（仅 PoC 用）
+// window.digaAgent.webviewPoc 的最小类型（仅 PoC 用）
 interface WebviewPocApi {
   attach: (
     webContentsId: number
@@ -47,8 +47,8 @@ interface WebviewPocApi {
 
 function getWebviewPocApi(): WebviewPocApi | null {
   if (typeof window === "undefined") return null;
-  const mp = (window as unknown as { miniPi?: { webviewPoc?: WebviewPocApi } })
-    .miniPi;
+  const mp = (window as unknown as { digaAgent?: { webviewPoc?: WebviewPocApi } })
+    .digaAgent;
   return mp?.webviewPoc ?? null;
 }
 
@@ -149,7 +149,7 @@ export function WebviewPocPanel() {
   if (!api) {
     return (
       <div className="flex h-full items-center justify-center px-6 text-center text-xs text-[color:var(--text-muted)]">
-        Webview PoC 仅在 Electron 桌面环境可用（未检测到 window.miniPi.webviewPoc）。
+        Webview PoC 仅在 Electron 桌面环境可用（未检测到 window.digaAgent.webviewPoc）。
       </div>
     );
   }

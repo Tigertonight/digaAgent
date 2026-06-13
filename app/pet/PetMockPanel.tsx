@@ -7,7 +7,7 @@
  * 直接打开 /pet 会看到永远的 idle 状态。本组件提供：
  *  - 一组按钮直接注入 6 种典型 petState（idle/thinking/running/attention/complete/offline）
  *  - 持久化最后一次选择到 localStorage，刷新后恢复
- *  - 仅在 !window.miniPi 时渲染，Electron 中不可见
+ *  - 仅在 !window.digaAgent 时渲染，Electron 中不可见
  *
  * 面板固定在窗口左上（远离 sprite 在右下），半透明背景。
  */

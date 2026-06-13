@@ -1,13 +1,13 @@
 # Provider/Auth Guide
 
 > **状态**：v0 指南
-> **适用范围**：mini-pi-web / Diga Agent 的模型授权、Provider 配置、OpenAI API Key 与 ChatGPT/Codex OAuth 区分
+> **适用范围**：diga-agent / Diga Agent 的模型授权、Provider 配置、OpenAI API Key 与 ChatGPT/Codex OAuth 区分
 
 ---
 
 ## 0. TL;DR
 
-mini-pi-web 自己不直接保存“模型账号会话”，而是复用 `@earendil-works/pi-coding-agent` SDK 的两套本地配置：
+diga-agent 自己不直接保存“模型账号会话”，而是复用 `@earendil-works/pi-coding-agent` SDK 的两套本地配置：
 
 | 文件 | 用途 |
 |---|---|

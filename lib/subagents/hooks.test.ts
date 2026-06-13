@@ -161,7 +161,7 @@ describe("runSubagentStopHook", () => {
   let root: string;
 
   beforeEach(() => {
-    root = mkdtempSync(path.join(os.tmpdir(), "mini-pi-hooks-"));
+    root = mkdtempSync(path.join(os.tmpdir(), "diga-agent-hooks-"));
     __setSubagentMemoryRootForTest(root);
   });
 

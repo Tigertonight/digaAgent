@@ -20,8 +20,8 @@ describe("subagent registry", () => {
   let cwd: string;
 
   beforeEach(() => {
-    userRoot = mkdtempSync(path.join(os.tmpdir(), "mini-pi-user-"));
-    cwd = mkdtempSync(path.join(os.tmpdir(), "mini-pi-cwd-"));
+    userRoot = mkdtempSync(path.join(os.tmpdir(), "diga-agent-user-"));
+    cwd = mkdtempSync(path.join(os.tmpdir(), "diga-agent-cwd-"));
     __setRegistryUserRootForTest(userRoot);
   });
 

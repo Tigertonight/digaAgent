@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 1. 写临时 models.json
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mini-pi-model-test-"));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "diga-agent-model-test-"));
     const tempFile = path.join(tempDir, "models.json");
     const tempConfig = {
       providers: {

@@ -271,9 +271,9 @@ RFC-3 主文把 Phase B 定义为「F2 全文检索 + F3 自动摘要」。实�
 
 ```
         ┌──────────────────────────────────┐
-        │ ~/.mini-pi-sessions/             │
+        │ ~/.diga-agent-sessions/             │
         │   <jsonl session files>          │  ← SDK 写
-        │ ~/.mini-pi/sessions/             │
+        │ ~/.diga-agent/sessions/             │
         │   {id}.meta.json                 │  ← Phase A 写
         └─────────────────┬────────────────┘
                           │ listAll + getSessionDetail
@@ -460,7 +460,7 @@ RFC-1（已完成）
                   └─ RFC-3 Phase C（未启动）—— 项目级记忆 (F4)
                       ↑
                       └─ 可复用 Phase B 的 extract.ts 做 per-cwd 索引
-                      └─ 可复用 Phase A 的 ~/.mini-pi/ 路径约定
+                      └─ 可复用 Phase A 的 ~/.diga-agent/ 路径约定
 ```
 
 ---

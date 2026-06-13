@@ -21,17 +21,17 @@ import {
 } from "./types";
 
 /**
- * 默认根目录：~/.mini-pi/
+ * 默认根目录：~/.diga-agent/
  *
  * 抽成 getter 而非常量：单测可以在 setup 里 vi.stubEnv 改 HOME 改默认根，避免 race。
  */
 function defaultRoot(): string {
-  return path.join(os.homedir(), ".mini-pi");
+  return path.join(os.homedir(), ".diga-agent");
 }
 
 /**
- * 当前 store 用的根目录。允许测试时覆盖（不让单测污染真用户 ~/.mini-pi/）。
- * 生产代码不传，默认 ~/.mini-pi。
+ * 当前 store 用的根目录。允许测试时覆盖（不让单测污染真用户 ~/.diga-agent/）。
+ * 生产代码不传，默认 ~/.diga-agent。
  */
 let activeRoot: string | null = null;
 

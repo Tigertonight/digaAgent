@@ -13,7 +13,7 @@ function parseRemoteCookie(raw: string) {
 
 export default async function MobilePage() {
   let initialRemote = null;
-  const raw = (await cookies()).get("mini-pi-remote")?.value;
+  const raw = (await cookies()).get("diga-agent-remote")?.value;
   if (raw) {
     try {
       initialRemote = parseRemoteCookie(raw);

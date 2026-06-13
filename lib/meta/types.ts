@@ -1,11 +1,11 @@
 /**
- * RFC-3 Phase A：mini-pi-web 自维护的 session 补充元数据。
+ * RFC-3 Phase A：diga-agent 自维护的 session 补充元数据。
  *
  * 与 SDK 的 ~/.pi/sessions/{id}.jsonl 严格分离：
  *   - SDK 数据是 single-source-of-truth 的对话内容
- *   - meta 是 mini-pi-web 自己加的"视图层属性"（title 覆盖 / pin / labels / ...）
+ *   - meta 是 diga-agent 自己加的"视图层属性"（title 覆盖 / pin / labels / ...）
  *
- * 存储位置：~/.mini-pi/sessions/{id}.meta.json（单 session 一个文件）。
+ * 存储位置：~/.diga-agent/sessions/{id}.meta.json（单 session 一个文件）。
  *
  * v0 Phase A 落地 id / title / pinned / lastSeenAt；其他字段类型先声明，
  * 给 Phase B（summary / cost / turns）/ Phase C（labels / noAutoSummary）

@@ -123,7 +123,7 @@ export default function MobilePairClient({
         throw new Error(data.error ?? "配对失败");
       }
       localStorage.setItem(
-        "mini-pi-remote",
+        "diga-agent-remote",
         JSON.stringify({
           token: data.token,
           deviceId: data.deviceId,

@@ -17,11 +17,11 @@ interface ProgressStore {
   progress: Map<string, AgentProgress>;
 }
 
-const g = globalThis as unknown as { __miniPiProgress?: ProgressStore };
-if (!g.__miniPiProgress) {
-  g.__miniPiProgress = { progress: new Map() };
+const g = globalThis as unknown as { __digaAgentProgress?: ProgressStore };
+if (!g.__digaAgentProgress) {
+  g.__digaAgentProgress = { progress: new Map() };
 }
-const store = g.__miniPiProgress;
+const store = g.__digaAgentProgress;
 
 function now() {
   return Date.now();

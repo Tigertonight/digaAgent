@@ -13,7 +13,7 @@
 
 | 里程碑 | 核心价值 | 落地文件 |
 |---|---|---|
-| **M1 持久化地基** | Goal 跨重启存活（落盘 `~/.mini-pi/goals/{agentId}.json`，envelope+version+原子写+容错 hydrate） | `lib/goal/file-store.ts`、`lib/goal/server-store.ts`（改为 facade）、`lib/goal/types.ts`（扩展） |
+| **M1 持久化地基** | Goal 跨重启存活（落盘 `~/.diga-agent/goals/{agentId}.json`，envelope+version+原子写+容错 hydrate） | `lib/goal/file-store.ts`、`lib/goal/server-store.ts`（改为 facade）、`lib/goal/types.ts`（扩展） |
 | **M2 Turn 生命周期** | 每轮续跑记录 turn；progress 产物自动桥接为 goal evidence（仅 active goal）；续跑 prompt 注入 recap | `lib/goal/evidence-bridge.ts`、`lib/goal/file-store.ts`（turn API）、`lib/agent-registry.ts`（挂钩 agent_start/agent_end） |
 | **M3 Stop-Time Verifier** | 完成由证据接受而非模型自报；无 evidence / workflow 失败 / 验收标准未满足 → 拒绝并反馈缺口 | `lib/goal/verifier.ts`、`lib/goal/update.ts`（单一编排点，工具与 API 共用）、`lib/goal/extension.ts`（反馈文本） |
 | **M4 结构化阻塞** | blocker 自动分类 + unblockAction；同一 blocker 累计 repeatedCount，达阈值停止自动续跑防空烧 | `lib/goal/blocked-state.ts`、`lib/goal/update.ts`、`lib/agent-registry.ts`（死循环守卫） |
@@ -32,12 +32,12 @@ DoD 中三个 Goal 验收点均有代码与测试支撑：`GOAL-ACCEPT-RESTART-R
 | 能力 | 核心价值 | 落地文件 |
 |---|---|---|
 | **Definition + Parser** | 手写最小 frontmatter 解析（无 YAML 依赖）+ schema 校验，invalid 快速失败 | `lib/subagents/definition.ts`、`lib/subagents/definition-parser.ts` |
-| **Registry** | 发现 project(`<cwd>/.agents/subagents/*.md`)/user(`~/.mini-pi/subagents/*.md`)，project 覆盖 user，versionHash 缓存 | `lib/subagents/registry.ts` |
+| **Registry** | 发现 project(`<cwd>/.agents/subagents/*.md`)/user(`~/.diga-agent/subagents/*.md`)，project 覆盖 user，versionHash 缓存 | `lib/subagents/registry.ts` |
 | **Permission policy** | definition 为上限，runtime 不可提权；readOnly/boundedWrite/denyAll | `lib/subagents/policy.ts` |
 | **per-agent model policy** | specialist 可固定模型（reviewer 用强模型、批量 RAG 用便宜模型），不完整 model 安全回退 parent | `lib/subagents/policy.ts`（resolveSubagentModel） |
 | **@agent 调用** | 解析 `@reviewer`，引导主 agent 用 specialistId 委派（保持主 agent 编排权） | `lib/subagents/router.ts`、`app/api/agent/[id]/route.ts`（prompt case 接线） |
 | **plan_subagents hints** | 把可用 specialists（id+description）注入 planner 供主 agent 选择 | `lib/subagents/planner.ts`、`lib/subagents/extension.ts` |
-| **Subagent memory v1** | specialist 跨 batch 保留紧凑结构化经验，注入 child prompt，落盘 `~/.mini-pi/subagents/memory/{scope}/{id}.json` | `lib/subagents/memory.ts` |
+| **Subagent memory v1** | specialist 跨 batch 保留紧凑结构化经验，注入 child prompt，落盘 `~/.diga-agent/subagents/memory/{scope}/{id}.json` | `lib/subagents/memory.ts` |
 | **orchestrator 接线** | 解析 specialistId→definition，合并 prompt/tools/model/permission/memory，audit `agent_selected` | `lib/subagents/orchestrator.ts`（三挂接点 + runOneTask） |
 | **types** | `SubagentTask.specialistId`（与 runtime agentId 区分）+ `agent_selected` audit | `lib/subagents/types.ts` |
 
@@ -131,7 +131,7 @@ Sprint 5 退出标准对照：
 ### Goal Mode（Sprint 1 后已升级，见第 0 节）
 
 - 用户可以用 `/goal <objective>` 启动目标。
-- ✅ goal、turn 历史、evidence 已持久化到 `~/.mini-pi/goals/{agentId}.json`，跨重启存活（M1）。
+- ✅ goal、turn 历史、evidence 已持久化到 `~/.diga-agent/goals/{agentId}.json`，跨重启存活（M1）。
 - agent turn 结束后可以自动续跑；每轮记录为结构化 `GoalTurn`（M2）。
 - 模型可以通过 `goal_update` 标记 `complete` 或 `blocked`；`complete` 须经 stop-time verifier 基于 evidence 接受（M3）。
 - ✅ blocked 状态结构化（category + unblockAction + repeatedCount），重复 blocker 达阈值停止空烧（M4）。
@@ -156,11 +156,11 @@ Sprint 5 退出标准对照：
   - `workflow.askUser`
   - `workflow.fetchUrl`
 - 已有 capability manifest、approval broker、network policy、network audit、worktree merge approval。
-- workflow run 已持久化到 `~/.mini-pi/workflows/runs/{workflowId}.json`。
+- workflow run 已持久化到 `~/.diga-agent/workflows/runs/{workflowId}.json`。
 - workflow store 已升级到 v2 envelope，支持 artifact index、大 artifact 压缩、迁移历史和可配置 retention。
 - resume 已支持 `resumeFromWorkflowId` 和 `resumeFromCheckpointName`。
 - Workflow history UI 可选择 checkpoint，并把 checkpoint/artifact 摘要写入续跑 prompt。
-- 可通过 `MINI_PI_WORKFLOW_WORKER_SANDBOX_ARGV_JSON` 接入外部 sandbox launcher。
+- 可通过 `DIGA_AGENT_WORKFLOW_WORKER_SANDBOX_ARGV_JSON` 接入外部 sandbox launcher。
 - 可通过 `npm run workflow:sandbox:check` 检测本机 sandbox 工具。
 
 ### Multi-Agent / Subagents
@@ -170,7 +170,7 @@ Sprint 5 退出标准对照：
 - 每个 child agent 拥有独立 session/context，结果写回 parent SSE/session。
 - child agent 在 sidebar 中归属到 parent 下，不作为顶层会话散落。
 - parent message 中的 subagent card 可展开查看单个 task 结果。
-- batch/task metadata 已持久化到 `~/.mini-pi/subagents/batches/{batchId}.json`。
+- batch/task metadata 已持久化到 `~/.diga-agent/subagents/batches/{batchId}.json`。
 - 支持 retry 单个 task、resume 未完成 batch、打开 child session 继续追问。
 - 支持 deterministic verifier、batch synthesis、attempts、auditEvents。
 - 支持 `allowedTools` + `writePaths`，并在 SDK `tool_call` 前阻断越界 write/edit/patch。
@@ -211,7 +211,7 @@ Sprint 5 退出标准对照：
 
 3. **CLI / headless 模式**
    - 当前主要依赖 Web/Electron UI。
-   - 缺 `mini-pi workflow run/resume/inspect`。
+   - 缺 `diga-agent workflow run/resume/inspect`。
    - 缺 JSON event stream。
    - 缺 CI-friendly exit code。
 
@@ -370,9 +370,9 @@ Acceptance criteria:
 
 Deliverables:
 
-- `mini-pi workflow run`。
-- `mini-pi workflow resume`。
-- `mini-pi workflow inspect`。
+- `diga-agent workflow run`。
+- `diga-agent workflow resume`。
+- `diga-agent workflow inspect`。
 - JSON event stream。
 - CI-friendly exit codes。
 - Optional GitHub issue/PR trigger。
@@ -433,7 +433,7 @@ export interface GoalStore {
 存储路径：
 
 ```text
-~/.mini-pi/goals/{agentId}.json
+~/.diga-agent/goals/{agentId}.json
 ```
 
 新增类型：
@@ -718,10 +718,10 @@ Implementation:
 Commands:
 
 ```text
-mini-pi workflow run --agent <id> --objective "..."
-mini-pi workflow resume --agent <id> --workflow <workflowId> --checkpoint <name>
-mini-pi workflow inspect --workflow <workflowId> --json
-mini-pi workflow sandbox check
+diga-agent workflow run --agent <id> --objective "..."
+diga-agent workflow resume --agent <id> --workflow <workflowId> --checkpoint <name>
+diga-agent workflow inspect --workflow <workflowId> --json
+diga-agent workflow sandbox check
 ```
 
 Output:
@@ -732,7 +732,7 @@ Output:
 
 Files:
 
-- `bin/mini-pi-web.js`
+- `bin/diga-agent.js`
 - `lib/workflows/cli.ts`
 - `scripts/check-workflow-sandbox.mjs`
 
@@ -793,7 +793,7 @@ Implementation:
 - Add `lib/subagents/definition-parser.ts`。
 - Discover project and user subagents。
 - Project path: `<cwd>/.agents/subagents/*.md`。
-- User path: `~/.mini-pi/subagents/*.md`。
+- User path: `~/.diga-agent/subagents/*.md`。
 - Registry precedence: project overrides user by `id`。
 - Validate frontmatter schema。
 - Store parsed definitions in memory with file hash/version。
@@ -966,7 +966,7 @@ Acceptance:
 Storage:
 
 ```text
-~/.mini-pi/subagents/memory/{scope}/{agentId}.json
+~/.diga-agent/subagents/memory/{scope}/{agentId}.json
 ```
 
 Types:

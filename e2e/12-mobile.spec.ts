@@ -30,7 +30,7 @@ test("mobile: 长会话加载更早内容使用分页 cursor", async ({ page }) 
   });
   await page.addInitScript(() => {
     window.localStorage.setItem(
-      "mini-pi-remote",
+      "diga-agent-remote",
       JSON.stringify({
         token: "remote-token",
         deviceId: "device-1",
@@ -89,7 +89,7 @@ test("mobile: shows long-task inbox and resolves findings", async ({ page }) => 
   await installApiFixtures(page);
   await page.addInitScript(() => {
     window.localStorage.setItem(
-      "mini-pi-remote",
+      "diga-agent-remote",
       JSON.stringify({
         token: "remote-token",
         deviceId: "device-1",

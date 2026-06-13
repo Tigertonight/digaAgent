@@ -4,11 +4,11 @@ interface EvidenceStore {
   byId: Map<string, EvidenceRef>;
 }
 
-const g = globalThis as unknown as { __miniPiEvidenceStore?: EvidenceStore };
-if (!g.__miniPiEvidenceStore) {
-  g.__miniPiEvidenceStore = { byId: new Map() };
+const g = globalThis as unknown as { __digaAgentEvidenceStore?: EvidenceStore };
+if (!g.__digaAgentEvidenceStore) {
+  g.__digaAgentEvidenceStore = { byId: new Map() };
 }
-const store = g.__miniPiEvidenceStore;
+const store = g.__digaAgentEvidenceStore;
 
 function matches(value: string | null | undefined, expected?: string | null): boolean {
   return expected === undefined || value === expected;

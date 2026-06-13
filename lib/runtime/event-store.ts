@@ -4,11 +4,11 @@ interface RuntimeEventStore {
   byId: Map<string, RuntimeEvent>;
 }
 
-const g = globalThis as unknown as { __miniPiRuntimeEventStore?: RuntimeEventStore };
-if (!g.__miniPiRuntimeEventStore) {
-  g.__miniPiRuntimeEventStore = { byId: new Map() };
+const g = globalThis as unknown as { __digaAgentRuntimeEventStore?: RuntimeEventStore };
+if (!g.__digaAgentRuntimeEventStore) {
+  g.__digaAgentRuntimeEventStore = { byId: new Map() };
 }
-const store = g.__miniPiRuntimeEventStore;
+const store = g.__digaAgentRuntimeEventStore;
 
 function matches(value: string | null | undefined, expected?: string | null): boolean {
   return expected === undefined || value === expected;

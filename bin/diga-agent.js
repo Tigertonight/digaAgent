@@ -2,7 +2,7 @@
 "use strict";
 
 /**
- * mini-pi-web CLI 启动器（npx mini-pi-web）。
+ * diga-agent CLI 启动器（npx diga-agent）。
  *
  * 子命令:
  *   (无)     启动服务（默认）
@@ -10,11 +10,11 @@
  *   help     显示帮助
  *
  * 用法:
- *   npx mini-pi-web                  # 端口默认 30142（避开 pi-web 的 30141）
- *   npx mini-pi-web -p 4000
- *   npx mini-pi-web -H 0.0.0.0
- *   npx mini-pi-web doctor
- *   PORT=4000 npx mini-pi-web
+ *   npx diga-agent                  # 端口默认 30142（避开 pi-web 的 30141）
+ *   npx diga-agent -p 4000
+ *   npx diga-agent -H 0.0.0.0
+ *   npx diga-agent doctor
+ *   PORT=4000 npx diga-agent
  */
 
 const { spawn } = require("child_process");
@@ -42,20 +42,20 @@ if (
   !subcommand.startsWith("-") &&
   subcommand !== "start"
 ) {
-  console.error(`[mini-pi-web] Unknown subcommand: ${subcommand}`);
+  console.error(`[diga-agent] Unknown subcommand: ${subcommand}`);
   printHelp();
   process.exit(1);
 }
 
 function printHelp() {
-  console.log(`mini-pi-web — self-hosted UI for pi-coding-agent
+  console.log(`diga-agent — self-hosted UI for pi-coding-agent
 
 Usage:
-  npx mini-pi-web                  start the server (default port 30142)
-  npx mini-pi-web -p 4000          start on custom port
-  npx mini-pi-web -H 0.0.0.0       bind to a specific host
-  npx mini-pi-web doctor           run configuration self-check
-  npx mini-pi-web help             show this help
+  npx diga-agent                  start the server (default port 30142)
+  npx diga-agent -p 4000          start on custom port
+  npx diga-agent -H 0.0.0.0       bind to a specific host
+  npx diga-agent doctor           run configuration self-check
+  npx diga-agent help             show this help
 
 Environment:
   PORT, HOSTNAME    override defaults
@@ -65,7 +65,7 @@ Environment:
 
 // ===== doctor 子命令 =====
 async function doctor() {
-  console.log("mini-pi-web doctor — 配置自检\n");
+  console.log("diga-agent doctor — 配置自检\n");
 
   const results = [];
   const check = (name, ok, detail = "") => {
@@ -243,7 +243,7 @@ const hostname = cliArgs.hostname ?? process.env.HOSTNAME ?? null;
 
 if (!fs.existsSync(nextDir)) {
   console.error(
-    "[mini-pi-web] Build artifacts not found at " +
+    "[diga-agent] Build artifacts not found at " +
       nextDir +
       ". This package must be installed from a published tarball with .next/ included."
   );
@@ -260,7 +260,7 @@ const child = spawn(process.execPath, [nextBin, ...nextArgs], {
     ...process.env,
     // 告诉 next.config.ts 跳过 output: "standalone"
     // （next start 与 standalone 输出不兼容，会打 warning 并降级）
-    MINI_PI_NO_STANDALONE: "1",
+    DIGA_AGENT_NO_STANDALONE: "1",
   },
 });
 

@@ -18,9 +18,9 @@ export default async function Home({
   ensureLongTaskScheduler();
   const sessions = await listAllSessions();
   // Electron 打包后 process.cwd() 落在 .app/Contents/Resources/app.asar.unpacked/.next/standalone,
-  // 既不是用户家目录、也会被 /api/files 的 MINI_PI_WEB_ROOT 守门拒掉。
-  // 优先用 MINI_PI_WEB_ROOT(electron/main.js 默认设为 os.homedir())。
-  const cwd = process.env.MINI_PI_WEB_ROOT || process.cwd();
+  // 既不是用户家目录、也会被 /api/files 的 DIGA_AGENT_WEB_ROOT 守门拒掉。
+  // 优先用 DIGA_AGENT_WEB_ROOT(electron/main.js 默认设为 os.homedir())。
+  const cwd = process.env.DIGA_AGENT_WEB_ROOT || process.cwd();
   return (
     <ChatApp
       initialSessions={sessions.map((s) => ({

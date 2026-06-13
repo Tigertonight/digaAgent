@@ -15,12 +15,12 @@ import {
 let tmpDir = "";
 
 beforeEach(async () => {
-  tmpDir = await mkdtemp(path.join(os.tmpdir(), "mini-pi-remote-test-"));
-  process.env.MINI_PI_SETTINGS_FILE = path.join(tmpDir, "settings.json");
+  tmpDir = await mkdtemp(path.join(os.tmpdir(), "diga-agent-remote-test-"));
+  process.env.DIGA_AGENT_SETTINGS_FILE = path.join(tmpDir, "settings.json");
 });
 
 afterEach(async () => {
-  delete process.env.MINI_PI_SETTINGS_FILE;
+  delete process.env.DIGA_AGENT_SETTINGS_FILE;
   await rm(tmpDir, { recursive: true, force: true });
 });
 

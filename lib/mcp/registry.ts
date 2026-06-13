@@ -21,17 +21,17 @@ interface McpStore {
   servers: Map<string, McpServerConfig>;
 }
 
-const g = globalThis as unknown as { __miniPiMcpRegistry?: McpStore };
-if (!g.__miniPiMcpRegistry) {
-  g.__miniPiMcpRegistry = { servers: new Map() };
+const g = globalThis as unknown as { __digaAgentMcpRegistry?: McpStore };
+if (!g.__digaAgentMcpRegistry) {
+  g.__digaAgentMcpRegistry = { servers: new Map() };
 }
-const store = g.__miniPiMcpRegistry;
+const store = g.__digaAgentMcpRegistry;
 
 let rootOverride: string | null = null;
 let hydrated = false;
 
 function getRoot(): string {
-  return rootOverride ?? path.join(os.homedir(), ".mini-pi");
+  return rootOverride ?? path.join(os.homedir(), ".diga-agent");
 }
 
 function mcpDir(): string {

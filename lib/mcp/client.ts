@@ -58,7 +58,7 @@ export class McpStdioClient {
     await this.request("initialize", {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: {},
-      clientInfo: { name: "mini-pi-web", version: "0.1.0" },
+      clientInfo: { name: "diga-agent", version: "0.1.0" },
     });
     this.notify("notifications/initialized", {});
     this.initialized = true;

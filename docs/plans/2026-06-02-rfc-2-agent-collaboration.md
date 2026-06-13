@@ -12,7 +12,7 @@
 
 ## TL;DR
 
-mini-pi-web 当前是「**单向喊话式**」的 Agent UI：用户按 Enter → agent 自己跑到死 → 用户看完结果再说话。这种模式在「短任务、强信任」场景里没问题，但只要任务跑到 5 分钟以上、或 agent 决定做用户不想做的事，体验就**立刻崩盘**——用户唯一的选择是「干等」或「abort 重来」。
+diga-agent 当前是「**单向喊话式**」的 Agent UI：用户按 Enter → agent 自己跑到死 → 用户看完结果再说话。这种模式在「短任务、强信任」场景里没问题，但只要任务跑到 5 分钟以上、或 agent 决定做用户不想做的事，体验就**立刻崩盘**——用户唯一的选择是「干等」或「abort 重来」。
 
 本 RFC 提出 **Agent 协作模式 v0**，把 agent 从「黑箱执行体」变成「可对话的搭档」，由三个特性组成：
 
@@ -22,14 +22,14 @@ mini-pi-web 当前是「**单向喊话式**」的 Agent UI：用户按 Enter →
 | F2 | **工具审批与改写**（Tool Approval） | 危险/可疑工具调用前由用户决定 allow / modify / deny | ✅ **SDK 已支持**（需架构改造，引入 inline extension） |
 | F3 | **意图预览**（Plan-Before-Act） | 多步任务先给计划再执行，用户可在执行前修正方向 | ⏸️ **延后** —— SDK 当前 phase 信息不足，需先观察 F2 真实使用，再定形态 |
 
-**最大认知更新**：在写本 RFC 前的盘点里，我把 F2 标为「需 SDK 配合 ~5 人天」。但**重新精读 SDK 类型定义后发现 SDK 已具备完整支持**——`tool_call` 事件可以 `block / mutate input` 且 handler 是 `async` 的（参见附录 B）。当前不能做 F2 的真正原因是 **mini-pi-web 的架构里没有用 extension 机制**，而是直接 `session.subscribe()` 拿事件（订阅是 read-only）。所以 F2 的成本从「等 SDK 升级」变成「**改造一次架构，永久解锁**」。
+**最大认知更新**：在写本 RFC 前的盘点里，我把 F2 标为「需 SDK 配合 ~5 人天」。但**重新精读 SDK 类型定义后发现 SDK 已具备完整支持**——`tool_call` 事件可以 `block / mutate input` 且 handler 是 `async` 的（参见附录 B）。当前不能做 F2 的真正原因是 **diga-agent 的架构里没有用 extension 机制**，而是直接 `session.subscribe()` 拿事件（订阅是 read-only）。所以 F2 的成本从「等 SDK 升级」变成「**改造一次架构，永久解锁**」。
 
 **推荐执行顺序**：
 1. **Phase A**（与 RFC-1 阶段 B 并行 / 之后）：F1 会话级 Budget MVP — 1.5 人天
 2. **Phase B**（在 RFC-1 完成后）：F2 工具审批 — 4 人天（含 inline extension 架构改造）
 3. **Phase C**（F2 上线 2 周后，看数据再决定）：F3 意图预览（如果做）
 
-**为什么是「v0」**：本 RFC 只覆盖 mini-pi-web **自己掌握全部决策权**的协作模式（用户审批 / 设上限）。**v1 才会做的**：跨 session 协作、agent 主动求助、人机角色切换 —— 这些都需要 v0 跑过真实数据后才知道形态。**v0 的目标是让用户敢把 agent 放手跑超过 10 分钟。**
+**为什么是「v0」**：本 RFC 只覆盖 diga-agent **自己掌握全部决策权**的协作模式（用户审批 / 设上限）。**v1 才会做的**：跨 session 协作、agent 主动求助、人机角色切换 —— 这些都需要 v0 跑过真实数据后才知道形态。**v0 的目标是让用户敢把 agent 放手跑超过 10 分钟。**
 
 ---
 
@@ -83,7 +83,7 @@ export interface ToolCallEventResult {
 
 并且 runner 的 `emitToolCall` 签名是 `Promise<ToolCallEventResult | undefined>`——**handler 可以是 async 的，agent 会 await 它的返回**。这就是"暂停等用户审批"的完整技术底座。
 
-**为什么我们用不上**：mini-pi-web 当前通过 `session.subscribe()` 订阅事件（lib/agent-registry.ts:155），这是 **read-only 的事件流**，无法返回 block / mutate 结果。要拦截工具调用，必须改为**注入一个 inline extension**，通过 `pi.on("tool_call", handler)` 拿到可干预的事件。SDK 已经提供了入口：
+**为什么我们用不上**：diga-agent 当前通过 `session.subscribe()` 订阅事件（lib/agent-registry.ts:155），这是 **read-only 的事件流**，无法返回 block / mutate 结果。要拦截工具调用，必须改为**注入一个 inline extension**，通过 `pi.on("tool_call", handler)` 拿到可干预的事件。SDK 已经提供了入口：
 
 ```ts
 // DefaultResourceLoaderOptions（dist/core/resource-loader.d.ts:63）
@@ -105,7 +105,7 @@ loadExtensionFromFactory(factory, cwd, eventBus, runtime, extensionPath?)
 | 整个 turn 开始前阻断（"先看计划再开跑"） | ⚠️ 部分 | 有 `before_agent_start` 事件，但只能看到原始 prompt，看不到 agent 计划要做什么 |
 | 暂停-继续（不 abort 也能让 agent 停下来） | ❌ 不支持 | 只有 `abort()`，且 abort 后必须重新 prompt |
 | 看到 agent 「准备调用哪些工具」的预览 | ❌ 不支持 | 没有 tool planning phase，模型直接进入 tool_call |
-| 跨 session 的全局 budget | ⚠️ 需自实现 | `getSessionStats()` 只看单 session，跨 session 需 mini-pi-web 自己聚合 |
+| 跨 session 的全局 budget | ⚠️ 需自实现 | `getSessionStats()` 只看单 session，跨 session 需 diga-agent 自己聚合 |
 
 → **结论**：F1（Budget）和 F2（Approval）是 v0 完全可做的；F3（Plan）不行，延后。
 
@@ -138,7 +138,7 @@ loadExtensionFromFactory(factory, cwd, eventBus, runtime, extensionPath?)
 ### 2.3 约束
 
 - 必须能与 RFC-1 拆分后的架构无缝衔接（不能拖 RFC-1 后腿）
-- 必须保持 mini-pi-web 「本地优先」「单机可跑」原则，不引入任何外部服务
+- 必须保持 diga-agent 「本地优先」「单机可跑」原则，不引入任何外部服务
 - 必须在 web UI 和未来 Electron 桌面端都能工作（审批弹窗不能依赖 web-only 的 API）
 
 ---
@@ -157,13 +157,13 @@ loadExtensionFromFactory(factory, cwd, eventBus, runtime, extensionPath?)
        ▲
        │ 注入 inline ExtensionFactory
        │
-  CollabExtension（mini-pi-web 自己写）
+  CollabExtension（diga-agent 自己写）
        ├─ on("tool_call") → 查询前端审批状态 → block? mutate? allow?
        ├─ on("turn_end")  → 累加 stats，触发 budget 检查
        └─ on("agent_end") → 释放等待中的审批 promise
 ```
 
-**关键变更**：mini-pi-web 从「SDK 的消费者」升级为「SDK 的扩展开发者」。**这一次性的架构投入，是 v0 之后所有 agent 协作能力的基石**。
+**关键变更**：diga-agent 从「SDK 的消费者」升级为「SDK 的扩展开发者」。**这一次性的架构投入，是 v0 之后所有 agent 协作能力的基石**。
 
 ### 3.2 三个特性的数据模型
 
@@ -296,7 +296,7 @@ interface ToolCallMatcher {
 
 理由：
 1. SDK 没有 plan phase 事件，agent 直接发 tool_call。要做"先看计划"必须**自己构造**——通过修改 system prompt 让 agent 先输出 `<plan>...</plan>` 再调用工具，然后我们 parse。但这是**模型行为的强约束**，不同 model（Sonnet vs Opus vs Haiku）遵守程度差异极大，会变成产品的"看脸"特性。
-2. 真正能做出可靠 plan-before-act 的产品（Cursor 的 Composer Plan、Cline 的 Plan/Act 模式），都是 model + framework 协同调优出来的，不是 mini-pi-web 这个体量能短期搞定的。
+2. 真正能做出可靠 plan-before-act 的产品（Cursor 的 Composer Plan、Cline 的 Plan/Act 模式），都是 model + framework 协同调优出来的，不是 diga-agent 这个体量能短期搞定的。
 3. **F2 已经能解决 80% 的"我不想让它做 X"场景** —— 让我们先看 F2 上线后用户还痛不痛，再决定 F3 的形态。
 
 非决策：F3 不是永远不做，是 v0.5 / v1 再回头看。
@@ -504,7 +504,7 @@ PUT /api/agent/[id]/budget
 | B7 | E2E：跑 `bash "rm -rf /tmp/test"` 全链路 | 0.3d | UI 弹审批 → deny → agent 收到 "Permission denied"，自然 reflect 不重试 |
 
 **风险**：
-- ⚠️ **inline extension 的 hot-reload**：Next.js dev 模式会 reload module，`pendingApprovals` Map 重启 → 已悬挂的 promise 会孤儿。**缓解**：把 Map 也挂到 `globalThis.__miniPi`（与现有 agent registry 一样）。
+- ⚠️ **inline extension 的 hot-reload**：Next.js dev 模式会 reload module，`pendingApprovals` Map 重启 → 已悬挂的 promise 会孤儿。**缓解**：把 Map 也挂到 `globalThis.__digaAgent`（与现有 agent registry 一样）。
 - ⚠️ **审批超时**：用户离开屏幕 30 分钟回来，agent 还在等。**缓解**：approval 默认 5 分钟超时 → 视为 deny，给 agent 返回 "approval timeout"。
 
 **上线策略**：默认**只开 1 条规则**（`dangerous-bash-destructive`），灰度 1 周观察误报率，再逐步开放其他 4 条。

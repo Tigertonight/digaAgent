@@ -1,6 +1,6 @@
 # Diga Agent Design Tokens
 
-This document is the source of truth for UI styling in `mini-pi-web`.
+This document is the source of truth for UI styling in `diga-agent`.
 New UI should consume tokens instead of hard-coded colors, arbitrary font sizes,
 ad-hoc radii, or component-local shadow values.
 

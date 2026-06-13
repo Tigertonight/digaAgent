@@ -1,12 +1,12 @@
-# mini-pi-web Architecture Health Roadmap
+# diga-agent Architecture Health Roadmap
 
 Date: 2026-06-05
 
-This note captures the current architecture health assessment for mini-pi-web and turns it into a follow-up hardening plan. The project has moved beyond a small demo: it is already an agent workbench with chat, sessions, browser use, workflows, subagents, goals, approvals, Electron, and persistence. The next step is not simply adding more features, but tightening the runtime model and evidence model so the existing capabilities become reliable, inspectable, and composable.
+This note captures the current architecture health assessment for diga-agent and turns it into a follow-up hardening plan. The project has moved beyond a small demo: it is already an agent workbench with chat, sessions, browser use, workflows, subagents, goals, approvals, Electron, and persistence. The next step is not simply adding more features, but tightening the runtime model and evidence model so the existing capabilities become reliable, inspectable, and composable.
 
 ## Executive Summary
 
-mini-pi-web has several strong first versions, but some of them are still in the "functional but not productized" stage. The biggest architecture need is convergence:
+diga-agent has several strong first versions, but some of them are still in the "functional but not productized" stage. The biggest architecture need is convergence:
 
 1. A **Runtime Identity Layer** that clearly separates persisted sessions, live agents, browser runtimes, workflow runs, subagent tasks, and UI runner keys.
 2. A unified **Evidence/Event Layer** that normalizes browser, workflow, subagent, goal, approval, and progress events into one inspectable stream.
@@ -362,7 +362,7 @@ These surfaces become much easier once the core workbench model is stable.
 
 ## Architectural North Star
 
-mini-pi-web should become an agent operating workbench:
+diga-agent should become an agent operating workbench:
 
 ```txt
 Persisted Session

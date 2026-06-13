@@ -195,11 +195,11 @@ interface GlobalRegistry {
   packageManagers?: Map<string, DefaultPackageManager>;
 }
 
-const g = globalThis as unknown as { __miniPi?: GlobalRegistry };
-if (!g.__miniPi) {
-  g.__miniPi = { agents: new Map() };
+const g = globalThis as unknown as { __digaAgent?: GlobalRegistry };
+if (!g.__digaAgent) {
+  g.__digaAgent = { agents: new Map() };
 }
-const reg = g.__miniPi!;
+const reg = g.__digaAgent!;
 
 export function getAuth(): AuthStorage {
   if (!reg.authStorage) {

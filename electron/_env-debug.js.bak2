@@ -1,5 +1,5 @@
 const path = require('node:path');
-process.chdir('/Users/Tigertonight/Documents/pi-agent/mini-pi-web');
+process.chdir(path.join(__dirname, '..'));
 const settingsModule = require('./settings');
 
 (async () => {
@@ -15,10 +15,10 @@ const settingsModule = require('./settings');
     ...keytarEnv,
     PORT: String(port),
     HOSTNAME: "127.0.0.1",
-    MINI_PI_WEB_ROOT: process.env.HOME,
+    DIGA_AGENT_WEB_ROOT: process.env.HOME,
     NODE_ENV: "production",
-    MINI_PI_SERVER_ENTRY: serverFile,
-    MINI_PI_PARENT_PID: String(process.pid),
+    DIGA_AGENT_SERVER_ENTRY: serverFile,
+    DIGA_AGENT_PARENT_PID: String(process.pid),
   };
   for (const [k, v] of Object.entries(mergedEnv)) {
     if (v === undefined) delete mergedEnv[k];

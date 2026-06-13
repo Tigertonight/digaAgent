@@ -1,11 +1,11 @@
 {
-  "name": "mini-pi-web",
+  "name": "diga-agent",
   "version": "0.1.2",
-  "description": "Self-hosted UI for pi-coding-agent (mini fork of pi-web). Web + Electron.",
+  "description": "Diga Agent: self-hosted coding agent UI for Web and Electron.",
   "license": "MIT",
   "keywords": [
-    "pi",
-    "pi-coding-agent",
+    "diga",
+    "diga-agent",
     "ai",
     "agent",
     "claude",
@@ -16,7 +16,7 @@
     "nextjs"
   ],
   "bin": {
-    "mini-pi-web": "bin/mini-pi-web.js"
+    "diga-agent": "bin/diga-agent.js"
   },
   "//main-comment": "electron 入口仅本地开发使用；用 scripts 显式传入而不写 main，避免 npm publish 把 electron/main.js 打进 tarball。",
   "files": [
@@ -46,7 +46,7 @@
   ],
   "scripts": {
     "dev": "next dev -p 3000",
-    "build": "MINI_PI_NO_STANDALONE=1 next build --webpack",
+    "build": "DIGA_AGENT_NO_STANDALONE=1 next build --webpack",
     "build:electron": "next build --webpack && node scripts/copy-standalone-assets.mjs",
     "start": "next start -p 3000",
     "lint": "eslint .",

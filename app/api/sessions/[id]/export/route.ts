@@ -63,7 +63,7 @@ export async function GET(
     const exportFromFile = await loadExportFromFile();
     const outPath = join(
       tmpdir(),
-      `mini-pi-web-export-${id}-${Date.now()}.html`
+      `diga-agent-export-${id}-${Date.now()}.html`
     );
     try {
       await exportFromFile(path, { outputPath: outPath });

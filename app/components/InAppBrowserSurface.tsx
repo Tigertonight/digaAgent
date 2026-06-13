@@ -34,8 +34,8 @@ type EmbeddedBrowserElement = ElectronWebviewElement | HTMLIFrameElement;
 
 function getElectronApi(): { webviewPoc?: WebviewPocApi } | null {
   if (typeof window === "undefined") return null;
-  return ((window as unknown as { miniPi?: { webviewPoc?: WebviewPocApi } })
-    .miniPi ?? null);
+  return ((window as unknown as { digaAgent?: { webviewPoc?: WebviewPocApi } })
+    .digaAgent ?? null);
 }
 
 function q(value: unknown): string {

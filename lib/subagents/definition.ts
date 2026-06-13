@@ -46,7 +46,7 @@ export type SubagentDefinitionSource = "project" | "user" | "builtin";
 
 /**
  * A reusable specialist definition discovered from `.agents/subagents/*.md`
- * (project) or `~/.mini-pi/subagents/*.md` (user). The frontmatter supplies the
+ * (project) or `~/.diga-agent/subagents/*.md` (user). The frontmatter supplies the
  * structured fields; the markdown body becomes `prompt`.
  */
 export interface SubagentDefinition {

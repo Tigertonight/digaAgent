@@ -12,7 +12,7 @@
 
 ## 0. TL;DR
 
-让 Sidebar 不再是「日期堆」：用户可以给 session 起 title、点置顶把重要 session 钉在最上面；元数据持久化到 `~/.mini-pi/sessions/{id}.meta.json`，session 删除时联删。完成 RFC-3 Phase A 的 F1（Session 元数据）；全程 0 行为退化、0 lint 漂移。
+让 Sidebar 不再是「日期堆」：用户可以给 session 起 title、点置顶把重要 session 钉在最上面；元数据持久化到 `~/.diga-agent/sessions/{id}.meta.json`，session 删除时联删。完成 RFC-3 Phase A 的 F1（Session 元数据）；全程 0 行为退化、0 lint 漂移。
 
 **实际成果**：
 
@@ -22,7 +22,7 @@
 | 新增 hook | — | useSessionMeta（80 行，纯 action） | +1 |
 | 新增 API 路由 | — | `/api/sessions/[id]/meta` (GET + PATCH) | +1 |
 | API 路由扩展 | — | `/api/sessions/[id]` DELETE 联删 meta | 0 新增 |
-| 持久化文件 | session.jsonl | `~/.mini-pi/sessions/{id}.meta.json`（独立单文件） | +1 类 |
+| 持久化文件 | session.jsonl | `~/.diga-agent/sessions/{id}.meta.json`（独立单文件） | +1 类 |
 | Sidebar 视觉 | name/firstMessage | meta.title 优先 + Pin 图标 + 「📌 置顶」菜单项 | UI ↑ |
 | 列表排序 | running > modified | **pinned > running > modified** | 升级 |
 | 单测 cases | 96 | **108（+12：12 meta/store）** | +12 |
@@ -38,7 +38,7 @@
 
 - F2：session 全文检索（Cmd+K 跨 session 搜历史）
 - F3：自动摘要（每 N 轮 LLM 摘要写回 meta）
-- F4：项目级记忆（`.mini-pi/agents.md` per-cwd）
+- F4：项目级记忆（`.diga-agent/agents.md` per-cwd）
 - Settings UI 改 title（PATCH 路由已支持，仅缺前端面板）
 - `lastSeenAt` 从 localStorage 迁到 meta（G5 已修，localStorage 工作中，迁移留 Phase C）
 - summary / labels / cost / lastSeenAt / activeBranch 等字段：types 已声明、`META_KNOWN_FIELDS` 已登记、白名单 `META_WRITABLE_FIELDS_V0` 不接收写入，留 Phase B/C 启用
@@ -56,7 +56,7 @@ RFC-3 主文把 Phase A 定义为「Session 元数据 + 持久化」。在 RFC-2
 | F1 元数据 + F2 搜索 + F3 摘要全做 | 仅 F1 元数据 + Sidebar UI | F2/F3 都强依赖 meta 持久化基础设施，先把 F1 跑通是 ROI 最高的一步；F2/F3 独立 phase 推进 |
 | 包含 lastSeenAt 迁移 | 跳过（localStorage 已工作）| RFC-1 B1（G5 修复）已用 localStorage lazy init 解决刷新丢失问题，跨设备同步价值低，迁移成本不抵收益 |
 
-→ **F1 是 RFC-3 的承重墙**：F2 搜索要 meta.title 当结果排序权重，F3 摘要要写回 meta.summary，F4 项目级记忆要复用 `~/.mini-pi/` 路径约定。
+→ **F1 是 RFC-3 的承重墙**：F2 搜索要 meta.title 当结果排序权重，F3 摘要要写回 meta.summary，F4 项目级记忆要复用 `~/.diga-agent/` 路径约定。
 
 ### 1.2 用户决策
 
@@ -111,7 +111,7 @@ RFC-3 主文把 Phase A 定义为「Session 元数据 + 持久化」。在 RFC-2
 
 | 决策 | 理由 |
 |---|---|
-| 单文件 `{id}.meta.json` 不是合并 `meta.db` | 与 session.jsonl 一一对应、好 diff、好排查、便于 RFC-3 Phase C 加 `.mini-pi/` 项目级文件时复用同一目录约定 |
+| 单文件 `{id}.meta.json` 不是合并 `meta.db` | 与 session.jsonl 一一对应、好 diff、好排查、便于 RFC-3 Phase C 加 `.diga-agent/` 项目级文件时复用同一目录约定 |
 | atomic write（tmp + rename） | 避免半写文件污染下次读，电源故障安全 |
 | `__setMetaRootForTests` 而非 mock fs | 真 fs 跑测试，`fs.mkdtemp(os.tmpdir())` 隔离；与 `lib/budget/index.test.ts` 风格一致 |
 | 不加 `server-only` 标记 | 纯 fs 模块，webpack 自动挡 client bundle（node:fs 无 polyfill）；同时 vitest（node env）能直跑，无需 jsdom |
@@ -166,7 +166,7 @@ RFC-3 主文把 Phase A 定义为「Session 元数据 + 持久化」。在 RFC-2
 
 | 决策 | 理由 |
 |---|---|
-| 不复用 `PATCH /api/sessions/[id]`（它写 SDK name）| 关注点分离：SDK name 是 SDK 的事，meta 是 mini-pi-web 自营的事；混用早晚出 bug |
+| 不复用 `PATCH /api/sessions/[id]`（它写 SDK name）| 关注点分离：SDK name 是 SDK 的事，meta 是 diga-agent 自营的事；混用早晚出 bug |
 | 不暴露 PUT，只 PATCH | 避免客户端整体覆盖把预留字段（summary/labels/cost...）抹掉；merge 是 source-of-truth 友好的写模式 |
 | 白名单写而非黑名单 | v0 只放 title/pinned，将来加字段必须显式加到 `META_WRITABLE_FIELDS_V0`，零意外暴露 |
 | hook 不做 state / 不做 GET | Sidebar 列表已经从 `GET /api/sessions` 拿到 `sess.meta`（A2），单 item 视图也走父级 props，无须每个 item 单独 fetch |
@@ -210,7 +210,7 @@ RFC-3 主文把 Phase A 定义为「Session 元数据 + 持久化」。在 RFC-2
 
 ```
        ┌───────────────────────────┐
-       │ ~/.mini-pi/sessions/      │
+       │ ~/.diga-agent/sessions/      │
        │   {id}.meta.json          │  ← 持久化（A1）
        │   { id, title?, pinned? } │
        └─────────────┬─────────────┘
@@ -284,7 +284,7 @@ Phase A 留下了 6 个干净接缝，未来扩展不用动 Sidebar / 不用动 
 |---|---|---|
 | F2 全文检索（Cmd+K 跨 session 搜历史）| Phase B | 需要构建索引（meta + jsonl content），独立大块 |
 | F3 自动摘要（每 N 轮 LLM 摘要写回 meta）| Phase B | 需要决定触发策略 + 摘要 prompt，独立调研 |
-| F4 项目级记忆（`.mini-pi/agents.md` per-cwd）| Phase C | 需要复用 meta 路径约定，但 scope 更大（per-cwd 而非 per-session）|
+| F4 项目级记忆（`.diga-agent/agents.md` per-cwd）| Phase C | 需要复用 meta 路径约定，但 scope 更大（per-cwd 而非 per-session）|
 | Settings 改 title UI | Phase B | PATCH 路由已支持，仅缺前端 form，与其他 Settings 改造一起做 |
 | Sidebar title 行内编辑 | Phase B | 视觉决策待定（双击 / 右键 / 长按），不影响 v0 价值 |
 | `lastSeenAt` 迁 meta | Phase C | localStorage 已工作（G5）；跨设备同步价值低，迁移成本不抵收益 |
@@ -292,7 +292,7 @@ Phase A 留下了 6 个干净接缝，未来扩展不用动 Sidebar / 不用动 
 
 ### 5.2 已知 sharp edges
 
-1. **meta 与 SDK SessionInfo 名字不一致**：用户在 SDK side 改了 session name（通过 SDK 自己的 UI），meta.title 不变。Sidebar 渲染优先 meta.title，可能让用户困惑「改了 name 为什么没生效」。Phase B 加 Settings 改 title 时应在 UI 文案上区分「session 名称（SDK）」vs「title（mini-pi-web 标签）」。
+1. **meta 与 SDK SessionInfo 名字不一致**：用户在 SDK side 改了 session name（通过 SDK 自己的 UI），meta.title 不变。Sidebar 渲染优先 meta.title，可能让用户困惑「改了 name 为什么没生效」。Phase B 加 Settings 改 title 时应在 UI 文案上区分「session 名称（SDK）」vs「title（diga-agent 标签）」。
 2. **batchReadMeta 顺序敏感**：实现假设 ids 顺序 = 返回顺序。当前实现走 Promise.all 保序，但单元测试未显式断言这点。如果将来切 `for await` 串行优化，要补一条 case。
 3. **PATCH title 截断 200 字符**：用户传 250 字符的 title 不报错只静默截断。前端将来加 title 编辑时应当 client-side 也限长，给提示。
 4. **DELETE 联删 meta 不报告失败**：当前 try/catch 吞掉错误。如果 fs 真坏了，session 删除成功但 meta 残留，用户感知不到。生产 OK，调试时可能困惑。Phase B 应该加 server log。

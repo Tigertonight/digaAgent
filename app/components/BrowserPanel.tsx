@@ -40,7 +40,7 @@ import { Button, TokenIconButton } from "./DesignPrimitives";
 function isElectronEnv(): boolean {
   return (
     typeof window !== "undefined" &&
-    !!(window as unknown as { miniPi?: unknown }).miniPi
+    !!(window as unknown as { digaAgent?: unknown }).digaAgent
   );
 }
 

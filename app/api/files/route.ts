@@ -5,7 +5,7 @@
  *   DELETE /api/files?path=<abs>           删文件/空目录
  *   POST   /api/files?op=move              { from, to } 移动/重命名
  *
- * 软保护：可设 MINI_PI_WEB_ROOT 环境变量，仅允许操作该根目录下的路径。
+ * 软保护：可设 DIGA_AGENT_WEB_ROOT 环境变量，仅允许操作该根目录下的路径。
  *   默认值：$HOME（你的 home 目录）。
  *   设为 "" 或 "/" 即关闭限制。
  */
@@ -18,7 +18,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 function getRoot(): string {
-  const r = process.env.MINI_PI_WEB_ROOT;
+  const r = process.env.DIGA_AGENT_WEB_ROOT;
   if (r === undefined) return os.homedir();
   if (r === "" || r === "/") return "/";
   return path.resolve(r);
@@ -30,7 +30,7 @@ function assertAllowed(p: string) {
   if (root === "/") return abs;
   const rel = path.relative(root, abs);
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
-    throw new Error(`path outside MINI_PI_WEB_ROOT (${root}): ${abs}`);
+    throw new Error(`path outside DIGA_AGENT_WEB_ROOT (${root}): ${abs}`);
   }
   return abs;
 }

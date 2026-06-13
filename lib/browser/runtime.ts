@@ -104,18 +104,18 @@ interface InAppBrowserHostState {
 }
 
 const g = globalThis as unknown as {
-  __miniPiBrowser?: GlobalBrowserRegistry;
-  __miniPiBrowserExitHook?: boolean;
+  __digaAgentBrowser?: GlobalBrowserRegistry;
+  __digaAgentBrowserExitHook?: boolean;
 };
-if (!g.__miniPiBrowser) {
-  g.__miniPiBrowser = { browsers: new Map() };
+if (!g.__digaAgentBrowser) {
+  g.__digaAgentBrowser = { browsers: new Map() };
 }
-const reg = g.__miniPiBrowser;
+const reg = g.__digaAgentBrowser;
 
 // 进程退出时兜底关闭所有浏览器，避免 server 被杀后留下孤儿 Chromium 窗口。
 // 只注册一次（globalThis 标记），防止热重载重复挂钩子。
-if (!g.__miniPiBrowserExitHook) {
-  g.__miniPiBrowserExitHook = true;
+if (!g.__digaAgentBrowserExitHook) {
+  g.__digaAgentBrowserExitHook = true;
   const killAllSync = () => {
     for (const rec of reg.browsers.values()) {
       // 同步阶段只能 best-effort：触发 close（不 await），让子进程收到信号
@@ -228,14 +228,14 @@ async function loadPlaywright(): Promise<PlaywrightModule> {
  *   - agent 用 Playwright 控制它自动跑任务；
  *   - 用户随时可直接在这个真实窗口上操作（过验证码、点按钮），
  *     因为是同一个浏览器实例，agent 后续接着用的就是你操作完的页面。
- * 服务器/CI 等无显示环境可设 MINI_PI_BROWSER_HEADLESS=1 切回无头。
+ * 服务器/CI 等无显示环境可设 DIGA_AGENT_BROWSER_HEADLESS=1 切回无头。
  */
 function isHeadless(): boolean {
-  return process.env.MINI_PI_BROWSER_HEADLESS === "1";
+  return process.env.DIGA_AGENT_BROWSER_HEADLESS === "1";
 }
 
 function allowPlaywrightFallback(): boolean {
-  return process.env.MINI_PI_BROWSER_PLAYWRIGHT_FALLBACK === "1";
+  return process.env.DIGA_AGENT_BROWSER_PLAYWRIGHT_FALLBACK === "1";
 }
 
 async function ensurePage(browserId: string): Promise<{ rec: BrowserRecord; page: Page }> {
@@ -244,7 +244,7 @@ async function ensurePage(browserId: string): Promise<{ rec: BrowserRecord; page
 
   if (!allowPlaywrightFallback()) {
     throw new Error(
-      "In-app browser host is not connected. Open the BrowserPanel to let the agent control the in-app page, or set MINI_PI_BROWSER_PLAYWRIGHT_FALLBACK=1 to allow launching Chrome for Testing."
+      "In-app browser host is not connected. Open the BrowserPanel to let the agent control the in-app page, or set DIGA_AGENT_BROWSER_PLAYWRIGHT_FALLBACK=1 to allow launching Chrome for Testing."
     );
   }
 

@@ -1,6 +1,6 @@
-# mini-pi-web 视觉对齐 plan（v1）
+# diga-agent 视觉对齐 plan（v1）
 
-> 目标：把 mini-pi-web 的视觉/布局，向上游 `@agegr/pi-web` 0.6.12 拉齐到"看起来同一家产品"的程度，但**不引入上游已知的坑**（独立 page 路由 prod 加载失败、文件树过度展开等）。
+> 目标：把 diga-agent 的视觉/布局，向上游 `@agegr/pi-web` 0.6.12 拉齐到"看起来同一家产品"的程度，但**不引入上游已知的坑**（独立 page 路由 prod 加载失败、文件树过度展开等）。
 >
 > 前置：[`docs/design-tokens.md`](./design-tokens.md) 是本 plan 的事实源。所有颜色/字号引用以那份为准。
 
@@ -263,7 +263,7 @@ import { OpenAI, Anthropic, Google, MiniMax } from "@lobehub/icons";
 
 **目标**：当 `selectedId === null` 时主区居中显示：
 ```
-π mini-pi-web
+π diga-agent
 self-hosted UI for pi-coding-agent
 
 [ 输入框 居中 ]

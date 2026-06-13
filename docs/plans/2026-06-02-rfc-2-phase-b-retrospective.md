@@ -153,7 +153,7 @@ RFC-2 主文 §4 把 Phase B 定义为**"多 agent 协作 + 共享 context"**。
 
 server 端（`lib/collab/server-store.ts`，~120 行）：
 
-- `globalThis.__miniPiCollab.pending: Map<key, { resolve, deny, defaultDecision, timer, ruleId }>`
+- `globalThis.__digaAgentCollab.pending: Map<key, { resolve, deny, defaultDecision, timer, ruleId }>`
 - key 为复合 `${agentId}:${toolCallId}` 满足多 session 并发
 - `registerPendingApproval(...)` 返回 Promise，CollabExtension 的 onApprovalNeeded 在此 await
 - `resolveApproval(key, decision)` 清 timer + clear map + resolve Promise

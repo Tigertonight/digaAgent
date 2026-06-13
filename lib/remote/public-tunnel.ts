@@ -1,5 +1,6 @@
 import "server-only";
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 
 export interface PublicTunnelStatus {
   running: boolean;
@@ -23,16 +24,28 @@ interface PublicTunnelState {
   waiters: Array<(status: PublicTunnelStatus) => void>;
 }
 
-const g = globalThis as unknown as { __miniPiPublicTunnel?: PublicTunnelState };
-if (!g.__miniPiPublicTunnel) {
-  g.__miniPiPublicTunnel = {
+const g = globalThis as unknown as { __digaAgentPublicTunnel?: PublicTunnelState };
+if (!g.__digaAgentPublicTunnel) {
+  g.__digaAgentPublicTunnel = {
     child: null,
     status: { running: false, provider: "cloudflared" },
     waiters: [],
   };
 }
 
-const state = g.__miniPiPublicTunnel;
+const state = g.__digaAgentPublicTunnel;
+
+function resolveCloudflaredCommand(): string {
+  const configured = process.env.DIGA_AGENT_CLOUDFLARED_PATH?.trim();
+  if (configured) return configured;
+
+  const candidates = [
+    "/opt/homebrew/bin/cloudflared",
+    "/usr/local/bin/cloudflared",
+    "/usr/bin/cloudflared",
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? "cloudflared";
+}
 
 function updateStatus(patch: Partial<PublicTunnelStatus>) {
   state.status = { ...state.status, ...patch, provider: "cloudflared" };
@@ -133,7 +146,7 @@ export async function startPublicTunnel(
 
   let child: ChildProcess;
   try {
-    child = spawn("cloudflared", ["tunnel", "--url", targetUrl], {
+    child = spawn(resolveCloudflaredCommand(), ["tunnel", "--url", targetUrl], {
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (e) {
