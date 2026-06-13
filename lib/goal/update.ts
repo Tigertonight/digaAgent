@@ -74,6 +74,7 @@ export function applyGoalUpdate(
       goal: current,
       accepted: false,
       rejectionNote: buildVerifierRejectionNote(verification),
+      evaluation: verification.evaluation,
     };
   }
 
@@ -91,5 +92,5 @@ export function applyGoalUpdate(
         }
       : {}),
   });
-  return { goal, accepted: true };
+  return { goal, accepted: true, evaluation: verification.evaluation };
 }
