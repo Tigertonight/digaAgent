@@ -28,6 +28,7 @@ import {
   Ellipsis,
   ExternalLink,
   GitBranch,
+  KeyRound,
   Moon,
   PanelLeft,
   Pin,
@@ -35,6 +36,7 @@ import {
   Plus,
   Search,
   Settings,
+  Sparkles,
   Sun,
   Trash2,
   X,
@@ -62,6 +64,8 @@ export interface SidebarProps {
 
   // ===== action menu =====
   onSkipUpdateVersion?: () => void;
+  onOpenProviderSetup: () => void;
+  onOpenAuth: () => void;
   onOpenSettings: () => void;
 
   // ===== sessions =====
@@ -198,6 +202,8 @@ export function Sidebar(props: SidebarProps) {
     updateLatestVersion,
     onDownloadUpdate,
     onSkipUpdateVersion,
+    onOpenProviderSetup,
+    onOpenAuth,
     onOpenSettings,
     sessions,
     groupedSessions,
@@ -803,7 +809,7 @@ export function Sidebar(props: SidebarProps) {
           onOpenFilePicker={() => setShowFilePicker(true)}
         />
       </div>
-      {/* sidebar 底：低频配置入口 */}
+      {/* sidebar 底：低频配置入口（仅保留 设置） */}
       <div
         className="flex items-stretch border-t h-12 shrink-0"
         style={{ borderColor: "var(--border)" }}
@@ -812,10 +818,10 @@ export function Sidebar(props: SidebarProps) {
           type="button"
           onClick={onOpenSettings}
           title="打开设置"
-          className="flex-1 inline-flex items-center justify-center gap-2 text-token-ui font-medium hover:bg-[color:var(--bg-hover)]"
+          className="flex-1 inline-flex flex-row items-center justify-center gap-1.5 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
           style={{ color: "var(--text)" }}
         >
-          <Settings size={15} />
+          <Settings size={14} />
           <span>设置</span>
         </button>
       </div>

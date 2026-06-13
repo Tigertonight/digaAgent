@@ -2628,6 +2628,14 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         updateAvailable={updateState?.status === "available"}
         updateLatestVersion={updateState?.latestVersion}
         onDownloadUpdate={openUpdateDownload}
+        onOpenProviderSetup={() => {
+          setProviderSetupChild(null);
+          setShowProviderSetup(true);
+        }}
+        onOpenAuth={() => {
+          setProviderSetupChild(null);
+          openAuth();
+        }}
         onOpenSettings={() => {
           window.location.assign("/settings");
         }}
