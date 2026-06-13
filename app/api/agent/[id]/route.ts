@@ -28,11 +28,11 @@ import {
   pushProgressEvent,
   claimClientRequest,
   clearClientRequest,
-  isCodeWizAgent,
-  promptCodeWizAgent,
-  abortCodeWizAgent,
-  CODEWIZ_CC_MODELS,
-  CODEWIZ_CC_PROVIDER_ID,
+  isLocalCodingAssistantAgent,
+  promptLocalCodingAssistantAgent,
+  abortLocalCodingAssistantAgent,
+  LOCAL_CODING_ASSISTANT_MODELS,
+  LOCAL_CODING_ASSISTANT_PROVIDER_ID,
 } from "@/lib/agent-registry";
 import {
   clearGoal,
@@ -423,8 +423,8 @@ export async function POST(
           : displayText;
 
         try {
-          if (isCodeWizAgent(rec)) {
-            await promptCodeWizAgent(rec, finalText);
+          if (isLocalCodingAssistantAgent(rec)) {
+            await promptLocalCodingAssistantAgent(rec, finalText);
             return NextResponse.json({
               ok: true,
               ...(mentionDirective
@@ -463,9 +463,9 @@ export async function POST(
           );
         }
         const images = parseImages(body.images);
-        if (isCodeWizAgent(rec)) {
+        if (isLocalCodingAssistantAgent(rec)) {
           void images;
-          await promptCodeWizAgent(rec, text);
+          await promptLocalCodingAssistantAgent(rec, text);
           return NextResponse.json({ ok: true });
         }
         await rec.session.steer(text, images);
@@ -482,9 +482,9 @@ export async function POST(
           );
         }
         const images = parseImages(body.images);
-        if (isCodeWizAgent(rec)) {
+        if (isLocalCodingAssistantAgent(rec)) {
           void images;
-          await promptCodeWizAgent(rec, text);
+          await promptLocalCodingAssistantAgent(rec, text);
           return NextResponse.json({ ok: true });
         }
         await rec.session.followUp(text, images);
@@ -609,7 +609,7 @@ export async function POST(
         pushProgressEvent(rec, progress);
         await abortWorkflowsForParent(id);
         await abortSubagentsForParent(id);
-        if (isCodeWizAgent(rec)) await abortCodeWizAgent(rec);
+        if (isLocalCodingAssistantAgent(rec)) await abortLocalCodingAssistantAgent(rec);
         else await rec.session.abort();
         // SDK 不一定会再送 agent_end（底层 stream 已被拆）。为避免 sidebar 黄点
         // 一直亮着，这里主动将 record.isStreaming 扯低。getRunningSessionFiles 下一
@@ -643,15 +643,15 @@ export async function POST(
             { status: 400 }
           );
         }
-        if (provider === CODEWIZ_CC_PROVIDER_ID) {
-          const model = CODEWIZ_CC_MODELS.find((item) => item.id === modelId);
+        if (provider === LOCAL_CODING_ASSISTANT_PROVIDER_ID) {
+          const model = LOCAL_CODING_ASSISTANT_MODELS.find((item) => item.id === modelId);
           if (!model) {
             return NextResponse.json(
               { error: `model not found: ${provider}/${modelId}` },
               { status: 404 }
             );
           }
-          if (!isCodeWizAgent(rec)) {
+          if (!isLocalCodingAssistantAgent(rec)) {
             return NextResponse.json(
               {
                 error:
@@ -661,10 +661,10 @@ export async function POST(
             );
           }
           const nextModel = {
-            provider: CODEWIZ_CC_PROVIDER_ID,
+            provider: LOCAL_CODING_ASSISTANT_PROVIDER_ID,
             id: model.id,
             name: model.name,
-            api: "codewiz-cli",
+            api: "local-cli",
             baseUrl: "local-cli",
             reasoning: true,
             input: ["text"],
@@ -682,7 +682,7 @@ export async function POST(
             },
           });
         }
-        if (isCodeWizAgent(rec)) {
+        if (isLocalCodingAssistantAgent(rec)) {
           return NextResponse.json(
             {
               error:
