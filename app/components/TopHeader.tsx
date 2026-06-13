@@ -5,11 +5,13 @@ import {
   FileText,
   GitBranch,
   Globe2,
+  KeyRound,
   Loader2,
   PanelLeft,
   PanelRight,
   RefreshCw,
   Smartphone,
+  Sparkles,
   Wrench,
   X,
 } from "lucide-react";
@@ -517,12 +519,15 @@ export function TopHeader({
   budgetSpent,
   budgetStatus,
   budgetHasOverride,
+  hasAuthedProviders,
   onToggleSidebar,
   onReconnectSession,
   onToggleTools,
   onToggleWorkbench,
   onOpenBranches,
   onOpenSystemPrompt,
+  onOpenProviderSetup,
+  onOpenAuth,
   onOpenSettings,
   onCheckForUpdates,
 }: TopHeaderProps) {
@@ -673,6 +678,22 @@ export function TopHeader({
                 }
               />
             ) : null}
+            <IconButton
+              onClick={onOpenAuth}
+              title={
+                hasAuthedProviders
+                  ? "管理模型账号授权"
+                  : "配置模型账号授权"
+              }
+              aria-label="模型账号授权"
+              icon={<KeyRound size={iconSizeMap.sm} />}
+            />
+            <IconButton
+              onClick={onOpenProviderSetup}
+              title="模型接入向导"
+              aria-label="模型接入向导"
+              icon={<Sparkles size={iconSizeMap.sm} />}
+            />
             <IconButton
               onClick={() => setMobilePairOpen(true)}
               title="手机扫码连接"

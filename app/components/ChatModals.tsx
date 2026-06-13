@@ -19,6 +19,7 @@ interface ChatModalsState {
   showAuth: boolean;
   authInitialProvider?: string | null;
   showModelsConfig: boolean;
+  providerSetupChild?: "auth" | "models" | null;
   showSystemPrompt: boolean;
   systemPromptText: string | null;
   showBranches: boolean;
@@ -45,9 +46,11 @@ interface ChatModalsProps {
   onProviderSetupOpenModelsConfig: () => void;
   // Auth
   onCloseAuth: () => void;
+  onBackFromAuth?: () => void;
   onAuthChanged: () => void;
   // ModelsConfig
   onCloseModelsConfig: () => void;
+  onBackFromModelsConfig?: () => void;
   onModelsConfigChanged: () => void;
   // SystemPrompt
   onCloseSystemPrompt: () => void;
@@ -70,8 +73,10 @@ export function ChatModals({
   onProviderSetupOpenAuth,
   onProviderSetupOpenModelsConfig,
   onCloseAuth,
+  onBackFromAuth,
   onAuthChanged,
   onCloseModelsConfig,
+  onBackFromModelsConfig,
   onModelsConfigChanged,
   onCloseSystemPrompt,
   onCloseBranches,
@@ -86,6 +91,7 @@ export function ChatModals({
     showAuth,
     authInitialProvider,
     showModelsConfig,
+    providerSetupChild,
     showSystemPrompt,
     systemPromptText,
     showBranches,
@@ -175,6 +181,7 @@ export function ChatModals({
       {showAuth && (
         <AuthPanel
           onClose={onCloseAuth}
+          onBack={providerSetupChild === "auth" ? onBackFromAuth : undefined}
           initialProvider={authInitialProvider}
           onChanged={onAuthChanged}
         />
@@ -182,6 +189,9 @@ export function ChatModals({
       {showModelsConfig && (
         <ModelsConfigPanel
           onClose={onCloseModelsConfig}
+          onBack={
+            providerSetupChild === "models" ? onBackFromModelsConfig : undefined
+          }
           onChanged={onModelsConfigChanged}
         />
       )}

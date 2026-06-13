@@ -162,20 +162,26 @@
       "contents": [
         {
           "x": 140,
-          "y": 180,
+          "y": 150,
           "type": "file"
         },
         {
           "x": 420,
-          "y": 180,
+          "y": 150,
           "type": "link",
           "path": "/Applications"
         },
         {
-          "x": 280,
-          "y": 340,
+          "x": 140,
+          "y": 330,
           "type": "file",
-          "path": "build/Open-Diga-Agent.command"
+          "path": "build/1-安装前必读.txt"
+        },
+        {
+          "x": 420,
+          "y": 330,
+          "type": "file",
+          "path": "build/2-一键安装并打开.command"
         }
       ]
     },

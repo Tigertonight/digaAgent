@@ -28,6 +28,11 @@ import {
   pushProgressEvent,
   claimClientRequest,
   clearClientRequest,
+  isCodeWizAgent,
+  promptCodeWizAgent,
+  abortCodeWizAgent,
+  CODEWIZ_CC_MODELS,
+  CODEWIZ_CC_PROVIDER_ID,
 } from "@/lib/agent-registry";
 import {
   clearGoal,
@@ -418,6 +423,15 @@ export async function POST(
           : displayText;
 
         try {
+          if (isCodeWizAgent(rec)) {
+            await promptCodeWizAgent(rec, finalText);
+            return NextResponse.json({
+              ok: true,
+              ...(mentionDirective
+                ? { routedSpecialists: mentionDirective.agentIds }
+                : {}),
+            });
+          }
           // 如果当前在 streaming，默认按 followUp 处理；否则正常 prompt
           if (rec.isStreaming) {
             await rec.session.prompt(finalText, {
@@ -449,6 +463,11 @@ export async function POST(
           );
         }
         const images = parseImages(body.images);
+        if (isCodeWizAgent(rec)) {
+          void images;
+          await promptCodeWizAgent(rec, text);
+          return NextResponse.json({ ok: true });
+        }
         await rec.session.steer(text, images);
         return NextResponse.json({ ok: true });
       }
@@ -463,6 +482,11 @@ export async function POST(
           );
         }
         const images = parseImages(body.images);
+        if (isCodeWizAgent(rec)) {
+          void images;
+          await promptCodeWizAgent(rec, text);
+          return NextResponse.json({ ok: true });
+        }
         await rec.session.followUp(text, images);
         return NextResponse.json({ ok: true });
       }
@@ -585,7 +609,8 @@ export async function POST(
         pushProgressEvent(rec, progress);
         await abortWorkflowsForParent(id);
         await abortSubagentsForParent(id);
-        await rec.session.abort();
+        if (isCodeWizAgent(rec)) await abortCodeWizAgent(rec);
+        else await rec.session.abort();
         // SDK 不一定会再送 agent_end（底层 stream 已被拆）。为避免 sidebar 黄点
         // 一直亮着，这里主动将 record.isStreaming 扯低。getRunningSessionFiles 下一
         // 次被 GET /api/sessions 调用时就会不再含该 sessionFile。
@@ -616,6 +641,54 @@ export async function POST(
           return NextResponse.json(
             { error: "provider and modelId required" },
             { status: 400 }
+          );
+        }
+        if (provider === CODEWIZ_CC_PROVIDER_ID) {
+          const model = CODEWIZ_CC_MODELS.find((item) => item.id === modelId);
+          if (!model) {
+            return NextResponse.json(
+              { error: `model not found: ${provider}/${modelId}` },
+              { status: 404 }
+            );
+          }
+          if (!isCodeWizAgent(rec)) {
+            return NextResponse.json(
+              {
+                error:
+                  "自研 Coding 助手使用本机 CLI 运行时。请新建会话后再从 API 模型切换到自研 Coding 助手。",
+              },
+              { status: 409 }
+            );
+          }
+          const nextModel = {
+            provider: CODEWIZ_CC_PROVIDER_ID,
+            id: model.id,
+            name: model.name,
+            api: "codewiz-cli",
+            baseUrl: "local-cli",
+            reasoning: true,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 200000,
+            maxTokens: 64000,
+          };
+          await rec.session.setModel(nextModel as never);
+          return NextResponse.json({
+            ok: true,
+            model: {
+              provider: nextModel.provider,
+              id: nextModel.id,
+              name: nextModel.name,
+            },
+          });
+        }
+        if (isCodeWizAgent(rec)) {
+          return NextResponse.json(
+            {
+              error:
+                "自研 Coding 助手使用本机 CLI 运行时。请新建会话后再切换到 API 模型。",
+            },
+            { status: 409 }
           );
         }
         const mr = getModelRegistry();

@@ -15,12 +15,13 @@
  *
  * 写入：本地状态改动会立即"标脏"，要点 Save 才 PUT 全量覆盖。
  */
-import { Settings } from "lucide-react";
+import { ArrowLeft, Settings } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ProviderConfigCard } from "./models/ProviderConfigCard";
 import {
   emptyModel,
   emptyProvider,
+  type ApiType,
   type ModelEntry,
   type ModelsConfig,
   type ProviderEntry,
@@ -29,10 +30,132 @@ import {
 
 interface Props {
   onClose: () => void;
+  onBack?: () => void;
   onChanged?: () => void;
 }
 
-export default function ModelsConfigPanel({ onClose, onChanged }: Props) {
+interface ProviderTemplate {
+  key: string;
+  name: string;
+  description: string;
+  provider: ProviderEntry;
+  model: ModelEntry;
+}
+
+const providerTemplates: ProviderTemplate[] = [
+  {
+    key: "openrouter",
+    name: "OpenRouter",
+    description: "一个 Key 接入多家模型；从 openrouter.ai 获取 API Key。",
+    provider: {
+      baseUrl: "https://openrouter.ai/api/v1",
+      api: "openai-completions",
+      apiKey: "",
+      models: [],
+    },
+    model: {
+      ...emptyModel(),
+      id: "anthropic/claude-sonnet-4",
+      name: "Claude Sonnet 4",
+      contextWindow: 200000,
+      maxTokens: 8192,
+    },
+  },
+  {
+    key: "ollama",
+    name: "Ollama / 本地模型",
+    description: "本机 Ollama OpenAI 兼容接口；API Key 可填任意非空值。",
+    provider: {
+      baseUrl: "http://127.0.0.1:11434/v1",
+      api: "openai-completions",
+      apiKey: "ollama",
+      models: [],
+    },
+    model: {
+      ...emptyModel(),
+      id: "qwen2.5-coder:7b",
+      name: "Local coder",
+      contextWindow: 32768,
+      maxTokens: 4096,
+    },
+  },
+  {
+    key: "lmstudio",
+    name: "LM Studio",
+    description: "本机 LM Studio Server；模型 ID 改成本机已加载模型。",
+    provider: {
+      baseUrl: "http://127.0.0.1:1234/v1",
+      api: "openai-completions",
+      apiKey: "lm-studio",
+      models: [],
+    },
+    model: {
+      ...emptyModel(),
+      id: "local-model",
+      name: "LM Studio local model",
+      contextWindow: 32768,
+      maxTokens: 4096,
+    },
+  },
+  {
+    key: "anthropic",
+    name: "Anthropic",
+    description: "Claude 官方 API；从 console.anthropic.com 获取 API Key。",
+    provider: {
+      baseUrl: "",
+      api: "anthropic-messages",
+      apiKey: "",
+      models: [],
+    },
+    model: {
+      ...emptyModel(),
+      id: "claude-sonnet-4-20250514",
+      name: "Claude Sonnet 4",
+      contextWindow: 200000,
+      maxTokens: 8192,
+    },
+  },
+  {
+    key: "custom-openai",
+    name: "OpenAI 兼容网关",
+    description: "公司网关、代理服务、One API、LiteLLM 等通用模板。",
+    provider: {
+      baseUrl: "https://api.example.com/v1",
+      api: "openai-completions",
+      apiKey: "",
+      models: [],
+    },
+    model: {
+      ...emptyModel(),
+      id: "model-id",
+      name: "Custom model",
+      contextWindow: 128000,
+      maxTokens: 4096,
+    },
+  },
+];
+
+function uniqueProviderKey(
+  baseKey: string,
+  providers: Record<string, ProviderEntry>
+): string {
+  if (!providers[baseKey]) return baseKey;
+  for (let i = 2; i < 100; i += 1) {
+    const next = `${baseKey}-${i}`;
+    if (!providers[next]) return next;
+  }
+  return `${baseKey}-${Date.now()}`;
+}
+
+function withTemplateModel(template: ProviderTemplate): ProviderEntry {
+  return {
+    ...template.provider,
+    api: template.provider.api as ApiType,
+    models: [{ ...template.model }],
+  };
+}
+
+export default function ModelsConfigPanel({ onClose, onBack, onChanged }: Props) {
   const [cfg, setCfg] = useState<ModelsConfig>({ providers: {} });
   const [origJson, setOrigJson] = useState<string>("");
   const [path, setPath] = useState<string | undefined>();
@@ -126,6 +249,23 @@ export default function ModelsConfigPanel({ onClose, onChanged }: Props) {
     setNewProvName("");
     setAddingProvider(false);
   }, [newProvName, cfg.providers]);
+
+  const addProviderFromTemplate = useCallback(
+    (template: ProviderTemplate) => {
+      const key = uniqueProviderKey(template.key, cfg.providers);
+      setCfg((c) => ({
+        providers: {
+          ...c.providers,
+          [key]: withTemplateModel(template),
+        },
+      }));
+      setExpanded((x) => ({ ...x, [key]: true }));
+      setAddingProvider(false);
+      setNewProvName("");
+      setErr(null);
+    },
+    [cfg.providers]
+  );
 
   const removeProvider = useCallback((key: string) => {
     setCfg((c) => {
@@ -245,7 +385,6 @@ export default function ModelsConfigPanel({ onClose, onChanged }: Props) {
   );
 
   const providerKeys = Object.keys(cfg.providers).sort();
-
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -266,6 +405,18 @@ export default function ModelsConfigPanel({ onClose, onChanged }: Props) {
           style={{ borderColor: "var(--border-soft)" }}
         >
           <span className="text-sm font-semibold inline-flex items-center gap-1.5">
+            {onBack && (
+              <button
+                type="button"
+                onClick={onBack}
+                className="mr-1 inline-flex h-6 w-6 items-center justify-center rounded border hover:opacity-80"
+                style={{ borderColor: "var(--border)" }}
+                aria-label="返回上一级"
+                title="返回上一级"
+              >
+                <ArrowLeft size={13} />
+              </button>
+            )}
             <Settings size={14} />
             自定义模型配置
           </span>
@@ -314,7 +465,62 @@ export default function ModelsConfigPanel({ onClose, onChanged }: Props) {
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2">
+        <div className="flex-1 overflow-y-auto px-3 py-2 space-y-3">
+          <section
+            className="rounded-md border p-3"
+            style={{
+              borderColor: "var(--border-soft)",
+              background: "var(--bg-panel-2)",
+            }}
+          >
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <div className="text-xs font-medium">推荐：从预设开始</div>
+                <p
+                  className="mt-1 text-token-xs leading-5"
+                  style={{ color: "var(--fg-faint)" }}
+                >
+                  模型 API 资源会写入 models.json，供 Diga/Cowork 在当前产品内直接调用。
+                  公司 Claude 3P 与自研 Coding 助手已放在开始向导里单独配置。
+                </p>
+              </div>
+            </div>
+            <div
+              className="mt-3 text-token-xs font-medium"
+              style={{ color: "var(--fg-muted)" }}
+            >
+              通用与本地端点
+            </div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              {providerTemplates.map((template) => (
+                <button
+                  key={template.key}
+                  type="button"
+                  onClick={() => addProviderFromTemplate(template)}
+                  className="rounded border px-3 py-2 text-left transition-colors hover:bg-[color:var(--bg-hover)]"
+                  style={{ borderColor: "var(--border)" }}
+                >
+                  <span className="block text-xs font-medium">
+                    {template.name}
+                  </span>
+                  <span
+                    className="mt-1 block text-token-xs leading-5"
+                    style={{ color: "var(--fg-faint)" }}
+                  >
+                    {template.description}
+                  </span>
+                  <span
+                    className="mt-1 block truncate font-mono text-token-xs"
+                    style={{ color: "var(--fg-muted)" }}
+                  >
+                    {template.provider.baseUrl || "(官方默认地址)"} ·{" "}
+                    {template.model.id}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+
           {providerKeys.length === 0 && !loading && (
             <div
               className="text-xs text-center py-8"

@@ -1,0 +1,22 @@
+Diga Agent 安装前必读
+
+当前 Diga Agent 的 DMG 还没有 Apple 开发者签名。
+如果你直接把 App 拖进 Applications 后打开，macOS 可能会提示：
+
+  “Diga Agent”已损坏，无法打开
+
+这不是安装包真的损坏，而是 macOS Gatekeeper 对未签名应用加了 quarantine 标记。
+
+推荐安装方式：
+
+1. 打开这个 DMG。
+2. 双击 “2-一键安装并打开.command”。
+3. 系统打开终端后，会自动复制 Diga Agent 到 Applications，并移除 quarantine 标记。
+4. 脚本完成后会自动打开 Diga Agent。
+
+如果你已经手动拖入 Applications，但打不开，也可以在终端执行：
+
+  xattr -dr com.apple.quarantine "/Applications/Diga Agent.app"
+
+然后再打开 Diga Agent。
+

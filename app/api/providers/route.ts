@@ -7,7 +7,12 @@
  * 前端用这个数据画 provider/model 二级选择器。
  */
 import { NextResponse } from "next/server";
-import { getModelRegistry } from "@/lib/agent-registry";
+import {
+  CODEWIZ_CC_MODELS,
+  CODEWIZ_CC_PROVIDER_ID,
+  getModelRegistry,
+} from "@/lib/agent-registry";
+import { detectCodeWizStatus } from "@/lib/codewiz-cc/status";
 import { pickDefaultProviderModel } from "@/lib/default-model";
 import { assertRemoteAuth } from "@/lib/remote/auth";
 
@@ -66,6 +71,24 @@ export async function GET(req: Request) {
         reasoning: m.reasoning,
         contextWindow: m.contextWindow,
         maxTokens: m.maxTokens,
+      });
+    }
+
+    const codewiz = await detectCodeWizStatus();
+    if (codewiz.installed && codewiz.tokenPresent) {
+      buckets.set(CODEWIZ_CC_PROVIDER_ID, {
+        provider: CODEWIZ_CC_PROVIDER_ID,
+        displayName: "自研 Coding 助手",
+        hasAuth: true,
+        authSource: "local_cli_session",
+        authLabel: "本机登录缓存",
+        models: CODEWIZ_CC_MODELS.map((model) => ({
+          id: model.id,
+          name: model.name,
+          reasoning: true,
+          contextWindow: 200000,
+          maxTokens: 64000,
+        })),
       });
     }
 
