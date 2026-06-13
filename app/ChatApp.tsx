@@ -999,6 +999,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     setSystemPromptText,
     closeSystemPrompt,
   } = useChatModalsState();
+  const [providerSetupChild, setProviderSetupChild] = useState<
+    "auth" | "models" | null
+  >(null);
   /** RFC-2 Phase A3：Budget 命中后由 useBudgetEnforcer 设置；非 null 时弹 BudgetExceededModal */
   const [budgetPausedTrigger, setBudgetPausedTrigger] =
     useState<BudgetTrigger | null>(null);
@@ -2493,6 +2496,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const onChangeModel = useCallback(
     async (provider: string, mid: string) => {
       const ownerKey = activeKeyRef.current;
+      const prevProviderId = providerId;
+      const prevModelId = modelId;
       setProviderId(provider);
       setModelId(mid);
       if (agentId) {
@@ -2516,10 +2521,23 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
               : {}),
           });
           void data;
-        } catch {}
+        } catch (e) {
+          setProviderId(prevProviderId);
+          setModelId(prevModelId);
+          setError(userFacingMessage(e, { context: "settings" }));
+        }
       }
     },
-    [activeKeyRef, agentId, agentAction, setModelId, setProviderId, updateRunner]
+    [
+      activeKeyRef,
+      agentId,
+      agentAction,
+      modelId,
+      providerId,
+      setModelId,
+      setProviderId,
+      updateRunner,
+    ]
   );
 
   // ===== Fork 模块（RFC-1 阶段 C1，已抽到 useForkable hook） =====
@@ -2694,8 +2712,12 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                 .catch((e) => setError(userFacingMessage(e)));
             }
           }}
-          onOpenProviderSetup={() => setShowProviderSetup(true)}
+          onOpenProviderSetup={() => {
+            setProviderSetupChild(null);
+            setShowProviderSetup(true);
+          }}
           onOpenAuth={() => {
+            setProviderSetupChild(null);
             openAuth();
           }}
           onOpenSettings={(section) => {
@@ -2824,8 +2846,18 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           modelId={modelId}
           currentProvider={currentProvider ?? null}
           onChangeModel={onChangeModel}
-          onOpenAuth={openAuth}
-          onOpenModelsConfig={() => setShowModelsConfig(true)}
+          onOpenAuth={(provider) => {
+            setProviderSetupChild(null);
+            openAuth(provider);
+          }}
+          onOpenModelsConfig={() => {
+            setProviderSetupChild(null);
+            setShowModelsConfig(true);
+          }}
+          onOpenProviderSetup={() => {
+            setProviderSetupChild(null);
+            setShowProviderSetup(true);
+          }}
           supportsThinking={supportsThinking}
           thinkingLevel={thinkingLevel}
           availableThinkingLevels={availableThinkingLevels}
@@ -2917,6 +2949,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           showAuth,
           authInitialProvider,
           showModelsConfig,
+          providerSetupChild,
           showSystemPrompt,
           systemPromptText,
           showBranches,
@@ -2937,14 +2970,39 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         }}
         onCloseSkills={toggleSkills}
         onCloseTools={toggleTools}
-        onCloseProviderSetup={() => setShowProviderSetup(false)}
+        onCloseProviderSetup={() => {
+          setProviderSetupChild(null);
+          setShowProviderSetup(false);
+        }}
         onProviderSetupOpenAuth={(provider) => {
+          setProviderSetupChild("auth");
+          setShowProviderSetup(false);
           openAuth(provider);
         }}
-        onProviderSetupOpenModelsConfig={() => setShowModelsConfig(true)}
-        onCloseAuth={closeAuth}
+        onProviderSetupOpenModelsConfig={() => {
+          setProviderSetupChild("models");
+          setShowProviderSetup(false);
+          setShowModelsConfig(true);
+        }}
+        onCloseAuth={() => {
+          setProviderSetupChild(null);
+          closeAuth();
+        }}
+        onBackFromAuth={() => {
+          closeAuth();
+          setProviderSetupChild(null);
+          setShowProviderSetup(true);
+        }}
         onAuthChanged={() => reloadProviders(false)}
-        onCloseModelsConfig={() => setShowModelsConfig(false)}
+        onCloseModelsConfig={() => {
+          setProviderSetupChild(null);
+          setShowModelsConfig(false);
+        }}
+        onBackFromModelsConfig={() => {
+          setShowModelsConfig(false);
+          setProviderSetupChild(null);
+          setShowProviderSetup(true);
+        }}
         onModelsConfigChanged={() => reloadProviders(false)}
         onCloseSystemPrompt={closeSystemPrompt}
         onCloseBranches={() => setShowBranches(false)}

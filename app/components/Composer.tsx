@@ -136,6 +136,7 @@ export interface ComposerProps {
   onChangeModel: (providerId: string, modelId: string) => void;
   onOpenAuth: (provider?: string) => void;
   onOpenModelsConfig: () => void;
+  onOpenProviderSetup: () => void;
   supportsThinking: boolean;
   thinkingLevel: ThinkingLevel;
   availableThinkingLevels: ThinkingLevel[];
@@ -194,6 +195,7 @@ export function Composer(props: ComposerProps) {
     onChangeModel,
     onOpenAuth,
     onOpenModelsConfig,
+    onOpenProviderSetup,
     supportsThinking,
     thinkingLevel,
     availableThinkingLevels,
@@ -482,6 +484,7 @@ export function Composer(props: ComposerProps) {
             blocker={composerBlocker}
             onOpenAuth={onOpenAuth}
             onOpenModelsConfig={onOpenModelsConfig}
+            onOpenProviderSetup={onOpenProviderSetup}
           />
         )}
         {/* 卡片：textarea + 内嵌 Send */}
@@ -922,7 +925,7 @@ type ComposerBlocker =
       blocking: true;
       title: string;
       detail: string;
-      action: "models";
+      action: "setup";
       actionLabel: string;
     }
   | {
@@ -979,8 +982,8 @@ function getComposerBlocker({
       kind: "no-provider",
       blocking: true,
       title: "还不能开始：没有可用模型",
-      detail: "需要先配置 provider 和默认模型，Send 才会启用。",
-      action: "models",
+      detail: "先完成一次模型接入；可以复用本机已有账号、填写 API Key，或添加本地/自定义端点。",
+      action: "setup",
       actionLabel: "配置模型",
     };
   }
@@ -1019,10 +1022,12 @@ function ComposerReadinessBar({
   blocker,
   onOpenAuth,
   onOpenModelsConfig,
+  onOpenProviderSetup,
 }: {
   blocker: ComposerBlocker;
   onOpenAuth: (provider?: string) => void;
   onOpenModelsConfig: () => void;
+  onOpenProviderSetup: () => void;
 }) {
   const tone = blocker.blocking ? "var(--color-warning)" : "var(--color-success)";
   return (
@@ -1053,6 +1058,8 @@ function ComposerReadinessBar({
           onClick={() =>
             blocker.action === "auth"
               ? onOpenAuth(blocker.kind === "no-auth" ? blocker.provider : undefined)
+              : blocker.action === "setup"
+                ? onOpenProviderSetup()
               : onOpenModelsConfig()
           }
           className="shrink-0 rounded border px-2 py-1 text-token-xs hover:bg-[color:var(--bg-hover)]"

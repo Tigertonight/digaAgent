@@ -5,6 +5,7 @@ import {
   Anthropic,
   Claude,
   ClaudeCode,
+  Codex,
   Bedrock,
   Google,
   Gemini,
@@ -34,16 +35,58 @@ import {
   HuggingFace,
 } from "@lobehub/icons";
 
+function CompanyIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg
+      aria-hidden="true"
+      role="img"
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M4 20V5.8c0-.9.7-1.6 1.6-1.6h6.8c.9 0 1.6.7 1.6 1.6V20"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M14 9h4.4c.9 0 1.6.7 1.6 1.6V20M2.8 20h18.4"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M7.2 8h3.6M7.2 11.5h3.6M7.2 15h3.6M16.7 13.2h1"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 /**
  * 把 provider id（来自 SDK / models.json）映射到 @lobehub/icons 的 brand icon。
  * 找不到就返回 null，调用方应回退到首字母占位。
  */
 const MAP: Record<string, React.ComponentType<{ size?: number }>> = {
   openai: OpenAI,
-  "openai-codex": OpenAI,
+  "openai-codex": Codex,
+  codex: Codex,
+  rednote: CompanyIcon,
+  xhs: CompanyIcon,
+  "rednote-claude-3p": CompanyIcon,
+  "rednote-runway-local": CompanyIcon,
   anthropic: Anthropic,
   claude: Claude,
   "claude-code": ClaudeCode,
+  "codewiz-cc": ClaudeCode,
+  codewiz: ClaudeCode,
   "amazon-bedrock": Bedrock,
   bedrock: Bedrock,
   google: Google,

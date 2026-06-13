@@ -4,6 +4,11 @@ export const DEFAULT_MODEL_STORAGE_VERSION = `${DEFAULT_PROVIDER_ID}:${DEFAULT_M
 
 export const CURATED_MODEL_OPTIONS = [
   {
+    providerId: "codewiz-cc",
+    modelId: "codewiz-cc",
+    label: "自研 Coding 助手",
+  },
+  {
     providerId: "openai-codex",
     modelId: "gpt-5.5",
     label: "GPT-5.5",
@@ -78,7 +83,10 @@ export function curateProviderModels<
   TModel extends { id: string },
   TProvider extends DefaultProviderLike<TModel>,
 >(providers: TProvider[]): TProvider[] {
+  const codewiz = providers.find((item) => item.provider === "codewiz-cc");
+  const codewizProviders = codewiz ? [codewiz] : [];
   return CURATED_MODEL_OPTIONS.flatMap((option) => {
+    if (option.providerId === "codewiz-cc") return [];
     const provider = providers.find((item) => item.provider === option.providerId);
     const model = provider?.models.find((item) => item.id === option.modelId);
     if (!provider || !model) return [];
@@ -88,5 +96,5 @@ export function curateProviderModels<
         models: [{ ...model, name: option.label }],
       },
     ] as TProvider[];
-  });
+  }).concat(codewizProviders);
 }

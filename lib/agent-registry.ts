@@ -22,6 +22,7 @@ import {
   getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import os from "node:os";
 import { createCollabExtension } from "./collab/extension";
 import { createClarificationExtension } from "./clarification/extension";
@@ -137,6 +138,36 @@ export type RingBufferEvent =
   | GoalUpdatedEvent
   | ProgressUpdatedEvent;
 
+export const CODEWIZ_CC_PROVIDER_ID = "codewiz-cc";
+export const CODEWIZ_CC_MODEL_ID = "codewiz-cc";
+export const CODEWIZ_CC_MODELS = [
+  {
+    id: CODEWIZ_CC_MODEL_ID,
+    name: "自研 Coding 助手 默认模型",
+    cliModel: undefined,
+  },
+  {
+    id: "opus",
+    name: "Claude Opus (自研助手)",
+    cliModel: "opus",
+  },
+  {
+    id: "sonnet",
+    name: "Claude Sonnet (自研助手)",
+    cliModel: "sonnet",
+  },
+  {
+    id: "claude-opus-4-8",
+    name: "Claude Opus 4.8 (自研助手)",
+    cliModel: "claude-opus-4-8",
+  },
+  {
+    id: "claude-sonnet-4-5",
+    name: "Claude Sonnet 4.5 (自研助手)",
+    cliModel: "claude-sonnet-4-5",
+  },
+] as const;
+
 export interface AgentRecord {
   id: string;
   session: AgentSession;
@@ -165,6 +196,11 @@ export interface AgentRecord {
   /** local shim 可能给完整 assistant 内容但漏掉 done/end，用 watchdog 兜底收尾 */
   finishWatchdog: ReturnType<typeof setTimeout> | null;
   pendingFinishMessage: unknown | null;
+  external?: {
+    kind: "codewiz-cc";
+    child: ChildProcessWithoutNullStreams | null;
+    emittedText: string;
+  };
 }
 
 const MAX_EVENTS_PER_AGENT = 5000;
@@ -524,11 +560,312 @@ export interface CreateOptions {
   mcpServers?: string[];
 }
 
+export function iscodewizModelId(modelId: string): boolean {
+  return CODEWIZ_CC_MODELS.some((model) => model.id === modelId);
+}
+
+function codewizModel(modelId = CODEWIZ_CC_MODEL_ID) {
+  const option =
+    CODEWIZ_CC_MODELS.find((model) => model.id === modelId) ??
+    CODEWIZ_CC_MODELS[0];
+  return {
+    provider: CODEWIZ_CC_PROVIDER_ID,
+    id: option.id,
+    name: option.name,
+    api: "codewiz-cli",
+    baseUrl: "local-cli",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200000,
+    maxTokens: 64000,
+  };
+}
+
+function codewizCliModelArg(modelId: string): string | undefined {
+  return CODEWIZ_CC_MODELS.find((model) => model.id === modelId)?.cliModel;
+}
+
+function createCodeWizSession(sessionId: string, modelId: string) {
+  const session = {
+    sessionId,
+    sessionFile: undefined,
+    model: codewizModel(modelId),
+    thinkingLevel: "medium",
+    pendingMessageCount: 0,
+    systemPrompt: "",
+    prompt: async () => undefined,
+    followUp: async () => undefined,
+    steer: async () => undefined,
+    abort: async () => undefined,
+    abortCompaction: () => undefined,
+    compact: async () => undefined,
+    dispose: () => undefined,
+    subscribe: () => () => undefined,
+    supportsThinking: () => false,
+    getAvailableThinkingLevels: () => [],
+    getAllTools: () => [],
+    getActiveToolNames: () => [],
+    setActiveToolsByName: () => undefined,
+    setModel: (nextModel: ReturnType<typeof codewizModel>) => {
+      session.model = nextModel;
+    },
+    getSessionStats: () => ({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cost: 0,
+    }),
+    getContextUsage: () => null,
+    getUserMessagesForForking: () => [],
+    sessionManager: {
+      getTree: () => [],
+      getLeafId: () => null,
+    },
+  };
+  return session as unknown as AgentSession;
+}
+
+function codewizMessage(
+  role: "user" | "assistant",
+  text: string,
+  responseId?: string,
+  modelId = CODEWIZ_CC_MODEL_ID
+) {
+  return {
+    role,
+    responseId,
+    provider: CODEWIZ_CC_PROVIDER_ID,
+    model: modelId,
+    api: "codewiz-cli",
+    timestamp: Date.now(),
+    content: text
+      ? [
+          {
+            type: "text",
+            text,
+          },
+        ]
+      : [],
+  };
+}
+
+function emitCodewizText(rec: AgentRecord, responseId: string, text: string) {
+  if (!text) return;
+  const modelId = rec.session.model?.id ?? CODEWIZ_CC_MODEL_ID;
+  pushAgentEvent(rec, {
+    type: "message_update",
+    assistantMessageEvent: {
+      type: "text_delta",
+      delta: text,
+      partial: {
+        responseId,
+      },
+    },
+    message: codewizMessage("assistant", "", responseId, modelId),
+  } as RingBufferEvent);
+}
+
+function extractCodewizText(obj: unknown): string {
+  if (!obj || typeof obj !== "object") return "";
+  const item = obj as {
+    type?: unknown;
+    delta?: unknown;
+    text?: unknown;
+    result?: unknown;
+    message?: { content?: Array<{ type?: string; text?: string }> };
+    content?: Array<{ type?: string; text?: string }>;
+  };
+  if (typeof item.delta === "string") return item.delta;
+  if (typeof item.text === "string") return item.text;
+  const blocks = item.message?.content ?? item.content;
+  if (Array.isArray(blocks)) {
+    return blocks
+      .filter((block) => block.type === "text" && typeof block.text === "string")
+      .map((block) => block.text)
+      .join("");
+  }
+  if (item.type === "result" && typeof item.result === "string") {
+    return item.result;
+  }
+  return "";
+}
+
+function emitCodewizJsonLine(
+  rec: AgentRecord,
+  responseId: string,
+  line: string
+) {
+  const trimmed = line.trim();
+  if (!trimmed) return;
+  try {
+    const obj = JSON.parse(trimmed);
+    const text = extractCodewizText(obj);
+    if (!text) return;
+    const emitted = rec.external?.emittedText ?? "";
+    const delta = text.startsWith(emitted) ? text.slice(emitted.length) : text;
+    if (rec.external) rec.external.emittedText = emitted + delta;
+    emitCodewizText(rec, responseId, delta);
+  } catch {
+    emitCodewizText(rec, responseId, line.endsWith("\n") ? line : `${line}\n`);
+  }
+}
+
+export function isCodeWizAgent(rec: AgentRecord): boolean {
+  return rec.external?.kind === "codewiz-cc";
+}
+
+export async function promptCodeWizAgent(
+  rec: AgentRecord,
+  text: string
+): Promise<void> {
+  if (rec.external?.child) {
+    throw new Error("自研 Coding 助手正在运行，请等待完成或先中止当前任务。");
+  }
+  const responseId = randomUUID();
+  const modelId = rec.session.model?.id ?? CODEWIZ_CC_MODEL_ID;
+  rec.external = {
+    kind: "codewiz-cc",
+    child: null,
+    emittedText: "",
+  };
+  rec.isStreaming = true;
+  rec.updatedAt = Date.now();
+  pushAgentEvent(rec, { type: "agent_start" } as RingBufferEvent);
+  pushAgentEvent(rec, {
+    type: "message_start",
+    message: codewizMessage("user", text, undefined, modelId),
+  } as RingBufferEvent);
+  pushAgentEvent(rec, {
+    type: "message_start",
+    message: codewizMessage("assistant", "", responseId, modelId),
+  } as RingBufferEvent);
+
+  const modelArg = codewizCliModelArg(modelId);
+  const args = [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--include-partial-messages",
+    "--permission-mode",
+    "default",
+    ...(modelArg ? ["--model", modelArg] : []),
+    text,
+  ];
+  const child = spawn("codewiz-cc", args, {
+    cwd: rec.cwd,
+    env: {
+      ...process.env,
+      FORCE_COLOR: "0",
+      NO_COLOR: "1",
+    },
+  });
+  rec.external.child = child;
+  child.stdin.end();
+
+  let stdoutBuffer = "";
+  child.stdout.on("data", (chunk: Buffer) => {
+    stdoutBuffer += chunk.toString("utf8");
+    let idx = stdoutBuffer.indexOf("\n");
+    while (idx >= 0) {
+      const line = stdoutBuffer.slice(0, idx);
+      stdoutBuffer = stdoutBuffer.slice(idx + 1);
+      emitCodewizJsonLine(rec, responseId, line);
+      idx = stdoutBuffer.indexOf("\n");
+    }
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    const textChunk = chunk.toString("utf8");
+    if (textChunk.trim()) emitCodewizText(rec, responseId, textChunk);
+  });
+
+  child.on("close", (code, signal) => {
+    if (stdoutBuffer.trim()) emitCodewizJsonLine(rec, responseId, stdoutBuffer);
+    stdoutBuffer = "";
+    if (code && code !== 0 && signal !== "SIGTERM") {
+      emitCodewizText(
+        rec,
+        responseId,
+        `\n\n[自研 Coding 助手退出，代码 ${code}]`
+      );
+    }
+    pushAgentEvent(rec, {
+      type: "message_end",
+      message: {
+        ...codewizMessage("assistant", "", responseId, modelId),
+        stopReason: code === 0 ? "stop" : "error",
+      },
+    } as RingBufferEvent);
+    rec.isStreaming = false;
+    rec.updatedAt = Date.now();
+    if (rec.external) rec.external.child = null;
+    pushAgentEvent(rec, { type: "agent_end" } as RingBufferEvent);
+  });
+  child.on("error", (err) => {
+    emitCodewizText(rec, responseId, `自研 Coding 助手启动失败：${err.message}`);
+  });
+}
+
+export async function abortCodeWizAgent(rec: AgentRecord): Promise<void> {
+  if (rec.external?.child) {
+    rec.external.child.kill("SIGTERM");
+    rec.external.child = null;
+  }
+  if (rec.isStreaming) {
+    rec.isStreaming = false;
+    rec.updatedAt = Date.now();
+    pushAgentEvent(rec, { type: "agent_end" } as RingBufferEvent);
+  }
+}
+
+async function createCodeWizAgent(opts: CreateOptions): Promise<{
+  id: string;
+  sessionId: string;
+  sessionFile: string | undefined;
+}> {
+  const id = randomUUID();
+  const sessionId = randomUUID();
+  const session = createCodeWizSession(sessionId, opts.modelId);
+  const record: AgentRecord = {
+    id,
+    session,
+    cwd: opts.cwd,
+    parentAgentId: opts.parentAgentId,
+    childRole: opts.childRole,
+    hidden: opts.hidden,
+    events: new Array(MAX_EVENTS_PER_AGENT),
+    nextSeq: 0,
+    listeners: new Set(),
+    unsubscribe: () => {},
+    isStreaming: false,
+    updatedAt: Date.now(),
+    recentClientRequests: new Map(),
+    finishWatchdog: null,
+    pendingFinishMessage: null,
+    external: {
+      kind: "codewiz-cc",
+      child: null,
+      emittedText: "",
+    },
+  };
+  reg.agents.set(id, record);
+  return { id, sessionId, sessionFile: undefined };
+}
+
 export async function createAgent(opts: CreateOptions): Promise<{
   id: string;
   sessionId: string;
   sessionFile: string | undefined;
 }> {
+  if (
+    opts.provider === CODEWIZ_CC_PROVIDER_ID &&
+    iscodewizModelId(opts.modelId)
+  ) {
+    return createCodeWizAgent(opts);
+  }
+
   const mr = getModelRegistry();
   const model = mr.find(opts.provider, opts.modelId);
   if (!model) {

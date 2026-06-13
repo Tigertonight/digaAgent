@@ -29,7 +29,7 @@ export interface ProviderEntry {
   api?: ApiType;
   apiKey?: string;
   headers?: Record<string, string>;
-  authHeader?: string;
+  authHeader?: boolean;
   models?: ModelEntry[];
   [k: string]: unknown;
 }

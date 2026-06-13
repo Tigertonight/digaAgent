@@ -41,7 +41,8 @@ base("cowork ux: composer explains why send is blocked", async ({ page }) => {
   await page.locator("textarea").first().fill("hello");
   await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
   await page.getByRole("button", { name: "配置模型" }).click();
-  await expect(page.getByText("自定义模型配置")).toBeVisible();
+  await expect(page.getByText("开始使用 Diga Agent")).toBeVisible();
+  await expect(page.getByText("本地 / 自定义端点")).toBeVisible();
 });
 
 async function activeAgentId(page: import("@playwright/test").Page): Promise<string> {

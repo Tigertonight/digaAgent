@@ -8,7 +8,7 @@
  * - OAuth 标记 supportsOAuth=true 的 provider 支持在此处打开授权登录
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { KeyRound } from "lucide-react";
+import { ArrowLeft, KeyRound } from "lucide-react";
 import {
   AuthProviderRow,
   type AuthTestResult,
@@ -19,12 +19,18 @@ import { userFacingMessage } from "@/lib/user-facing-error";
 
 interface Props {
   onClose: () => void;
+  onBack?: () => void;
   initialProvider?: string | null;
   /** 任何变更后调用，方便父组件刷新 providers/models */
   onChanged?: () => void;
 }
 
-export default function AuthPanel({ onClose, initialProvider, onChanged }: Props) {
+export default function AuthPanel({
+  onClose,
+  onBack,
+  initialProvider,
+  onChanged,
+}: Props) {
   const {
     authData: data,
     authProviders,
@@ -201,6 +207,18 @@ export default function AuthPanel({ onClose, initialProvider, onChanged }: Props
           style={{ borderColor: "var(--border-soft)" }}
         >
           <span className="text-sm font-semibold inline-flex items-center gap-1.5">
+            {onBack && (
+              <button
+                type="button"
+                onClick={onBack}
+                className="mr-1 inline-flex h-6 w-6 items-center justify-center rounded border hover:opacity-80"
+                style={{ borderColor: "var(--border)" }}
+                aria-label="返回上一级"
+                title="返回上一级"
+              >
+                <ArrowLeft size={13} />
+              </button>
+            )}
             <KeyRound size={14} />
             Auth
           </span>
