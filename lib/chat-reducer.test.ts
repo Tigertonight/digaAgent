@@ -595,7 +595,7 @@ describe("applyEvent — shim duplicate completion guards", () => {
     const replay = {
       ...first,
       responseId: "msg-late-id",
-      provider: "rednote-runway-local",
+      provider: "local-runway",
     };
 
     s = applyEvent(s, { type: "message_start", message: first });
@@ -611,7 +611,7 @@ describe("applyEvent — shim duplicate completion guards", () => {
     const startMessage = {
       role: "assistant",
       responseId: "msg-usage",
-      provider: "rednote-runway-local",
+      provider: "local-runway",
       model: "claude-opus-4-7",
       api: "openai-completions",
       content: [{ type: "text", text: "answer" }],
@@ -633,7 +633,7 @@ describe("applyEvent — shim duplicate completion guards", () => {
     s = applyEvent(s, { type: "message_end", message: endMessage });
 
     expect(s.messages[0].meta).toEqual({
-      provider: "rednote-runway-local",
+      provider: "local-runway",
       model: "claude-opus-4-7",
       api: "openai-completions",
       responseId: "msg-usage",

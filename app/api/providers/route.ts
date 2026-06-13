@@ -8,11 +8,11 @@
  */
 import { NextResponse } from "next/server";
 import {
-  CODEWIZ_CC_MODELS,
-  CODEWIZ_CC_PROVIDER_ID,
+  LOCAL_CODING_ASSISTANT_MODELS,
+  LOCAL_CODING_ASSISTANT_PROVIDER_ID,
   getModelRegistry,
 } from "@/lib/agent-registry";
-import { detectCodeWizStatus } from "@/lib/codewiz-cc/status";
+import { detectLocalCodingAssistantStatus } from "@/lib/local-coding-assistant/status";
 import { pickDefaultProviderModel } from "@/lib/default-model";
 import { assertRemoteAuth } from "@/lib/remote/auth";
 
@@ -74,15 +74,15 @@ export async function GET(req: Request) {
       });
     }
 
-    const codewiz = await detectCodeWizStatus();
-    if (codewiz.installed && codewiz.tokenPresent) {
-      buckets.set(CODEWIZ_CC_PROVIDER_ID, {
-        provider: CODEWIZ_CC_PROVIDER_ID,
+    const localCodingAssistant = await detectLocalCodingAssistantStatus();
+    if (localCodingAssistant.installed && localCodingAssistant.tokenPresent) {
+      buckets.set(LOCAL_CODING_ASSISTANT_PROVIDER_ID, {
+        provider: LOCAL_CODING_ASSISTANT_PROVIDER_ID,
         displayName: "自研 Coding 助手",
         hasAuth: true,
         authSource: "local_cli_session",
         authLabel: "本机登录缓存",
-        models: CODEWIZ_CC_MODELS.map((model) => ({
+        models: LOCAL_CODING_ASSISTANT_MODELS.map((model) => ({
           id: model.id,
           name: model.name,
           reasoning: true,

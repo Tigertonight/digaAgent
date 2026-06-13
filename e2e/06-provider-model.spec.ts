@@ -28,8 +28,8 @@ const providersResponse = {
       ],
     },
     {
-      provider: "rednote-runway-local",
-      displayName: "rednote-runway-local",
+      provider: "local-runway",
+      displayName: "local-runway",
       hasAuth: true,
       authSource: "models_json_key",
       authLabel: "models.json",
@@ -94,7 +94,7 @@ test("provider switch selects the provider's first model before set_model", asyn
   await expect(selects.nth(0)).toHaveValue("openai-codex");
   await expect(selects.nth(1)).toHaveValue("gpt-5.5");
 
-  await selects.nth(0).selectOption("rednote-runway-local");
+  await selects.nth(0).selectOption("local-runway");
 
   await expect(selects.nth(1)).toHaveValue(
     "claude-opus-4-7"
@@ -103,7 +103,7 @@ test("provider switch selects the provider's first model before set_model", asyn
     .poll(() => setModelBody)
     .toEqual({
       type: "set_model",
-      provider: "rednote-runway-local",
+      provider: "local-runway",
       modelId: "claude-opus-4-7",
     });
   await expect(page.getByText("provider and modelId required")).toBeHidden();
@@ -115,7 +115,7 @@ test("provider/model selection resets stale localStorage to curated default", as
   await installSseMock(page);
   await installApiFixtures(page, { providersResponse });
   await page.addInitScript(() => {
-    localStorage.setItem("pi-provider-id", "rednote-runway-local");
+    localStorage.setItem("pi-provider-id", "local-runway");
     localStorage.setItem("pi-model-id", "gpt-5.2");
   });
 

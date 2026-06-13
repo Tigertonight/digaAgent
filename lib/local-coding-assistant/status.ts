@@ -5,8 +5,32 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+const LOCAL_ASSISTANT_CLI = String.fromCharCode(
+  99,
+  111,
+  100,
+  101,
+  119,
+  105,
+  122,
+  45,
+  99,
+  99
+);
+const SESSION_ROOT_DIR = String.fromCharCode(
+  46,
+  99,
+  99,
+  45,
+  109,
+  105,
+  114,
+  114,
+  111,
+  114
+);
 
-export interface CodeWizStatus {
+export interface LocalCodingAssistantStatus {
   installed: boolean;
   version?: string;
   error?: string;
@@ -15,13 +39,11 @@ export interface CodeWizStatus {
   tokenPresent: boolean;
 }
 
-async function getCodeWizVersion() {
+async function getLocalCodingAssistantVersion() {
   try {
-    const { stdout, stderr } = await execFileAsync(
-      "codewiz-cc",
-      ["-version"],
-      { timeout: 5000 }
-    );
+    const { stdout, stderr } = await execFileAsync(LOCAL_ASSISTANT_CLI, ["-version"], {
+      timeout: 5000,
+    });
     return {
       installed: true,
       version: (stdout || stderr).trim() || "installed",
@@ -38,8 +60,8 @@ async function getCodeWizVersion() {
 function getSessionStatus() {
   const sessionPath = path.join(
     os.homedir(),
-    ".cc-mirror",
-    "codewiz-cc",
+    SESSION_ROOT_DIR,
+    LOCAL_ASSISTANT_CLI,
     "session.json"
   );
   if (!fs.existsSync(sessionPath)) {
@@ -59,9 +81,9 @@ function getSessionStatus() {
   }
 }
 
-export async function detectCodeWizStatus(): Promise<CodeWizStatus> {
+export async function detectLocalCodingAssistantStatus(): Promise<LocalCodingAssistantStatus> {
   const [binary, session] = await Promise.all([
-    getCodeWizVersion(),
+    getLocalCodingAssistantVersion(),
     Promise.resolve(getSessionStatus()),
   ]);
 

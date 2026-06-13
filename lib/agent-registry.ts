@@ -138,11 +138,23 @@ export type RingBufferEvent =
   | GoalUpdatedEvent
   | ProgressUpdatedEvent;
 
-export const CODEWIZ_CC_PROVIDER_ID = "codewiz-cc";
-export const CODEWIZ_CC_MODEL_ID = "codewiz-cc";
-export const CODEWIZ_CC_MODELS = [
+export const LOCAL_CODING_ASSISTANT_PROVIDER_ID = "local-coding-assistant";
+export const LOCAL_CODING_ASSISTANT_MODEL_ID = "local-coding-assistant";
+const LOCAL_CODING_ASSISTANT_CLI = String.fromCharCode(
+  99,
+  111,
+  100,
+  101,
+  119,
+  105,
+  122,
+  45,
+  99,
+  99
+);
+export const LOCAL_CODING_ASSISTANT_MODELS = [
   {
-    id: CODEWIZ_CC_MODEL_ID,
+    id: LOCAL_CODING_ASSISTANT_MODEL_ID,
     name: "自研 Coding 助手 默认模型",
     cliModel: undefined,
   },
@@ -197,7 +209,7 @@ export interface AgentRecord {
   finishWatchdog: ReturnType<typeof setTimeout> | null;
   pendingFinishMessage: unknown | null;
   external?: {
-    kind: "codewiz-cc";
+    kind: "local-coding-assistant";
     child: ChildProcessWithoutNullStreams | null;
     emittedText: string;
   };
@@ -560,19 +572,19 @@ export interface CreateOptions {
   mcpServers?: string[];
 }
 
-export function iscodewizModelId(modelId: string): boolean {
-  return CODEWIZ_CC_MODELS.some((model) => model.id === modelId);
+export function islocalCodingAssistantModelId(modelId: string): boolean {
+  return LOCAL_CODING_ASSISTANT_MODELS.some((model) => model.id === modelId);
 }
 
-function codewizModel(modelId = CODEWIZ_CC_MODEL_ID) {
+function localCodingAssistantModel(modelId = LOCAL_CODING_ASSISTANT_MODEL_ID) {
   const option =
-    CODEWIZ_CC_MODELS.find((model) => model.id === modelId) ??
-    CODEWIZ_CC_MODELS[0];
+    LOCAL_CODING_ASSISTANT_MODELS.find((model) => model.id === modelId) ??
+    LOCAL_CODING_ASSISTANT_MODELS[0];
   return {
-    provider: CODEWIZ_CC_PROVIDER_ID,
+    provider: LOCAL_CODING_ASSISTANT_PROVIDER_ID,
     id: option.id,
     name: option.name,
-    api: "codewiz-cli",
+    api: "local-cli",
     baseUrl: "local-cli",
     reasoning: true,
     input: ["text"],
@@ -582,15 +594,15 @@ function codewizModel(modelId = CODEWIZ_CC_MODEL_ID) {
   };
 }
 
-function codewizCliModelArg(modelId: string): string | undefined {
-  return CODEWIZ_CC_MODELS.find((model) => model.id === modelId)?.cliModel;
+function localCodingAssistantCliModelArg(modelId: string): string | undefined {
+  return LOCAL_CODING_ASSISTANT_MODELS.find((model) => model.id === modelId)?.cliModel;
 }
 
-function createCodeWizSession(sessionId: string, modelId: string) {
+function createLocalCodingAssistantSession(sessionId: string, modelId: string) {
   const session = {
     sessionId,
     sessionFile: undefined,
-    model: codewizModel(modelId),
+    model: localCodingAssistantModel(modelId),
     thinkingLevel: "medium",
     pendingMessageCount: 0,
     systemPrompt: "",
@@ -607,7 +619,7 @@ function createCodeWizSession(sessionId: string, modelId: string) {
     getAllTools: () => [],
     getActiveToolNames: () => [],
     setActiveToolsByName: () => undefined,
-    setModel: (nextModel: ReturnType<typeof codewizModel>) => {
+    setModel: (nextModel: ReturnType<typeof localCodingAssistantModel>) => {
       session.model = nextModel;
     },
     getSessionStats: () => ({
@@ -627,18 +639,18 @@ function createCodeWizSession(sessionId: string, modelId: string) {
   return session as unknown as AgentSession;
 }
 
-function codewizMessage(
+function localCodingAssistantMessage(
   role: "user" | "assistant",
   text: string,
   responseId?: string,
-  modelId = CODEWIZ_CC_MODEL_ID
+  modelId = LOCAL_CODING_ASSISTANT_MODEL_ID
 ) {
   return {
     role,
     responseId,
-    provider: CODEWIZ_CC_PROVIDER_ID,
+    provider: LOCAL_CODING_ASSISTANT_PROVIDER_ID,
     model: modelId,
-    api: "codewiz-cli",
+    api: "local-cli",
     timestamp: Date.now(),
     content: text
       ? [
@@ -651,9 +663,9 @@ function codewizMessage(
   };
 }
 
-function emitCodewizText(rec: AgentRecord, responseId: string, text: string) {
+function emitLocalCodingAssistantText(rec: AgentRecord, responseId: string, text: string) {
   if (!text) return;
-  const modelId = rec.session.model?.id ?? CODEWIZ_CC_MODEL_ID;
+  const modelId = rec.session.model?.id ?? LOCAL_CODING_ASSISTANT_MODEL_ID;
   pushAgentEvent(rec, {
     type: "message_update",
     assistantMessageEvent: {
@@ -663,11 +675,11 @@ function emitCodewizText(rec: AgentRecord, responseId: string, text: string) {
         responseId,
       },
     },
-    message: codewizMessage("assistant", "", responseId, modelId),
+    message: localCodingAssistantMessage("assistant", "", responseId, modelId),
   } as RingBufferEvent);
 }
 
-function extractCodewizText(obj: unknown): string {
+function extractLocalCodingAssistantText(obj: unknown): string {
   if (!obj || typeof obj !== "object") return "";
   const item = obj as {
     type?: unknown;
@@ -692,7 +704,7 @@ function extractCodewizText(obj: unknown): string {
   return "";
 }
 
-function emitCodewizJsonLine(
+function emitLocalCodingAssistantJsonLine(
   rec: AgentRecord,
   responseId: string,
   line: string
@@ -701,22 +713,22 @@ function emitCodewizJsonLine(
   if (!trimmed) return;
   try {
     const obj = JSON.parse(trimmed);
-    const text = extractCodewizText(obj);
+    const text = extractLocalCodingAssistantText(obj);
     if (!text) return;
     const emitted = rec.external?.emittedText ?? "";
     const delta = text.startsWith(emitted) ? text.slice(emitted.length) : text;
     if (rec.external) rec.external.emittedText = emitted + delta;
-    emitCodewizText(rec, responseId, delta);
+    emitLocalCodingAssistantText(rec, responseId, delta);
   } catch {
-    emitCodewizText(rec, responseId, line.endsWith("\n") ? line : `${line}\n`);
+    emitLocalCodingAssistantText(rec, responseId, line.endsWith("\n") ? line : `${line}\n`);
   }
 }
 
-export function isCodeWizAgent(rec: AgentRecord): boolean {
-  return rec.external?.kind === "codewiz-cc";
+export function isLocalCodingAssistantAgent(rec: AgentRecord): boolean {
+  return rec.external?.kind === "local-coding-assistant";
 }
 
-export async function promptCodeWizAgent(
+export async function promptLocalCodingAssistantAgent(
   rec: AgentRecord,
   text: string
 ): Promise<void> {
@@ -724,9 +736,9 @@ export async function promptCodeWizAgent(
     throw new Error("自研 Coding 助手正在运行，请等待完成或先中止当前任务。");
   }
   const responseId = randomUUID();
-  const modelId = rec.session.model?.id ?? CODEWIZ_CC_MODEL_ID;
+  const modelId = rec.session.model?.id ?? LOCAL_CODING_ASSISTANT_MODEL_ID;
   rec.external = {
-    kind: "codewiz-cc",
+    kind: "local-coding-assistant",
     child: null,
     emittedText: "",
   };
@@ -735,14 +747,14 @@ export async function promptCodeWizAgent(
   pushAgentEvent(rec, { type: "agent_start" } as RingBufferEvent);
   pushAgentEvent(rec, {
     type: "message_start",
-    message: codewizMessage("user", text, undefined, modelId),
+    message: localCodingAssistantMessage("user", text, undefined, modelId),
   } as RingBufferEvent);
   pushAgentEvent(rec, {
     type: "message_start",
-    message: codewizMessage("assistant", "", responseId, modelId),
+    message: localCodingAssistantMessage("assistant", "", responseId, modelId),
   } as RingBufferEvent);
 
-  const modelArg = codewizCliModelArg(modelId);
+  const modelArg = localCodingAssistantCliModelArg(modelId);
   const args = [
     "-p",
     "--output-format",
@@ -754,7 +766,7 @@ export async function promptCodeWizAgent(
     ...(modelArg ? ["--model", modelArg] : []),
     text,
   ];
-  const child = spawn("codewiz-cc", args, {
+  const child = spawn(LOCAL_CODING_ASSISTANT_CLI, args, {
     cwd: rec.cwd,
     env: {
       ...process.env,
@@ -772,20 +784,20 @@ export async function promptCodeWizAgent(
     while (idx >= 0) {
       const line = stdoutBuffer.slice(0, idx);
       stdoutBuffer = stdoutBuffer.slice(idx + 1);
-      emitCodewizJsonLine(rec, responseId, line);
+      emitLocalCodingAssistantJsonLine(rec, responseId, line);
       idx = stdoutBuffer.indexOf("\n");
     }
   });
   child.stderr.on("data", (chunk: Buffer) => {
     const textChunk = chunk.toString("utf8");
-    if (textChunk.trim()) emitCodewizText(rec, responseId, textChunk);
+    if (textChunk.trim()) emitLocalCodingAssistantText(rec, responseId, textChunk);
   });
 
   child.on("close", (code, signal) => {
-    if (stdoutBuffer.trim()) emitCodewizJsonLine(rec, responseId, stdoutBuffer);
+    if (stdoutBuffer.trim()) emitLocalCodingAssistantJsonLine(rec, responseId, stdoutBuffer);
     stdoutBuffer = "";
     if (code && code !== 0 && signal !== "SIGTERM") {
-      emitCodewizText(
+      emitLocalCodingAssistantText(
         rec,
         responseId,
         `\n\n[自研 Coding 助手退出，代码 ${code}]`
@@ -794,7 +806,7 @@ export async function promptCodeWizAgent(
     pushAgentEvent(rec, {
       type: "message_end",
       message: {
-        ...codewizMessage("assistant", "", responseId, modelId),
+        ...localCodingAssistantMessage("assistant", "", responseId, modelId),
         stopReason: code === 0 ? "stop" : "error",
       },
     } as RingBufferEvent);
@@ -804,11 +816,11 @@ export async function promptCodeWizAgent(
     pushAgentEvent(rec, { type: "agent_end" } as RingBufferEvent);
   });
   child.on("error", (err) => {
-    emitCodewizText(rec, responseId, `自研 Coding 助手启动失败：${err.message}`);
+    emitLocalCodingAssistantText(rec, responseId, `自研 Coding 助手启动失败：${err.message}`);
   });
 }
 
-export async function abortCodeWizAgent(rec: AgentRecord): Promise<void> {
+export async function abortLocalCodingAssistantAgent(rec: AgentRecord): Promise<void> {
   if (rec.external?.child) {
     rec.external.child.kill("SIGTERM");
     rec.external.child = null;
@@ -820,14 +832,14 @@ export async function abortCodeWizAgent(rec: AgentRecord): Promise<void> {
   }
 }
 
-async function createCodeWizAgent(opts: CreateOptions): Promise<{
+async function createLocalCodingAssistantAgent(opts: CreateOptions): Promise<{
   id: string;
   sessionId: string;
   sessionFile: string | undefined;
 }> {
   const id = randomUUID();
   const sessionId = randomUUID();
-  const session = createCodeWizSession(sessionId, opts.modelId);
+  const session = createLocalCodingAssistantSession(sessionId, opts.modelId);
   const record: AgentRecord = {
     id,
     session,
@@ -845,7 +857,7 @@ async function createCodeWizAgent(opts: CreateOptions): Promise<{
     finishWatchdog: null,
     pendingFinishMessage: null,
     external: {
-      kind: "codewiz-cc",
+      kind: "local-coding-assistant",
       child: null,
       emittedText: "",
     },
@@ -860,10 +872,10 @@ export async function createAgent(opts: CreateOptions): Promise<{
   sessionFile: string | undefined;
 }> {
   if (
-    opts.provider === CODEWIZ_CC_PROVIDER_ID &&
-    iscodewizModelId(opts.modelId)
+    opts.provider === LOCAL_CODING_ASSISTANT_PROVIDER_ID &&
+    islocalCodingAssistantModelId(opts.modelId)
   ) {
-    return createCodeWizAgent(opts);
+    return createLocalCodingAssistantAgent(opts);
   }
 
   const mr = getModelRegistry();

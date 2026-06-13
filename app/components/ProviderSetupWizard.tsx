@@ -22,13 +22,13 @@ interface ProviderSetupWizardProps {
 const cardBase =
   "group flex w-full items-start gap-3 rounded-md border p-3 text-left transition-colors hover:bg-[color:var(--bg-hover)]";
 const quarantineCommand = "xattr -dr com.apple.quarantine /Applications/Diga\\ Agent.app";
-const codewizNpmInstallCommand =
+const localCodingAssistantNpmInstallCommand =
   "# 请联系管理员获取公司内部 npm 源地址和包名\nnpm config set @company:registry https://npm.company.example\nnpm install -g @company/coding-assistant@latest\ncoding-assistant -version";
-const codewizScriptInstallCommand =
+const localCodingAssistantScriptInstallCommand =
   '# 请联系管理员获取公司内部一键安装脚本\ncurl -fsSL "https://example.company/coding-assistant/install.sh" | bash\ncoding-assistant -version';
-const codewizLoginCommand = "coding-assistant login --force";
+const localCodingAssistantLoginCommand = "coding-assistant login --force";
 
-interface CodeWizStatus {
+interface LocalCodingAssistantStatus {
   installed: boolean;
   version?: string;
   sessionPath: string;
@@ -45,11 +45,11 @@ export function ProviderSetupWizard({
   const { authProviders, authLoading } = useProviderStatus({
     autoLoadAuth: true,
   });
-  const [showCodeWiz, setShowCodeWiz] = useState(false);
-  const [codewizStatus, setCodewizStatus] = useState<CodeWizStatus | null>(
+  const [showLocalCodingAssistant, setShowLocalCodingAssistant] = useState(false);
+  const [localCodingAssistantStatus, setLocalCodingAssistantStatus] = useState<LocalCodingAssistantStatus | null>(
     null
   );
-  const [codewizLoading, setCodewizLoading] = useState(true);
+  const [localCodingAssistantLoading, setLocalCodingAssistantLoading] = useState(true);
   const detectedProviders = authProviders.filter((p) => p.hasAuth);
   const detectedResources = [
     ...detectedProviders.map((p) => ({
@@ -58,11 +58,11 @@ export function ProviderSetupWizard({
       displayName: p.displayName,
       source: p.status.source,
     })),
-    ...(codewizStatus?.installed && codewizStatus.tokenPresent
+    ...(localCodingAssistantStatus?.installed && localCodingAssistantStatus.tokenPresent
       ? [
           {
-            key: "codewiz-cc",
-            provider: "codewiz-cc",
+            key: "local-coding-assistant",
+            provider: "local-coding-assistant",
             displayName: "自研 Coding 助手",
             source: "session",
           },
@@ -72,16 +72,16 @@ export function ProviderSetupWizard({
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/codewiz-cc/status")
-      .then((r) => r.json() as Promise<CodeWizStatus>)
+    fetch("/api/local-coding-assistant/status")
+      .then((r) => r.json() as Promise<LocalCodingAssistantStatus>)
       .then((data) => {
-        if (!cancelled) setCodewizStatus(data);
+        if (!cancelled) setLocalCodingAssistantStatus(data);
       })
       .catch((e) => {
         if (!cancelled) {
-          setCodewizStatus({
+          setLocalCodingAssistantStatus({
             installed: false,
-            sessionPath: "~/.cc-mirror/codewiz-cc/session.json",
+            sessionPath: "",
             sessionExists: false,
             tokenPresent: false,
             error: e instanceof Error ? e.message : String(e),
@@ -89,7 +89,7 @@ export function ProviderSetupWizard({
         }
       })
       .finally(() => {
-        if (!cancelled) setCodewizLoading(false);
+        if (!cancelled) setLocalCodingAssistantLoading(false);
       });
     return () => {
       cancelled = true;
@@ -260,7 +260,7 @@ export function ProviderSetupWizard({
               style={{ borderColor: "var(--border)" }}
               onClick={openModels}
             >
-              <ProviderIcon provider="rednote-claude-3p" size={24} />
+              <ProviderIcon provider="company-claude-3p" size={24} />
               <span className="min-w-0">
                 <span className="block text-sm font-medium">
                   公司 Claude 3P 模型资源
@@ -363,9 +363,9 @@ export function ProviderSetupWizard({
               className={cardBase}
               style={{ borderColor: "var(--border)" }}
               onClick={() => {
-                const next = !showCodeWiz;
-                if (next && !codewizStatus) setCodewizLoading(true);
-                setShowCodeWiz(next);
+                const next = !showLocalCodingAssistant;
+                if (next && !localCodingAssistantStatus) setLocalCodingAssistantLoading(true);
+                setShowLocalCodingAssistant(next);
               }}
             >
               <Terminal size={24} />
@@ -384,7 +384,7 @@ export function ProviderSetupWizard({
             </button>
           </div>
 
-          {showCodeWiz && (
+          {showLocalCodingAssistant && (
             <div
               className="mt-3 rounded-md border p-3 text-xs"
               style={{
@@ -403,44 +403,44 @@ export function ProviderSetupWizard({
                 <button
                   type="button"
                   onClick={() => {
-                    setCodewizStatus(null);
-                    setCodewizLoading(true);
-                    fetch("/api/codewiz-cc/status")
-                      .then((r) => r.json() as Promise<CodeWizStatus>)
-                      .then(setCodewizStatus)
-                      .finally(() => setCodewizLoading(false));
+                    setLocalCodingAssistantStatus(null);
+                    setLocalCodingAssistantLoading(true);
+                    fetch("/api/local-coding-assistant/status")
+                      .then((r) => r.json() as Promise<LocalCodingAssistantStatus>)
+                      .then(setLocalCodingAssistantStatus)
+                      .finally(() => setLocalCodingAssistantLoading(false));
                   }}
                   className="h-7 rounded border px-2 hover:bg-[color:var(--bg-hover)]"
                   style={{ borderColor: "var(--border)" }}
                 >
-                  {codewizLoading ? "检测中…" : "重新检测"}
+                  {localCodingAssistantLoading ? "检测中…" : "重新检测"}
                 </button>
               </div>
 
               <div className="mt-3 grid gap-2 sm:grid-cols-4">
                 <StatusBox
                   label="客户端"
-                  value={codewizStatus?.installed ? "已安装" : "未检测到"}
-                  ok={!!codewizStatus?.installed}
+                  value={localCodingAssistantStatus?.installed ? "已安装" : "未检测到"}
+                  ok={!!localCodingAssistantStatus?.installed}
                 />
                 <StatusBox
                   label="登录缓存"
-                  value={codewizStatus?.sessionExists ? "已存在" : "未找到"}
-                  ok={!!codewizStatus?.sessionExists}
+                  value={localCodingAssistantStatus?.sessionExists ? "已存在" : "未找到"}
+                  ok={!!localCodingAssistantStatus?.sessionExists}
                 />
                 <StatusBox
                   label="Access Token"
-                  value={codewizStatus?.tokenPresent ? "已就绪" : "未就绪"}
-                  ok={!!codewizStatus?.tokenPresent}
+                  value={localCodingAssistantStatus?.tokenPresent ? "已就绪" : "未就绪"}
+                  ok={!!localCodingAssistantStatus?.tokenPresent}
                 />
                 <StatusBox
                   label="供应商列表"
                   value={
-                    codewizStatus?.installed && codewizStatus.tokenPresent
+                    localCodingAssistantStatus?.installed && localCodingAssistantStatus.tokenPresent
                       ? "已可选择"
                       : "未就绪"
                   }
-                  ok={!!(codewizStatus?.installed && codewizStatus.tokenPresent)}
+                  ok={!!(localCodingAssistantStatus?.installed && localCodingAssistantStatus.tokenPresent)}
                 />
               </div>
 
@@ -464,17 +464,17 @@ export function ProviderSetupWizard({
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
                 <CommandBlock
                   title="研发序列 npm 安装"
-                  command={codewizNpmInstallCommand}
+                  command={localCodingAssistantNpmInstallCommand}
                   onCopy={copyText}
                 />
                 <CommandBlock
                   title="非研发序列脚本安装"
-                  command={codewizScriptInstallCommand}
+                  command={localCodingAssistantScriptInstallCommand}
                   onCopy={copyText}
                 />
                 <CommandBlock
                   title="重新登录"
-                  command={codewizLoginCommand}
+                  command={localCodingAssistantLoginCommand}
                   onCopy={copyText}
                 />
                 <div
