@@ -96,6 +96,14 @@ function candidateUrl(candidate: { url: string } | string): string {
   return typeof candidate === "string" ? candidate : candidate.url;
 }
 
+function isCloudflaredMissingError(message: string | null): boolean {
+  return Boolean(
+    message &&
+      /cloudflared/i.test(message) &&
+      /(未安装|install|not found|ENOENT)/i.test(message)
+  );
+}
+
 function MobilePairDialog({
   electronApi,
   onClose,
@@ -112,6 +120,7 @@ function MobilePairDialog({
   const [pairBaseOptions, setPairBaseOptions] = useState<string[]>([]);
   const [selectedPairBase, setSelectedPairBase] = useState("");
   const [busy, setBusy] = useState(false);
+  const [installingCloudflared, setInstallingCloudflared] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const localFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -119,7 +128,7 @@ function MobilePairDialog({
     if (electronApi) {
       try {
         const secret = await electronApi.getLocalSecret();
-        if (secret) headers.set("x-mini-pi-local-secret", secret);
+        if (secret) headers.set("x-diga-agent-local-secret", secret);
       } catch {
         // In browser/dev mode the preload bridge can exist without the
         // getLocalSecret IPC handler. Localhost remains allowed by the API.
@@ -150,8 +159,8 @@ function MobilePairDialog({
       margin: 1,
       width: 360,
       color: {
-        dark: "black",
-        light: "white",
+        dark: "#000000",
+        light: "#ffffff",
       },
     });
 
@@ -267,6 +276,29 @@ function MobilePairDialog({
     }
   };
 
+  const installCloudflaredAndRetry = async () => {
+    if (!electronApi?.dependencies?.installCloudflared) {
+      setError("当前环境无法自动安装 cloudflared，请在终端运行：brew install cloudflared");
+      return;
+    }
+    setInstallingCloudflared(true);
+    setError(null);
+    try {
+      const result = await electronApi.dependencies.installCloudflared();
+      if (!result.ok || !result.installed) {
+        throw new Error(
+          result.error ??
+            "cloudflared 自动安装失败，请在终端运行：brew install cloudflared"
+        );
+      }
+      await startPublicTunnelAndPair();
+    } catch (e) {
+      setError(userFacingMessage(e, { context: "remote" }));
+    } finally {
+      setInstallingCloudflared(false);
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
@@ -341,7 +373,26 @@ function MobilePairDialog({
 
           {error ? (
             <div className="mt-4 w-full max-w-[420px] rounded-token border border-[color:var(--color-danger)] bg-[color:var(--color-danger-bg)] px-3 py-2 text-left text-token-sm text-[color:var(--color-danger)]">
-              {error}
+              <div>{error}</div>
+              {isCloudflaredMissingError(error) ? (
+                <Button
+                  type="button"
+                  disabled={busy || installingCloudflared}
+                  onClick={() => void installCloudflaredAndRetry()}
+                  size="sm"
+                  variant="outline"
+                  className="mt-2"
+                  leading={
+                    installingCloudflared ? (
+                      <Loader2 size={15} className="animate-spin" />
+                    ) : (
+                      <Wrench size={15} />
+                    )
+                  }
+                >
+                  安装 cloudflared 并重试
+                </Button>
+              ) : null}
             </div>
           ) : null}
 
