@@ -575,6 +575,7 @@ export async function POST(
           ...(result.rejectionNote
             ? { rejectionNote: result.rejectionNote }
             : {}),
+          ...(result.evaluation ? { evaluation: result.evaluation } : {}),
         });
       }
 
