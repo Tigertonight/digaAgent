@@ -1,3 +1,5 @@
+import type { RubricEvaluation } from "@/lib/evaluation/types";
+
 export type GoalStatus = "active" | "paused" | "complete" | "blocked";
 
 /**
@@ -126,4 +128,10 @@ export interface GoalUpdateResult {
   goal: AgentGoal | null;
   accepted: boolean;
   rejectionNote?: string;
+  /**
+   * Additive rubric evaluation produced by the stop-time verifier. Present for
+   * every `complete` attempt (accepted or rejected) so the UI can surface the
+   * score and per-criterion breakdown. Absent for `blocked` updates.
+   */
+  evaluation?: RubricEvaluation;
 }
