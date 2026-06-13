@@ -22,7 +22,7 @@ describe("goal evidence bridge", () => {
   let root: string;
 
   beforeEach(() => {
-    root = mkdtempSync(path.join(os.tmpdir(), "mini-pi-goals-"));
+    root = mkdtempSync(path.join(os.tmpdir(), "diga-agent-goals-"));
     __setGoalStoreRootForTest(root);
   });
 

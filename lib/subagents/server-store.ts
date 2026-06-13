@@ -14,19 +14,19 @@ interface SubagentStore {
   byParentAgentId: Map<string, Set<string>>;
 }
 
-const g = globalThis as unknown as { __miniPiSubagents?: SubagentStore };
-if (!g.__miniPiSubagents) {
-  g.__miniPiSubagents = {
+const g = globalThis as unknown as { __digaAgentSubagents?: SubagentStore };
+if (!g.__digaAgentSubagents) {
+  g.__digaAgentSubagents = {
     batches: new Map(),
     byParentAgentId: new Map(),
   };
 }
-const store = g.__miniPiSubagents!;
+const store = g.__digaAgentSubagents!;
 let activeRoot: string | null = null;
 let hydrated = false;
 
 function getRoot(): string {
-  return activeRoot ?? path.join(os.homedir(), ".mini-pi");
+  return activeRoot ?? path.join(os.homedir(), ".diga-agent");
 }
 
 function batchDir(): string {

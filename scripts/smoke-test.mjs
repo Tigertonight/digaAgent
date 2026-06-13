@@ -9,12 +9,12 @@
  *
  * 用法：
  *   # 先启动 server
- *   cd /tmp/mini-pi-web-smoke
- *   PORT=30142 BROWSER=none node_modules/.bin/mini-pi-web &
+ *   cd /tmp/diga-agent-smoke
+ *   PORT=30142 BROWSER=none node_modules/.bin/diga-agent &
  *   sleep 6
  *
  *   # 再跑测试
- *   PORT=30142 node mini-pi-web/scripts/smoke-test.mjs
+ *   PORT=30142 node diga-agent/scripts/smoke-test.mjs
  */
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -76,7 +76,7 @@ async function main() {
   });
 
   await check("GET /api/files (HOME)", async () => {
-    // 用 HOME 而不是 /tmp（mini-pi-web 默认锁定到 MINI_PI_WEB_ROOT，通常是 HOME）
+    // 用 HOME 而不是 /tmp（diga-agent 默认锁定到 DIGA_AGENT_WEB_ROOT，通常是 HOME）
     const { status, json } = await getJson(`/api/files?path=${encodeURIComponent(process.env.HOME ?? "/")}`);
     assert(status === 200, `status ${status}, body=${JSON.stringify(json)}`);
     // entries 字段或 children 字段都接受

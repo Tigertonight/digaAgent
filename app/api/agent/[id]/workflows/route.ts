@@ -150,6 +150,6 @@ function parseWorkflowWorktree(raw: unknown): WorkflowWorktree | null {
 
 function isSafeWorkflowWorktreePath(rawPath: string): boolean {
   const resolved = path.resolve(rawPath);
-  const root = path.resolve(os.tmpdir(), "mini-pi-worktrees");
+  const root = path.resolve(os.tmpdir(), "diga-agent-worktrees");
   return resolved === root || resolved.startsWith(`${root}${path.sep}`);
 }

@@ -1252,7 +1252,7 @@ export function buildWorkflowWorkerSpawnConfig(options: {
 }
 
 function parseWorkflowWorkerSandboxArgv(): string[] {
-  const raw = process.env.MINI_PI_WORKFLOW_WORKER_SANDBOX_ARGV_JSON;
+  const raw = process.env.DIGA_AGENT_WORKFLOW_WORKER_SANDBOX_ARGV_JSON;
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw) as unknown;

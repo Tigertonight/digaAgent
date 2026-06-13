@@ -15,16 +15,16 @@ interface RegistryStore {
   byScope: Map<string, Map<string, SubagentDefinition>>;
 }
 
-const g = globalThis as unknown as { __miniPiSubagentRegistry?: RegistryStore };
-if (!g.__miniPiSubagentRegistry) {
-  g.__miniPiSubagentRegistry = { byScope: new Map() };
+const g = globalThis as unknown as { __digaAgentSubagentRegistry?: RegistryStore };
+if (!g.__digaAgentSubagentRegistry) {
+  g.__digaAgentSubagentRegistry = { byScope: new Map() };
 }
-const store = g.__miniPiSubagentRegistry;
+const store = g.__digaAgentSubagentRegistry;
 
 let userRootOverride: string | null = null;
 
 function userDir(): string {
-  const root = userRootOverride ?? path.join(os.homedir(), ".mini-pi");
+  const root = userRootOverride ?? path.join(os.homedir(), ".diga-agent");
   return path.join(root, "subagents");
 }
 

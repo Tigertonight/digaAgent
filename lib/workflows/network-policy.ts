@@ -28,7 +28,7 @@ interface WorkflowNetworkAuditEnvelope {
 }
 
 const g = globalThis as unknown as {
-  __miniPiWorkflowNetworkPolicy?: {
+  __digaAgentWorkflowNetworkPolicy?: {
     rootOverride: string | null;
     loaded: boolean;
     policy: WorkflowNetworkPolicy;
@@ -37,8 +37,8 @@ const g = globalThis as unknown as {
   };
 };
 
-if (!g.__miniPiWorkflowNetworkPolicy) {
-  g.__miniPiWorkflowNetworkPolicy = {
+if (!g.__digaAgentWorkflowNetworkPolicy) {
+  g.__digaAgentWorkflowNetworkPolicy = {
     rootOverride: null,
     loaded: false,
     policy: {},
@@ -47,10 +47,10 @@ if (!g.__miniPiWorkflowNetworkPolicy) {
   };
 }
 
-const store = g.__miniPiWorkflowNetworkPolicy;
+const store = g.__digaAgentWorkflowNetworkPolicy;
 
 function rootDir(): string {
-  return store.rootOverride ?? path.join(os.homedir(), ".mini-pi");
+  return store.rootOverride ?? path.join(os.homedir(), ".diga-agent");
 }
 
 function policyPath(): string {

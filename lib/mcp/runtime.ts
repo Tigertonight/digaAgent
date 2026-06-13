@@ -13,11 +13,11 @@ interface RuntimeStore {
   clients: Map<string, McpStdioClient>;
 }
 
-const g = globalThis as unknown as { __miniPiMcpRuntime?: RuntimeStore };
-if (!g.__miniPiMcpRuntime) {
-  g.__miniPiMcpRuntime = { clients: new Map() };
+const g = globalThis as unknown as { __digaAgentMcpRuntime?: RuntimeStore };
+if (!g.__digaAgentMcpRuntime) {
+  g.__digaAgentMcpRuntime = { clients: new Map() };
 }
-const store = g.__miniPiMcpRuntime;
+const store = g.__digaAgentMcpRuntime;
 
 /** Test seam: resolve a server config (defaults to the registry). */
 let resolveConfig: (id: string) => McpServerConfig | null = getMcpServer;

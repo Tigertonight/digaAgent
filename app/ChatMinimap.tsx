@@ -2,7 +2,7 @@
 
 /**
  * 右侧消息小地图（minimap）。
- * 移植自 pi-web/components/ChatMinimap.tsx，适配 mini-pi-web 的 ChatMessage / parts 模型。
+ * 移植自 pi-web/components/ChatMinimap.tsx，适配 diga-agent 的 ChatMessage / parts 模型。
  *
  * 渲染：
  *   - 每条 user/assistant 消息一个圆点（user 是方块、assistant 是圆）

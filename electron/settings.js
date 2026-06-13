@@ -3,7 +3,7 @@
  *
  * 两类数据：
  *  1. 敏感数据（API key）→ keytar（macOS Keychain / win Credential Manager / linux libsecret）
- *     service = "mini-pi-web"
+ *     service = "diga-agent"
  *     account = provider 名（如 "minimax-cn", "openai", "anthropic"）
  *     password = key 原文
  *
@@ -28,7 +28,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
-const SERVICE = "mini-pi-web";
+const SERVICE = "diga-agent";
 
 // 常见 provider → env 名（用于一次性迁移）
 const PROVIDER_ENV_MAP = {

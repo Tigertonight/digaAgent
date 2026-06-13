@@ -1,22 +1,22 @@
-# mini-pi-web
+# Diga Agent
 
 Self-hosted UI for [`@earendil-works/pi-coding-agent`](https://www.npmjs.com/package/@earendil-works/pi-coding-agent).
 A mini fork of `pi-web` that runs as a standalone web server (or Electron app),
 talks to the SDK directly, and keeps configuration in `~/.pi/` (shared with the
-`pi` CLI) plus mini-pi-web-only state in `~/.mini-pi/`.
+`pi` CLI) plus Diga Agent-only state in `~/.diga-agent/`.
 
 ## Quick Start
 
 ```bash
 # One-shot: install + start + auto-open browser
-npx mini-pi-web
+npx diga-agent
 
 # Custom port / host
-npx mini-pi-web -p 4000
-npx mini-pi-web -H 0.0.0.0
+npx diga-agent -p 4000
+npx diga-agent -H 0.0.0.0
 
 # Self-check before reporting issues
-npx mini-pi-web doctor
+npx diga-agent doctor
 ```
 
 Default URL: <http://localhost:30142>
@@ -51,7 +51,7 @@ for the full architecture roadmap.
 | Tools toggle panel (runtime enable/disable) | ✅ |
 | Image / HTML / wrapped-text preview in messages | ✅ |
 | Session list, context inspector, export | ✅ |
-| File picker bound to `MINI_PI_WEB_ROOT` | ✅ |
+| File picker bound to `DIGA_AGENT_WEB_ROOT` | ✅ |
 | Electron desktop build (`npm run electron:build`) | ✅ |
 | **Desktop pet widget** (transparent, hover bubble, drag, right-click) | ✅ |
 | **Session metadata**: pin / manual title / unread sync across reload | ✅ |
@@ -63,8 +63,8 @@ for the full architecture roadmap.
 
 ## Configuration
 
-mini-pi-web reads from `~/.pi/` (shared with the `pi` CLI) and `~/.mini-pi/`
-(mini-pi-web-only state):
+Diga Agent reads from `~/.pi/` (shared with the `pi` CLI) and `~/.diga-agent/`
+(Diga Agent-only state):
 
 | Path | Purpose |
 |---|---|
@@ -72,21 +72,21 @@ mini-pi-web reads from `~/.pi/` (shared with the `pi` CLI) and `~/.mini-pi/`
 | `~/.pi/models.json` | Custom providers and per-model overrides |
 | `~/.pi/agent/skills/` | Installed agent skills |
 | `~/.pi/agent/browser-sites.json` | Browser-use site allow/deny policy |
-| `~/.mini-pi/sessions/<sessionId>.meta.json` | Per-session metadata (title, pinned, lastSeenAt) |
-| `~/.mini-pi/settings.json` | Global Budget defaults, approval rules, UI prefs |
-| `~/.mini-pi/goals/<agentId>.json` | Durable goal runtime: goal + turn + evidence history |
-| `~/.mini-pi/subagents/` | Subagent batches, memory, and user-level `*.md` definitions |
-| `~/.mini-pi/mcp/servers.json` | Configured MCP (stdio) servers |
-| `~/.mini-pi/workflows/runs/<workflowId>.json` | Dynamic workflow run history |
-| `~/.mini-pi/workflows/templates/<templateId>.json` | Reusable dynamic workflow templates |
-| `~/.mini-pi/workflows/network-policy.json` | Workflow network allow/deny policy |
-| `~/.mini-pi/workflows/network-audit.json` | Workflow network request audit trail |
+| `~/.diga-agent/sessions/<sessionId>.meta.json` | Per-session metadata (title, pinned, lastSeenAt) |
+| `~/.diga-agent/settings.json` | Global Budget defaults, approval rules, UI prefs |
+| `~/.diga-agent/goals/<agentId>.json` | Durable goal runtime: goal + turn + evidence history |
+| `~/.diga-agent/subagents/` | Subagent batches, memory, and user-level `*.md` definitions |
+| `~/.diga-agent/mcp/servers.json` | Configured MCP (stdio) servers |
+| `~/.diga-agent/workflows/runs/<workflowId>.json` | Dynamic workflow run history |
+| `~/.diga-agent/workflows/templates/<templateId>.json` | Reusable dynamic workflow templates |
+| `~/.diga-agent/workflows/network-policy.json` | Workflow network allow/deny policy |
+| `~/.diga-agent/workflows/network-audit.json` | Workflow network request audit trail |
 
 The `~/.pi/` files are interchangeable with the upstream `pi` CLI and `pi-web`.
 
 ### Project-level memory
 
-mini-pi-web inherits the SDK's `AGENTS.md` / `CLAUDE.md` auto-loader. Drop a
+Diga Agent inherits the SDK's `AGENTS.md` / `CLAUDE.md` auto-loader. Drop a
 file named `AGENTS.md` anywhere from your project root up to filesystem root,
 and it will be injected into the agent's system prompt automatically (no UI
 needed). See [docs/guides/project-memory.md](./docs/guides/project-memory.md).
@@ -98,7 +98,7 @@ Use `/workflow <objective>` for one-off complex work, or ask the agent to call
 parallel agents, checkpoints, structured artifacts, worktree isolation, or
 adversarial verification.
 
-Reusable workflow templates live under `~/.mini-pi/workflows/templates/` and are
+Reusable workflow templates live under `~/.diga-agent/workflows/templates/` and are
 run with `run_workflow_template`. The workflow history panel can resume previous
 runs and inspect per-run debug bundles with trace events, logs, artifacts,
 checkpoints, and the generated script.
@@ -118,14 +118,14 @@ the example templates in
 |---|---|---|
 | `PORT` | `30142` | Server port |
 | `HOSTNAME` | (none) | Bind host |
-| `MINI_PI_WEB_ROOT` | `$HOME` | File picker / cwd sandbox root |
+| `DIGA_AGENT_WEB_ROOT` | `$HOME` | File picker / cwd sandbox root |
 | `BROWSER=none` | — | Don't auto-open browser on start |
 
 ## doctor
 
 ```
-$ npx mini-pi-web doctor
-mini-pi-web doctor — 配置自检
+$ npx diga-agent doctor
+diga-agent doctor — 配置自检
 
 ✅ Node.js 22.10.0
 ℹ️  Platform: darwin arm64
@@ -183,11 +183,11 @@ npm run electron:build
 └──────────────────────────────┬─────────────────────────────┘
                                │
 ┌──────────────────────────────▼─────────────────────────────┐
-│ ~/.pi/  (shared with pi CLI)  +  ~/.mini-pi/  (app state)  │
+│ ~/.pi/  (shared with pi CLI)  +  ~/.diga-agent/  (app state)  │
 └────────────────────────────────────────────────────────────┘
 ```
 
-No backend database. No external service. Just `~/.pi/` and `~/.mini-pi/`.
+No backend database. No external service. Just `~/.pi/` and `~/.diga-agent/`.
 
 ## License
 

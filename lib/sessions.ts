@@ -29,7 +29,7 @@ export type SessionInfoWithStatus = SessionInfo & {
   waitingClarificationCount?: number;
   lastEventSeq?: number;
   runtimeUpdatedAt?: number;
-  /** RFC-3 Phase A：~/.mini-pi/sessions/{id}.meta.json 内容，未建时缺省 undefined */
+  /** RFC-3 Phase A：~/.diga-agent/sessions/{id}.meta.json 内容，未建时缺省 undefined */
   meta?: SessionMeta;
 };
 

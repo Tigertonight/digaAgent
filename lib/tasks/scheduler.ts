@@ -8,16 +8,16 @@ interface SchedulerMemory extends LongTaskSchedulerState {
   timer: ReturnType<typeof setInterval> | null;
 }
 
-const g = globalThis as unknown as { __miniPiLongTaskScheduler?: SchedulerMemory };
-if (!g.__miniPiLongTaskScheduler) {
-  g.__miniPiLongTaskScheduler = {
+const g = globalThis as unknown as { __digaAgentLongTaskScheduler?: SchedulerMemory };
+if (!g.__digaAgentLongTaskScheduler) {
+  g.__digaAgentLongTaskScheduler = {
     enabled: false,
     intervalMs: DEFAULT_INTERVAL_MS,
     running: false,
     timer: null,
   };
 }
-const scheduler = g.__miniPiLongTaskScheduler;
+const scheduler = g.__digaAgentLongTaskScheduler;
 
 export function ensureLongTaskScheduler(): LongTaskSchedulerState {
   if (scheduler.timer) return getLongTaskSchedulerState();

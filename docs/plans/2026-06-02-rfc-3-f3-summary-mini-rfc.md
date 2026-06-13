@@ -43,11 +43,11 @@ Phase A + B 完成后：
 仍然没解决的痛点：
 
 ```
-🟢 mini-pi-web                     2 分钟前      ← 这是干啥的？
-🟢 mini-pi-web                     5 分钟前      ← 这又是干啥的？
-   mini-pi-web                    14 分钟前
-   pi-agent                       昨天
-   mini-pi-web                    昨天
+🟢 diga-agent                     2 分钟前      ← 这是干啥的？
+🟢 diga-agent                     5 分钟前      ← 这又是干啥的？
+   diga-agent                    14 分钟前
+   diga-agent                       昨天
+   diga-agent                    昨天
 ```
 
 用户**扫一眼 sidebar 还是不知道哪个是哪个**。F1 的 `meta.title` 解决"想标的能标"，但 90% 的 session 用户不会手动标。
@@ -65,7 +65,7 @@ F3 = **每个 session 自动有一句话说清干了什么**。这是 sidebar �
 F1/F2 是纯本地，0 成本。F3 是有成本的特性，单次摘要 ~$0.002，500 session 一波就 $1。决策面**完全不同**：
 
 - 默认开 vs 默认关？
-- 谁付钱（用户自己的 API key vs mini-pi-web 代付）？
+- 谁付钱（用户自己的 API key vs diga-agent 代付）？
 - 超预算后行为？
 
 ### 2.2 涉及 LLM 调用 = 涉及 prompt 工程
@@ -117,7 +117,7 @@ compact(customInstructions?: string): Promise<CompactionResult>;
 
 ### 3.2 SDK 暴露的 model 调用基建（可复用）
 
-mini-pi-web 已经在用：
+diga-agent 已经在用：
 
 - `getModelRegistry()` (`lib/agent-registry.ts:94`)：从 settings 拿 default provider/model
 - `mr.find(provider, modelId)`：解析成可调用的 `Model` 对象
@@ -228,7 +228,7 @@ F3 不需要新建持久化层，**扩展 SessionMeta 加 3 个字段即可**：
 
 ### Q4：成本上限怎么管？
 
-**风险**：用户挂着 mini-pi-web 跑 100 个 session/天 → 摘要花 $0.5 → 月度 $15。对个人付费用户**显眼**。
+**风险**：用户挂着 diga-agent 跑 100 个 session/天 → 摘要花 $0.5 → 月度 $15。对个人付费用户**显眼**。
 
 **护栏**：
 
@@ -241,7 +241,7 @@ F3 不需要新建持久化层，**扩展 SessionMeta 加 3 个字段即可**：
 
 **预算管理实现**：复用 RFC-2 Phase A 的 Budget MVP 基建（如果已完成）—— **需要查 RFC-2 进度**。
 
-**Provider 报销**：完全用用户自己 API key（mini-pi-web 不代付，沿用 SDK 现状）。
+**Provider 报销**：完全用用户自己 API key（diga-agent 不代付，沿用 SDK 现状）。
 
 ### Q5：用户能否关闭 / 重新生成 / 手动编辑？
 

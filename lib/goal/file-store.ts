@@ -37,11 +37,11 @@ interface GoalStore {
   envelopes: Map<string, GoalStoreEnvelope>;
 }
 
-const g = globalThis as unknown as { __miniPiGoalsV2?: GoalStore };
-if (!g.__miniPiGoalsV2) {
-  g.__miniPiGoalsV2 = { envelopes: new Map() };
+const g = globalThis as unknown as { __digaAgentGoalsV2?: GoalStore };
+if (!g.__digaAgentGoalsV2) {
+  g.__digaAgentGoalsV2 = { envelopes: new Map() };
 }
-const store = g.__miniPiGoalsV2;
+const store = g.__digaAgentGoalsV2;
 
 let activeRoot: string | null = null;
 let hydrated = false;
@@ -51,7 +51,7 @@ function now(): number {
 }
 
 function getRoot(): string {
-  return activeRoot ?? path.join(os.homedir(), ".mini-pi");
+  return activeRoot ?? path.join(os.homedir(), ".diga-agent");
 }
 
 function goalsDir(): string {

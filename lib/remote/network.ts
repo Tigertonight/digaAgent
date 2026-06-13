@@ -69,7 +69,7 @@ export function listRemoteCandidates(opts: {
   }
 
   if (opts.mode === "vpn") {
-    const tailnetName = process.env.MINI_PI_TAILSCALE_DNS;
+    const tailnetName = process.env.DIGA_AGENT_TAILSCALE_DNS;
     if (tailnetName) {
       candidates.unshift({
         url: `${protocol}://${tailnetName}:${port}`,

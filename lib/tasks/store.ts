@@ -40,9 +40,9 @@ interface TaskStoreState {
   rootOverride?: string | null;
 }
 
-const g = globalThis as unknown as { __miniPiLongTasks?: TaskStoreState };
-if (!g.__miniPiLongTasks) {
-  g.__miniPiLongTasks = {
+const g = globalThis as unknown as { __digaAgentLongTasks?: TaskStoreState };
+if (!g.__digaAgentLongTasks) {
+  g.__digaAgentLongTasks = {
     loaded: false,
     tasks: new Map(),
     runs: new Map(),
@@ -50,7 +50,7 @@ if (!g.__miniPiLongTasks) {
     rootOverride: null,
   };
 }
-const store = g.__miniPiLongTasks;
+const store = g.__digaAgentLongTasks;
 
 const DEFAULT_PERMISSION_POLICY: TaskPermissionPolicy = {
   requireApprovalBeforeWrite: true,
@@ -59,7 +59,7 @@ const DEFAULT_PERMISSION_POLICY: TaskPermissionPolicy = {
 };
 
 function defaultRoot(): string {
-  return path.join(os.homedir(), ".mini-pi");
+  return path.join(os.homedir(), ".diga-agent");
 }
 
 function getRoot(): string {

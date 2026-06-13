@@ -35,8 +35,8 @@ const nextConfig: NextConfig = {
   // 这样 Electron 主进程就能直接 fork 它，不依赖宿主的 node_modules
   // npx/web 模式（电池场景）走 `next start`，不需要 standalone，
   // 且 standalone + next start 会冲突告警。
-  // 默认开启（electron:build 路径），通过 MINI_PI_NO_STANDALONE=1 关闭（CI/npm publish 路径）
-  ...(process.env.MINI_PI_NO_STANDALONE
+  // 默认开启（electron:build 路径），通过 DIGA_AGENT_NO_STANDALONE=1 关闭（CI/npm publish 路径）
+  ...(process.env.DIGA_AGENT_NO_STANDALONE
     ? {}
     : { output: "standalone" as const }),
   turbopack: {

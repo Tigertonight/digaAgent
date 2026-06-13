@@ -17,7 +17,7 @@ import PetMockPanel from "./PetMockPanel";
  */
 function useNeedMock(): boolean {
   const [need] = useState(
-    () => typeof window !== "undefined" && !window.miniPi
+    () => typeof window !== "undefined" && !window.digaAgent
   );
   return need;
 }
@@ -96,14 +96,14 @@ export default function PetApp() {
   // hasUI=true → 关闭穿透（窗口接收所有事件）
   // hasUI=false → 开启穿透（透明区域鼠标穿透到下方窗口）
   useEffect(() => {
-    window.miniPi?.pet?.setIgnoreMouse?.(!hasUI);
+    window.digaAgent?.pet?.setIgnoreMouse?.(!hasUI);
   }, [hasUI]);
 
   // 组件挂载时开启穿透（默认 idle 状态）
   useEffect(() => {
-    window.miniPi?.pet?.setIgnoreMouse?.(true);
+    window.digaAgent?.pet?.setIgnoreMouse?.(true);
     return () => {
-      window.miniPi?.pet?.setIgnoreMouse?.(false);
+      window.digaAgent?.pet?.setIgnoreMouse?.(false);
       // 卸载时清理单击延迟定时器
       if (clickTimerRef.current) {
         clearTimeout(clickTimerRef.current);
@@ -122,7 +122,7 @@ export default function PetApp() {
       setBubbleHover(false);
       setBubbleVisible(false);
     };
-    const unsub = window.miniPi?.pet?.onWindowBlur?.(closeFloaters);
+    const unsub = window.digaAgent?.pet?.onWindowBlur?.(closeFloaters);
     window.addEventListener("blur", closeFloaters);
     return () => {
       unsub?.();
@@ -132,7 +132,7 @@ export default function PetApp() {
 
   // 订阅来自右键菜单的"切换 session"指令
   useEffect(() => {
-    const unsub = window.miniPi?.pet?.onSwitchLocalSession?.((id) => {
+    const unsub = window.digaAgent?.pet?.onSwitchLocalSession?.((id) => {
       setLocalFocusId(id);
     });
     return unsub;
@@ -140,7 +140,7 @@ export default function PetApp() {
 
   // 订阅来自右键菜单的"请求中止"指令 → 调 abort API
   useEffect(() => {
-    const unsub = window.miniPi?.pet?.onRequestAbort?.(() => {
+    const unsub = window.digaAgent?.pet?.onRequestAbort?.(() => {
       const aid = displaySession?.agentId;
       if (!aid) return;
       void fetch(`/api/agent/${aid}`, {
@@ -165,7 +165,7 @@ export default function PetApp() {
         name: s.name,
         focused: s.id === focusedId,
       }));
-    window.miniPi?.pet?.showContextMenu?.({
+    window.digaAgent?.pet?.showContextMenu?.({
       hasSession: !!displaySession,
       streaming: !!displaySession?.streaming,
       sessions,
@@ -233,7 +233,7 @@ export default function PetApp() {
             onSwitchLocalSession={(id) => setLocalFocusId(id)}
             onReconnect={() => {
               if (displaySession?.id) {
-                window.miniPi?.pet?.requestReconnect?.(displaySession.id);
+                window.digaAgent?.pet?.requestReconnect?.(displaySession.id);
               }
             }}
           />
@@ -266,7 +266,7 @@ export default function PetApp() {
             // 重连后端会推 sseStatus=active 让状态自然刷新；
             // 双击仍照常跳主窗（在上面的双击分支）
             if (animState === "offline" && displaySession?.id) {
-              window.miniPi?.pet?.requestReconnect?.(displaySession.id);
+              window.digaAgent?.pet?.requestReconnect?.(displaySession.id);
               return;
             }
             // 卡片已开 → 再次点击 sprite 关掉卡片（toggle）

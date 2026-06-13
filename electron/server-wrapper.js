@@ -6,18 +6,18 @@
  *
  * 用法：从 Electron 主进程 fork 这个文件，而不是直接 fork server.js。
  * 必须传 env：
- *   MINI_PI_SERVER_ENTRY   - standalone server.js 的绝对路径
- *   MINI_PI_PARENT_PID     - Electron 主进程 pid（兜底，正常用 process.ppid 即可）
+ *   DIGA_AGENT_SERVER_ENTRY   - standalone server.js 的绝对路径
+ *   DIGA_AGENT_PARENT_PID     - Electron 主进程 pid（兜底，正常用 process.ppid 即可）
  */
 
 "use strict";
 
 const PARENT_PID =
-  parseInt(process.env.MINI_PI_PARENT_PID || "", 10) || process.ppid;
-const ENTRY = process.env.MINI_PI_SERVER_ENTRY;
+  parseInt(process.env.DIGA_AGENT_PARENT_PID || "", 10) || process.ppid;
+const ENTRY = process.env.DIGA_AGENT_SERVER_ENTRY;
 
 if (!ENTRY) {
-  console.error("[server-wrapper] missing MINI_PI_SERVER_ENTRY env");
+  console.error("[server-wrapper] missing DIGA_AGENT_SERVER_ENTRY env");
   process.exit(2);
 }
 

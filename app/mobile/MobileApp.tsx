@@ -139,9 +139,9 @@ const MOBILE_SESSION_PAGE_SIZE = 30;
 const MOBILE_CONTEXT_TAIL_MESSAGES = 80;
 const MOBILE_MESSAGE_WINDOW = 36;
 const MOBILE_MESSAGE_WINDOW_STEP = 24;
-const MOBILE_PROVIDER_STORAGE_KEY = "mini-pi-mobile-provider-id";
-const MOBILE_MODEL_STORAGE_KEY = "mini-pi-mobile-model-id";
-const MOBILE_MODEL_VERSION_STORAGE_KEY = "mini-pi-mobile-model-default-version";
+const MOBILE_PROVIDER_STORAGE_KEY = "diga-agent-mobile-provider-id";
+const MOBILE_MODEL_STORAGE_KEY = "diga-agent-mobile-model-id";
+const MOBILE_MODEL_VERSION_STORAGE_KEY = "diga-agent-mobile-model-default-version";
 const MOBILE_FILES_CACHE_TTL_MS = 5000;
 const MOBILE_API_RETRY_DELAYS_MS = [0, 450, 1200];
 const MOBILE_KEYBOARD_THRESHOLD_PX = 120;
@@ -301,11 +301,11 @@ function loadRemoteStorage(): RemoteStorage | null {
         );
         parsed = JSON.parse(atob(padded)) as RemoteStorage;
       }
-      localStorage.setItem("mini-pi-remote", JSON.stringify(parsed));
+      localStorage.setItem("diga-agent-remote", JSON.stringify(parsed));
       window.history.replaceState(null, "", "/mobile");
       return parsed;
     }
-    const raw = localStorage.getItem("mini-pi-remote");
+    const raw = localStorage.getItem("diga-agent-remote");
     return raw ? (JSON.parse(raw) as RemoteStorage) : null;
   } catch {
     return null;
@@ -1437,7 +1437,7 @@ export default function MobileApp({
     setRemote(nextStorage);
     setBaseUrl(nextBase);
     try {
-      localStorage.setItem("mini-pi-remote", JSON.stringify(nextStorage));
+      localStorage.setItem("diga-agent-remote", JSON.stringify(nextStorage));
     } catch {
       // Storage may be unavailable in private browsing; runtime state is enough.
     }
@@ -1539,8 +1539,8 @@ export default function MobileApp({
       ]);
       if (sessionsRes.status === 401 || providersRes.status === 401) {
         try {
-          localStorage.removeItem("mini-pi-remote");
-          document.cookie = "mini-pi-remote=; Max-Age=0; Path=/";
+          localStorage.removeItem("diga-agent-remote");
+          document.cookie = "diga-agent-remote=; Max-Age=0; Path=/";
         } catch {
           // Ignore storage cleanup failures; the visible error still guides the user.
         }
@@ -1747,7 +1747,7 @@ export default function MobileApp({
           initialRemote.baseUrl ||
           (typeof window !== "undefined" ? window.location.origin : "");
         const trustedRemote = { ...initialRemote, baseUrl: trustedBase };
-        localStorage.setItem("mini-pi-remote", JSON.stringify(trustedRemote));
+        localStorage.setItem("diga-agent-remote", JSON.stringify(trustedRemote));
         setRemote(trustedRemote);
         setBaseUrl(trustedBase);
         setConnection("reconnecting");

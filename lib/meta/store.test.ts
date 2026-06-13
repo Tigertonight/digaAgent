@@ -21,7 +21,7 @@ import type { SessionMeta } from "./types";
 let tmpRoot: string;
 
 beforeEach(async () => {
-  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "mini-pi-meta-test-"));
+  tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "diga-agent-meta-test-"));
   __setMetaRootForTests(tmpRoot);
 });
 

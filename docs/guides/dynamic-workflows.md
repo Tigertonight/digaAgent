@@ -61,7 +61,7 @@ the definition of done.
 Reusable workflows live in the local template registry:
 
 ```text
-~/.mini-pi/workflows/templates/<templateId>.json
+~/.diga-agent/workflows/templates/<templateId>.json
 ```
 
 The HTTP registry API is:
@@ -102,13 +102,13 @@ Minimal template envelope:
 Example templates are stored in
 `docs/examples/workflow-templates/`. To install one locally, POST the file to the
 template API or place the template object in the registry shape used by
-`~/.mini-pi/workflows/templates`.
+`~/.diga-agent/workflows/templates`.
 
 ## Goal Mode And Looping
 
 `/goal <objective>` is the durable loop for long-running workflow work:
 
-1. The active goal is stored in `~/.mini-pi/goals/<agentId>.json`.
+1. The active goal is stored in `~/.diga-agent/goals/<agentId>.json`.
 2. Each agent turn opens and closes a goal turn record.
 3. If the goal remains active after a turn, the runtime automatically prompts
    the agent to continue the next useful step.

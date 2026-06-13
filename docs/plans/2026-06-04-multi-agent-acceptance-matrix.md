@@ -24,7 +24,7 @@ Prove that the current multi-agent system is no longer just parallel tool calls.
 | Tool visibility | Main agent receives planner recommendation, planning, and synthesis guidance in tool result text/details. | `lib/subagents/extension.test.ts` validates `plan_subagents`, `## Planning policy`, `## Synthesis guidance`, and details payload. |
 | Parallel execution | Batch creates child agents and returns per-task results. | `lib/subagents/orchestrator.test.ts` lifecycle test. |
 | Runtime cleanup | Child runtime is disposed after task completion. | `disposeChild` assertion in orchestrator lifecycle test. |
-| Persistence | Batch/task metadata writes to `~/.mini-pi/subagents/batches/*.json`. | Store hydration assertions in orchestrator tests. |
+| Persistence | Batch/task metadata writes to `~/.diga-agent/subagents/batches/*.json`. | Store hydration assertions in orchestrator tests. |
 | Restore by session | Historical session context can restore persisted batches by `parentSessionPath`. | `appendRestoredSubagentBatches` reducer tests, context API wiring, and `e2e/08-subagents.spec.ts` restored-session flow. |
 | Retry one task | A single task can rerun while preserving prior attempt. | `retrySubagentTask` test asserts attempts and metadata update. |
 | Continue unfinished batch | Restored unfinished batch can rerun pending/running tasks by session ownership. | `resumeSubagentBatch` test asserts interrupted attempt and new parent id; `e2e/08-subagents.spec.ts` verifies cold restored UI creates a parent agent with the original `sessionPath` before POSTing `resume`. |

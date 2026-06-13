@@ -6,7 +6,7 @@ Source: `docs/plans/2026-06-05-architecture-health-roadmap.md`
 
 ## Objective
 
-Define the regression suite needed to harden mini-pi-web's runtime identity, browser workbench, evidence/event layer, workflows, subagents, goals, approvals, progress, and Electron surfaces.
+Define the regression suite needed to harden diga-agent's runtime identity, browser workbench, evidence/event layer, workflows, subagents, goals, approvals, progress, and Electron surfaces.
 
 The purpose is to catch the class of bugs already seen in practice:
 
@@ -427,7 +427,7 @@ Expected:
 External:
 
 ```txt
-请用 browser_open 打开 https://mini-pi-approval-check.invalid/
+请用 browser_open 打开 https://diga-agent-approval-check.invalid/
 ```
 
 Expected:

@@ -27,7 +27,7 @@ interface WorkflowArtifactIndexEntry {
 }
 
 interface CompressedWorkflowArtifactValue {
-  __miniPiWorkflowCompressedArtifact: true;
+  __digaAgentWorkflowCompressedArtifact: true;
   encoding: "gzip+base64+json";
   data: string;
   originalBytes: number;
@@ -57,9 +57,9 @@ interface WorkflowStore {
   rootOverride?: string | null;
 }
 
-const g = globalThis as unknown as { __miniPiWorkflows?: WorkflowStore };
-if (!g.__miniPiWorkflows) {
-  g.__miniPiWorkflows = {
+const g = globalThis as unknown as { __digaAgentWorkflows?: WorkflowStore };
+if (!g.__digaAgentWorkflows) {
+  g.__digaAgentWorkflows = {
     runs: new Map(),
     runningByParent: new Map(),
     controllers: new Map(),
@@ -68,12 +68,12 @@ if (!g.__miniPiWorkflows) {
   };
 }
 
-const store = g.__miniPiWorkflows;
+const store = g.__digaAgentWorkflows;
 if (store.loadedFromDisk === undefined) store.loadedFromDisk = false;
 if (!("rootOverride" in store)) store.rootOverride = null;
 
 function defaultRoot(): string {
-  return path.join(os.homedir(), ".mini-pi");
+  return path.join(os.homedir(), ".diga-agent");
 }
 
 function getRoot(): string {
@@ -85,21 +85,21 @@ function runsDir(): string {
 }
 
 function configuredMaxRunsPerParent(): number {
-  const raw = Number(process.env.MINI_PI_WORKFLOW_MAX_RUNS_PER_PARENT);
+  const raw = Number(process.env.DIGA_AGENT_WORKFLOW_MAX_RUNS_PER_PARENT);
   return Number.isFinite(raw) && raw > 0
     ? Math.floor(raw)
     : DEFAULT_MAX_RUNS_PER_PARENT;
 }
 
 function configuredMaxRunAgeMs(): number {
-  const days = Number(process.env.MINI_PI_WORKFLOW_MAX_RUN_AGE_DAYS);
+  const days = Number(process.env.DIGA_AGENT_WORKFLOW_MAX_RUN_AGE_DAYS);
   return Number.isFinite(days) && days >= 0
     ? Math.floor(days * 24 * 60 * 60 * 1000)
     : DEFAULT_MAX_RUN_AGE_MS;
 }
 
 function configuredArtifactCompressionThresholdBytes(): number {
-  const raw = Number(process.env.MINI_PI_WORKFLOW_ARTIFACT_COMPRESSION_BYTES);
+  const raw = Number(process.env.DIGA_AGENT_WORKFLOW_ARTIFACT_COMPRESSION_BYTES);
   return Number.isFinite(raw) && raw >= 0
     ? Math.floor(raw)
     : DEFAULT_ARTIFACT_COMPRESSION_THRESHOLD_BYTES;
@@ -422,7 +422,7 @@ function encodeRunForPersistence(run: WorkflowRun): {
     });
     if (!compressed) return artifact;
     const value: CompressedWorkflowArtifactValue = {
-      __miniPiWorkflowCompressedArtifact: true,
+      __digaAgentWorkflowCompressedArtifact: true,
       encoding: "gzip+base64+json",
       data: gzipSync(Buffer.from(json, "utf8")).toString("base64"),
       originalBytes: jsonBytes,
@@ -458,7 +458,7 @@ function decodeArtifactValue(value: unknown): unknown {
   if (!value || typeof value !== "object") return value;
   const rec = value as Partial<CompressedWorkflowArtifactValue>;
   if (
-    rec.__miniPiWorkflowCompressedArtifact !== true ||
+    rec.__digaAgentWorkflowCompressedArtifact !== true ||
     rec.encoding !== "gzip+base64+json" ||
     typeof rec.data !== "string"
   ) {

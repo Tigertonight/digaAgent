@@ -6,7 +6,7 @@ Source: `docs/plans/2026-06-05-architecture-health-roadmap.md`
 
 ## Objective
 
-Turn the architecture health roadmap into an implementation plan that hardens mini-pi-web from a feature-rich agent UI into a reliable agent operating workbench.
+Turn the architecture health roadmap into an implementation plan that hardens diga-agent from a feature-rich agent UI into a reliable agent operating workbench.
 
 The plan focuses on two convergence layers:
 

@@ -2,7 +2,7 @@
  * RFC-2 Phase A: 会话级 Budget 类型定义。
  *
  * 设计意图：
- *   - mini-pi-web 当前只能 abort 全停 / 没有软上限 / 没有费用预警。
+ *   - diga-agent 当前只能 abort 全停 / 没有软上限 / 没有费用预警。
  *   - 这套类型描述「单 session 的资源上限」，命中后由前端 abort 并按 action 决定后续。
  *   - cost / turns / duration 三维独立可启用；任一命中即触发。
  *   - 不引入新依赖，纯数据 + 纯函数 + localStorage 持久化。

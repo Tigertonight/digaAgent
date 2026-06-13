@@ -13,7 +13,7 @@
 
 ## TL;DR
 
-mini-pi-web 当前每个 session 是一座**孤岛**：用户只能按"最近修改时间"在 sidebar 找到它，进去前看不到内容、找完了带不走、跑过的 session 跟没跑过没差。**多 session 并行**是产品的核心差异化，但当 session 数量从 5 涨到 50 时，用户体验**急剧崩盘** —— sidebar 变成一堆"无标题对话 / 5 月 14 日 14:23"。
+diga-agent 当前每个 session 是一座**孤岛**：用户只能按"最近修改时间"在 sidebar 找到它，进去前看不到内容、找完了带不走、跑过的 session 跟没跑过没差。**多 session 并行**是产品的核心差异化，但当 session 数量从 5 涨到 50 时，用户体验**急剧崩盘** —— sidebar 变成一堆"无标题对话 / 5 月 14 日 14:23"。
 
 本 RFC 把 session 从「**对话记录**」升级为「**可检索、可复用、可流通的知识资产**」，由四个特性组成：
 
@@ -43,17 +43,17 @@ mini-pi-web 当前每个 session 是一座**孤岛**：用户只能按"最近修
 
 ### 1.1 sidebar 的现实
 
-打开 `/Users/yuanzexiang/Documents/pi-agent/mini-pi-web` 跑 30 分钟，sidebar 通常长这样：
+打开 `diga-agent` 项目跑 30 分钟，sidebar 通常长这样：
 
 ```
-🟢 mini-pi-web                     2 分钟前
-🟢 mini-pi-web                     5 分钟前
-   mini-pi-web                    14 分钟前
-   pi-agent                       昨天
-   mini-pi-web                    昨天
+🟢 diga-agent                     2 分钟前
+🟢 diga-agent                     5 分钟前
+   diga-agent                    14 分钟前
+   diga-agent                       昨天
+   diga-agent                    昨天
    (unnamed)                      昨天
    ai-explorations                3 天前
-   mini-pi-web                    1 周前
+   diga-agent                    1 周前
    (unnamed)                      1 周前
    ...（还有 22 条）
 ```
@@ -76,7 +76,7 @@ mini-pi-web 当前每个 session 是一座**孤岛**：用户只能按"最近修
 - ❌ `lastSeenMap` 是 React 内存 state（`app/ChatApp.tsx:242`），**刷新页面就丢**（这是个已知 bug）
 - ❌ 列表只按 `isRunning + modified` 排序，**没有搜索、没有过滤、没有标签**
 - ❌ 没有摘要 —— `getHeader()` 返回的元数据没人渲染
-- ❌ 没有 `.mini-pi/` 项目级目录概念
+- ❌ 没有 `.diga-agent/` 项目级目录概念
 - ❌ 没有"我经常用的 prompt"概念
 
 > 🎯 **核心洞察**：**所有原料齐了，只是没有人把它们做成成品。**
@@ -101,7 +101,7 @@ mini-pi-web 当前每个 session 是一座**孤岛**：用户只能按"最近修
 | Cursor Chat | 按时间 | ❌ | ❌ | ❌ | ✅ `.cursorrules` |
 | Cline | 按时间 | ⚠️ 局部 | ❌ | ❌ | ✅ `.clinerules` |
 | Claude Code | 按时间 | ❌ | ❌ | ❌ | ✅ `CLAUDE.md` |
-| **mini-pi-web (now)** | **按时间** | **❌** | **❌** | **❌** | **❌** |
+| **diga-agent (now)** | **按时间** | **❌** | **❌** | **❌** | **❌** |
 
 我们在 **session 数量最多的场景**（多 session 并行是核心特性）里，**所有四项检索能力都缺失**。这是反直觉的，但也是机会——补上就立刻领先大多数同类。
 
@@ -118,7 +118,7 @@ mini-pi-web 当前每个 session 是一座**孤岛**：用户只能按"最近修
 - 验收信号：4 周后观察"打开 modified > 24h 的 session"频率从 X 提升到 2X 以上。
 
 **G3**：让每次 session 都为下次省时间。
-- 验收信号：项目级 `.mini-pi/prompts/` 有常用 prompt 库；命中复用率 > 30%。
+- 验收信号：项目级 `.diga-agent/prompts/` 有常用 prompt 库；命中复用率 > 30%。
 
 **G4**：保持本地优先 + 隐私安全。
 - 不上传任何 session 内容到外部服务（除了用户自配的 LLM provider）。
@@ -131,13 +131,13 @@ mini-pi-web 当前每个 session 是一座**孤岛**：用户只能按"最近修
 - ❌ **不做** 团队共享 session（本地优先，不引入云）
 - ❌ **不做** session 自动归档 / 自动删除
 - ❌ **不做** session 之间的图谱可视化
-- ❌ **不做** 自动生成项目文档（这是 agent 的工作，不是 mini-pi-web 的工作）
+- ❌ **不做** 自动生成项目文档（这是 agent 的工作，不是 diga-agent 的工作）
 - ❌ **不改** SDK 的 session 存储格式（依赖 `~/.pi/sessions/*.jsonl` 既定 schema）
 
 ### 2.3 约束
 
-- 所有改动**append-only**，不改 SDK 写入的 JSONL（mini-pi-web 自己的元数据另存）
-- 跨设备 sync 不在 v0 范围（mini-pi 的物理位置是用户的家目录）
+- 所有改动**append-only**，不改 SDK 写入的 JSONL（diga-agent 自己的元数据另存）
+- 跨设备 sync 不在 v0 范围（diga-agent 的物理位置是用户的家目录）
 - 摘要生成必须**显式可关**（用户可能不想给摘要任务付 LLM 钱）
 
 ---
@@ -148,21 +148,21 @@ mini-pi-web 当前每个 session 是一座**孤岛**：用户只能按"最近修
 
 ```
 ~/.pi/sessions/{id}.jsonl              ← SDK 原生存储（不动）
-~/.mini-pi/                            ← mini-pi-web 新增存储
+~/.diga-agent/                            ← diga-agent 新增存储
   ├── sessions/{id}.meta.json          ← 补充元数据：title / summary / labels / pinned / lastSeenAt
   ├── search-index.json                ← 全文搜索倒排索引（增量更新）
   └── settings.json                    ← 全局设置（含 budget 默认、approval rules）
 
-<project>/.mini-pi/                    ← 项目级（在 cwd 下）
+<project>/.diga-agent/                    ← 项目级（在 cwd 下）
   ├── prompts/*.md                     ← 项目常用 prompt 模板
   ├── memory.md                        ← 项目级笔记（agent 可读）
   └── settings.json                    ← 项目级覆盖
 ```
 
 **关键设计**：
-- 全局元数据放 `~/.mini-pi/`，不污染 SDK 的 `~/.pi/`
-- 项目级配置放 `<project>/.mini-pi/`，**可以 commit 进 git**（团队复用）
-- 与 RFC-2 共享 `~/.mini-pi/settings.json` 的存储位置
+- 全局元数据放 `~/.diga-agent/`，不污染 SDK 的 `~/.pi/`
+- 项目级配置放 `<project>/.diga-agent/`，**可以 commit 进 git**（团队复用）
+- 与 RFC-2 共享 `~/.diga-agent/settings.json` 的存储位置
 
 ### 3.2 四个特性详细设计
 
@@ -196,7 +196,7 @@ export interface SessionMeta {
 }
 ```
 
-**存储位置**：`~/.mini-pi/sessions/{sessionId}.meta.json`，每个 session 一个文件（**好处**：单个 session 删除时元数据也好清；并发写不互相影响）。
+**存储位置**：`~/.diga-agent/sessions/{sessionId}.meta.json`，每个 session 一个文件（**好处**：单个 session 删除时元数据也好清；并发写不互相影响）。
 
 **读取 API**（server-side）：
 
@@ -376,16 +376,16 @@ async function generateSummary(sessionId: string): Promise<{
 - 点击 title 可编辑（变成手动覆盖）
 - 摘要旁有 ↻ 图标，点击重新生成
 
-#### 3.2.4 F4：项目级记忆 `.mini-pi/`
+#### 3.2.4 F4：项目级记忆 `.diga-agent/`
 
 > ⚠️ **v0 实施方案变更（2026-06-02 Phase C 设计阶段确认）**
 >
-> 调研 SDK `@earendil-works/pi-coding-agent` 发现，它**已经内建**了完整的项目级记忆机制：`DefaultResourceLoader` 在创建 session 时会自动扫描 `<agentDir>/AGENTS.md` 和 cwd 一路向上每一级目录的 `AGENTS.md` / `CLAUDE.md`，并通过 `appendSystemPrompt` 注入。mini-pi-web 的 `lib/agent-registry.ts:236-241` 已经在用 `DefaultResourceLoader` 且未禁用，等价于**该机制已经在生产生效**，只是用户不知道。
+> 调研 SDK `@earendil-works/pi-coding-agent` 发现，它**已经内建**了完整的项目级记忆机制：`DefaultResourceLoader` 在创建 session 时会自动扫描 `<agentDir>/AGENTS.md` 和 cwd 一路向上每一级目录的 `AGENTS.md` / `CLAUDE.md`，并通过 `appendSystemPrompt` 注入。diga-agent 的 `lib/agent-registry.ts:236-241` 已经在用 `DefaultResourceLoader` 且未禁用，等价于**该机制已经在生产生效**，只是用户不知道。
 >
 > 因此 v0 决策：
 > - ✅ **不写代码**，复用 SDK 既有约定（`AGENTS.md` 是 Claude Code / Cursor / Aider 的事实标准）
 > - ✅ **写用户指南**：`docs/guides/project-memory.md`
-> - 🚫 暂不实现 `.mini-pi/agents.md`、`.mini-pi/prompts/`、`.mini-pi/settings.json`、"加入 memory" 抽取等
+> - 🚫 暂不实现 `.diga-agent/agents.md`、`.diga-agent/prompts/`、`.diga-agent/settings.json`、"加入 memory" 抽取等
 > - 下方原设计保留作为**未来可能扩展**的参考
 >
 > 推荐先读 → [项目级记忆指南](../guides/project-memory.md)
@@ -397,7 +397,7 @@ async function generateSummary(sessionId: string): Promise<{
 **目录结构**：
 
 ```
-<cwd>/.mini-pi/
+<cwd>/.diga-agent/
   ├── prompts/
   │   ├── refactor.md          # 用户写的 prompt 模板
   │   ├── new-feature.md
@@ -417,15 +417,15 @@ async function generateSummary(sessionId: string): Promise<{
 - 用户可在 UI 里点"加入 memory" 把任何 chat message 抽出来
 
 **settings.json**：
-- 与 `~/.mini-pi/settings.json` 同 schema，但**项目级优先**
-- 例：根目录默认 budget $5，敏感项目可以在 `.mini-pi/settings.json` 改成 $1
+- 与 `~/.diga-agent/settings.json` 同 schema，但**项目级优先**
+- 例：根目录默认 budget $5，敏感项目可以在 `.diga-agent/settings.json` 改成 $1
 
 **与 RFC-2 联动**：
 - 项目级 approval rules（"这个项目里 git push 必审批"）
 
 **git 友好**：
-- README 推荐 `.mini-pi/` 目录可以 commit
-- 但默认 `.gitignore` 模板里加 `.mini-pi/sessions/`（这些是个人对话，不应共享）
+- README 推荐 `.diga-agent/` 目录可以 commit
+- 但默认 `.gitignore` 模板里加 `.diga-agent/sessions/`（这些是个人对话，不应共享）
 - `prompts/` 和 `memory.md` 是团队资产，可以共享
 
 ### 3.3 修复 lastSeenMap 持久化（G5）
@@ -491,7 +491,7 @@ const isUnread = sess.modified.getTime() > seenAt;
 | 任务 | 工时 | 验收 |
 |------|-----|------|
 | B1 | 选型确认 + 引入 minisearch + 定义 `SearchIndex` schema | 0.3d | 包加完，dev 启动正常 |
-| B2 | `lib/search/build-index.ts`（构建 + 增量 + 持久化到 `~/.mini-pi/search-index.json`） | 1.0d | 100 session 测试，构建 < 5s，增量 < 50ms |
+| B2 | `lib/search/build-index.ts`（构建 + 增量 + 持久化到 `~/.diga-agent/search-index.json`） | 1.0d | 100 session 测试，构建 < 5s，增量 < 50ms |
 | B3 | `POST /api/search` + `POST /api/search/reindex` 路由 | 0.4d | 命中 query 返回带 snippet 的结果 |
 | B4 | Sidebar 搜索框 + `useSearch` hook + 命中渲染 | 0.5d | 输入 "宠物" 能找到 RFC-1 提到的 session |
 | B5 | 命中点击 → 打开 session + 跳到对应 entryId | 0.3d | 跳转后 entry 闪烁高亮 1 秒 |
@@ -512,7 +512,7 @@ const isUnread = sess.modified.getTime() > seenAt;
 
 **前置**：Phase A/B 完成（必需）。
 
-> ⚠️ **2026-06-02 方案变更**：调研发现 SDK `@earendil-works/pi-coding-agent` 的 `DefaultResourceLoader` 已经内建项目级 `AGENTS.md` 加载机制，且 mini-pi-web 已默认启用。Phase C v0 不需要写代码，**只产出用户指南**。下方原 C1–C8 任务列表全部转入「未来可能扩展」状态。
+> ⚠️ **2026-06-02 方案变更**：调研发现 SDK `@earendil-works/pi-coding-agent` 的 `DefaultResourceLoader` 已经内建项目级 `AGENTS.md` 加载机制，且 diga-agent 已默认启用。Phase C v0 不需要写代码，**只产出用户指南**。下方原 C1–C8 任务列表全部转入「未来可能扩展」状态。
 >
 > v0 实际产出（commit）：
 > - `docs/guides/project-memory.md`：完整用户指南（怎么写、加载顺序、常见模板、故障排查）
@@ -523,13 +523,13 @@ const isUnread = sess.modified.getTime() > seenAt;
 
 | 任务 | 工时 | 验收 |
 |------|-----|------|
-| ~~C1~~ | ~~`lib/project-memory/store.ts`：读写 `<cwd>/.mini-pi/`（含安全：写之前必须确认 cwd 在用户允许列表）~~ | ~~0.7d~~ | ~~单元测试覆盖 + 在 readonly 目录优雅降级~~ |
+| ~~C1~~ | ~~`lib/project-memory/store.ts`：读写 `<cwd>/.diga-agent/`（含安全：写之前必须确认 cwd 在用户允许列表）~~ | ~~0.7d~~ | ~~单元测试覆盖 + 在 readonly 目录优雅降级~~ |
 | ~~C2~~ | ~~`memory.md` 接入：创建 agent 时拼到 `appendSystemPrompt`~~ | ~~0.4d~~ | ~~改 memory.md 后新建 session 能看到生效~~ |
-| ~~C3~~ | ~~Prompt 模板：读 `.mini-pi/prompts/*.md` + parse front matter + 变量解析~~ | ~~0.8d~~ | ~~解析 `{{var}}` 模板正常~~ |
+| ~~C3~~ | ~~Prompt 模板：读 `.diga-agent/prompts/*.md` + parse front matter + 变量解析~~ | ~~0.8d~~ | ~~解析 `{{var}}` 模板正常~~ |
 | ~~C4~~ | ~~`PromptPicker` 组件（输入框上方下拉） + 模板变量小表单~~ | ~~0.8d~~ | ~~选模板 → 填表单 → fill 输入框~~ |
 | ~~C5~~ | ~~设置页：项目级 settings 编辑 UI（与全局 settings 合并显示）~~ | ~~0.6d~~ | ~~改完保存到对应文件，全局 vs 项目优先级生效~~ |
 | ~~C6~~ | ~~"加入 memory" 快捷动作（chat message 右键 → 抽到 memory.md）~~ | ~~0.5d~~ | ~~抽出后 memory.md 出现该段~~ |
-| ~~C7~~ | ~~README + 设置页文档解释 `.mini-pi/` 目录约定 + .gitignore 推荐~~ | ~~0.4d~~ | ~~文档可读~~ |
+| ~~C7~~ | ~~README + 设置页文档解释 `.diga-agent/` 目录约定 + .gitignore 推荐~~ | ~~0.4d~~ | ~~文档可读~~ |
 | ~~C8~~ | ~~E2E：在新项目里走一遍（建目录 → 写 memory → 用 prompt → agent 自然带上）~~ | ~~0.8d~~ | ~~整链路 happy path 跑通~~ |
 
 **v0 上线策略**：`AGENTS.md` 在项目根存在即生效，无 opt-in 开关。用户教育通过 [项目级记忆指南](../guides/project-memory.md) 完成。
@@ -555,9 +555,9 @@ v0 实际显著低于原估，主要因为：
 |---|------|-----|-----|-----|
 | R1 | search-index.json 损坏 | 低 | 中 | 校验失败时直接全量重建（异步） |
 | R2 | 摘要生成失败 / 模型 quota 用尽 | 中 | 低 | 失败静默，title 显示 fallback，下次再试 |
-| R3 | `~/.mini-pi/sessions/*.meta.json` 数量爆炸（1 万个文件） | 中 | 中 | 单文件方案保留；超过 5000 时迁 SQLite（v1） |
+| R3 | `~/.diga-agent/sessions/*.meta.json` 数量爆炸（1 万个文件） | 中 | 中 | 单文件方案保留；超过 5000 时迁 SQLite（v1） |
 | R4 | 摘要 prompt 泄漏敏感信息 | 中 | 高 | summary 必须存本地；用户可禁用整个特性 |
-| R5 | `.mini-pi/` 被误 commit 个人对话 | 中 | 高 | 默认 .gitignore 模板 + README 警告 |
+| R5 | `.diga-agent/` 被误 commit 个人对话 | 中 | 高 | 默认 .gitignore 模板 + README 警告 |
 | R6 | 项目级 settings 与全局 settings 优先级混乱 | 中 | 中 | 设置页明确显示"来源：global / project" |
 | R7 | 全文检索中文分词不准 | 中 | 中 | 默认按字符 + bigram；接 [@orama/tokenizers-chinese] 可选 |
 | R8 | 多窗口同时改 meta race condition | 低 | 低 | 写之前 read-merge-write，冲突时后者赢 |
@@ -580,7 +580,7 @@ v0 实际显著低于原估，主要因为：
 - [ ] 打开 modified > 24h 的 session 频率 +100%
 - [ ] 单 session 平均生成摘要数 1-3 次（说明触发节奏合理）
 - [ ] 摘要被用户手动编辑率 < 30%（说明质量可接受）
-- [ ] `.mini-pi/prompts/` 启用率 > 20%
+- [ ] `.diga-agent/prompts/` 启用率 > 20%
 - [ ] 启用项目记忆的项目里，复用 prompt 模板 > 3 次/周
 
 ### 6.3 反指标
@@ -602,7 +602,7 @@ v0 实际显著低于原估，主要因为：
 - `LabelEntry` 是 entry 级（针对 message），不是 session 级
 - 改 SDK schema 风险大、不归我们控
 
-→ **折中**：title 写两份（SDK 的 sessionName 和 meta.title），SDK 端用于 SDK 自己（如 print mode 输出）；其他 mini-pi-web 特性只读自己的 meta。
+→ **折中**：title 写两份（SDK 的 sessionName 和 meta.title），SDK 端用于 SDK 自己（如 print mode 输出）；其他 diga-agent 特性只读自己的 meta。
 
 ### 备选 B：用 SQLite 取代 JSON 文件
 
@@ -624,9 +624,9 @@ v0 实际显著低于原估，主要因为：
 
 ### 备选 D：把 prompt 模板放云端共享
 
-> 团队级 prompt 库，比 .mini-pi/ 更协作友好。
+> 团队级 prompt 库，比 .diga-agent/ 更协作友好。
 
-❌ 违反"本地优先"原则。`.mini-pi/prompts/` commit 进 git 已经是非常天然的团队共享方式了。
+❌ 违反"本地优先"原则。`.diga-agent/prompts/` commit 进 git 已经是非常天然的团队共享方式了。
 
 ### 备选 E：自动生成摘要时同时改 SDK session name
 
@@ -648,11 +648,11 @@ v0 实际显著低于原估，主要因为：
 
 ### 8.2 RFC-2
 
-- RFC-2 的 approval rules 可以从项目级 `.mini-pi/settings.json` 读
+- RFC-2 的 approval rules 可以从项目级 `.diga-agent/settings.json` 读
 - RFC-2 的 budget 默认值可以项目级覆盖
 - RFC-2 的审批历史**未来**可以作为 search 索引的一部分（v1）
 
-→ **存储位置已统一在 `.mini-pi/` 命名空间**，两个 RFC 共享同一套配置基础设施。
+→ **存储位置已统一在 `.diga-agent/` 命名空间**，两个 RFC 共享同一套配置基础设施。
 
 ### 8.3 长期愿景：v1+ 的可能性
 
@@ -697,7 +697,7 @@ v0 实际显著低于原估，主要因为：
 
 ### A.4 F4 项目记忆
 
-- [ ] 在 `<cwd>/.mini-pi/memory.md` 写"用 React 18 严格模式"
+- [ ] 在 `<cwd>/.diga-agent/memory.md` 写"用 React 18 严格模式"
 - [ ] 新建 session 后让 agent 用 useState，能在它 reply 里看到对 strict mode 的考虑
 - [ ] 创建 `prompts/refactor.md` 模板带 `{{file}}` 变量
 - [ ] 在输入框上方下拉里选到该模板，弹小表单填 `file`，fill 进输入框正确
@@ -759,7 +759,7 @@ node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.d.ts
 
 进入第二个 session，发现 agent 上次跑到一半被打断。
 
-打开输入框上方下拉，选 "📁 debug-prod.md" 模板（来自 `.mini-pi/prompts/`），fill 变量后 enter。agent 接着上次跑，开头自然引用 `memory.md` 里写的"用 pino 不用 console.log"。
+打开输入框上方下拉，选 "📁 debug-prod.md" 模板（来自 `.diga-agent/prompts/`），fill 变量后 enter。agent 接着上次跑，开头自然引用 `memory.md` 里写的"用 pino 不用 console.log"。
 
 用了 20 分钟修好，agent 自动 summary 更新成 "排查 SSE 连接断开 → 已修复"，cost +0.55，从未读变已读。
 
@@ -769,10 +769,10 @@ node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.d.ts
 
 ## 附录 D：术语表
 
-- **session meta**：mini-pi-web 自己存的、对 SDK session 的补充元数据
+- **session meta**：diga-agent 自己存的、对 SDK session 的补充元数据
 - **search index**：minisearch 实例 + 持久化 JSON
-- **project memory**：`<cwd>/.mini-pi/` 目录下的项目级配置/笔记/模板
-- **prompt template**：`.mini-pi/prompts/*.md` 里的可参数化 prompt
+- **project memory**：`<cwd>/.diga-agent/` 目录下的项目级配置/笔记/模板
+- **prompt template**：`.diga-agent/prompts/*.md` 里的可参数化 prompt
 - **last-seen**：用户最后查看某 session 的时间戳，用于未读判定
 
 ---

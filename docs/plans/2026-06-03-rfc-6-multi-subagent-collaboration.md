@@ -10,7 +10,7 @@
 
 ## 0. TL;DR
 
-mini-pi-web 当前已经具备多 session、工具审批、主动追问、SSE 自定义事件等协作基础，但所有复杂任务仍由一个 agent 串行完成。对于批量 RAG 问答、规则制度查询、代码审查、竞品分析这类任务，一个 agent 往往会在多个问题之间来回切换，导致速度慢、上下文混杂、答案不易归因。
+diga-agent 当前已经具备多 session、工具审批、主动追问、SSE 自定义事件等协作基础，但所有复杂任务仍由一个 agent 串行完成。对于批量 RAG 问答、规则制度查询、代码审查、竞品分析这类任务，一个 agent 往往会在多个问题之间来回切换，导致速度慢、上下文混杂、答案不易归因。
 
 本 RFC 建议新增 **Multi-Subagent Collaboration** 能力：
 
@@ -672,7 +672,7 @@ GET /api/agent/[id]/subagents
 后续 Phase D 可持久化到：
 
 ```text
-~/.mini-pi/subagents/{batchId}.json
+~/.diga-agent/subagents/{batchId}.json
 ```
 
 ---

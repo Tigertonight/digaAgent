@@ -1,6 +1,6 @@
 # Diga Agent Product Language
 
-This document is the source of truth for product language in `mini-pi-web`.
+This document is the source of truth for product language in Diga Agent.
 It complements `docs/design-tokens.md`: visual tokens define how the product
 looks; product language defines how the product speaks.
 

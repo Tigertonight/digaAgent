@@ -158,7 +158,7 @@ export function usePetDrag() {
       const newY = ref.startWinY + dy;
       ref.lastX = newX;
       ref.lastY = newY;
-      const api = window.miniPi;
+      const api = window.digaAgent;
       api?.pet?.move?.({ x: newX, y: newY });
     };
 
@@ -182,7 +182,7 @@ export function usePetDrag() {
 
       // 边缘吸附：mouseup 时查 workArea 算最终位置，平滑推一次 pet.move
       // 异步进行，不阻塞 mouseup 后续流程
-      const api = window.miniPi;
+      const api = window.digaAgent;
       if (!api?.pet?.getWorkArea) return;
       void (async () => {
         const wa = await api.pet.getWorkArea();

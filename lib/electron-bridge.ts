@@ -173,10 +173,33 @@ export interface SettingsApi {
   getProviderEnvMap(): Promise<Record<string, string[]>>;
 }
 
+export interface CloudflaredDependencyStatus {
+  installed: boolean;
+  path: string | null;
+  installable: boolean;
+  installer: "homebrew" | null;
+  installCommand: string;
+  error?: string | null;
+}
+
+export interface DependencyInstallResult {
+  ok: boolean;
+  installed: boolean;
+  path: string | null;
+  output: string;
+  error?: string | null;
+}
+
+export interface DependenciesApi {
+  getCloudflaredStatus(): Promise<CloudflaredDependencyStatus>;
+  installCloudflared(): Promise<DependencyInstallResult>;
+}
+
 export interface ElectronApi {
   getAppInfo(): Promise<AppInfo>;
   getApiBase(): Promise<string>;
   getLocalSecret(): Promise<string>;
+  dependencies?: DependenciesApi;
   updater: UpdaterApi;
   selectDirectory(opts?: SelectDirectoryOptions): Promise<string | null>;
   revealInFinder(path: string): Promise<boolean>;
@@ -236,17 +259,17 @@ export interface ElectronApi {
 
 declare global {
   interface Window {
-    miniPi?: ElectronApi;
+    digaAgent?: ElectronApi;
   }
 }
 
 /** 在浏览器环境返回 null，在 Electron 渲染进程返回 API */
 export function getElectronApi(): ElectronApi | null {
   if (typeof window === "undefined") return null;
-  return window.miniPi ?? null;
+  return window.digaAgent ?? null;
 }
 
 /** 同步判断当前是否在 Electron 中（用于条件渲染） */
 export function isElectron(): boolean {
-  return typeof window !== "undefined" && !!window.miniPi;
+  return typeof window !== "undefined" && !!window.digaAgent;
 }

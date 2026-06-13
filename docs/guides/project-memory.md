@@ -20,7 +20,7 @@ cat > AGENTS.md <<'EOF'
 EOF
 ```
 
-刷新 mini-pi-web，下一次新建 session 时，agent 已经"知道"上述约定，不需要每次复制粘贴重申。
+刷新 diga-agent，下一次新建 session 时，agent 已经"知道"上述约定，不需要每次复制粘贴重申。
 
 ---
 
@@ -149,7 +149,7 @@ Diga Agent 底层的 SDK（`@earendil-works/pi-coding-agent`）在每次创建 /
 
 新建 session 后，agent 的回复如果第一个字符是 🎯，说明读到了。**测完记得删掉这条**。
 
-方法 3 — 看 mini-pi-web server 日志（如果 SDK 有 verbose 模式）
+方法 3 — 看 diga-agent server 日志（如果 SDK 有 verbose 模式）
 
 ---
 
@@ -215,10 +215,10 @@ SDK 候选名是固定的 4 个：`AGENTS.md` / `AGENTS.MD` / `CLAUDE.md` / `CLA
 
 后续可能加（待用户反馈再决定）：
 
-- **UI 编辑面板**：在 mini-pi-web settings 里直接编辑（不用切到编辑器）
+- **UI 编辑面板**：在 diga-agent settings 里直接编辑（不用切到编辑器）
 - **session → memory 抽取**：右键某条 message → "加入 memory.md"
 - **AI 自动学习**：agent 发现"用户反复纠正同一件事" → 提议加入 memory
-- **`.mini-pi/` 命名空间**：如果 `AGENTS.md` 在项目根太"显眼"，提供 `.mini-pi/agents.md` 作为可选位置
+- **`.diga-agent/` 命名空间**：如果 `AGENTS.md` 在项目根太"显眼"，提供 `.diga-agent/agents.md` 作为可选位置
 
 这些都不在 v0 范围内。当前 v0 = "教用户用 SDK 已经内建的能力"。
 
@@ -231,12 +231,12 @@ SDK 候选名是固定的 4 个：`AGENTS.md` / `AGENTS.MD` / `CLAUDE.md` / `CLA
 - **新建 session**，不是 resume 旧 session（旧 session 启动时的 system prompt 已经固化）
   - 不过 SDK 也会在 resume 时重新加载，理论上应该生效
 - 检查文件名大小写（`AGENTS.md` 不是 `Agents.md`）
-- 检查文件路径是不是在你 mini-pi-web 选定的 cwd 下
+- 检查文件路径是不是在你 diga-agent 选定的 cwd 下
 - 用第 5 节方法 2 写一条特征约定验证
 
 ### Q2：怎么知道我现在的 cwd 是哪个？
 
-- mini-pi-web 顶部状态栏 / settings 页应该有显示
+- diga-agent 顶部状态栏 / settings 页应该有显示
 - 或者新建 session 后直接问 agent：「pwd」
 
 ### Q3：我在 monorepo 父目录写了 AGENTS.md，子包没生效？

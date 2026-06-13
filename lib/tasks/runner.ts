@@ -18,11 +18,11 @@ import type {
   LongTaskRun,
 } from "@/lib/tasks/types";
 
-const g = globalThis as unknown as { __miniPiLongTaskRunner?: { starting: Set<string> } };
-if (!g.__miniPiLongTaskRunner) {
-  g.__miniPiLongTaskRunner = { starting: new Set() };
+const g = globalThis as unknown as { __digaAgentLongTaskRunner?: { starting: Set<string> } };
+if (!g.__digaAgentLongTaskRunner) {
+  g.__digaAgentLongTaskRunner = { starting: new Set() };
 }
-const runnerState = g.__miniPiLongTaskRunner;
+const runnerState = g.__digaAgentLongTaskRunner;
 
 export interface StartLongTaskRunResult {
   task: LongTaskDefinition;

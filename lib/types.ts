@@ -41,7 +41,7 @@ export interface SessionInfoLite {
   lastEventSeq?: number;
   runtimeUpdatedAt?: number;
   /**
-   * RFC-3 Phase A：mini-pi-web 自维护的元数据（title / pinned / ...）。
+   * RFC-3 Phase A：diga-agent 自维护的元数据（title / pinned / ...）。
    * 没有 meta 文件时缺省 undefined；UI 自己做 fallback。
    */
   meta?: SessionMeta;

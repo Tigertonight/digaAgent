@@ -391,7 +391,7 @@ describe("runSubagentBatch lifecycle", () => {
 
 describe("subagent batch metadata persistence", () => {
   it("persists and hydrates batch/task metadata", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "mini-pi-subagents-"));
+    const root = mkdtempSync(path.join(os.tmpdir(), "diga-agent-subagents-"));
     try {
       __setSubagentStoreRootForTest(root);
       const listeners = new Set<(event: { type: string; message?: unknown }) => void>();
@@ -486,7 +486,7 @@ describe("subagent batch metadata persistence", () => {
 
 describe("retrySubagentTask", () => {
   it("reruns a single task, preserves the previous attempt, and updates metadata", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "mini-pi-subagents-retry-"));
+    const root = mkdtempSync(path.join(os.tmpdir(), "diga-agent-subagents-retry-"));
     try {
       __setSubagentStoreRootForTest(root);
       let answer = "first answer";
@@ -597,7 +597,7 @@ describe("retrySubagentTask", () => {
 
 describe("resumeSubagentBatch", () => {
   it("reruns unfinished tasks by session ownership and preserves interrupted attempts", async () => {
-    const root = mkdtempSync(path.join(os.tmpdir(), "mini-pi-subagents-resume-"));
+    const root = mkdtempSync(path.join(os.tmpdir(), "diga-agent-subagents-resume-"));
     try {
       __setSubagentStoreRootForTest(root);
       putBatch({

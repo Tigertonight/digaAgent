@@ -28,7 +28,7 @@ describe("mcp registry", () => {
   let root: string;
 
   beforeEach(() => {
-    root = mkdtempSync(path.join(os.tmpdir(), "mini-pi-mcp-"));
+    root = mkdtempSync(path.join(os.tmpdir(), "diga-agent-mcp-"));
     __setMcpRegistryRootForTest(root);
   });
 

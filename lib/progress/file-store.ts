@@ -11,7 +11,7 @@ import type {
 } from "./types";
 
 function defaultRoot(): string {
-  return path.join(os.homedir(), ".mini-pi");
+  return path.join(os.homedir(), ".diga-agent");
 }
 
 let activeRoot: string | null = null;

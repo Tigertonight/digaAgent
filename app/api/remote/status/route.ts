@@ -55,7 +55,7 @@ export async function GET(req: Request) {
     candidates,
     port: settings.port,
     publicTunnel: tunnel,
-    defaultCwd: process.env.MINI_PI_WEB_ROOT || process.cwd(),
+    defaultCwd: process.env.DIGA_AGENT_WEB_ROOT || process.cwd(),
     defaultProvider: defaultModel?.provider,
     defaultModelId: defaultModel?.id,
     activeAgents: listAgentSummaries().filter((agent) => !agent.hidden),

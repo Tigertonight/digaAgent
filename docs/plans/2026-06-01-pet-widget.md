@@ -16,7 +16,7 @@
 - **品牌帧图**：`public/brand/diga-logo-frames/diga-logo-01.webp` ~ `diga-logo-16.webp`（16 帧）
 - **主 logo**：`public/brand/diga-logo-main.webp`
 - **Electron 设置窗口参考**：`electron/main.js` 里的 `openSettingsWindow()` 函数——宠物窗口照此模式建
-- **IPC bridge**：`electron/preload.js` 暴露 `window.miniPi`，`lib/electron-bridge.ts` 是 TS 类型定义
+- **IPC bridge**：`electron/preload.js` 暴露 `window.digaAgent`，`lib/electron-bridge.ts` 是 TS 类型定义
 - **Runner 状态**：`lib/session-runner.ts` 里的 `RunnerState`，`AgentPhase` 类型
 - **主窗口状态推送点**：`app/ChatApp.tsx` 里的 `activeSnapshot` 和 `runnersRef`
 
@@ -32,16 +32,16 @@ done       → agent_end 刚触发（帧 15-16 短暂播放后回 idle）
 ### IPC 数据流
 ```
 ChatApp.tsx (渲染进程)
-  → window.miniPi.sendPetState(state)   [新增 IPC channel]
+  → window.digaAgent.sendPetState(state)   [新增 IPC channel]
   → ipcMain 接收 → petWindow.webContents.send("pet:state", state)
 
 宠物窗口 (/pet/page.tsx)
-  → window.miniPi.onPetState(cb)        [新增 IPC listener]
+  → window.digaAgent.onPetState(cb)        [新增 IPC listener]
   → 更新宠物动画状态
 
 宠物窗口操作
   → fetch("/api/agent/[id]", { abort | prompt })   [直接走 REST，不走 IPC]
-  → window.miniPi.focusMainWindow()                [新增 IPC，聚焦主窗口]
+  → window.digaAgent.focusMainWindow()                [新增 IPC，聚焦主窗口]
 ```
 
 ### PetState 结构
@@ -117,7 +117,7 @@ pet: {
 
 ### Step 2: 在 preload.js 暴露宠物 IPC
 
-在 `contextBridge.exposeInMainWorld("miniPi", { ... })` 的对象末尾追加：
+在 `contextBridge.exposeInMainWorld("digaAgent", { ... })` 的对象末尾追加：
 
 ```javascript
 // electron/preload.js —— 在 settings 对象后面追加
@@ -427,7 +427,7 @@ export function usePetState() {
 
   // 订阅 IPC 推送
   useEffect(() => {
-    const api = (window as unknown as { miniPi?: { pet?: { onState?: (cb: (s: PetState) => void) => () => void } } }).miniPi;
+    const api = (window as unknown as { digaAgent?: { pet?: { onState?: (cb: (s: PetState) => void) => () => void } } }).digaAgent;
     if (!api?.pet?.onState) return;
     const unsub = api.pet.onState((state) => {
       setPetState(state);
@@ -480,7 +480,7 @@ export function usePetState() {
 
   /** 聚焦主窗口并切到对应 session */
   const focusMain = useCallback((sessionId?: string) => {
-    const api = (window as unknown as { miniPi?: { pet?: { focusMain?: (id?: string) => void } } }).miniPi;
+    const api = (window as unknown as { digaAgent?: { pet?: { focusMain?: (id?: string) => void } } }).digaAgent;
     api?.pet?.focusMain?.(sessionId ?? displaySession?.id);
   }, [displaySession]);
 
@@ -1048,7 +1048,7 @@ export function usePetDrag() {
       const dy = ev.screenY - ref.startMouseY;
       const newX = ref.startWinX + dx;
       const newY = ref.startWinY + dy;
-      const api = (window as unknown as { miniPi?: { pet?: { move?: (pos: {x: number; y: number}) => void } } }).miniPi;
+      const api = (window as unknown as { digaAgent?: { pet?: { move?: (pos: {x: number; y: number}) => void } } }).digaAgent;
       // 通过自定义 IPC 移动窗口（需要在 preload + ipcMain 里注册）
       api?.pet?.move?.({ x: newX, y: newY });
     };

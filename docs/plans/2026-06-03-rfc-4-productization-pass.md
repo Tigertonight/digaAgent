@@ -3,7 +3,7 @@
 > **状态**：Completed
 > **创建**：2026-06-03
 > **完成**：2026-06-03
-> **目标**：把 mini-pi-web 从“功能可用”推进到“新用户能配置、长任务能放心跑、核心代码能继续演进”的 Beta+ 状态
+> **目标**：把 diga-agent 从“功能可用”推进到“新用户能配置、长任务能放心跑、核心代码能继续演进”的 Beta+ 状态
 > **范围**：Provider/Auth Onboarding、Long-running Reliability、ChatApp Thin Pass
 > **预计工期**：5-7 人天
 

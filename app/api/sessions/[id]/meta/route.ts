@@ -1,8 +1,8 @@
 /**
- * RFC-3 Phase A3：mini-pi-web 自维护 session meta 的读写路由。
+ * RFC-3 Phase A3：diga-agent 自维护 session meta 的读写路由。
  *
  * 与 `/api/sessions/[id]` PATCH（写 SDK 的 SessionInfo entry / name）严格分离：
- *   - 本路由只动 `~/.mini-pi/sessions/{id}.meta.json`
+ *   - 本路由只动 `~/.diga-agent/sessions/{id}.meta.json`
  *   - 不动 SDK 数据；不需要 session 文件存在（允许预先写 meta）
  *
  * 设计：

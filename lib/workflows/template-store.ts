@@ -25,15 +25,15 @@ type TemplateStoreState = {
 };
 
 const g = globalThis as unknown as {
-  __miniPiWorkflowTemplateStore?: TemplateStoreState;
+  __digaAgentWorkflowTemplateStore?: TemplateStoreState;
 };
-if (!g.__miniPiWorkflowTemplateStore) {
-  g.__miniPiWorkflowTemplateStore = { rootOverride: null };
+if (!g.__digaAgentWorkflowTemplateStore) {
+  g.__digaAgentWorkflowTemplateStore = { rootOverride: null };
 }
-const store = g.__miniPiWorkflowTemplateStore;
+const store = g.__digaAgentWorkflowTemplateStore;
 
 function defaultRoot(): string {
-  return path.join(os.homedir(), ".mini-pi");
+  return path.join(os.homedir(), ".diga-agent");
 }
 
 function getRoot(): string {

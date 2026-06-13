@@ -1,4 +1,4 @@
-# mini-pi-web npm 发布过滤
+# Diga Agent npm 发布过滤
 #
 # package.json "files" 已是白名单（bin/, .next/, public/, next.config.*, README, LICENSE），
 # 这里只在 .next/ 内部再排除一些 build artifact 噪声（节省 publish 体积）。

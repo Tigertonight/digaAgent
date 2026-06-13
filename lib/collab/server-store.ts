@@ -9,7 +9,7 @@
  *
  * 为什么挂 globalThis：
  *   Next dev 模式下 module 被 hot-reload 时会丢 in-module state，
- *   同 agent-registry 一样用 globalThis.__miniPiCollab 持久化，避免改个 UI 就丢所有 pending。
+ *   同 agent-registry 一样用 globalThis.__digaAgentCollab 持久化，避免改个 UI 就丢所有 pending。
  *
  * R2 5min 超时：registerPendingApproval 里 setTimeout，到点按 defaultDecision 自动结算。
  * R5 多 session 并发：id 已含 agentId 前缀，所以同一个 toolCallId 在不同 session 不会撞。
@@ -47,11 +47,11 @@ interface CollabStore {
   sessionRemember: Map<string, Set<string>>;
 }
 
-const g = globalThis as unknown as { __miniPiCollab?: CollabStore };
-if (!g.__miniPiCollab) {
-  g.__miniPiCollab = { pending: new Map(), sessionRemember: new Map() };
+const g = globalThis as unknown as { __digaAgentCollab?: CollabStore };
+if (!g.__digaAgentCollab) {
+  g.__digaAgentCollab = { pending: new Map(), sessionRemember: new Map() };
 }
-const store = g.__miniPiCollab!;
+const store = g.__digaAgentCollab!;
 // 老进程升级兼容：旧 store 没 sessionRemember 字段时补上
 if (!store.sessionRemember) store.sessionRemember = new Map();
 

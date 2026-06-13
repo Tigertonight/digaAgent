@@ -27,16 +27,16 @@ interface PairStore {
   codes: Map<string, PairingCodeRecord>;
 }
 
-const g = globalThis as unknown as { __miniPiRemotePairs?: PairStore };
-if (!g.__miniPiRemotePairs) {
-  g.__miniPiRemotePairs = { codes: new Map() };
+const g = globalThis as unknown as { __digaAgentRemotePairs?: PairStore };
+if (!g.__digaAgentRemotePairs) {
+  g.__digaAgentRemotePairs = { codes: new Map() };
 }
-const pairStore = g.__miniPiRemotePairs;
+const pairStore = g.__digaAgentRemotePairs;
 
 function settingsPath(): string {
   return (
-    process.env.MINI_PI_SETTINGS_FILE ||
-    path.join(os.homedir(), ".mini-pi", "settings.json")
+    process.env.DIGA_AGENT_SETTINGS_FILE ||
+    path.join(os.homedir(), ".diga-agent", "settings.json")
   );
 }
 
@@ -265,8 +265,8 @@ export function parseBearer(req: Request): string | null {
 }
 
 export function isLocalRequest(req: Request): boolean {
-  const secret = process.env.MINI_PI_LOCAL_SECRET;
-  if (secret && req.headers.get("x-mini-pi-local-secret") === secret) {
+  const secret = process.env.DIGA_AGENT_LOCAL_SECRET;
+  if (secret && req.headers.get("x-diga-agent-local-secret") === secret) {
     return true;
   }
   if (secret) return false;
