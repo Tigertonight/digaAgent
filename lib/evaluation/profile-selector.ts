@@ -22,19 +22,12 @@ export function inferEvaluationProfileId(
     .toLowerCase();
 
   if (
-    /\b(send|publish|deploy|delete|remove|email|message|post|release|production|secret|token|key)\b/.test(
+    /\b(send|publish|deploy|delete|remove|email|message|post|publish release|deploy release|production release|secret|token|key)\b/.test(
       text
     ) ||
     /发送|发布|部署|删除|密钥|隐私|外部账号|生产环境/.test(text)
   ) {
     return "desktop.external-action";
-  }
-
-  if (
-    /\b(upstream|merge|sync|cherry-pick|rebase|release notes|fork)\b/.test(text) ||
-    /上游|同步|合并|迁移|摘取|分叉|原版/.test(text)
-  ) {
-    return "upstream.sync";
   }
 
   if (

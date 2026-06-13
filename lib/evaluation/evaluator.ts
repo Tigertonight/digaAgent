@@ -54,6 +54,31 @@ function defaultScore(status: CriterionScoreInput["status"]): number {
   }
 }
 
+/**
+ * `accepted_skip` grants a passing score and bypasses problem / hard-fail
+ * accounting, so it is the one status an agent could abuse to "skip the hard
+ * parts" and still clear the gate. It is only legitimate for low-stakes
+ * criteria that are explicitly justified. We downgrade it to `fail` when:
+ *   - the criterion is `essential` or marked `hardFail` (core requirements can
+ *     never be waived by the executor), or
+ *   - no human-written skip reason was supplied (a silent skip is a fail).
+ * Because every downstream check reads the *normalized* status, downgrading
+ * here re-engages problem detection, hard-fail, and essential-failure handling
+ * automatically — there is no second place to patch.
+ */
+function resolveSkipStatus(
+  criterion: RubricCriterion,
+  input: CriterionScoreInput | undefined
+): CriterionScoreInput["status"] {
+  if (input?.status !== "accepted_skip") return input?.status ?? "fail";
+  const waivable = criterion.importance === "optional" || criterion.importance === "important";
+  const hasReason = Boolean(input.reason?.trim());
+  if (!waivable || criterion.hardFail || !hasReason) {
+    return "fail";
+  }
+  return "accepted_skip";
+}
+
 function normalizeCriterionScores(
   rubric: RubricSpec,
   inputScores: CriterionScoreInput[]
@@ -61,11 +86,16 @@ function normalizeCriterionScores(
   const byId = new Map(inputScores.map((score) => [score.criterionId, score]));
   return rubric.criteria.map((criterion) => {
     const input = byId.get(criterion.id);
-    const status = input?.status ?? "fail";
+    const status = resolveSkipStatus(criterion, input);
+    // A skip that was downgraded to fail must not keep the caller's optimistic
+    // score; recompute from the resolved status unless an explicit score stands
+    // for the *resolved* status.
+    const useInputScore =
+      typeof input?.score === "number" && status === input.status;
     return {
       criterionId: criterion.id,
       status,
-      score: roundScore(input?.score ?? defaultScore(status)),
+      score: roundScore(useInputScore ? input!.score! : defaultScore(status)),
       reason: input?.reason?.trim() || criterion.description,
       evidenceIds: input?.evidenceIds?.filter(Boolean),
     };

@@ -61,7 +61,11 @@ describe("evaluateRubric", () => {
         { criterionId: "core-flow", status: "pass", evidenceIds: ["test-1"] },
         { criterionId: "minimal-change", status: "pass" },
         { criterionId: "build-pass", status: "pass", evidenceIds: ["cmd-1"] },
-        { criterionId: "nice-copy", status: "accepted_skip" },
+        {
+          criterionId: "nice-copy",
+          status: "accepted_skip",
+          reason: "Out of scope for this task; copy unchanged.",
+        },
         { criterionId: "secret-leak", status: "pass" },
       ],
       createdAt: 1234,
@@ -190,19 +194,63 @@ describe("evaluateRubric", () => {
           {
             id: "not-applicable",
             dimensionId: "functional_correctness",
-            importance: "essential",
+            importance: "optional",
             description: "Skipped by explicit decision.",
           },
         ],
       }),
       criteria: [
         { criterionId: "must-have", status: "pass" },
-        { criterionId: "not-applicable", status: "accepted_skip" },
+        {
+          criterionId: "not-applicable",
+          status: "accepted_skip",
+          reason: "Feature flag disables this path in the target environment.",
+        },
       ],
     });
 
     expect(result.dimensionScores[0]?.score).toBe(1);
     expect(result.status).toBe("passed");
+  });
+
+  it("downgrades accepted_skip on essential/hardFail criteria to a fail", () => {
+    const result = evaluateRubric({
+      rubric: rubric(),
+      criteria: [
+        // core-flow is essential + hardFail; an executor must not be able to
+        // waive it by reporting accepted_skip — even with a reason.
+        {
+          criterionId: "core-flow",
+          status: "accepted_skip",
+          reason: "Too hard to verify right now.",
+          evidenceIds: ["test-1"],
+        },
+        { criterionId: "minimal-change", status: "pass" },
+        { criterionId: "build-pass", status: "pass", evidenceIds: ["cmd-1"] },
+        { criterionId: "nice-copy", status: "pass" },
+        { criterionId: "secret-leak", status: "pass" },
+      ],
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.hardFails).toContain("core-flow");
+    expect(result.failedCriteria).toContain("core-flow");
+  });
+
+  it("downgrades accepted_skip without a reason even on optional criteria", () => {
+    const result = evaluateRubric({
+      rubric: rubric(),
+      criteria: [
+        { criterionId: "core-flow", status: "pass", evidenceIds: ["test-1"] },
+        { criterionId: "minimal-change", status: "pass" },
+        { criterionId: "build-pass", status: "pass", evidenceIds: ["cmd-1"] },
+        // optional, but no skip reason -> a silent skip is treated as a fail.
+        { criterionId: "nice-copy", status: "accepted_skip" },
+        { criterionId: "secret-leak", status: "pass" },
+      ],
+    });
+
+    expect(result.failedCriteria).toContain("nice-copy");
   });
 
   it("iterates when a required dimension minimum is not met", () => {

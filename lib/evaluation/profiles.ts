@@ -336,26 +336,6 @@ export const SKILL_EVAL_PROFILE: EvaluatorWeightProfile = {
   },
 };
 
-export const UPSTREAM_SYNC_PROFILE: EvaluatorWeightProfile = {
-  version: "1",
-  profileId: "upstream.sync",
-  taskClass: "workflow",
-  targetScore: 0.92,
-  dimensions: [
-    { id: "change_classification", name: "上游变更分类", weight: 0.25, minScore: 0.85 },
-    { id: "lxw_boundary_preserved", name: "LXW 边界保护", weight: 0.35, minScore: 0.9 },
-    { id: "migration_safety", name: "迁移安全性", weight: 0.25, minScore: 0.85 },
-    { id: "verification_plan", name: "验证计划", weight: 0.15 },
-  ],
-  importanceWeights: DEFAULT_IMPORTANCE_WEIGHTS,
-  exitPolicy: {
-    maxIterations: 4,
-    minDelta: 0.02,
-    blockedRepeatLimit: 3,
-    scoreCapWithoutEvidence: 0.55,
-  },
-};
-
 export const EVALUATOR_WEIGHT_PROFILES: EvaluatorWeightProfile[] = [
   CODING_DEFAULT_PROFILE,
   CODING_FRONTEND_UI_PROFILE,
@@ -366,7 +346,6 @@ export const EVALUATOR_WEIGHT_PROFILES: EvaluatorWeightProfile[] = [
   ATTRIBUTION_ANALYSIS_PROFILE,
   TEACHER_WORKFLOW_PROFILE,
   SKILL_EVAL_PROFILE,
-  UPSTREAM_SYNC_PROFILE,
 ];
 
 export function getEvaluatorWeightProfile(

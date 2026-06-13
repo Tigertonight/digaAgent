@@ -29,10 +29,7 @@ describe("inferEvaluationProfileId", () => {
     );
   });
 
-  it("selects LXW analysis and workflow profiles", () => {
-    expect(inferEvaluationProfileId({ objective: "同步上游 Diga 更新" })).toBe(
-      "upstream.sync"
-    );
+  it("selects specialized analysis and workflow profiles", () => {
     expect(inferEvaluationProfileId({ objective: "评测这个 skill 的负样本" })).toBe(
       "skill.eval"
     );
