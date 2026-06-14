@@ -132,6 +132,7 @@
       "node_modules/keytar/**/*",
       "**/.next/standalone/node_modules/@earendil-works/pi-coding-agent/**/*"
     ],
+    "afterPack": "scripts/electron-after-pack.mjs",
     "extraResources": [
       {
         "from": "build/trayTemplate.png",
