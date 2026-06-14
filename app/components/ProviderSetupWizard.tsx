@@ -21,7 +21,9 @@ interface ProviderSetupWizardProps {
 
 const cardBase =
   "group flex w-full items-start gap-3 rounded-md border p-3 text-left transition-colors hover:bg-[color:var(--bg-hover)]";
-const quarantineCommand = "xattr -dr com.apple.quarantine /Applications/Diga\\ Agent.app";
+const quarantineCommand = 'xattr -dr com.apple.quarantine "/Applications/Diga Agent.app"';
+const appAttributesCommand = 'xattr -cr "/Applications/Diga Agent.app"';
+const macInstallCommands = `${quarantineCommand}\n${appAttributesCommand}`;
 const localCodingAssistantNpmInstallCommand =
   "# 请联系管理员获取公司内部 npm 源地址和包名\nnpm config set @company:registry https://npm.company.example\nnpm install -g @company/coding-assistant@latest\ncoding-assistant -version";
 const localCodingAssistantScriptInstallCommand =
@@ -105,7 +107,7 @@ export function ProviderSetupWizard({
     onOpenModelsConfig();
   };
   const copyQuarantineCommand = () => {
-    void navigator.clipboard?.writeText(quarantineCommand);
+    void navigator.clipboard?.writeText(macInstallCommands);
   };
   const copyText = (text: string) => {
     void navigator.clipboard?.writeText(text);
@@ -171,7 +173,7 @@ export function ProviderSetupWizard({
               <div>
                 <div className="font-medium">macOS 提示“已损坏”或“无法打开”</div>
                 <div className="mt-0.5" style={{ color: "var(--text-muted)" }}>
-                  当前 DMG 未做 Apple 开发者签名。安装到 Applications 后，在终端执行：
+                  当前 DMG 未做 Apple 开发者签名。拖到 Applications 后，在终端按顺序执行两条命令：
                 </div>
               </div>
               <button
@@ -179,7 +181,7 @@ export function ProviderSetupWizard({
                 onClick={copyQuarantineCommand}
                 className="inline-flex h-7 shrink-0 items-center gap-1 rounded border px-2 hover:bg-[color:var(--bg-hover)]"
                 style={{ borderColor: "var(--border)" }}
-                title="复制终端命令"
+                title="复制两条终端命令"
               >
                 <Clipboard size={13} />
                 复制
@@ -192,7 +194,10 @@ export function ProviderSetupWizard({
                 background: "var(--bg-panel)",
               }}
             >
-              {quarantineCommand}
+              <span className="block text-[color:var(--text-muted)]"># 1. 先移除安装包 quarantine 标记</span>
+              <span className="block">{quarantineCommand}</span>
+              <span className="mt-1 block text-[color:var(--text-muted)]"># 2. 再清理 App 内部扩展属性，避免本地 agent 运行报错</span>
+              <span className="block">{appAttributesCommand}</span>
             </code>
           </div>
 

@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useProviderStatus } from "./useProviderStatus";
 import type { ProviderInfo } from "@/lib/types";
 import {
-  curateProviderModels,
   DEFAULT_MODEL_ID,
   DEFAULT_MODEL_STORAGE_VERSION,
   DEFAULT_PROVIDER_ID,
@@ -36,8 +35,8 @@ export function normalizeProviderModelSelection(
 
 export function useProviderModel() {
   const { providers, reloadProviders: fetchProviders } = useProviderStatus();
-  const curatedProviders = useMemo(
-    () => curateProviderModels(providers).filter((provider) => provider.hasAuth),
+  const visibleProviders = useMemo(
+    () => providers.filter((provider) => provider.models.length > 0),
     [providers]
   );
   const [providerId, setProviderId] = useState<string>("");
@@ -82,13 +81,13 @@ export function useProviderModel() {
       void fetchProviders()
         .then((data) => {
           if (!data?.providers || !applyDefaults) return;
-          const curated = curateProviderModels(data.providers).filter(
-            (provider) => provider.hasAuth
+          const visible = data.providers.filter(
+            (provider) => provider.models.length > 0
           );
           setProviderId((curProv) => {
             setModelId((curModel) => {
               return normalizeProviderModelSelection(
-                curated,
+                visible,
                 curProv,
                 curModel,
                 data.defaultProvider,
@@ -96,7 +95,7 @@ export function useProviderModel() {
               ).modelId;
             });
             return normalizeProviderModelSelection(
-              curated,
+              visible,
               curProv,
               "",
               data.defaultProvider,
@@ -114,13 +113,13 @@ export function useProviderModel() {
   }, [reloadProviders]);
 
   const currentProvider = useMemo(
-    () => curatedProviders.find((p) => p.provider === providerId),
-    [curatedProviders, providerId]
+    () => visibleProviders.find((p) => p.provider === providerId),
+    [visibleProviders, providerId]
   );
 
   return {
-    providers: curatedProviders,
-    visibleProviders: curatedProviders,
+    providers: visibleProviders,
+    visibleProviders,
     currentProvider,
     providerId,
     setProviderId,

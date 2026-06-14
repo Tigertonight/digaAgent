@@ -21,6 +21,19 @@ npx diga-agent doctor
 
 Default URL: <http://localhost:30142>
 
+## macOS DMG Install
+
+The DMG is not signed with an Apple Developer ID yet. After dragging
+`Diga Agent.app` into Applications, run these two commands in Terminal in order:
+
+```bash
+# 1. Remove the quarantine flag added by macOS Gatekeeper.
+xattr -dr com.apple.quarantine "/Applications/Diga Agent.app"
+
+# 2. Clear extended attributes inside the app bundle before running the local agent.
+xattr -cr "/Applications/Diga Agent.app"
+```
+
 ## What's New (2026-06-02)
 
 `pet` branch landed 4 major capabilities on top of the original web UI:
