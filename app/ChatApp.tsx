@@ -980,6 +980,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const {
     showAuth,
     authInitialProvider,
+    showCompanyClaude3PConfig,
     showModelsConfig,
     showProviderSetup,
     showSystemPrompt,
@@ -990,6 +991,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     setShowAuth,
     openAuth,
     closeAuth,
+    setShowCompanyClaude3PConfig,
     setShowModelsConfig,
     setShowProviderSetup,
     setShowSystemPrompt,
@@ -1000,7 +1002,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     closeSystemPrompt,
   } = useChatModalsState();
   const [providerSetupChild, setProviderSetupChild] = useState<
-    "auth" | "models" | null
+    "auth" | "company3p" | "models" | null
   >(null);
   /** RFC-2 Phase A3：Budget 命中后由 useBudgetEnforcer 设置；非 null 时弹 BudgetExceededModal */
   const [budgetPausedTrigger, setBudgetPausedTrigger] =
@@ -2982,6 +2984,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           showProviderSetup,
           showAuth,
           authInitialProvider,
+          showCompanyClaude3PConfig,
           showModelsConfig,
           providerSetupChild,
           showSystemPrompt,
@@ -3013,6 +3016,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           setShowProviderSetup(false);
           openAuth(provider);
         }}
+        onProviderSetupOpenCompanyClaude3PConfig={() => {
+          setProviderSetupChild("company3p");
+          setShowProviderSetup(false);
+          setShowCompanyClaude3PConfig(true);
+        }}
         onProviderSetupOpenModelsConfig={() => {
           setProviderSetupChild("models");
           setShowProviderSetup(false);
@@ -3028,6 +3036,16 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           setShowProviderSetup(true);
         }}
         onAuthChanged={() => reloadProviders(false)}
+        onCloseCompanyClaude3PConfig={() => {
+          setProviderSetupChild(null);
+          setShowCompanyClaude3PConfig(false);
+        }}
+        onBackFromCompanyClaude3PConfig={() => {
+          setShowCompanyClaude3PConfig(false);
+          setProviderSetupChild(null);
+          setShowProviderSetup(true);
+        }}
+        onCompanyClaude3PConfigChanged={() => reloadProviders(false)}
         onCloseModelsConfig={() => {
           setProviderSetupChild(null);
           setShowModelsConfig(false);

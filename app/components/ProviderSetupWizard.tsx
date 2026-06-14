@@ -16,6 +16,7 @@ import { useProviderStatus } from "@/app/hooks/useProviderStatus";
 interface ProviderSetupWizardProps {
   onClose: () => void;
   onOpenAuth: (provider?: string) => void;
+  onOpenCompanyClaude3PConfig: () => void;
   onOpenModelsConfig: () => void;
 }
 
@@ -44,6 +45,7 @@ interface LocalCodingAssistantStatus {
 export function ProviderSetupWizard({
   onClose,
   onOpenAuth,
+  onOpenCompanyClaude3PConfig,
   onOpenModelsConfig,
 }: ProviderSetupWizardProps) {
   const { authProviders, authLoading } = useProviderStatus({
@@ -107,6 +109,10 @@ export function ProviderSetupWizard({
   const openModels = () => {
     onClose();
     onOpenModelsConfig();
+  };
+  const openCompanyClaude3P = () => {
+    onClose();
+    onOpenCompanyClaude3PConfig();
   };
   const copyQuarantineCommand = () => {
     void navigator.clipboard?.writeText(macInstallCommands);
@@ -265,7 +271,7 @@ export function ProviderSetupWizard({
               type="button"
               className={cardBase}
               style={{ borderColor: "var(--border)" }}
-              onClick={openModels}
+              onClick={openCompanyClaude3P}
             >
               <ProviderIcon provider="company-claude-3p" size={24} />
               <span className="min-w-0">

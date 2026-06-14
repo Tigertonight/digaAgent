@@ -5,6 +5,7 @@ import { useCallback, useReducer, type SetStateAction } from "react";
 interface ChatModalsState {
   showAuth: boolean;
   authInitialProvider: string | null;
+  showCompanyClaude3PConfig: boolean;
   showModelsConfig: boolean;
   showProviderSetup: boolean;
   showSystemPrompt: boolean;
@@ -16,6 +17,7 @@ interface ChatModalsState {
 
 type BooleanKey =
   | "showAuth"
+  | "showCompanyClaude3PConfig"
   | "showModelsConfig"
   | "showProviderSetup"
   | "showSystemPrompt"
@@ -33,6 +35,7 @@ type Action =
 const INITIAL: ChatModalsState = {
   showAuth: false,
   authInitialProvider: null,
+  showCompanyClaude3PConfig: false,
   showModelsConfig: false,
   showProviderSetup: false,
   showSystemPrompt: false,
@@ -120,6 +123,7 @@ export function useChatModalsState() {
     setShowAuth,
     openAuth,
     closeAuth,
+    setShowCompanyClaude3PConfig: makeBooleanSetter("showCompanyClaude3PConfig"),
     setShowModelsConfig: makeBooleanSetter("showModelsConfig"),
     setShowProviderSetup: makeBooleanSetter("showProviderSetup"),
     setShowSystemPrompt: makeBooleanSetter("showSystemPrompt"),

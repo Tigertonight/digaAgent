@@ -4,6 +4,7 @@ import FileBrowser from "./FileBrowser";
 import SkillsPanel from "./SkillsPanel";
 import ToolsPanel from "./ToolsPanel";
 import AuthPanel from "./AuthPanel";
+import CompanyClaude3PConfigPanel from "./CompanyClaude3PConfigPanel";
 import ModelsConfigPanel from "./ModelsConfigPanel";
 import { ProviderSetupWizard } from "./ProviderSetupWizard";
 import BranchesPopover from "./BranchesPopover";
@@ -18,8 +19,9 @@ interface ChatModalsState {
   showProviderSetup: boolean;
   showAuth: boolean;
   authInitialProvider?: string | null;
+  showCompanyClaude3PConfig: boolean;
   showModelsConfig: boolean;
-  providerSetupChild?: "auth" | "models" | null;
+  providerSetupChild?: "auth" | "company3p" | "models" | null;
   showSystemPrompt: boolean;
   systemPromptText: string | null;
   showBranches: boolean;
@@ -43,11 +45,16 @@ interface ChatModalsProps {
   // Provider setup
   onCloseProviderSetup: () => void;
   onProviderSetupOpenAuth: (provider?: string) => void;
+  onProviderSetupOpenCompanyClaude3PConfig: () => void;
   onProviderSetupOpenModelsConfig: () => void;
   // Auth
   onCloseAuth: () => void;
   onBackFromAuth?: () => void;
   onAuthChanged: () => void;
+  // Company 3P
+  onCloseCompanyClaude3PConfig: () => void;
+  onBackFromCompanyClaude3PConfig?: () => void;
+  onCompanyClaude3PConfigChanged: () => void;
   // ModelsConfig
   onCloseModelsConfig: () => void;
   onBackFromModelsConfig?: () => void;
@@ -71,10 +78,14 @@ export function ChatModals({
   onCloseTools,
   onCloseProviderSetup,
   onProviderSetupOpenAuth,
+  onProviderSetupOpenCompanyClaude3PConfig,
   onProviderSetupOpenModelsConfig,
   onCloseAuth,
   onBackFromAuth,
   onAuthChanged,
+  onCloseCompanyClaude3PConfig,
+  onBackFromCompanyClaude3PConfig,
+  onCompanyClaude3PConfigChanged,
   onCloseModelsConfig,
   onBackFromModelsConfig,
   onModelsConfigChanged,
@@ -90,6 +101,7 @@ export function ChatModals({
     showProviderSetup,
     showAuth,
     authInitialProvider,
+    showCompanyClaude3PConfig,
     showModelsConfig,
     providerSetupChild,
     showSystemPrompt,
@@ -175,6 +187,7 @@ export function ChatModals({
         <ProviderSetupWizard
           onClose={onCloseProviderSetup}
           onOpenAuth={onProviderSetupOpenAuth}
+          onOpenCompanyClaude3PConfig={onProviderSetupOpenCompanyClaude3PConfig}
           onOpenModelsConfig={onProviderSetupOpenModelsConfig}
         />
       )}
@@ -184,6 +197,17 @@ export function ChatModals({
           onBack={providerSetupChild === "auth" ? onBackFromAuth : undefined}
           initialProvider={authInitialProvider}
           onChanged={onAuthChanged}
+        />
+      )}
+      {showCompanyClaude3PConfig && (
+        <CompanyClaude3PConfigPanel
+          onClose={onCloseCompanyClaude3PConfig}
+          onBack={
+            providerSetupChild === "company3p"
+              ? onBackFromCompanyClaude3PConfig
+              : undefined
+          }
+          onChanged={onCompanyClaude3PConfigChanged}
         />
       )}
       {showModelsConfig && (
