@@ -9,7 +9,7 @@
  *   2. cwd 显示条（点击切换工作目录）
  *   3. sessions 列表（含 renderRow：父/子嵌套、状态点、⋯ 菜单、内联删除确认）
  *   4. EXPLORER 文件树（SidebarExplorer 包装）
- *   5. 底部：Settings 入口
+ *   5. 底部：模型 / 授权 / Settings 入口
  *
  * 设计要点：
  *   - 纯受控：所有 state / setter / action 走 props
@@ -809,11 +809,31 @@ export function Sidebar(props: SidebarProps) {
           onOpenFilePicker={() => setShowFilePicker(true)}
         />
       </div>
-      {/* sidebar 底：低频配置入口（仅保留 设置） */}
+      {/* sidebar 底：低频配置入口 */}
       <div
         className="flex items-stretch border-t h-12 shrink-0"
         style={{ borderColor: "var(--border)" }}
       >
+        <button
+          type="button"
+          onClick={onOpenProviderSetup}
+          title="配置模型"
+          className="flex-1 inline-flex flex-row items-center justify-center gap-1.5 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
+          style={{ color: "var(--text)" }}
+        >
+          <Sparkles size={14} />
+          <span>模型</span>
+        </button>
+        <button
+          type="button"
+          onClick={onOpenAuth}
+          title="账号授权"
+          className="flex-1 inline-flex flex-row items-center justify-center gap-1.5 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
+          style={{ color: "var(--text)" }}
+        >
+          <KeyRound size={14} />
+          <span>授权</span>
+        </button>
         <button
           type="button"
           onClick={onOpenSettings}

@@ -1,0 +1,35 @@
+name: Build and upload DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to upload to"
+        required: true
+        default: "v0.1.2"
+
+permissions:
+  contents: write
+
+jobs:
+  build-dmg:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - run: npm ci
+
+      - run: npm run electron:build
+
+      - name: Upload DMG to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          cp "dist/Diga Agent-0.1.2-arm64.dmg" "dist/Diga.Agent-0.1.2-arm64.dmg"
+          gh release upload "$TAG" "dist/Diga.Agent-0.1.2-arm64.dmg" --clobber
