@@ -1,6 +1,15 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 
+if (process.platform === "win32") {
+  console.log("Workflow worker sandbox check:");
+  console.log("- Windows: not enforced by this POSIX/macOS sandbox probe");
+  console.log(
+    "Set DIGA_AGENT_WORKFLOW_WORKER_SANDBOX_ARGV_JSON explicitly on Windows if a local sandbox wrapper is available."
+  );
+  process.exit(0);
+}
+
 const candidates = [
   {
     name: "bwrap",

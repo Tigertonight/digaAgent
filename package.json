@@ -55,14 +55,16 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "workflow:sandbox:check": "node scripts/check-workflow-sandbox.mjs",
+    "electron:resources:check": "node scripts/check-electron-packaging-resources.mjs",
+    "electron:smoke:win": "node scripts/smoke-windows-package.mjs",
     "electron:dev": "ELECTRON_DEV=1 electron electron/main.js",
     "electron:start": "electron electron/main.js",
     "clean": "node scripts/clean.mjs",
     "electron:build": "npm run electron:build:mac",
     "electron:build:mac": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --mac --arm64",
-    "electron:build:win": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --win --x64",
-    "electron:build:win:dir": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --win --x64 --dir",
-    "electron:build:win:portable": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --win portable --x64"
+    "electron:build:win": "npm run electron:resources:check && npm run clean && npm run build:electron && node scripts/build-electron.mjs --win --x64",
+    "electron:build:win:dir": "npm run electron:resources:check && npm run clean && npm run build:electron && node scripts/build-electron.mjs --win --x64 --dir",
+    "electron:build:win:portable": "npm run electron:resources:check && npm run clean && npm run build:electron && node scripts/build-electron.mjs --win portable --x64"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.78.0",
@@ -163,6 +165,7 @@
       "gatekeeperAssess": false
     },
     "win": {
+      "signAndEditExecutable": false,
       "target": [
         {
           "target": "nsis",

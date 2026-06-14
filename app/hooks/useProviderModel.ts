@@ -113,6 +113,28 @@ export function useProviderModel() {
     reloadProviders(true);
   }, [reloadProviders]);
 
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      if (curatedProviders.length === 0) {
+        if (providerId) setProviderId("");
+        if (modelId) setModelId("");
+        return;
+      }
+      const next = normalizeProviderModelSelection(
+        curatedProviders,
+        providerId,
+        modelId
+      );
+      if (next.providerId !== providerId) setProviderId(next.providerId);
+      if (next.modelId !== modelId) setModelId(next.modelId);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [curatedProviders, modelId, providerId]);
+
   const currentProvider = useMemo(
     () => curatedProviders.find((p) => p.provider === providerId),
     [curatedProviders, providerId]

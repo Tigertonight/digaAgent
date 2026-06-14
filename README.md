@@ -179,12 +179,36 @@ Windows installers are generated artifacts, not source files. Do not commit
 Maintainers can build locally with:
 
 ```bash
-npm run electron:build:win
+npm run electron:resources:check
+npm run electron:build:win:dir
+npm run electron:smoke:win
 ```
+
+`electron:build:win:dir` is the fast local packaging gate. It validates the
+renderer build, Electron packaging inputs, bundled server files, and unpacked
+Windows app layout. `electron:smoke:win` then launches the packaged executable
+in smoke-test mode and waits for the bundled server `/api/health` endpoint.
+
+Use the full packaging command for release candidates:
+
+```bash
+npm run electron:build:win
+npm run electron:smoke:win -- --installer
+```
+
+Windows builds intentionally set `win.signAndEditExecutable=false`. This keeps
+PR and release packaging independent from the local `winCodeSign` download /
+resource-editing path. The tradeoff is that Windows executable icon/resource
+editing and code signing are out of scope for this unsigned package. The
+installer smoke should run on a clean CI runner; local machines with an existing
+Diga Agent install will be blocked unless
+`DIGA_AGENT_ALLOW_EXISTING_INSTALLER_SMOKE=1` is set explicitly.
 
 The GitHub workflow
 `.github/workflows/windows-electron-build.yml` also builds Windows x64 packages:
 
+- `pull_request`: resource validation, lint, tests, full Windows packaging,
+  packaged app smoke, and installer smoke.
 - `workflow_dispatch`: manual packaging run, uploaded as a workflow artifact.
 - `v*` tag push: packaging run plus upload of Windows assets to the matching
   GitHub Release.
@@ -197,6 +221,11 @@ The in-app updater checks the latest GitHub Release and opens the best download
 asset for the current platform. On Windows it prefers the Setup `.exe`, then
 `.msi`, then other `.exe` or `.zip` assets. On macOS it prefers `.dmg`. This
 flow opens the download page or asset; it does not silently install updates.
+
+Windows users should normally download the Setup `.exe`; the Portable `.exe`
+is useful for quick tests. Unsigned builds may show Microsoft Defender
+SmartScreen warnings on first launch. First startup can take a few seconds while
+the bundled server starts. Configure model API keys in Settings after launch.
 
 ## Architecture
 

@@ -2,7 +2,15 @@ node_modules
 .next
 out
 dist
-build
+build/*
+!build/
+!build/1-安装前必读.txt
+!build/2-一键安装并打开.command
+!build/Open-Diga-Agent.command
+!build/installer.nsh
+!build/trayTemplate.png
+!build/trayTemplate@2x.png
+!build/trayIconSource.png
 .env*.local
 *.log
 .DS_Store

@@ -1651,6 +1651,13 @@ export default function SettingsPanel() {
     }
   }, [api]);
 
+  const reloadServerAndRefresh = useCallback(async () => {
+    if (!api) return null;
+    const result = await api.reloadServer();
+    await refresh();
+    return result;
+  }, [api, refresh]);
+
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
@@ -1670,7 +1677,7 @@ export default function SettingsPanel() {
       // 清空编辑框
       setEditing((s) => ({ ...s, [provider]: "" }));
       setRevealed((s) => ({ ...s, [provider]: "" }));
-      await refresh();
+      await reloadServerAndRefresh();
     } catch (e) {
       setError(userFacingMessage(e, { context: "settings" }));
     } finally {
@@ -1681,10 +1688,11 @@ export default function SettingsPanel() {
   const deleteKey = async (provider: string) => {
     if (!api) return;
     setBusy(provider);
+    setError(null);
     try {
       await api.deleteKey(provider);
       setRevealed((s) => ({ ...s, [provider]: "" }));
-      await refresh();
+      await reloadServerAndRefresh();
     } catch (e) {
       setError(userFacingMessage(e, { context: "settings" }));
     } finally {
@@ -1710,11 +1718,11 @@ export default function SettingsPanel() {
     setBusy("__server__");
     setError(null);
     try {
-      const r = await api.reloadServer();
+      const r = await reloadServerAndRefresh();
       alert(
-        r.dev
+        r?.dev
           ? "dev 模式跳过 reload（next dev 由你手动管）"
-          : `server reloaded: ${r.base ?? "?"}`
+          : `server reloaded: ${r?.base ?? "?"}`
       );
     } catch (e) {
       setError(userFacingMessage(e, { context: "settings" }));
@@ -1757,7 +1765,7 @@ export default function SettingsPanel() {
           <section className="rounded-md border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-5">
             <h2 className="text-sm font-semibold">模型服务账号</h2>
             <p className="mt-1 text-sm leading-relaxed text-[color:var(--text-muted)]">
-              管理 OpenAI、Anthropic 等模型服务的 API 密钥。密钥保存在 macOS Keychain，不写入明文配置文件。
+              管理 OpenAI、Anthropic、DeepSeek 等模型服务的 API 密钥。密钥保存在系统凭据库，不写入明文配置文件。
             </p>
           </section>
           {loading ? (
@@ -1914,7 +1922,7 @@ export default function SettingsPanel() {
             ) : null}
           </section>
           <section className="text-token-sm leading-relaxed text-[color:var(--text-muted)]">
-            修改密钥后，点击顶部的 <code className="text-[color:var(--text)]">重启服务</code> 让后台服务读取新配置。
+            保存或删除密钥后会自动重启后台服务并刷新模型可用状态；也可以点击顶部的 <code className="text-[color:var(--text)]">重启服务</code> 手动同步。
           </section>
         </>
       ) : null}

@@ -30,6 +30,11 @@ contextBridge.exposeInMainWorld("digaAgent", {
 
   /** standalone server 的真实 URL（留作未来给 main 进程内部用，renderer 不需要） */
   getApiBase: () => ipcRenderer.invoke("app:getApiBase"),
+  /**
+   * 本机远程访问接口的短期 header secret。
+   * 仅用于移动端配对 / 远程设置调用的 x-diga-agent-local-secret，
+   * 不用于模型服务 API Key，也不应持久化或展示。
+   */
   getLocalSecret: () => ipcRenderer.invoke("app:getLocalSecret"),
 
   dependencies: {

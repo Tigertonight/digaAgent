@@ -28,7 +28,6 @@ import {
   Ellipsis,
   ExternalLink,
   GitBranch,
-  KeyRound,
   Moon,
   PanelLeft,
   Pin,
@@ -36,7 +35,6 @@ import {
   Plus,
   Search,
   Settings,
-  Sparkles,
   Sun,
   Trash2,
   X,
@@ -202,8 +200,6 @@ export function Sidebar(props: SidebarProps) {
     updateLatestVersion,
     onDownloadUpdate,
     onSkipUpdateVersion,
-    onOpenProviderSetup,
-    onOpenAuth,
     onOpenSettings,
     sessions,
     groupedSessions,
@@ -325,7 +321,7 @@ export function Sidebar(props: SidebarProps) {
                   App
                 </div>
                 {updateAvailable && onDownloadUpdate ? (
-                  <SidebarActionMenuItem icon={<Download size={15} />} label="Download DMG" description="打开新版本下载页" onClick={() => runAction(onDownloadUpdate)} />
+                  <SidebarActionMenuItem icon={<Download size={15} />} label="Download update" description="打开新版本下载页" onClick={() => runAction(onDownloadUpdate)} />
                 ) : null}
                 {updateAvailable && onSkipUpdateVersion ? (
                   <SidebarActionMenuItem icon={<X size={15} />} label="Ignore this version" description="这个版本不再提醒" onClick={() => runAction(onSkipUpdateVersion)} />

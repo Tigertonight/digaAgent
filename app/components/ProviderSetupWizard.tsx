@@ -12,6 +12,7 @@ import {
 import { useEffect, useState } from "react";
 import { ProviderIcon } from "./ProviderIcon";
 import { useProviderStatus } from "@/app/hooks/useProviderStatus";
+import { getElectronApi, type AppInfo } from "@/lib/electron-bridge";
 
 interface ProviderSetupWizardProps {
   onClose: () => void;
@@ -22,6 +23,24 @@ interface ProviderSetupWizardProps {
 const cardBase =
   "group flex w-full items-start gap-3 rounded-md border p-3 text-left transition-colors hover:bg-[color:var(--bg-hover)]";
 const quarantineCommand = "xattr -dr com.apple.quarantine /Applications/Diga\\ Agent.app";
+const windowsFirstRunNotes = [
+  {
+    title: "Setup / Portable",
+    body: "安装版可从开始菜单或桌面快捷方式启动；Portable 版请放到固定目录后直接运行，不要在压缩包里启动。",
+  },
+  {
+    title: "SmartScreen",
+    body: "如果 Windows 提示未知发布者，先确认安装包来源可信，再点“更多信息”并选择“仍要运行”。",
+  },
+  {
+    title: "首次启动",
+    body: "第一次打开会初始化本机服务和依赖，窗口可能需要几十秒才完全可用。",
+  },
+  {
+    title: "设置密钥",
+    body: "进入“账号授权 / Auth 管理”保存 API Key；保存后回到模型下拉框，如未刷新可在设置页重新加载服务。",
+  },
+] as const;
 const localCodingAssistantNpmInstallCommand =
   "# 请联系管理员获取公司内部 npm 源地址和包名\nnpm config set @company:registry https://npm.company.example\nnpm install -g @company/coding-assistant@latest\ncoding-assistant -version";
 const localCodingAssistantScriptInstallCommand =
@@ -37,6 +56,15 @@ interface LocalCodingAssistantStatus {
   error?: string;
 }
 
+function detectBrowserPlatform(): AppInfo["platform"] | null {
+  if (typeof navigator === "undefined") return null;
+  const value = `${navigator.platform ?? ""} ${navigator.userAgent ?? ""}`.toLowerCase();
+  if (value.includes("win")) return "win32";
+  if (value.includes("mac")) return "darwin";
+  if (value.includes("linux")) return "linux";
+  return null;
+}
+
 export function ProviderSetupWizard({
   onClose,
   onOpenAuth,
@@ -50,6 +78,7 @@ export function ProviderSetupWizard({
     null
   );
   const [localCodingAssistantLoading, setLocalCodingAssistantLoading] = useState(true);
+  const [platform, setPlatform] = useState<AppInfo["platform"] | null>(null);
   const detectedProviders = authProviders.filter((p) => p.hasAuth);
   const detectedResources = [
     ...detectedProviders.map((p) => ({
@@ -90,11 +119,38 @@ export function ProviderSetupWizard({
       })
       .finally(() => {
         if (!cancelled) setLocalCodingAssistantLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const api = getElectronApi();
+    if (!api) {
+      queueMicrotask(() => {
+        if (!cancelled) setPlatform(detectBrowserPlatform());
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+    void api
+      .getAppInfo()
+      .then((info) => {
+        if (!cancelled) setPlatform(info.platform);
+      })
+      .catch(() => {
+        if (!cancelled) setPlatform(detectBrowserPlatform());
       });
     return () => {
       cancelled = true;
-      };
+    };
   }, []);
+
+  const showMacInstallNotice = platform === "darwin";
+  const showWindowsInstallNotice = platform === "win32";
 
   const openAuth = (provider?: string) => {
     onClose();
@@ -159,42 +215,74 @@ export function ProviderSetupWizard({
         </header>
 
         <div className="overflow-auto p-4">
-          <div
-            className="mb-4 rounded-md border p-3 text-xs"
-            style={{
-              borderColor: "var(--color-warning)",
-              background: "var(--color-warning-bg)",
-              color: "var(--fg)",
-            }}
-          >
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <div>
-                <div className="font-medium">macOS 提示“已损坏”或“无法打开”</div>
-                <div className="mt-0.5" style={{ color: "var(--text-muted)" }}>
-                  当前 DMG 未做 Apple 开发者签名。安装到 Applications 后，在终端执行：
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={copyQuarantineCommand}
-                className="inline-flex h-7 shrink-0 items-center gap-1 rounded border px-2 hover:bg-[color:var(--bg-hover)]"
-                style={{ borderColor: "var(--border)" }}
-                title="复制终端命令"
-              >
-                <Clipboard size={13} />
-                复制
-              </button>
-            </div>
-            <code
-              className="block overflow-x-auto rounded border px-2 py-1.5 font-mono"
+          {showWindowsInstallNotice && (
+            <div
+              className="mb-4 rounded-md border p-3 text-xs"
               style={{
-                borderColor: "var(--border-soft)",
-                background: "var(--bg-panel)",
+                borderColor: "var(--color-info)",
+                background: "var(--color-info-bg)",
+                color: "var(--fg)",
               }}
             >
-              {quarantineCommand}
-            </code>
-          </div>
+              <div className="font-medium">Windows 首次启动提示</div>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                {windowsFirstRunNotes.map((note) => (
+                  <div
+                    key={note.title}
+                    className="rounded border px-2 py-1.5 leading-5"
+                    style={{
+                      borderColor: "var(--border-soft)",
+                      background: "var(--bg-panel)",
+                    }}
+                  >
+                    <div className="font-medium">{note.title}</div>
+                    <div className="mt-0.5" style={{ color: "var(--text-muted)" }}>
+                      {note.body}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {showMacInstallNotice && (
+            <div
+              className="mb-4 rounded-md border p-3 text-xs"
+              style={{
+                borderColor: "var(--color-warning)",
+                background: "var(--color-warning-bg)",
+                color: "var(--fg)",
+              }}
+            >
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div>
+                  <div className="font-medium">macOS 提示“已损坏”或“无法打开”</div>
+                  <div className="mt-0.5" style={{ color: "var(--text-muted)" }}>
+                    当前 DMG 未做 Apple 开发者签名。安装到 Applications 后，在终端执行：
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={copyQuarantineCommand}
+                  className="inline-flex h-7 shrink-0 items-center gap-1 rounded border px-2 hover:bg-[color:var(--bg-hover)]"
+                  style={{ borderColor: "var(--border)" }}
+                  title="复制终端命令"
+                >
+                  <Clipboard size={13} />
+                  复制
+                </button>
+              </div>
+              <code
+                className="block overflow-x-auto rounded border px-2 py-1.5 font-mono"
+                style={{
+                  borderColor: "var(--border-soft)",
+                  background: "var(--bg-panel)",
+                }}
+              >
+                {quarantineCommand}
+              </code>
+            </div>
+          )}
 
           {detectedResources.length > 0 && (
             <div

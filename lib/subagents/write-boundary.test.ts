@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import path from "node:path";
 import {
   findWriteBoundaryViolation,
   normalizeWriteBoundaries,
@@ -74,7 +75,7 @@ describe("subagent write boundary", () => {
 
   it("normalizes relative boundaries against the child cwd", () => {
     expect(normalizeWriteBoundaries("/repo", ["src"]).map((item) => item.absolute)).toEqual([
-      "/repo/src",
+      path.resolve("/repo", "src"),
     ]);
   });
 });

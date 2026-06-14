@@ -14,6 +14,11 @@ export const CURATED_MODEL_OPTIONS = [
     label: "GPT-5.5",
   },
   {
+    providerId: "deepseek",
+    modelId: "deepseek-v4-pro",
+    label: "DeepSeek V4 Pro",
+  },
+  {
     providerId: "minimax-cn",
     modelId: "MiniMax-M2.7-highspeed",
     label: "MiniMax 2.7 highspeed",

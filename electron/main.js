@@ -33,6 +33,13 @@ const updaterModule = require("./updater");
 const DEV = process.env.ELECTRON_DEV === "1";
 const DEV_URL = process.env.ELECTRON_DEV_URL || "http://localhost:3000";
 const DISABLE_PET_WINDOW = process.env.ELECTRON_DISABLE_PET === "1";
+const SMOKE_TEST =
+  process.argv.includes("--smoke-test") ||
+  process.env.DIGA_AGENT_ELECTRON_SMOKE_TEST === "1";
+
+if (SMOKE_TEST) {
+  app.disableHardwareAcceleration();
+}
 
 /**
  * 把 asar 路径转成 asar.unpacked 路径。
@@ -212,6 +219,8 @@ async function waitForHttp(url, timeoutMs = 15000) {
 }
 
 let serverChild = null;
+const expectedServerExitReasons = new Map();
+let serverRestartInProgress = false;
 /** standalone server 的 base URL，IPC getApiBase 返回 */
 let apiBase = null;
 let localSessionSecret = crypto.randomBytes(32).toString("base64url");
@@ -220,6 +229,8 @@ let localSecretHeaderHookInstalled = false;
 let mainWin = null;
 /** macOS menu bar / tray icon 必须保留强引用，否则会被 GC 回收。 */
 let tray = null;
+const FALLBACK_TRAY_ICON_DATA_URL =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAABxSURBVDhPzZHRCcAwCEQzjis5TnZxlEziIhb6kdLLKU2+enAfAd9DTGu/jIhEVpxdggArMjM4WBXZFe4j3hnRKwkXPND9dAs9FYhaOGyRw6nAw5QIqIQKkg2+CNT85AYbv0AlRZGdwUFWZJYgsAXv5gLqdw/ucAZ0IwAAAABJRU5ErkJggg==";
 
 function getPrimaryMainWindow() {
   if (mainWin && !mainWin.isDestroyed()) return mainWin;
@@ -278,7 +289,9 @@ function createTrayIcon() {
   const retinaIconPath = DEV
     ? path.resolve(__dirname, "..", "build", "trayTemplate@2x.png")
     : path.join(process.resourcesPath, "trayTemplate@2x.png");
-  const image = nativeImage.createFromBuffer(fs.readFileSync(iconPath));
+  let image = fs.existsSync(iconPath)
+    ? nativeImage.createFromBuffer(fs.readFileSync(iconPath))
+    : nativeImage.createFromDataURL(FALLBACK_TRAY_ICON_DATA_URL);
   if (fs.existsSync(retinaIconPath)) {
     image.addRepresentation({
       scaleFactor: 2,
@@ -287,6 +300,7 @@ function createTrayIcon() {
   }
   if (image.isEmpty()) {
     console.warn(`[electron] tray icon is empty: ${iconPath}`);
+    image = nativeImage.createFromDataURL(FALLBACK_TRAY_ICON_DATA_URL);
   }
   return image;
 }
@@ -447,15 +461,24 @@ async function startStandaloneServer() {
   }
 
   // 走 wrapper：parent 死了它会自杀（防 Electron 被 SIGKILL 时留孤儿）
-  serverChild = fork(wrapperFile, [], {
+  const child = fork(wrapperFile, [], {
     env: mergedEnv,
     stdio: ["ignore", "inherit", "inherit", "ipc"],
   });
+  serverChild = child;
 
-  serverChild.on("exit", (code, signal) => {
+  child.on("exit", (code, signal) => {
     console.log(`[electron] server exited code=${code} signal=${signal}`);
-    serverChild = null;
-    // 如果 app 还活着，意味着 server 异常挂掉，整个退出
+    if (serverChild === child) serverChild = null;
+    const expectedReason = expectedServerExitReasons.get(child);
+    if (expectedReason) expectedServerExitReasons.delete(child);
+    if (expectedReason || serverRestartInProgress) {
+      console.log(
+        `[electron] server exit ignored during ${expectedReason || "restart"}`
+      );
+      return;
+    }
+    // If the app is still alive, an unexpected server exit is fatal.
     if (!app.isQuitting) {
       app.quit();
     }
@@ -466,11 +489,11 @@ async function startStandaloneServer() {
   const ipcReady = new Promise((resolve) => {
     const onMsg = (msg) => {
       if (msg && msg.type === "server-ready") {
-        serverChild?.off?.("message", onMsg);
+        child.off?.("message", onMsg);
         resolve(true);
       }
     };
-    serverChild.on("message", onMsg);
+    child.on("message", onMsg);
   });
   const ready = await Promise.race([
     ipcReady,
@@ -483,6 +506,90 @@ async function startStandaloneServer() {
   }
   apiBase = `http://${bindHost === "0.0.0.0" ? "127.0.0.1" : bindHost}:${port}`;
   return apiBase;
+}
+
+function waitForServerChildExit(child, timeoutMs = 3000) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      child.off?.("exit", onExit);
+      resolve(false);
+    }, timeoutMs);
+    const onExit = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    child.once("exit", onExit);
+  });
+}
+
+function urlOnNewApiBase(currentUrl, newBase) {
+  try {
+    const current = new URL(currentUrl);
+    if (current.protocol !== "http:" && current.protocol !== "https:") {
+      return newBase;
+    }
+    const base = new URL(newBase);
+    base.pathname = current.pathname;
+    base.search = current.search;
+    base.hash = current.hash;
+    return base.toString();
+  } catch {
+    return newBase;
+  }
+}
+
+async function reloadWindowsToApiBase(newBase) {
+  const failures = [];
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win || win.isDestroyed()) continue;
+    const targetUrl = urlOnNewApiBase(win.webContents.getURL(), newBase);
+    try {
+      await win.loadURL(targetUrl);
+    } catch (e) {
+      const message = e?.message || String(e);
+      failures.push(message);
+      console.warn("[electron] reload window failed:", message);
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(
+      `server reloaded, but ${failures.length} window(s) failed to reload: ${failures.join("; ")}`
+    );
+  }
+}
+
+async function restartStandaloneServerForSettings() {
+  serverRestartInProgress = true;
+  try {
+    const oldChild = serverChild;
+    if (oldChild && !oldChild.killed) {
+      expectedServerExitReasons.set(oldChild, "reloadServer");
+      killServerChild("reloadServer");
+      const exited = await waitForServerChildExit(oldChild);
+      if (!exited) {
+        throw new Error("standalone server did not exit during settings reload");
+      }
+    }
+    if (serverChild === oldChild) serverChild = null;
+    apiBase = null;
+    const newBase = await startStandaloneServer();
+    await reloadWindowsToApiBase(newBase);
+    return { ok: true, base: newBase };
+  } catch (e) {
+    const failedChild = serverChild;
+    if (failedChild && !failedChild.killed) {
+      expectedServerExitReasons.set(failedChild, "reloadServer failed startup");
+      killServerChild("reloadServer failed startup");
+    }
+    apiBase = null;
+    console.error("[electron] settings:reloadServer failed:", e);
+    throw e;
+  } finally {
+    serverRestartInProgress = false;
+  }
 }
 
 /**
@@ -734,29 +841,7 @@ function registerIpc() {
   ipcMain.handle("settings:reloadServer", async () => {
     if (DEV) return { ok: true, dev: true }; // dev 模式不动外部 next dev
     console.log("[electron] settings:reloadServer requested");
-    killServerChild("reloadServer");
-    // 等 child 真死
-    await new Promise((r) => {
-      const t0 = Date.now();
-      const tick = setInterval(() => {
-        if (!serverChild || serverChild.killed || Date.now() - t0 > 3000) {
-          clearInterval(tick);
-          r();
-        }
-      }, 50);
-    });
-    serverChild = null;
-    apiBase = null;
-    const newBase = await startStandaloneServer();
-    // 通知所有窗口 reload
-    for (const win of BrowserWindow.getAllWindows()) {
-      try {
-        await win.loadURL(newBase);
-      } catch (e) {
-        console.warn("[electron] reload window failed:", e.message);
-      }
-    }
-    return { ok: true, base: newBase };
+    return restartStandaloneServerForSettings();
   });
 
   // ===== 宠物挂件 IPC =====
@@ -1153,10 +1238,36 @@ function buildAppMenu() {
 }
 
 app.whenReady().then(async () => {
+  if (SMOKE_TEST) {
+    try {
+      const base = await startStandaloneServer();
+      const ok = await waitForHttp(`${base}/api/health`, 30000);
+      if (!ok) {
+        throw new Error(`smoke test health check failed at ${base}/api/health`);
+      }
+      console.log(`[electron] smoke-test ok ${base}`);
+      app.isQuitting = true;
+      const child = serverChild;
+      killServerChild("smoke-test");
+      await waitForServerChildExit(child, 3000);
+      app.exit(0);
+    } catch (e) {
+      console.error("[electron] smoke-test failed:", e);
+      app.isQuitting = true;
+      killServerChild("smoke-test failed");
+      app.exit(1);
+    }
+    return;
+  }
+
   registerIpc();
   installLocalSecretHeaderHook();
   buildAppMenu();
-  createTray();
+  try {
+    createTray();
+  } catch (e) {
+    console.warn("[electron] tray failed to start:", e?.message || e);
+  }
 
   // 一次性 env → keytar 迁移（首次启动若 keytar 空且 env 里有 key，自动入库）
   try {
@@ -1174,6 +1285,10 @@ app.whenReady().then(async () => {
     await createWindow();
   } catch (e) {
     console.error("[electron] failed to start:", e);
+    dialog.showErrorBox(
+      "Diga Agent failed to start",
+      e?.message || String(e)
+    );
     app.quit();
   }
 

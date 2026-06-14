@@ -198,6 +198,11 @@ export interface DependenciesApi {
 export interface ElectronApi {
   getAppInfo(): Promise<AppInfo>;
   getApiBase(): Promise<string>;
+  /**
+   * Desktop local-server header secret for remote-access endpoints only.
+   * Current callers fetch it just-in-time for x-diga-agent-local-secret on
+   * /api/remote/* requests; do not store, display, or reuse for model keys.
+   */
   getLocalSecret(): Promise<string>;
   dependencies?: DependenciesApi;
   updater: UpdaterApi;
