@@ -42,7 +42,7 @@ Diga Agent 底层的 SDK（`@earendil-works/pi-coding-agent`）在每次创建 /
 
 ### 2.1 全局记忆（跨所有项目）
 
-`~/.config/codewiz/AGENTS.md`（或 `~/.config/codewiz/CLAUDE.md`，二选一）
+`~/.config/diga-agent/AGENTS.md`（或 `~/.config/diga-agent/CLAUDE.md`，二选一）
 
 - 写你**所有项目都适用**的偏好，例：
   ```markdown
@@ -82,7 +82,7 @@ Diga Agent 底层的 SDK（`@earendil-works/pi-coding-agent`）在每次创建 /
 
 确切的加载顺序（来自 SDK `loadProjectContextFiles`）：
 
-1. **全局**：`~/.config/codewiz/AGENTS.md`（或 `CLAUDE.md`）
+1. **全局**：`~/.config/diga-agent/AGENTS.md`（或 `CLAUDE.md`）
 2. **祖先链（root → cwd）**：从 `/` 一路扫到 cwd，凡是该目录下有 `AGENTS.md` 的都收集
 3. **去重**：路径相同的文件只加载一次（防止 cwd 和 agentDir 是同一目录时双加载）
 4. **单目录单文件**：一个目录里**只取第一个匹配**，候选顺序是 `AGENTS.md` → `AGENTS.MD` → `CLAUDE.md` → `CLAUDE.MD`。**不会**同时加载 AGENTS.md 和 CLAUDE.md。
@@ -129,7 +129,7 @@ Diga Agent 底层的 SDK（`@earendil-works/pi-coding-agent`）在每次创建 /
 ### 4.3 团队共享 + 个人偏好分离
 
 - `<项目根>/AGENTS.md` → commit 进 git，团队共享
-- `~/.config/codewiz/AGENTS.md` → 个人偏好（如"中文回答""不要解释太多"），不进 git
+- `~/.config/diga-agent/AGENTS.md` → 个人偏好（如"中文回答""不要解释太多"），不进 git
 
 ---
 
@@ -190,7 +190,7 @@ SDK 候选名是固定的 4 个：`AGENTS.md` / `AGENTS.MD` / `CLAUDE.md` / `CLA
 /AGENTS.md
 ```
 
-或者反过来：项目共享版本 commit，个人覆盖单独建一个 `~/.config/codewiz/AGENTS.md`。
+或者反过来：项目共享版本 commit，个人覆盖单独建一个 `~/.config/diga-agent/AGENTS.md`。
 
 ---
 

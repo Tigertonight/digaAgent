@@ -1,7 +1,7 @@
 # RFC-3：Session as Knowledge
 
 > **状态**：Draft
-> **作者**：Seal（Codewiz 角色：产品经理 + 体验设计师）
+> **作者**：Seal（Diga Agent 角色：产品经理 + 体验设计师）
 > **日期**：2026-06-02
 > **预读时间**：约 25 分钟
 > **关联文档**：

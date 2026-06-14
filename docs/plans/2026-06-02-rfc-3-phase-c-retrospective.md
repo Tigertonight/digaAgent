@@ -135,7 +135,7 @@ const resourceLoader = new DefaultResourceLoader({
 |---|---|
 | TL;DR | 30 秒上手范例 |
 | §1 价值定位 | 不带记忆 vs 带记忆的痛点对比 |
-| §2 三个文件位置 | global（`~/.config/codewiz/AGENTS.md`）/ project root / monorepo 父目录链 |
+| §2 三个文件位置 | global（`~/.config/diga-agent/AGENTS.md`）/ project root / monorepo 父目录链 |
 | §3 加载顺序与去重规则 | 完整描述 SDK 行为（全局优先 → ancestor root → cwd / 路径去重 / 单目录单文件） |
 | §4 常见场景模板 | Next.js+TS / Python 数据项目 / 团队共享 + 个人偏好分离 |
 | §5 验证方法 | 3 种验证 agent 真的读到了 |
