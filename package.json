@@ -148,6 +148,7 @@
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
       "target": {
         "target": "dmg",
         "arch": [
@@ -177,12 +178,6 @@
           "y": 330,
           "type": "file",
           "path": "build/1-安装前必读.txt"
-        },
-        {
-          "x": 420,
-          "y": 330,
-          "type": "file",
-          "path": "build/2-一键安装并打开.command"
         }
       ]
     },
