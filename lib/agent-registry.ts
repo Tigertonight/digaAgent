@@ -47,6 +47,7 @@ import { runWorkflowScript } from "./workflows/script-runtime";
 import { abortRunningWorkflows } from "./workflows/server-store";
 import { createGitWorktreeManager } from "./workflows/git-worktree";
 import { getWorkflowNetworkPolicy } from "./workflows/network-policy";
+import { resolveLocalCodingAssistantCli } from "./local-coding-assistant/cli";
 import { DEFAULT_RULES } from "./collab/rules";
 import {
   clearSessionRemember,
@@ -140,18 +141,6 @@ export type RingBufferEvent =
 
 export const LOCAL_CODING_ASSISTANT_PROVIDER_ID = "local-coding-assistant";
 export const LOCAL_CODING_ASSISTANT_MODEL_ID = "local-coding-assistant";
-const LOCAL_CODING_ASSISTANT_CLI = String.fromCharCode(
-  99,
-  111,
-  100,
-  101,
-  119,
-  105,
-  122,
-  45,
-  99,
-  99
-);
 export const LOCAL_CODING_ASSISTANT_MODELS = [
   {
     id: LOCAL_CODING_ASSISTANT_MODEL_ID,
@@ -766,10 +755,25 @@ export async function promptLocalCodingAssistantAgent(
     ...(modelArg ? ["--model", modelArg] : []),
     text,
   ];
-  const child = spawn(LOCAL_CODING_ASSISTANT_CLI, args, {
+  let cliResolution: Awaited<ReturnType<typeof resolveLocalCodingAssistantCli>>;
+  try {
+    cliResolution = await resolveLocalCodingAssistantCli();
+  } catch (err) {
+    emitLocalCodingAssistantText(
+      rec,
+      responseId,
+      `自研 Coding 助手启动失败：${err instanceof Error ? err.message : String(err)}`
+    );
+    rec.isStreaming = false;
+    rec.updatedAt = Date.now();
+    pushAgentEvent(rec, { type: "agent_end" } as RingBufferEvent);
+    return;
+  }
+
+  const child = spawn(cliResolution.command, args, {
     cwd: rec.cwd,
     env: {
-      ...process.env,
+      ...cliResolution.env,
       FORCE_COLOR: "0",
       NO_COLOR: "1",
     },

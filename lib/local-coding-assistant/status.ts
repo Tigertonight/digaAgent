@@ -1,39 +1,19 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { promisify } from "node:util";
+import {
+  getLocalCodingAssistantSessionPath,
+  resolveLocalCodingAssistantCli,
+} from "./cli";
 
 const execFileAsync = promisify(execFile);
-const LOCAL_ASSISTANT_CLI = String.fromCharCode(
-  99,
-  111,
-  100,
-  101,
-  119,
-  105,
-  122,
-  45,
-  99,
-  99
-);
-const SESSION_ROOT_DIR = String.fromCharCode(
-  46,
-  99,
-  99,
-  45,
-  109,
-  105,
-  114,
-  114,
-  111,
-  114
-);
 
 export interface LocalCodingAssistantStatus {
   installed: boolean;
   version?: string;
   error?: string;
+  command?: string;
+  detectedPath?: string;
   sessionPath: string;
   sessionExists: boolean;
   tokenPresent: boolean;
@@ -41,12 +21,16 @@ export interface LocalCodingAssistantStatus {
 
 async function getLocalCodingAssistantVersion() {
   try {
-    const { stdout, stderr } = await execFileAsync(LOCAL_ASSISTANT_CLI, ["-version"], {
+    const resolution = await resolveLocalCodingAssistantCli();
+    const { stdout, stderr } = await execFileAsync(resolution.command, ["-version"], {
+      env: resolution.env,
       timeout: 5000,
     });
     return {
       installed: true,
       version: (stdout || stderr).trim() || "installed",
+      command: resolution.command,
+      detectedPath: resolution.resolvedFrom,
     };
   } catch (e) {
     return {
@@ -58,12 +42,7 @@ async function getLocalCodingAssistantVersion() {
 }
 
 function getSessionStatus() {
-  const sessionPath = path.join(
-    os.homedir(),
-    SESSION_ROOT_DIR,
-    LOCAL_ASSISTANT_CLI,
-    "session.json"
-  );
+  const sessionPath = getLocalCodingAssistantSessionPath();
   if (!fs.existsSync(sessionPath)) {
     return { sessionPath, sessionExists: false, tokenPresent: false };
   }

@@ -33,6 +33,8 @@ const localCodingAssistantLoginCommand = "coding-assistant login --force";
 interface LocalCodingAssistantStatus {
   installed: boolean;
   version?: string;
+  command?: string;
+  detectedPath?: string;
   sessionPath: string;
   sessionExists: boolean;
   tokenPresent: boolean;
@@ -448,6 +450,17 @@ export function ProviderSetupWizard({
                   ok={!!(localCodingAssistantStatus?.installed && localCodingAssistantStatus.tokenPresent)}
                 />
               </div>
+              {(localCodingAssistantStatus?.installed ||
+                localCodingAssistantStatus?.error) && (
+                <div
+                  className="mt-2 truncate text-xs"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  {localCodingAssistantStatus.installed
+                    ? "已在本机环境中发现客户端。"
+                    : "未发现本机客户端；如已安装，请重启应用后重新检测。"}
+                </div>
+              )}
 
               <div
                 className="mt-3 rounded border px-2 py-1.5 leading-5"

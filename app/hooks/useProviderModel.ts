@@ -36,7 +36,10 @@ export function normalizeProviderModelSelection(
 export function useProviderModel() {
   const { providers, reloadProviders: fetchProviders } = useProviderStatus();
   const visibleProviders = useMemo(
-    () => providers.filter((provider) => provider.models.length > 0),
+    () =>
+      providers.filter(
+        (provider) => provider.hasAuth && provider.models.length > 0
+      ),
     [providers]
   );
   const [providerId, setProviderId] = useState<string>("");
@@ -82,7 +85,7 @@ export function useProviderModel() {
         .then((data) => {
           if (!data?.providers || !applyDefaults) return;
           const visible = data.providers.filter(
-            (provider) => provider.models.length > 0
+            (provider) => provider.hasAuth && provider.models.length > 0
           );
           setProviderId((curProv) => {
             setModelId((curModel) => {

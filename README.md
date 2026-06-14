@@ -161,6 +161,31 @@ PORT=30142 node scripts/smoke-test.mjs
 
 This is what the maintainers run before publishing.
 
+## Release Checks
+
+Run the public-surface check before sharing the project externally or publishing
+a build. It fails if source/docs/build metadata contain internal company names,
+domains, package scopes, or client identifiers.
+
+```bash
+npm run public-surface:check
+```
+
+On an internal workstation, run the runtime check to verify the local coding
+assistant can be discovered from a GUI-launched app environment and has a usable
+login cache:
+
+```bash
+npm run internal-runtime:check
+```
+
+If a local Diga server is already running, this also verifies that the provider
+is visible through `/api/providers`:
+
+```bash
+npm run internal-runtime:check -- --api http://localhost:3000
+```
+
 ## Development
 
 ```bash

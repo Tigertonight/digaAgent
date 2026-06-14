@@ -649,7 +649,6 @@ export function Composer(props: ComposerProps) {
             >
               {visibleProviders.map((p) => (
                 <option key={p.provider} value={p.provider}>
-                  {p.hasAuth ? "✓ " : "  "}
                   {p.displayName}
                 </option>
               ))}
