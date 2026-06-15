@@ -59,6 +59,16 @@ export interface UseComposerAttachmentsReturn {
   removePendingImage: (idx: number) => void;
   onDropFiles: (files: File[]) => void;
   removePendingFile: (path: string) => void;
+  /**
+   * 结构化 Composer P5：从 Explorer / file picker 中添加一条路径引用。
+   * 不再拼 "@/abs/path" 进 textarea，而是入 pendingFiles 并渲染为 FileChip。
+   * 重复路径不重复添加（最少动：重复时返回 "duplicate" 以供 UI 闪一下原 tag）。
+   * 返回表示该跱调是否被接受。
+   */
+  addPathAttachment: (
+    absPath: string,
+    opts?: { name?: string; isFolder?: boolean }
+  ) => "added" | "duplicate";
 }
 
 export function useComposerAttachments(
@@ -152,10 +162,41 @@ export function useComposerAttachments(
     [setPendingFiles]
   );
 
+  const addPathAttachment = useCallback<
+    UseComposerAttachmentsReturn["addPathAttachment"]
+  >(
+    (absPath, opts) => {
+      if (!absPath) return "duplicate";
+      let result: "added" | "duplicate" = "added";
+      setPendingFiles((prev) => {
+        if (prev.some((a) => a.path === absPath)) {
+          result = "duplicate";
+          return prev;
+        }
+        const name =
+          opts?.name ??
+          absPath.split("/").filter(Boolean).pop() ??
+          absPath;
+        const isFolder =
+          opts?.isFolder ?? !/\.[a-z0-9]{1,8}$/i.test(name);
+        const next: PendingAttachment = {
+          path: absPath,
+          name,
+          size: isFolder ? null : 0,
+          kind: isFolder ? "folder" : kindFromName(name),
+        };
+        return [...prev, next];
+      });
+      return result;
+    },
+    [setPendingFiles]
+  );
+
   return {
     addImageFiles,
     removePendingImage,
     onDropFiles,
     removePendingFile,
+    addPathAttachment,
   };
 }

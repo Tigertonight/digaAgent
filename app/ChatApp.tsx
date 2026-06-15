@@ -16,11 +16,11 @@ import {
   updateInput as storeUpdateInput,
   deleteInput as deleteStoreInput,
 } from "@/lib/composer/input-store";
+import { parseSlashCommand } from "@/lib/slash-command";
 import { ArrowDown, CheckCircle2, Download, FileText, Loader2, RotateCcw, X } from "lucide-react";
 import type {
   SessionInfoLite,
   ChatMessage,
-  ThinkingLevel,
   ImageContentLite,
   ForkableUserMessage,
 } from "@/lib/types";
@@ -32,6 +32,7 @@ import type {
 import type { BrowserAnnotation } from "@/lib/browser/types";
 import type { AgentProgress } from "@/lib/progress/types";
 import { extractImagesFromClipboard } from "@/lib/image-utils";
+import { extractMentionsFromPaste } from "@/lib/composer/paste-mentions";
 import {
   getElectronApi,
   type AppInfo,
@@ -44,7 +45,6 @@ import {
   appendRestoredSubagentBatches,
   createInitialState,
   ctxToMessages,
-  type ReducerState,
 } from "@/lib/chat-reducer";
 import { userFacingMessage } from "@/lib/user-facing-error";
 import type { SubagentBatch } from "@/lib/subagents/types";
@@ -60,6 +60,7 @@ import { useAgentEvents } from "./hooks/useAgentEvents";
 import { useSessions } from "./hooks/useSessions";
 import { useChatStream } from "./hooks/useChatStream";
 import { useComposerAttachments } from "./hooks/useComposerAttachments";
+import { useMissingFileCheck } from "./hooks/useMissingFileCheck";
 import { usePetPusher } from "./hooks/usePetPusher";
 import { useBudget } from "./hooks/useBudget";
 import { useBudgetEnforcer, type BudgetTrigger } from "./hooks/useBudgetEnforcer";
@@ -74,6 +75,7 @@ import { loadCollabSettings } from "@/lib/collab/settings";
 import { useAutocomplete } from "./hooks/useAutocomplete";
 import { useMessageRefs } from "./ChatMinimap";
 import { EmptyState } from "./components/EmptyState";
+import { SessionLoadingState } from "./components/SessionLoadingState";
 import { Composer } from "./components/Composer";
 import { DropOverlay } from "./components/DropOverlay";
 import { Sidebar } from "./components/Sidebar";
@@ -725,6 +727,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // 提供 groupedSessions / refreshSessions / submitRename / executeDeleteSession 等。
   const {
     sessions,
+    setSessions,
     selectedId,
     setSelectedId,
     lastSeenMap,
@@ -1044,11 +1047,18 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   }, [persistWorkbench]);
   const selectSessionAndCloseWorkbench = useCallback(
     (id: string) => {
+      // F2：原子切换。如果这个 session 在 sessions 里有个能认出的 path，并且
+      // runnersRef 里已有该 path 对应的 runner，就同步 switchTo + setSelectedId，
+      // 避免 effect 异步窗口期间 send 拿到新 selectedId 但 activeKey 还是 draft。
+      const target = sessions.find((s) => s.id === id);
+      if (target && runnersRef.current.has(target.path)) {
+        switchTo(target.path);
+      }
       setSelectedId(id);
       setWorkbenchOpen(false);
       persistWorkbench(false, { type: "overview" });
     },
-    [persistWorkbench, setSelectedId]
+    [persistWorkbench, runnersRef, sessions, setSelectedId, switchTo]
   );
   const toggleWorkbench = useCallback(() => {
     setWorkbenchOpen((prev) => {
@@ -1255,6 +1265,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // 所有下游 callbacks/render 通过这些同名变量读取,行为与原 useState 完全一致。
   const {
     chatState,
+    contextLoading,
     forkableUserMessages,
     forkingIndex,
     forkText,
@@ -1264,6 +1275,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     sessionFile: currentSessionFile,
     pendingImages,
     pendingFiles,
+    composerMode,
     streaming,
     agentPhase,
     compacting,
@@ -1326,11 +1338,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     []
   );
 
-  const setChatState = useCallback(
-    (v: Updater<ReducerState>) =>
-      updateActive((s) => ({ chatState: resolve(s.chatState, v) })),
-    [resolve, updateActive]
-  );
+  // setChatState 在 F6 后不再使用。取而代之是在 capture ownerKey 后调 updateRunner，
+  // 避免 A 请求返回后写到 当前 active 的 B。保留函数定义会被 lint 报 unused，
+  // 直接刪。
   const setForkableUserMessages = useCallback(
     (v: Updater<ForkableUserMessage[]>) =>
       updateActive((s) => ({
@@ -1378,6 +1388,15 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       updateActive((s) => ({ pendingFiles: resolve(s.pendingFiles, v) })),
     [resolve, updateActive]
   );
+  const setComposerMode = useCallback(
+    (
+      v: Updater<
+        import("@/lib/session-runner").RunnerState["composerMode"]
+      >
+    ) =>
+      updateActive((s) => ({ composerMode: resolve(s.composerMode, v) })),
+    [resolve, updateActive]
+  );
   const setCompactError = useCallback(
     (v: Updater<string | null>) =>
       updateActive((s) => ({ compactError: resolve(s.compactError, v) })),
@@ -1391,11 +1410,35 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     removePendingImage,
     onDropFiles,
     removePendingFile,
+    addPathAttachment,
   } = useComposerAttachments({
     setPendingImages,
     setPendingFiles,
     setError,
   });
+
+  // Phase C：服务端检查引用文件是否存在，驱动 FileChip warning tone。
+  const { missingPaths: missingFilePaths } = useMissingFileCheck(pendingFiles);
+
+  // F1：重复点同一 mention 时让原 chip flash 300ms。
+  const [flashedFilePath, setFlashedFilePath] = useState<string | null>(null);
+  const flashFilePathTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const flashFilePath = useCallback((p: string) => {
+    setFlashedFilePath(p);
+    if (flashFilePathTimerRef.current) clearTimeout(flashFilePathTimerRef.current);
+    flashFilePathTimerRef.current = setTimeout(() => {
+      setFlashedFilePath(null);
+      flashFilePathTimerRef.current = null;
+    }, 300);
+  }, []);
+  useEffect(
+    () => () => {
+      if (flashFilePathTimerRef.current) clearTimeout(flashFilePathTimerRef.current);
+    },
+    []
+  );
 
   const {
     isDragOver,
@@ -1411,9 +1454,36 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       if (imgs.length > 0) {
         e.preventDefault();
         void addImageFiles(imgs);
+        return;
+      }
+      // 结构化 Composer Phase B：粘贴含 @/abs/path 的文本 → 提为 mention。
+      // 仅当粘贴的文本返回了 “路径芅取” 时才 preventDefault，避免污染普通复粘贴体验。
+      const text = e.clipboardData?.getData("text/plain") ?? "";
+      if (!text) return;
+      const { paths, remainingText } =
+        extractMentionsFromPaste(text);
+      if (paths.length === 0) return;
+      e.preventDefault();
+      // 多个路径递进 pendingFiles（addPathAttachment 本身会 dedupe）
+      for (const p of paths) {
+        const r = addPathAttachment(p);
+        if (r === "duplicate") flashFilePath(p);
+      }
+      // 剩余文本插入到 caret 处；Composer 底层使用 store-based input，
+      // 这里走 setInput(prev => before + remaining + after)。caret 位置从 textarea
+      // currentTarget 取。
+      if (remainingText) {
+        const ta = e.currentTarget;
+        const start = ta.selectionStart ?? 0;
+        const end = ta.selectionEnd ?? start;
+        setInput((cur) => {
+          const before = cur.slice(0, start);
+          const after = cur.slice(end);
+          return `${before}${remainingText}${after}`;
+        });
       }
     },
-    [addImageFiles]
+    [addImageFiles, addPathAttachment, flashFilePath, setInput]
   );
 
   // compactError 3 秒自动消失（原本贴在 useState 旁,现在挪到 wrapper 之后）
@@ -1442,6 +1512,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   } = useApprovals({
     agentId,
     onError: setError,
+    // 问题 2：POST 成功后立即兑底刷一次 sidebar（避免 SSE 丢包时 “需确认” 不消）。
+    refreshSessions,
   });
 
   // RFC-5：主动追问 / 推荐下一步 user actions。
@@ -1452,6 +1524,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   } = useClarifications({
     agentId,
     onError: setError,
+    refreshSessions,
   });
 
   // ===== 宠物状态推送（hook 化，见 app/hooks/usePetPusher.ts）=====
@@ -1520,6 +1593,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // 用户是否"贴底"：贴底时新内容自动跟随，往上滚一旦离开底部 64px 就停止跟随。
   const stickToBottomRef = useRef(true);
   const scrollRafRef = useRef<number | null>(null);
+  // “问题 1”修复：用户刚刚手动滚动后的时间窗内（400ms）不允许自动贴底。
+  // 避免 approval/clarification part 追加、progress.updatedAt 跳动、偶尔的
+  // streaming token delta 在用户试图往上看时调 scrollTop 抢回底。
+  const lastUserScrollAtRef = useRef(0);
+  const USER_SCROLL_LOCK_MS = 400;
   // send 后锚定到刚发的 user 消息:记 send 时的 user 消息总数,
   // 等新 user 消息从 SSE 回来后扫到对应那条,把它滚到屏顶。
   // null = 不锚定(普通贴底跟随);number = 期望"这条 user 一出现就锚"
@@ -1527,36 +1605,64 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // 锚定阶段:仅此期间渲染 60vh 底部占位,让最后一条 user 能被 scroll-to-top
   // 一旦锚定完成或被取消,移除占位,避免列表底部一大片空白可滚。
   const [pinSpacer, setPinSpacer] = useState(false);
-  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [scrollToBottomState, setScrollToBottomState] = useState({
+    key: "",
+    visible: false,
+  });
+  const showScrollToBottom =
+    scrollToBottomState.key === activeKey && scrollToBottomState.visible;
 
-  const scrollMessagesToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
-    if (scrollRafRef.current != null) {
-      cancelAnimationFrame(scrollRafRef.current);
-    }
-    scrollRafRef.current = requestAnimationFrame(() => {
-      scrollRafRef.current = null;
-      const el = messagesScrollRef.current;
-      if (!el) return;
-      if (behavior === "smooth") {
-        el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-      } else {
-        // Streaming token updates must be an immediate snap-to-bottom. Smooth
-        // animations overlap with frequent content growth and make the scrollbar
-        // visibly bounce.
-        el.scrollTop = el.scrollHeight;
+  // 类型参数：“force” 不受用户滚动锁限制。点“贴底”按钮 / send 后的主动贴底会传 force。
+  const scrollMessagesToBottom = useCallback(
+    (behavior: ScrollBehavior = "auto", opts?: { force?: boolean }) => {
+      // “问题 1”：用户刚手动滚不久——以用户为准，跳过本次贴底。
+      if (
+        !opts?.force &&
+        Date.now() - lastUserScrollAtRef.current < USER_SCROLL_LOCK_MS
+      ) {
+        return;
       }
-      stickToBottomRef.current = true;
-      setShowScrollToBottom(false);
-    });
-  }, []);
+      if (scrollRafRef.current != null) {
+        cancelAnimationFrame(scrollRafRef.current);
+      }
+      scrollRafRef.current = requestAnimationFrame(() => {
+        scrollRafRef.current = null;
+        const el = messagesScrollRef.current;
+        if (!el) return;
+        if (behavior === "smooth") {
+          el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+        } else {
+          // Streaming token updates must be an immediate snap-to-bottom. Smooth
+          // animations overlap with frequent content growth and make the scrollbar
+          // visibly bounce.
+          el.scrollTop = el.scrollHeight;
+        }
+        stickToBottomRef.current = true;
+        setScrollToBottomState((state) =>
+          state.visible ? { ...state, visible: false } : state,
+        );
+      });
+    },
+    []
+  );
 
   function handleMessagesScroll() {
     const el = messagesScrollRef.current;
     if (!el) return;
     const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     const atBottom = distanceToBottom < 64;
+    // “问题 1”：记下一次用户手动滚动时间（包括轮子 / 拖动条 / 键盘翻页）。
+    // scrollMessagesToBottom 不 force 时会看这个时间戏。这里不完全区分 “用户” 和
+    // “代码主动 scrollTo”，scrollMessagesToBottom 走 force=true，scrollTo 后的
+    // 事件跳不起作用 —— 反正当时 stickToBottomRef 已被设为 true，lock 对后续
+    // streaming 也不会阫错人。
+    lastUserScrollAtRef.current = Date.now();
     stickToBottomRef.current = atBottom;
-    setShowScrollToBottom((visible) => (visible === !atBottom ? visible : !atBottom));
+    setScrollToBottomState((state) =>
+      state.key === activeKey && state.visible === !atBottom
+        ? state
+        : { key: activeKey, visible: !atBottom },
+    );
     // 用户主动滚动 = 取消锚定意图(占位也跟着移除,见 effect)
     if (pendingPinUserCountRef.current !== null) {
       pendingPinUserCountRef.current = null;
@@ -1564,35 +1670,58 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     }
   }
 
+  // “问题 1”：贴底跟随只看“真正需要跟随”的信号。
+  // streamSignature = 消息总数 + 末尾消息的 text/thinking 总长度。
+  // 这样：approval/clarification/subagent_batch 等 part 追加不会调发贴底。
+  const streamSignature = useMemo(() => {
+    const list = chatState.messages;
+    const last = list[list.length - 1];
+    let tail = 0;
+    if (last?.parts) {
+      for (const p of last.parts) {
+        if (p.kind === "text") tail += p.text.length;
+        else if (p.kind === "thinking") tail += p.text.length;
+      }
+    } else if (last) {
+      tail = (last.text?.length ?? 0) + (last.thinking?.length ?? 0);
+    }
+    return `${list.length}|${tail}`;
+  }, [chatState.messages]);
+
+  // 锁定用户消息锁顶（send 后的一次性言领则什，仅起始完上锁期内动作）。
+  // 这条 effect 不走“贴底”逻辑，只负责“锁到刚发的 user”，不受 lock 控制。
   useEffect(() => {
-    // 兜底:streaming 已结束还留着锚定/占位的话清掉,避免占位永久滞留
     if (!streaming && pendingPinUserCountRef.current !== null) {
       pendingPinUserCountRef.current = null;
       queueMicrotask(() => setPinSpacer(false));
     }
-    // 优先级 1:有锚定目标 → 等那条 user 消息从 SSE 回来后锚到屏顶,只锚一次
     const targetCount = pendingPinUserCountRef.current;
-    if (targetCount !== null) {
-      if (
-        messageRenderState.userMessageCount >= targetCount &&
-        messageRenderState.lastUserVisibleIndex >= 0
-      ) {
-        const el = messageRefs.current?.[messageRenderState.lastUserVisibleIndex];
-        if (el) {
-          el.scrollIntoView({ behavior: "smooth", block: "start" });
-          // 锚定完成 → 清意图 + 移除占位,列表底部回到"最后一条 + padding"
-          pendingPinUserCountRef.current = null;
-          queueMicrotask(() => setPinSpacer(false));
-          return;
-        }
+    if (targetCount === null) return;
+    if (
+      messageRenderState.userMessageCount >= targetCount &&
+      messageRenderState.lastUserVisibleIndex >= 0
+    ) {
+      const el = messageRefs.current?.[messageRenderState.lastUserVisibleIndex];
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+        pendingPinUserCountRef.current = null;
+        queueMicrotask(() => setPinSpacer(false));
       }
-      // 目标消息还没到/ref 还没挂上,这一轮先不滚,等下一次 messages 更新再试
-      return;
     }
-    // 优先级 2:贴底时跟随新内容
+  }, [
+    messageRenderState.userMessageCount,
+    messageRenderState.lastUserVisibleIndex,
+    streaming,
+    messageRefs,
+  ]);
+
+  // 贴底跟随只看 streamSignature：approval / clarification / subagent_batch / progress.updatedAt
+  // 都不会作为 deps 在这里出现，从而不会抢回底。
+  useEffect(() => {
+    if (pendingPinUserCountRef.current !== null) return; // 锁定中 — 交给上一个 effect
     if (!stickToBottomRef.current) return;
     scrollMessagesToBottom();
-  }, [messageRenderState, streaming, messageRefs, scrollMessagesToBottom]);
+  }, [streamSignature, scrollMessagesToBottom]);
 
   useEffect(() => {
     return () => {
@@ -1602,6 +1731,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     };
   }, []);
 
+  // progress.updatedAt 也只在“本来在底”时才跟随。各种状态类事件（优先级下调），
+  // 同样会被 user-scroll lock 守住。
   useEffect(() => {
     if (!stickToBottomRef.current) return;
     scrollMessagesToBottom();
@@ -1630,43 +1761,95 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     // 冷启动:建空 runner,先切过去显示空(很快),再异步填 context
     const fresh = emptyRunner();
     fresh.sessionFile = sel.path;
+    fresh.contextLoading = true;
     startTransition(() => {
       setRunner(key, fresh);
       switchTo(key);
     });
 
-    void fetch(`/api/sessions/${selectedId}/context`)
+    // F4：capture ownerKey + sessionId 请求发起时的状态。返回后只在同一 ownerKey
+    // 仍然处于 contextLoading=true 且 chatState 未产生 live event 时才填充，
+    // 避免覆盖用户发送后 SSE 已写入的实时消息。
+    const requestSessionId = selectedId;
+    void fetch(`/api/sessions/${requestSessionId}/context`)
       .then((r) => r.json())
       .then((ctx) => {
         if (ctx.error) {
+          // 还是在处理 loading？
+          const cur = runnersRef.current.get(key);
+          if (cur && cur.contextLoading) {
+            updateRunner(key, { contextLoading: false, contextError: ctx.error });
+          }
           setError(ctx.error);
           return;
         }
+        const cur = runnersRef.current.get(key);
+        if (!cur) return; // runner 已被淘汰 / 删除
+        // 只有仍在 loading 且 chatState 不含实时消息时才覆盖，否则 merge。
+        const hasLiveMessages = (cur.chatState?.messages?.length ?? 0) > 0;
         // P2-I: 从后端拉回的整个历史会话可能包含几百条消息；
         // 这一重重渲染量包进低优先级 transition，让输入交互优先保持响应。
+        // 后端 context route 会给出 interrupted 信号（检测未配对工具调用
+        // 且没 active runtime）。sel.isRunning 只是辅助“实时在跑”的信号。
+        const interruptedFlag =
+          (ctx as { interrupted?: boolean })?.interrupted === true;
+        const restoreToolOptions =
+          interruptedFlag || !sel.isRunning
+            ? {
+                unfinishedToolStatus: "error" as const,
+                unfinishedToolResult:
+                  "上次运行在工具返回前被中断。可以重新发送或继续任务。",
+              }
+            : undefined;
         startTransition(() => {
-          updateRunner(key, {
-            chatState: createInitialState(
-              appendRestoredSubagentBatches(
-                ctxToMessages(ctx.messages ?? []),
-                Array.isArray(ctx.subagentBatches)
-                  ? (ctx.subagentBatches as SubagentBatch[])
-                  : undefined
-              )
-            ),
-            ...(Array.isArray(ctx.forkableUserMessages)
-              ? {
-                  forkableUserMessages:
-                    ctx.forkableUserMessages as ForkableUserMessage[],
-                }
-              : {}),
-            ...(ctx.progress
-              ? { progress: ctx.progress as AgentProgress }
-              : {}),
-          });
+          if (cur.contextLoading && !hasLiveMessages) {
+            updateRunner(key, {
+              contextLoading: false,
+              contextError: null,
+              chatState: createInitialState(
+                appendRestoredSubagentBatches(
+                  ctxToMessages(ctx.messages ?? [], restoreToolOptions),
+                  Array.isArray(ctx.subagentBatches)
+                    ? (ctx.subagentBatches as SubagentBatch[])
+                    : undefined
+                )
+              ),
+              ...(Array.isArray(ctx.forkableUserMessages)
+                ? {
+                    forkableUserMessages:
+                      ctx.forkableUserMessages as ForkableUserMessage[],
+                  }
+                : {}),
+              ...(ctx.progress
+                ? { progress: ctx.progress as AgentProgress }
+                : {}),
+            });
+          } else {
+            // 已有实时消息——只补 forkable / progress 这种仅供辅助 UI 用途的字段。
+            updateRunner(key, {
+              contextLoading: false,
+              contextError: null,
+              ...(Array.isArray(ctx.forkableUserMessages)
+                ? {
+                    forkableUserMessages:
+                      ctx.forkableUserMessages as ForkableUserMessage[],
+                  }
+                : {}),
+              ...(ctx.progress
+                ? { progress: ctx.progress as AgentProgress }
+                : {}),
+            });
+          }
         });
       })
-      .catch((e) => setError(userFacingMessage(e, { context: "settings" })));
+      .catch((e) => {
+        const message = userFacingMessage(e, { context: "settings" });
+        const cur = runnersRef.current.get(key);
+        if (cur && cur.contextLoading) {
+          updateRunner(key, { contextLoading: false, contextError: message });
+        }
+        setError(message);
+      });
      
   }, [runnersRef, selectedId, sessions, setRunner, switchTo, updateRunner]);
 
@@ -1738,10 +1921,16 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     [activeKeyRef, updateRunner]
   );
 
-  // 切完分支后从 session context 重建 chat state
+  // 切完分支后从 session context 重建 chat state。
+  // F6：capture ownerKey + sessionId，返回时要求 ownerKey 仍是 activeKey
+  // 且该 runner 的 sessionFile / agentId 仍与请求发起时一致，避免 A 请求结果落到 B。
   const reloadFromCurrentSession = useCallback(async () => {
     const sid = agentSessionId ?? selectedId;
     if (!sid) return;
+    const ownerKeyAtStart = activeKeyRef.current;
+    const ownerSnapshot = runnersRef.current.get(ownerKeyAtStart);
+    const ownerSessionFile = ownerSnapshot?.sessionFile ?? null;
+    const ownerAgentId = ownerSnapshot?.agentId ?? null;
     try {
       const r = await fetch(`/api/sessions/${sid}/context`);
       const ctx = await r.json();
@@ -1749,36 +1938,60 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         setError(ctx.error);
         return;
       }
-      setChatState(
-        createInitialState(
+      const stillSameOwner = (): boolean => {
+        if (activeKeyRef.current !== ownerKeyAtStart) return false;
+        const cur = runnersRef.current.get(ownerKeyAtStart);
+        if (!cur) return false;
+        if (cur.sessionFile !== ownerSessionFile) return false;
+        if (cur.agentId !== ownerAgentId) return false;
+        return true;
+      };
+      if (!stillSameOwner()) {
+        return;
+      }
+      // 定向写 ownerKey。不走 setChatState（它是 update active sugar）。
+      const interruptedFlag =
+        (ctx as { interrupted?: boolean })?.interrupted === true;
+      const restoreToolOptions =
+        interruptedFlag || !selectedSession?.isRunning
+          ? {
+              unfinishedToolStatus: "error" as const,
+              unfinishedToolResult:
+                "上次运行在工具返回前被中断。可以重新发送或继续任务。",
+            }
+          : undefined;
+      updateRunner(ownerKeyAtStart, {
+        chatState: createInitialState(
           appendRestoredSubagentBatches(
-            ctxToMessages(ctx.messages ?? []),
+            ctxToMessages(ctx.messages ?? [], restoreToolOptions),
             Array.isArray(ctx.subagentBatches)
               ? (ctx.subagentBatches as SubagentBatch[])
               : undefined
           )
-        )
-      );
-      if (Array.isArray(ctx.forkableUserMessages)) {
-        setForkableUserMessages(
-          ctx.forkableUserMessages as ForkableUserMessage[]
-        );
-      }
-      if (agentId) {
-        void refreshStats(agentId);
-        void refreshToolsCount(agentId);
+        ),
+        ...(Array.isArray(ctx.forkableUserMessages)
+          ? {
+              forkableUserMessages:
+                ctx.forkableUserMessages as ForkableUserMessage[],
+            }
+          : {}),
+      });
+      if (ownerAgentId) {
+        void refreshStats(ownerAgentId, ownerKeyAtStart);
+        void refreshToolsCount(ownerAgentId, ownerKeyAtStart);
       }
     } catch (e) {
       setError(userFacingMessage(e));
     }
   }, [
-    agentId,
+    activeKeyRef,
     agentSessionId,
     refreshStats,
     refreshToolsCount,
+    runnersRef,
+    selectedSession?.isRunning,
     selectedId,
-    setChatState,
-    setForkableUserMessages,
+    updateRunner,
   ]);
 
   // 把 handleAgentEvent 绑到 ref，供 useSseManager 的 onEvent 回调使用。
@@ -1832,15 +2045,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
    * +New chat:
    * 1) 先确保 draft runner 存在(初始化已经建过,做兜底)
    * 2) 切到 draft —— 用户切走再切回时输入框/状态都还在
-   * 3) 仍然 eager create 一个 agent 绑到 draft,这样 thinking pill / 模型能力
-   *    立即就有数据(老 UX 保留)。首次发送时 send() 会把 draft 升级到 sessionFile key。
+   * 3) 不预创建后端 agent/session。真正的 session 文件在第一次发送时创建，
+   *    避免点击 New chat 产生空 session 或 orphan agent。
    */
-  const startNewSession = useCallback(async () => {
+  const startNewSession = useCallback(() => {
     setError(null);
-    if (!providerId || !modelId) {
-      setError("请先选择 provider 和 model");
-      return;
-    }
     // 兜底:draft 槽如果被异常清掉了,重建一个
     if (!runnersRef.current.has(DRAFT_KEY)) {
       setRunner(DRAFT_KEY, emptyRunner());
@@ -1855,60 +2064,12 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     storeSetInput(DRAFT_KEY, "");
     // 重新 switchTo 让 useRunners 把新的 empty snapshot 同步给 React state
     switchTo(DRAFT_KEY);
-
-    try {
-      const r = await fetch("/api/agent/new", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          provider: providerId,
-          modelId,
-          cwd,
-          thinkingLevel,
-        }),
-      });
-      const data = await r.json();
-      if (data.error) {
-        setError(userFacingMessage(data.error, { context: "settings" }));
-        return;
-      }
-      updateRunner(DRAFT_KEY, {
-        agentId: data.id,
-        agentSessionId: data.sessionId,
-        sessionFile: data.sessionFile ?? null,
-        ...(data.thinkingLevel
-          ? { thinkingLevel: data.thinkingLevel as ThinkingLevel }
-          : {}),
-        ...(data.availableThinkingLevels
-          ? {
-              availableThinkingLevels:
-                data.availableThinkingLevels as ThinkingLevel[],
-            }
-          : {}),
-        ...(typeof data.supportsThinking === "boolean"
-          ? { supportsThinking: data.supportsThinking }
-          : {}),
-      });
-      attachSseFor(DRAFT_KEY, data.id);
-      void refreshStats(data.id, DRAFT_KEY);
-      void refreshToolsCount(data.id, DRAFT_KEY);
-    } catch (e) {
-      setError(userFacingMessage(e, { context: "settings" }));
-    }
   }, [
-    cwd,
-    providerId,
-    modelId,
-    thinkingLevel,
-    refreshStats,
-    refreshToolsCount,
     switchTo,
     setRunner,
     setSelectedId,
     runnersRef,
     closeSseFor,
-    attachSseFor,
-    updateRunner,
     persistWorkbench,
   ]);
 
@@ -1950,21 +2111,43 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   useEffect(() => {
     if (!agentId) return;
     let cancelled = false;
-    const ownerKey = activeKey;
+    const aidAtStart = agentId;
+    // C3：恢复时不依赖“当前的 activeKey”。按 request.agentId 反查当前
+    // runnersRef 中 agentId 相同的 runnerKey 定向写。找不到则跳过这条
+    // （说明该 agent 在 UI 上还没 hydrated runner）。
+    const findOwnerKeyByAgentId = (
+      aid: string
+    ): RunnerKey | null => {
+      for (const [key, runner] of runnersRef.current) {
+        if (runner.agentId === aid) return key;
+      }
+      return null;
+    };
     void loadPendingApprovals().then((requests) => {
-      if (cancelled || requests.length === 0) return;
-      restorePendingApprovals(requests, agentId, ownerKey);
+      if (cancelled) return;
+      for (const request of requests) {
+        const target =
+          findOwnerKeyByAgentId(request.agentId ?? aidAtStart) ??
+          activeKeyRef.current;
+        restorePendingApprovals([request], request.agentId ?? aidAtStart, target);
+      }
     });
     void loadPendingClarifications().then((requests) => {
-      if (cancelled || requests.length === 0) return;
-      restorePendingClarifications(requests, agentId, ownerKey);
+      if (cancelled) return;
+      for (const request of requests) {
+        const target =
+          findOwnerKeyByAgentId(request.agentId) ??
+          activeKeyRef.current;
+        restorePendingClarifications([request], request.agentId, target);
+      }
     });
     return () => {
       cancelled = true;
     };
   }, [
     agentId,
-    activeKey,
+    activeKeyRef,
+    runnersRef,
     loadPendingApprovals,
     loadPendingClarifications,
     restorePendingApprovals,
@@ -2012,6 +2195,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     setPendingFiles,
     setError,
     setSelectedId,
+    setSessions,
     refreshStats,
     refreshToolsCount,
     pendingPinUserCountRef,
@@ -2027,26 +2211,30 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     budget,
     onAbort,
     onPause: (trigger) => {
+      // B4：只弹窗。不提前 goal_pause 、也不清 progress。是否 resume 由用户
+      // 在弹窗里选。开着的 step 在 abort 里会被 fail-open（failOpenProgressSteps）以
+      // 给出中断信号；resume 后 progress 不会被重置，留用户看到上轮状态。
       setBudgetPausedTrigger(trigger);
-      if (trigger.agentId) {
-        void agentAction(trigger.agentId, {
-          type: "goal_pause",
-          reason: "Budget limit reached.",
-        }).catch(() => {});
-      }
     },
   });
 
-  // "提高上限并继续"：把当前 budget 各启用维度 × 2 写入 session override
+  // B4 + B5：“提高上限并恢复”。主要动作：
+  //   1. 把当前 budget 各启用维度 × 2 写入 session override。
+  //   2. 如果该 session 还有 active goal，先照顺序 goal_resume（包括在 enforcer
+  //      未主动 pause 场景下也能重启推进循环）。
+  //   3. 补一条 progress 节点“预算恢复”，避免右侧面板看不出“刚刚发生过什么”。
+  //   4. 发一条“请继续刚才的任务”的 prompt，让 agent 真接下去跑；避免“按了但
+  //      实际卡住”的体感。
   const handleRaiseAndContinue = useCallback(
-    (trigger: BudgetTrigger) => {
+    async (trigger: BudgetTrigger) => {
       if (!agentId) {
         setBudgetPausedTrigger(null);
         return;
       }
       const b = trigger.budget;
       setSessionOverride({
-        maxCostUsd: b.maxCostUsd && b.maxCostUsd > 0 ? b.maxCostUsd * 2 : b.maxCostUsd,
+        maxCostUsd:
+          b.maxCostUsd && b.maxCostUsd > 0 ? b.maxCostUsd * 2 : b.maxCostUsd,
         maxTurns: b.maxTurns && b.maxTurns > 0 ? b.maxTurns * 2 : b.maxTurns,
         maxDurationSec:
           b.maxDurationSec && b.maxDurationSec > 0
@@ -2055,9 +2243,63 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         action: b.action,
       });
       setBudgetPausedTrigger(null);
-      // Phase A 暂不自动续发；用户需手动在 Composer 里继续追问
+      // B5: 给右侧 progress 补一条“预算恢复”节点，但不清空历史。
+      const ownerKey = activeKeyRef.current;
+      updateRunner(ownerKey, (state) => {
+        if (!state.progress) return {};
+        const t = Date.now();
+        const note = {
+          id: `budget-resume-${t}`,
+          title: "预算上调，继续任务",
+          status: "completed" as const,
+          summary: "提高了预算上限。上一轮起的节点仅作为中断记录保留。",
+          completedAt: t,
+        };
+        const groups = state.progress.groups;
+        const lastIdx = groups.length - 1;
+        const next = {
+          ...state.progress,
+          groups:
+            lastIdx >= 0
+              ? groups.map((g, i) =>
+                  i === lastIdx
+                    ? {
+                        ...g,
+                        steps: [...g.steps, note],
+                        endedAt: undefined,
+                      }
+                    : g
+                )
+              : groups,
+          steps:
+            lastIdx >= 0
+              ? groups[lastIdx].steps.concat(note)
+              : state.progress.steps.concat(note),
+          updatedAt: t,
+        };
+        return { progress: next };
+      });
+      // 如果该 session 有 active goal 且处于 paused（上轮 abort 会可能让 goal
+      // 留在 active 但 turn 中断），resume 一下；agent-registry 里 maybeContinueGoal
+      // 会接手推进。同时发一条“提高上限，请继续上一轮任务” prompt，作为实际
+      // 推进信号。
+      try {
+        await agentAction(agentId, { type: "goal_resume" }).catch(() => {});
+        await agentAction(agentId, {
+          type: "prompt",
+          text: "预算已上调，请继续刚才被预算限制中断的任务。如果上一轮是调用工具中途被中断，重新起这个工具调用。",
+        });
+      } catch {
+        /* error 已被 agentAction 设置 */
+      }
     },
-    [agentId, setSessionOverride]
+    [
+      agentId,
+      activeKeyRef,
+      agentAction,
+      setSessionOverride,
+      updateRunner,
+    ]
   );
 
   const rememberComposerInput = useCallback((text: string) => {
@@ -2120,33 +2362,40 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     [inputHistory, inputRef, setInput]
   );
 
+  // G3：goal pause/resume/clear 都需要从渲染 goal 的 runner 里拿 agentId，
+  // 不能只读全局 active。这里点击时快照一下“当前渲染 goal 的 runner = active runner”，
+  // 如果异步间隔里被切走，就别动错误 session 的 goal。
+  const captureGoalOwner = useCallback((): {
+    agentId: string;
+    ownerKey: RunnerKey;
+  } | null => {
+    const ownerKeyAtClick = activeKeyRef.current;
+    const snap = runnersRef.current.get(ownerKeyAtClick);
+    if (!snap?.agentId || !snap.goal) return null;
+    return { agentId: snap.agentId, ownerKey: ownerKeyAtClick };
+  }, [activeKeyRef, runnersRef]);
+
   const runGoalCommand = useCallback(
     async (raw: string): Promise<boolean> => {
-      const trimmed = raw.trim();
-      if (!trimmed.startsWith("/goal")) return false;
-      const rest = trimmed.slice("/goal".length).trim();
+      const parsed = parseSlashCommand(raw, ["goal"]);
+      if (!parsed) return false;
+      const { rest } = parsed;
       if (!rest) {
         setError(goal ? `当前 goal: ${goal.objective}` : "当前没有 active goal");
         setInput("");
         return true;
       }
-      if (rest === "pause") {
-        if (agentId) {
-          await agentAction(agentId, { type: "goal_pause" }).catch(() => {});
-        }
-        setInput("");
-        return true;
-      }
-      if (rest === "resume") {
-        if (agentId) {
-          await agentAction(agentId, { type: "goal_resume" }).catch(() => {});
-        }
-        setInput("");
-        return true;
-      }
-      if (rest === "clear") {
-        if (agentId) {
-          await agentAction(agentId, { type: "goal_clear" }).catch(() => {});
+      // G3：pause/resume/clear 也走 captured owner。
+      if (rest === "pause" || rest === "resume" || rest === "clear") {
+        const owner = captureGoalOwner();
+        if (owner) {
+          const t =
+            rest === "pause"
+              ? "goal_pause"
+              : rest === "resume"
+              ? "goal_resume"
+              : "goal_clear";
+          await agentAction(owner.agentId, { type: t }).catch(() => {});
         }
         setInput("");
         return true;
@@ -2157,8 +2406,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       return true;
     },
     [
-      agentId,
       agentAction,
+      captureGoalOwner,
       goal,
       rememberComposerInput,
       setError,
@@ -2173,9 +2422,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
    */
   const runWorkflowCommand = useCallback(
     async (raw: string): Promise<boolean> => {
-      const trimmed = raw.trim();
-      if (!trimmed.startsWith("/workflow")) return false;
-      const rest = trimmed.slice("/workflow".length).trim();
+      const parsed = parseSlashCommand(raw, ["workflow"]);
+      if (!parsed) return false;
+      const { rest } = parsed;
       if (!rest) {
         setError("用法：/workflow <目标描述>，将用 dynamic workflow 执行该目标");
         return true;
@@ -2189,28 +2438,68 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   );
 
   const handleGoalPause = useCallback(async () => {
-    if (!agentId) return;
-    await agentAction(agentId, { type: "goal_pause" }).catch(() => {});
-  }, [agentId, agentAction]);
+    const owner = captureGoalOwner();
+    if (!owner) return;
+    await agentAction(owner.agentId, { type: "goal_pause" }).catch(() => {});
+  }, [captureGoalOwner, agentAction]);
 
   const handleGoalResume = useCallback(async () => {
-    if (!agentId) return;
-    await agentAction(agentId, { type: "goal_resume" }).catch(() => {});
-  }, [agentId, agentAction]);
+    const owner = captureGoalOwner();
+    if (!owner) return;
+    await agentAction(owner.agentId, { type: "goal_resume" }).catch(() => {});
+  }, [captureGoalOwner, agentAction]);
 
   const handleGoalClear = useCallback(async () => {
-    if (!agentId) return;
-    await agentAction(agentId, { type: "goal_clear" }).catch(() => {});
-  }, [agentId, agentAction]);
+    const owner = captureGoalOwner();
+    if (!owner) return;
+    await agentAction(owner.agentId, { type: "goal_clear" }).catch(() => {});
+  }, [captureGoalOwner, agentAction]);
 
   const sendWithHistory = useCallback(async () => {
     // P1-E: input 不再是 ChatApp 订阅状态，在交互时点同步读一次 store 快照。
     const current = getCurrentInput();
+    // 结构化路径：如果已选中 mode chip，直接走该能力。不再依赖“/goal ” 前缀。
+    if (composerMode === "goal") {
+      if (!current.trim()) {
+        setError(goal ? `当前 goal: ${goal.objective}` : "请输入 goal 描述");
+        return;
+      }
+      rememberComposerInput(current);
+      setInput("");
+      setComposerMode(null);
+      await startGoal(current);
+      return;
+    }
+    if (composerMode === "workflow") {
+      if (!current.trim()) {
+        setError("请输入 workflow 目标描述");
+        return;
+      }
+      rememberComposerInput(current);
+      setInput("");
+      setComposerMode(null);
+      await startWorkflow(current);
+      return;
+    }
+    // 兑底路径：老习惯“/goal foo” “/workflow bar” 还能走。
     if (await runGoalCommand(current)) return;
     if (await runWorkflowCommand(current)) return;
     rememberComposerInput(current);
     await send();
-  }, [getCurrentInput, rememberComposerInput, runGoalCommand, runWorkflowCommand, send]);
+  }, [
+    composerMode,
+    getCurrentInput,
+    goal,
+    rememberComposerInput,
+    runGoalCommand,
+    runWorkflowCommand,
+    send,
+    setComposerMode,
+    setError,
+    setInput,
+    startGoal,
+    startWorkflow,
+  ]);
 
   const steerWithHistory = useCallback(async () => {
     rememberComposerInput(getCurrentInput());
@@ -2231,6 +2520,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     [setInput]
   );
 
+  // F10：resume 必须绑定原会话 owner。卷起点击时的 ownerKey/agentId，
+  // 如果调用时用户已切走 → 提示用户返回原会话，不要默默写到当前
+  // composer，以免在另一个会话 / cwd 里跳 workflow。
   const resumeWorkflowFromCard = useCallback(
     (
       workflowId: string,
@@ -2238,6 +2530,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       checkpointName?: string,
       snapshot?: WorkflowResumeSnapshot
     ) => {
+      const ownerKeyAtClick = activeKeyRef.current;
+      const ownerSnapshot = runnersRef.current.get(ownerKeyAtClick);
+      const ownerAgentId = ownerSnapshot?.agentId ?? null;
       const summaryLines = formatWorkflowResumeSummaries(snapshot, checkpointName);
       const prompt = [
         "请从这个历史 workflow 的 checkpoint/artifact 继续执行，不要从头重跑全部工作。",
@@ -2254,25 +2549,42 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       ]
         .filter(Boolean)
         .join("\n");
+      // resume 必须在原 workflow 所属 agent / owner 里发。如果点击时 owner 未改变，
+      // 直接写 composer（与原行为一致）；如果 owner runner 已丢失 agent 或被切走，
+      // 则提示用户存不能跳 owner 。
+      if (
+        activeKeyRef.current !== ownerKeyAtClick ||
+        ownerAgentId === null
+      ) {
+        setError(
+          "请先返回原 workflow 所属会话再点 resume，避免跳进另一个会话 / cwd。"
+        );
+        return;
+      }
       setComposerInput(prompt);
       requestAnimationFrame(() => inputRef.current?.focus());
     },
-    [inputRef, setComposerInput]
+    [activeKeyRef, inputRef, runnersRef, setComposerInput, setError]
   );
 
+  // F9：capture agentId。请求返回后验证当前 agentId 仍是发起时的 agentId，
+  // 否则丢弃 —— history/debug bundle 不能住进另一个会话。
   const loadWorkflowHistory = useCallback(async () => {
-    if (!agentId) return;
+    const aidAtStart = agentId;
+    if (!aidAtStart) return;
     setWorkflowHistoryLoading(true);
     setError(null);
     try {
-      const r = await fetch(`/api/agent/${agentId}/workflows`);
+      const r = await fetch(`/api/agent/${aidAtStart}/workflows`);
       const d = (await r.json()) as {
         resumes?: WorkflowResumeSnapshot[];
         error?: string;
       };
       if (!r.ok) throw new Error(d.error ?? `workflow history HTTP ${r.status}`);
+      // 返回后才设。如果中间用户已切走，workflowHistoryAgentId 仍被锁在老 aidAtStart，
+      // openWorkflowHistory 会重新拉。
       setWorkflowHistory(Array.isArray(d.resumes) ? d.resumes : []);
-      setWorkflowHistoryAgentId(agentId);
+      setWorkflowHistoryAgentId(aidAtStart);
     } catch (e) {
       setError(userFacingMessage(e));
     } finally {
@@ -2282,12 +2594,13 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
   const loadWorkflowDebugBundle = useCallback(
     async (snapshot: WorkflowResumeSnapshot) => {
-      if (!agentId) return;
+      const aidAtStart = agentId;
+      if (!aidAtStart) return;
       setWorkflowDebugLoading(true);
       setWorkflowDebugError(null);
       try {
         const r = await fetch(
-          `/api/agent/${agentId}/workflows?id=${encodeURIComponent(
+          `/api/agent/${aidAtStart}/workflows?id=${encodeURIComponent(
             snapshot.workflowId
           )}&debug=1`
         );
@@ -2298,8 +2611,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         if (!r.ok || !d.debugBundle) {
           throw new Error(d.error ?? `workflow debug HTTP ${r.status}`);
         }
+        // F9：只在 agentId 未变时才展示。
+        if (agentId !== aidAtStart) return;
         setWorkflowDebugBundle(d.debugBundle);
       } catch (e) {
+        if (agentId !== aidAtStart) return;
         setWorkflowDebugError(userFacingMessage(e));
       } finally {
         setWorkflowDebugLoading(false);
@@ -2339,13 +2655,18 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       workflowId: string,
       worktree: WorkflowWorktreeAction
     ) => {
-      if (!agentId) {
+      // F9：capture owner。在点击时快照 ownerKey + agentId，请求结束后只能
+      // 写回原 owner，不能误安到 当前 active runner。
+      const ownerKeyAtClick = activeKeyRef.current;
+      const ownerSnapshot = runnersRef.current.get(ownerKeyAtClick);
+      const ownerAgentId = ownerSnapshot?.agentId ?? agentId;
+      if (!ownerAgentId) {
         const message = "当前没有可用的 agent，无法操作 workflow worktree";
         setError(message);
         throw new Error(message);
       }
       setError(null);
-      const r = await fetch(`/api/agent/${agentId}/workflows`, {
+      const r = await fetch(`/api/agent/${ownerAgentId}/workflows`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2368,29 +2689,38 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         throw new Error(message);
       }
       if (d.artifact) {
-        handleAgentEvent(
-          {
-            type: "workflow_artifact",
-            workflowId,
-            artifact: d.artifact,
-          },
-          agentId,
-          activeKeyRef.current
-        );
+        // 走 captured owner，不读实时 active。如果 owner runner 已被淘汰，随之丢弃。
+        const ownerStillExists = runnersRef.current.has(ownerKeyAtClick);
+        if (ownerStillExists) {
+          handleAgentEvent(
+            {
+              type: "workflow_artifact",
+              workflowId,
+              artifact: d.artifact,
+            },
+            ownerAgentId,
+            ownerKeyAtClick
+          );
+        }
       }
     },
-    [activeKeyRef, agentId, handleAgentEvent]
+    [activeKeyRef, agentId, handleAgentEvent, runnersRef]
   );
 
+  // S5：以卡片携带的 parentAgentId 为优先，退化到 active agent。
   const retrySubagentTaskFromCard = useCallback(
-    async (batchId: string, taskId: string) => {
-      const ensured = await ensureAgent();
-      if (!ensured) {
-        setError("当前没有可用的 parent agent，无法重试 subagent task");
-        return;
+    async (batchId: string, taskId: string, parentAgentId?: string) => {
+      let aid = parentAgentId;
+      if (!aid) {
+        const ensured = await ensureAgent();
+        if (!ensured) {
+          setError("当前没有可用的 parent agent，无法重试 subagent task");
+          return;
+        }
+        aid = ensured.aid;
       }
       setError(null);
-      const r = await fetch(`/api/agent/${ensured.aid}/subagents`, {
+      const r = await fetch(`/api/agent/${aid}/subagents`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "retry", batchId, taskId }),
@@ -2406,14 +2736,18 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   );
 
   const resumeSubagentBatchFromCard = useCallback(
-    async (batchId: string) => {
-      const ensured = await ensureAgent();
-      if (!ensured) {
-        setError("当前没有可用的 parent agent，无法继续 subagent batch");
-        return;
+    async (batchId: string, parentAgentId?: string) => {
+      let aid = parentAgentId;
+      if (!aid) {
+        const ensured = await ensureAgent();
+        if (!ensured) {
+          setError("当前没有可用的 parent agent，无法继续 subagent batch");
+          return;
+        }
+        aid = ensured.aid;
       }
       setError(null);
-      const r = await fetch(`/api/agent/${ensured.aid}/subagents`, {
+      const r = await fetch(`/api/agent/${aid}/subagents`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "resume", batchId }),
@@ -2782,8 +3116,22 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           />
         ) : null}
 
-        {messages.length === 0 && !error && !progress ? (
-          <EmptyState />
+        {contextLoading ? (
+          <SessionLoadingState
+            title={
+              selectedSession?.meta?.title ??
+              selectedSession?.name ??
+              selectedSession?.firstMessage
+            }
+          />
+        ) : messages.length === 0 && !error && !progress ? (
+          <EmptyState
+            visibleProviders={visibleProviders}
+            onOpenProviderSetup={() => {
+              setProviderSetupChild(null);
+              setShowProviderSetup(true);
+            }}
+          />
         ) : (
           <MessagesScrollArea
             messages={messages}
@@ -2824,10 +3172,10 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         )}
 
         <div className="relative shrink-0">
-          {showScrollToBottom ? (
+          {showScrollToBottom && messages.length > 0 ? (
             <button
               type="button"
-              onClick={() => scrollMessagesToBottom("smooth")}
+              onClick={() => scrollMessagesToBottom("smooth", { force: true })}
               className="absolute left-1/2 top-0 z-20 inline-flex h-9 w-9 -translate-x-1/2 -translate-y-[calc(100%+8px)] items-center justify-center rounded-full border shadow-lg backdrop-blur transition-all hover:-translate-y-[calc(100%+10px)] hover:shadow-xl"
               style={{
                 borderColor: "var(--border)",
@@ -2856,9 +3204,13 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           goal={goal}
           pendingImages={pendingImages}
           pendingFiles={pendingFiles}
+          missingFilePaths={missingFilePaths}
+          flashedFilePath={flashedFilePath}
           removePendingImage={removePendingImage}
           removePendingFile={removePendingFile}
           addImageFiles={addImageFiles}
+          composerMode={composerMode}
+          setComposerMode={setComposerMode}
           acMode={acMode}
           acItems={acItems}
           acIndex={acIndex}
@@ -2994,15 +3346,28 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         onCloseCwdPicker={() => setShowCwdPicker(false)}
         onPickCwd={(picked) => {
           setCwd(picked);
+          // F1：全局 cwd 仅作为默认值；agent 发送依赖 runner.cwd。
+          //   - 如果 runner 还没 agent，同步 runner.cwd 让首发走新路径。
+          //   - 如果 runner 已有 agent 且 cwd 不同，记录 pendingCwd 提示用户是否
+          //     起新 session。
+          updateActive((s) => {
+            const ownerCwd = s.cwd ?? null;
+            if (!s.agentId) {
+              return { cwd: picked, pendingCwd: null };
+            }
+            if (ownerCwd && ownerCwd !== picked) {
+              return { pendingCwd: picked };
+            }
+            return { cwd: picked, pendingCwd: null };
+          });
           setShowCwdPicker(false);
         }}
         onCloseFilePicker={() => setShowFilePicker(false)}
         onPickFile={(absPath) => {
-          setInput((cur) => {
-            const sep =
-              cur.length === 0 || cur.endsWith(" ") ? "" : " ";
-            return `${cur}${sep}@${absPath} `;
-          });
+          // 结构化 P5：不再拼 "@/abs/path" 进输入框，走 pendingFiles + FileChip。
+          // F1 flash：duplicate 时原 chip 闪一下。
+          const r = addPathAttachment(absPath);
+          if (r === "duplicate") flashFilePath(absPath);
           setShowFilePicker(false);
         }}
         onCloseSkills={toggleSkills}

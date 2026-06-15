@@ -33,7 +33,11 @@ import {
   ShieldCheck,
   XCircle,
 } from "lucide-react";
-import type { ChatMessage, MessagePart } from "@/lib/types";
+import type {
+  ChatMessage,
+  ChatMessageComposerMeta,
+  MessagePart,
+} from "@/lib/types";
 import type { AgentPhase } from "@/lib/session-runner";
 import { formatMessageTime, formatTokens } from "@/lib/format";
 import { previewStore } from "@/lib/preview-store";
@@ -93,9 +97,20 @@ export interface MessageViewProps {
     worktree: WorkflowWorktreeAction
   ) => Promise<void> | void;
   /** Multi-agent：重试某个 subagent task */
-  onRetrySubagentTask?: (batchId: string, taskId: string) => Promise<void> | void;
+  /**
+   * S5：带上 parentAgentId。在卡片点击时快照 batch 所属 parent，
+   * 避免后续发送到当前 active session。老参数顺序保留以免双端丢。
+   */
+  onRetrySubagentTask?: (
+    batchId: string,
+    taskId: string,
+    parentAgentId?: string
+  ) => Promise<void> | void;
   /** Multi-agent：继续执行某个未完成 subagent batch */
-  onResumeSubagentBatch?: (batchId: string) => Promise<void> | void;
+  onResumeSubagentBatch?: (
+    batchId: string,
+    parentAgentId?: string
+  ) => Promise<void> | void;
   /** Multi-agent：打开某个 child subagent session 继续追问 */
   onOpenSubagentSession?: (sessionFile: string) => void;
 }
@@ -197,6 +212,11 @@ export const MessageView = memo(function MessageView({
             return null;
           })}
         </div>
+
+        {/* 结构化 Composer A6：user 气泡下的轻量 metadata strip（mode + refs 计数） */}
+        {msg.composerMeta && (
+          <UserComposerMetaStrip meta={msg.composerMeta} />
+        )}
 
         {/* 时间戳 + hover 操作行（Copy / Edit from here / New session） */}
         <div
@@ -1238,8 +1258,15 @@ function SubagentBatchCard({
   part: Extract<MessagePart, { kind: "subagent_batch" }>;
   cwd?: string;
   onOpenUrl?: (href: string) => void;
-  onRetryTask?: (batchId: string, taskId: string) => Promise<void> | void;
-  onResumeBatch?: (batchId: string) => Promise<void> | void;
+  onRetryTask?: (
+    batchId: string,
+    taskId: string,
+    parentAgentId?: string
+  ) => Promise<void> | void;
+  onResumeBatch?: (
+    batchId: string,
+    parentAgentId?: string
+  ) => Promise<void> | void;
   onOpenSubagentSession?: (sessionFile: string) => void;
 }) {
   const [retryingTaskIds, setRetryingTaskIds] = useState<Set<string>>(
@@ -1303,7 +1330,7 @@ function SubagentBatchCard({
               if (!canResume) return;
               setResuming(true);
               try {
-                await onResumeBatch(part.id);
+                await onResumeBatch(part.id, part.parentAgentId);
               } finally {
                 setResuming(false);
               }
@@ -1538,7 +1565,7 @@ function SubagentBatchCard({
                           return next;
                         });
                         try {
-                          await onRetryTask(part.id, task.id);
+                          await onRetryTask(part.id, task.id, part.parentAgentId);
                         } finally {
                           setRetryingTaskIds((cur) => {
                             const next = new Set(cur);
@@ -1660,5 +1687,47 @@ function ThinkingBlock({
         <Markdown text={text} size="small" />
       </div>
     </details>
+  );
+}
+
+/**
+ * user 气泡下方的轻量 metadata strip（结构化 Composer Phase A6）。
+ *
+ * 显示：
+ *   - mode: Goal / Workflow（chip 颜色与 Composer ModeChip 对齐）
+ *   - refs: "N references"，hover 看完整路径（基本名 join "\n"）
+ *
+ * 不显示：refs 的内容入气泡文本——气泡仍然只展示用户原话；strip 只是上下文说明。
+ */
+function UserComposerMetaStrip({ meta }: { meta: ChatMessageComposerMeta }) {
+  const refsCount = meta.refs?.length ?? 0;
+  if (!meta.mode && refsCount === 0) return null;
+  const modeColor =
+    meta.mode === "goal"
+      ? "var(--color-warning)"
+      : meta.mode === "workflow"
+        ? "var(--accent)"
+        : "var(--text-muted)";
+  const modeLabel =
+    meta.mode === "goal" ? "Goal" : meta.mode === "workflow" ? "Workflow" : null;
+  const refsTooltip =
+    refsCount > 0 && meta.refs
+      ? meta.refs.map((p) => `@${p}`).join("\n")
+      : undefined;
+  return (
+    <div
+      className="text-token-xs mt-0.5 flex items-center gap-2"
+      style={{ color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}
+    >
+      {modeLabel && (
+        <span style={{ color: modeColor, fontWeight: 500 }}>{modeLabel}</span>
+      )}
+      {modeLabel && refsCount > 0 && <span aria-hidden>·</span>}
+      {refsCount > 0 && (
+        <span title={refsTooltip}>
+          {refsCount} reference{refsCount > 1 ? "s" : ""}
+        </span>
+      )}
+    </div>
   );
 }

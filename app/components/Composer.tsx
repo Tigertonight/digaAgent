@@ -24,6 +24,7 @@ import type {
   KeyboardEvent,
   ClipboardEvent,
   CompositionEvent as ReactCompositionEvent,
+  MouseEvent as ReactMouseEvent,
   SyntheticEvent,
   RefObject,
   Dispatch,
@@ -33,6 +34,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -55,6 +57,7 @@ import {
   FileCode,
   Paperclip,
   X,
+  ChevronDown,
 } from "lucide-react";
 import type {
   PendingAttachment,
@@ -70,6 +73,10 @@ import type {
 } from "@/lib/types";
 import { THINKING_LEVEL_LABELS } from "@/lib/types";
 import { approxBase64Bytes, formatBytes } from "@/lib/image-utils";
+import { extractModeFromInput } from "@/lib/composer/mode-chip";
+import type { ComposerMode } from "@/lib/composer/mode-chip";
+import { ModeChip } from "./ModeChip";
+import { computeDisambigByPath } from "@/lib/composer/disambig";
 import { InputAutocomplete } from "./InputAutocomplete";
 import type { AutocompleteItem } from "./InputAutocomplete";
 import { PillSelect } from "./PillSelect";
@@ -100,9 +107,19 @@ export interface ComposerProps {
   // ===== 附件 =====
   pendingImages: ImageContentLite[];
   pendingFiles: PendingAttachment[];
+  /** Phase C：服务端检查后认定不存在的路径集合。默认空。 */
+  missingFilePaths?: Set<string>;
+  /** F1：重复添加同路径时，ChatApp 设该 path 闪一下；300ms 后自清。 */
+  flashedFilePath?: string | null;
   removePendingImage: (index: number) => void;
   removePendingFile: (path: string) => void;
   addImageFiles: (files: FileList) => Promise<void> | void;
+
+  // ===== 结构化 Composer：mode chip =====
+  /** 用户选中的 mode（当前 “goal” 或 “workflow”）。null = 普通 prompt。 */
+  composerMode: ComposerMode | null;
+  /** 从 chip 渲染点调：× 删除 / Backspace 连击删除。 */
+  setComposerMode: (mode: ComposerMode | null) => void;
 
   // ===== 自动补全 =====
   acMode: AcMode;
@@ -167,9 +184,13 @@ export function Composer(props: ComposerProps) {
     goal,
     pendingImages,
     pendingFiles,
+    missingFilePaths,
+    flashedFilePath,
     removePendingImage,
     removePendingFile,
     addImageFiles,
+    composerMode,
+    setComposerMode,
     acMode,
     acItems,
     acIndex,
@@ -328,11 +349,66 @@ export function Composer(props: ComposerProps) {
     [flushLocalInput]
   );
 
+  // 结构化 Composer：“/goal ”/“/workflow ” 一旦出现在输入头，提为 chip。
+  // 这里用 ref 保证的 stale closure 安全。
+  const setComposerModeRef = useRef(setComposerMode);
+  setComposerModeRef.current = setComposerMode;
+  const composerModeRef = useRef<ComposerMode | null>(composerMode);
+  composerModeRef.current = composerMode;
+  // chip “键盘选中”态：第一次 Backspace at caret=0 激活，第二次 Backspace 删除。
+  // mode 被清时 chipActive 自然不再被渲染看到。避免在 effect 中 setState。
+  const [chipActive, setChipActive] = useState(false);
+
+  // F4：FileChip 多选集合。与 mode chipActive 独立。Backspace at caret=0 会优先处理多选删除。
+  const [selectedFilePaths, setSelectedFilePaths] = useState<Set<string>>(
+    () => new Set()
+  );
+  // 范围选择的“锚点” path，简化 Shift+Click 实现。
+  const lastSelectedAnchorRef = useRef<string | null>(null);
+  // 当 pendingFiles 里不再有某选中 path 时，同步清除。避免 effect 中 setState：
+  // 直接在 onClick / onKeyDown / removePendingFile 路径中裁减。
+  // 另外：外部 pendingFiles 变化路径（从设置 UI / 其他 hook）都走 useMemo 裁减。
+  const selectedFilePathsSafe = useMemo(() => {
+    const known = new Set(pendingFiles.map((p) => p.path));
+    let dirty = false;
+    const next = new Set<string>();
+    for (const p of selectedFilePaths) {
+      if (known.has(p)) next.add(p);
+      else dirty = true;
+    }
+    return dirty ? next : selectedFilePaths;
+  }, [pendingFiles, selectedFilePaths]);
+
+  // F2：同名冲突时的 disambig 映射，只随 pendingFiles 重计。
+  const disambigByPath = useMemo(
+    () => computeDisambigByPath(pendingFiles.map((f) => f.path)),
+    [pendingFiles]
+  );
+
+  // F3：是否走“折叠为 popover”。启发式：超过 5 个 chip 。
+  // 联动实现上：Composer 顶部只渲染前 2 个 chip，剩下只作为 [N references ▾]。
+  const collapseFiles = pendingFiles.length > 5;
+  const [filesPopoverOpen, setFilesPopoverOpen] = useState(false);
+
   // textarea handlers
   const onTextareaChange = useCallback(
     (e: ChangeEvent<HTMLTextAreaElement>) => {
       const v = e.target.value;
       const caret = e.target.selectionStart ?? v.length;
+      // 结构化：仅在还没选中 mode 时检测。识别到后提为 chip，
+      // textarea 清空为该 mode 之后的正文。
+      if (!composerModeRef.current) {
+        const detected = extractModeFromInput(v);
+        if (detected.mode) {
+          // 准备上报 + 设为正文。调顺序：先 setLocalInput（起 caret 重置）再变 mode。
+          setLocalInput(detected.text);
+          setComposerModeRef.current(detected.mode);
+          if (!composingRef.current) {
+            void refreshAutocompleteRef.current(detected.text, detected.text.length);
+          }
+          return;
+        }
+      }
       // 用 layout-style 同步更新本地值，UI 立刻看到字符
       setLocalInput(v);
       // IME compose 阶段不刷新 autocomplete，避免重复布局/请求
@@ -468,15 +544,55 @@ export function Composer(props: ComposerProps) {
           </div>
         )}
         {pendingFiles.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mb-2">
-            {pendingFiles.map((att) => (
-              <FileChip
-                key={att.path}
-                att={att}
-                onRemove={() => removePendingFile(att.path)}
-              />
-            ))}
-          </div>
+          <FileChipRow
+            pendingFiles={pendingFiles}
+            missingFilePaths={missingFilePaths}
+            flashedFilePath={flashedFilePath}
+            disambigByPath={disambigByPath}
+            collapse={collapseFiles}
+            popoverOpen={filesPopoverOpen}
+            setPopoverOpen={setFilesPopoverOpen}
+            selectedPaths={selectedFilePathsSafe}
+            onClickChip={(path, e) => {
+              const isCmd = e.metaKey || e.ctrlKey;
+              const isShift = e.shiftKey;
+              setSelectedFilePaths((prev) => {
+                const next = new Set(prev);
+                if (isShift && lastSelectedAnchorRef.current) {
+                  // 范围选：以锚点为起点，拾 pendingFiles 顺序中两者之间的所有 path
+                  const list = pendingFiles.map((p) => p.path);
+                  const a = list.indexOf(lastSelectedAnchorRef.current);
+                  const b = list.indexOf(path);
+                  if (a >= 0 && b >= 0) {
+                    const [lo, hi] = a <= b ? [a, b] : [b, a];
+                    for (let i = lo; i <= hi; i += 1) next.add(list[i]);
+                    return next;
+                  }
+                }
+                if (isCmd) {
+                  if (next.has(path)) next.delete(path);
+                  else next.add(path);
+                  lastSelectedAnchorRef.current = path;
+                  return next;
+                }
+                // 普通点击：独选该 chip
+                next.clear();
+                next.add(path);
+                lastSelectedAnchorRef.current = path;
+                return next;
+              });
+            }}
+            onRemoveChip={(path) => {
+              removePendingFile(path);
+              setSelectedFilePaths((prev) => {
+                if (!prev.has(path)) return prev;
+                const next = new Set(prev);
+                next.delete(path);
+                return next;
+              });
+            }}
+            onClearSelection={() => setSelectedFilePaths(new Set())}
+          />
         )}
         <QueuedMessagesBar pendingMessages={pendingMessages} />
         {composerBlocker?.blocking && !streaming && !abortable && (
@@ -495,6 +611,18 @@ export function Composer(props: ComposerProps) {
             borderColor: "var(--border)",
           }}
         >
+          {composerMode && (
+            <div
+              className="flex flex-wrap gap-1.5 px-3 pt-2"
+              style={{ marginBottom: -4 }}
+            >
+              <ModeChip
+                mode={composerMode}
+                active={chipActive}
+                onRemove={() => setComposerMode(null)}
+              />
+            </div>
+          )}
           <textarea
             ref={inputRef}
             value={localInput}
@@ -515,6 +643,75 @@ export function Composer(props: ComposerProps) {
                   e.key === "ArrowDown")
               ) {
                 flushLocalInput();
+              }
+              // F4 chip 多选键盘交互：仅在 textarea 空 / autocomplete 未打开 / IME 未合成。
+              if (
+                !e.nativeEvent.isComposing &&
+                !acMode &&
+                pendingFiles.length > 0
+              ) {
+                const ta = e.currentTarget;
+                const at0 = ta.selectionStart === 0 && ta.selectionEnd === 0;
+                const isCmd = e.metaKey || e.ctrlKey;
+                // Cmd+A （textarea 空）→ 全选 chip
+                if (
+                  isCmd &&
+                  e.key.toLowerCase() === "a" &&
+                  ta.value.length === 0
+                ) {
+                  e.preventDefault();
+                  setSelectedFilePaths(
+                    new Set(pendingFiles.map((p) => p.path))
+                  );
+                  return;
+                }
+                // Esc → 如果有选中，先清选中态
+                if (e.key === "Escape" && selectedFilePathsSafe.size > 0) {
+                  e.preventDefault();
+                  setSelectedFilePaths(new Set());
+                  return;
+                }
+                // Backspace/Delete 且有选中 → 批删
+                if (
+                  (e.key === "Backspace" || e.key === "Delete") &&
+                  selectedFilePathsSafe.size > 0 &&
+                  at0
+                ) {
+                  e.preventDefault();
+                  for (const p of selectedFilePathsSafe) removePendingFile(p);
+                  setSelectedFilePaths(new Set());
+                  return;
+                }
+              }
+              // 结构化：Backspace at caret=0 连击删 chip、Esc 取消选中态。
+              // 只在未合成 / autocomplete 未打开时处理，避免与 IME / 选项面板冲突。
+              if (
+                composerModeRef.current &&
+                !e.nativeEvent.isComposing &&
+                !acMode
+              ) {
+                if (e.key === "Escape" && chipActive) {
+                  e.preventDefault();
+                  setChipActive(false);
+                  return;
+                }
+                if (e.key === "Backspace" || e.key === "Delete") {
+                  const ta = e.currentTarget;
+                  const at0 =
+                    ta.selectionStart === 0 && ta.selectionEnd === 0;
+                  if (at0) {
+                    if (!chipActive) {
+                      e.preventDefault();
+                      setChipActive(true);
+                      return;
+                    }
+                    e.preventDefault();
+                    setComposerModeRef.current(null);
+                    return;
+                  }
+                }
+                // 任何其他输入取消 chip 选中态
+                if (chipActive) setChipActive(false);
               }
               onKeyDown(e);
             }}
@@ -798,13 +995,154 @@ export function Composer(props: ComposerProps) {
   );
 }
 
+/**
+ * F3：多 chip 的顺序渲染 + 超量折叠。全部 “single-source-of-truth” 都是
+ * pendingFiles；selectedPaths / disambig / missing / flashing 都以依赖注入。
+ */
+function FileChipRow({
+  pendingFiles,
+  missingFilePaths,
+  flashedFilePath,
+  disambigByPath,
+  collapse,
+  popoverOpen,
+  setPopoverOpen,
+  selectedPaths,
+  onClickChip,
+  onRemoveChip,
+  onClearSelection,
+}: {
+  pendingFiles: PendingAttachment[];
+  missingFilePaths?: Set<string>;
+  flashedFilePath?: string | null;
+  disambigByPath: Map<string, string>;
+  collapse: boolean;
+  popoverOpen: boolean;
+  setPopoverOpen: Dispatch<SetStateAction<boolean>>;
+  selectedPaths: Set<string>;
+  onClickChip: (path: string, e: ReactMouseEvent<HTMLDivElement>) => void;
+  onRemoveChip: (path: string) => void;
+  onClearSelection: () => void;
+}) {
+  // collapse 时只顶层露前 2 个 + [N references ▾]。展开后 popover 列出全部。
+  const visibleHead = collapse ? pendingFiles.slice(0, 2) : pendingFiles;
+  const remainder = collapse ? pendingFiles.slice(2) : [];
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  // 点顶布 outside 关闭 popover
+  useEffect(() => {
+    if (!popoverOpen) return;
+    const onDoc = (e: MouseEvent) => {
+      const el = popoverRef.current;
+      if (el && !el.contains(e.target as Node)) {
+        setPopoverOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [popoverOpen, setPopoverOpen]);
+  return (
+    <div className="flex flex-wrap gap-1.5 mb-2 items-center">
+      {visibleHead.map((att) => (
+        <FileChip
+          key={att.path}
+          att={att}
+          missing={missingFilePaths?.has(att.path)}
+          flashing={flashedFilePath === att.path}
+          selected={selectedPaths.has(att.path)}
+          disambig={disambigByPath.get(att.path)}
+          onRemove={() => onRemoveChip(att.path)}
+          onClick={(e) => onClickChip(att.path, e)}
+        />
+      ))}
+      {collapse && remainder.length > 0 && (
+        <div className="relative" ref={popoverRef}>
+          <button
+            type="button"
+            onClick={() => setPopoverOpen((v) => !v)}
+            className="inline-flex items-center gap-1 rounded-md border px-2 py-1 hover:bg-[color:var(--bg-hover)]"
+            style={{
+              borderColor: "var(--border)",
+              color: "var(--text-muted)",
+              fontSize: 12,
+              fontFamily: "var(--font-mono)",
+            }}
+            aria-expanded={popoverOpen}
+            title="展开查看全部引用"
+          >
+            +{remainder.length} reference{remainder.length > 1 ? "s" : ""}
+            <ChevronDown size={12} aria-hidden />
+          </button>
+          {popoverOpen && (
+            <div
+              className="absolute z-20 mt-1 max-h-72 w-[320px] overflow-auto rounded-md border p-2 shadow-md"
+              style={{
+                background: "var(--bg-panel)",
+                borderColor: "var(--border)",
+              }}
+              role="dialog"
+            >
+              <div
+                className="flex items-center justify-between mb-2"
+                style={{ color: "var(--text-muted)", fontSize: 12 }}
+              >
+                <span>{pendingFiles.length} references</span>
+                {selectedPaths.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      for (const p of [...selectedPaths]) onRemoveChip(p);
+                      onClearSelection();
+                    }}
+                    className="hover:text-[color:var(--color-warning)]"
+                  >
+                    删除选中 ({selectedPaths.size})
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {pendingFiles.map((att) => (
+                  <FileChip
+                    key={att.path}
+                    att={att}
+                    missing={missingFilePaths?.has(att.path)}
+                    flashing={flashedFilePath === att.path}
+                    selected={selectedPaths.has(att.path)}
+                    disambig={disambigByPath.get(att.path)}
+                    onRemove={() => onRemoveChip(att.path)}
+                    onClick={(e) => onClickChip(att.path, e)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** 拖入附件 chip：图标 + 文件名 + 大小 + ✕ 移除 */
 function FileChip({
   att,
+  missing,
+  flashing,
+  selected,
+  disambig,
   onRemove,
+  onClick,
 }: {
   att: PendingAttachment;
+  /** Phase C：服务端检查后被认为不存在/不可读。UI 走 warning tone。 */
+  missing?: boolean;
+  /** F1：重复添加同路径时，原 chip 闪一下。 */
+  flashing?: boolean;
+  /** F4：多选选中态。 */
+  selected?: boolean;
+  /** F2：同名重名后附加的父路径提示（例：app/api/auth）。 */
+  disambig?: string;
   onRemove: () => void;
+  /** F4：点击 chip 本体的响应（选中 / 范围选 / Cmd+点击多选）。 */
+  onClick?: (e: ReactMouseEvent<HTMLDivElement>) => void;
 }) {
   const Icon =
     att.kind === "folder"
@@ -818,27 +1156,67 @@ function FileChip({
       : att.kind === "doc" || att.kind === "pdf"
       ? FileText
       : Paperclip;
+  const tooltip = missing
+    ? `路径不存在或不可读：${att.path}`
+    : att.path;
+  // F1 flash：outline 闪一下，使用与选中态同色但不同动作。
+  // F4 selected：outline。
+  const ringColor = selected
+    ? "var(--accent)"
+    : flashing
+      ? "var(--color-warning)"
+      : null;
   return (
     <div
-      className="inline-flex items-center gap-1.5 rounded-md border pl-2 pr-1 py-1 max-w-[260px]"
+      className="inline-flex items-center gap-1.5 rounded-md border pl-2 pr-1 py-1 max-w-[260px] cursor-default select-none"
       style={{
-        background: "var(--bg-panel)",
-        borderColor: "var(--border)",
+        background:
+          selected
+            ? "var(--bg-hover)"
+            : missing
+              ? "var(--bg-panel-2)"
+              : "var(--bg-panel)",
+        borderColor: missing ? "var(--color-warning)" : "var(--border)",
+        outline: ringColor ? `2px solid ${ringColor}` : "none",
+        outlineOffset: 1,
+        transition: "outline-color 80ms, background 80ms",
       }}
-      title={att.path}
+      title={tooltip}
+      data-missing={missing ? "true" : "false"}
+      data-flashing={flashing ? "true" : "false"}
+      data-selected={selected ? "true" : "false"}
+      onClick={onClick}
     >
-      <Icon size={14} style={{ color: "var(--text-muted)", flexShrink: 0 }} />
+      <Icon
+        size={14}
+        style={{
+          color: missing ? "var(--color-warning)" : "var(--text-muted)",
+          flexShrink: 0,
+        }}
+      />
       <span
         className="truncate text-token-sm font-mono"
-        style={{ color: "var(--text)" }}
+        style={{
+          color: missing ? "var(--color-warning)" : "var(--text)",
+          textDecoration: missing ? "line-through" : undefined,
+        }}
       >
         {att.name}
       </span>
+      {disambig && (
+        <span
+          className="shrink-0 text-token-xs"
+          style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}
+          aria-hidden
+        >
+          · {disambig}
+        </span>
+      )}
       <span
         className="shrink-0 text-token-xs"
         style={{ color: "var(--text-muted)" }}
       >
-        {att.size == null ? "dir" : formatBytes(att.size)}
+        {missing ? "missing" : att.size == null ? "dir" : formatBytes(att.size)}
       </span>
       <button
         type="button"
