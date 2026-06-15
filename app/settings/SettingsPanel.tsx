@@ -940,25 +940,11 @@ function RemoteAccessSection({
   const [installingCloudflared, setInstallingCloudflared] = useState(false);
   const [statusNow, setStatusNow] = useState(0);
 
+  // 主进程已经给同源 fetch 注入 x-diga-agent-local-secret（见 electron/main.js
+  // installLocalSecretHeaderHook）。renderer 不再拿 secret 明文。
   const localFetch = useCallback(
-    async (input: RequestInfo | URL, init?: RequestInit) => {
-      const headers = new Headers(init?.headers);
-      if (electronApi) {
-        try {
-          const secret = await electronApi.getLocalSecret();
-          if (secret) headers.set("x-diga-agent-local-secret", secret);
-        } catch {
-          // Browser/dev mode may expose part of the Electron bridge without the
-          // local-secret IPC handler. In that case Next's localhost fallback is
-          // enough for local settings validation.
-        }
-      }
-      return fetch(input, {
-        ...init,
-        headers,
-      });
-    },
-    [electronApi]
+    (input: RequestInfo | URL, init?: RequestInit) => fetch(input, init),
+    []
   );
 
   const loadRemote = useCallback(async () => {

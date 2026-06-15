@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { Check, HelpCircle, Send } from "lucide-react";
 import type { MessagePart } from "@/lib/types";
 
@@ -8,8 +8,8 @@ type ClarificationPart = Extract<MessagePart, { kind: "clarification" }>;
 
 export interface ClarificationCardProps {
   part: ClarificationPart;
-  onChoose?: (requestId: string, optionId: string) => void;
-  onRespond?: (requestId: string, customText: string) => void;
+  onChoose?: (requestId: string, optionId: string) => void | Promise<void>;
+  onRespond?: (requestId: string, customText: string) => void | Promise<void>;
 }
 
 export const ClarificationCard = memo(function ClarificationCard({
@@ -18,9 +18,43 @@ export const ClarificationCard = memo(function ClarificationCard({
   onRespond,
 }: ClarificationCardProps) {
   const [customText, setCustomText] = useState("");
+  // C4：本地 submitting 状态。点一下后立即 disable 按钮和输入，防重复点击。
+  // SSE 返 resolved 后 part.status 为 'resolved'，卡片会整体切换为已确认 UI。
+  const [submitting, setSubmitting] = useState<"option" | "custom" | null>(
+    null
+  );
   const selected = useMemo(
     () => part.options.find((o) => o.id === part.selectedOptionId),
     [part.options, part.selectedOptionId]
+  );
+
+  const handleChoose = useCallback(
+    async (requestId: string, optionId: string) => {
+      if (submitting) return;
+      setSubmitting("option");
+      try {
+        await onChoose?.(requestId, optionId);
+      } finally {
+        // SSE resolved 后 part 会换成 resolved 分支，卡片重渲染。如果提交失败
+        // 则释放 disable 让用户重试。
+        setSubmitting(null);
+      }
+    },
+    [onChoose, submitting]
+  );
+
+  const handleRespond = useCallback(
+    async (requestId: string, text: string) => {
+      if (submitting) return;
+      setSubmitting("custom");
+      try {
+        await onRespond?.(requestId, text);
+        setCustomText("");
+      } finally {
+        setSubmitting(null);
+      }
+    },
+    [onRespond, submitting]
   );
 
   const originBadge = part.taskTitle ? (
@@ -111,8 +145,9 @@ export const ClarificationCard = memo(function ClarificationCard({
             <button
               key={opt.id}
               type="button"
-              onClick={() => onChoose?.(part.requestId, opt.id)}
-              className="w-full rounded-md border px-3 py-2 text-left hover:opacity-90 transition-opacity"
+              disabled={submitting !== null}
+              onClick={() => void handleChoose(part.requestId, opt.id)}
+              className="w-full rounded-md border px-3 py-2 text-left hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
               style={{
                 background: recommended
                   ? "color-mix(in srgb, var(--accent) 12%, var(--bg-panel))"
@@ -155,7 +190,8 @@ export const ClarificationCard = memo(function ClarificationCard({
           value={customText}
           onChange={(e) => setCustomText(e.target.value.slice(0, 500))}
           placeholder="自定义回复..."
-          className="min-w-0 flex-1 rounded-md border px-2 py-1.5 text-xs outline-none"
+          disabled={submitting !== null}
+          className="min-w-0 flex-1 rounded-md border px-2 py-1.5 text-xs outline-none disabled:opacity-60"
           style={{
             background: "var(--bg-panel)",
             borderColor: "var(--border-soft)",
@@ -167,15 +203,14 @@ export const ClarificationCard = memo(function ClarificationCard({
           onClick={() => {
             const text = customText.trim();
             if (!text) return;
-            onRespond?.(part.requestId, text);
-            setCustomText("");
+            void handleRespond(part.requestId, text);
           }}
-          disabled={!customText.trim()}
-          className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs disabled:opacity-50"
+          disabled={!customText.trim() || submitting !== null}
+          className="inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs disabled:opacity-50 disabled:cursor-not-allowed"
           style={{ background: "var(--accent)", color: "var(--color-bg)" }}
         >
           <Send size={12} />
-          发送
+          {submitting === "custom" ? "发送中…" : "发送"}
         </button>
       </div>
     </div>

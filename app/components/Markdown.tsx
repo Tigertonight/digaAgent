@@ -477,7 +477,10 @@ function CodeBlockWithHeader({
         <iframe
           title={`inline-html-preview`}
           srcDoc={code}
-          sandbox="allow-scripts allow-forms"
+          // fix-S4.a：安全收敛。模型输出的 HTML 仅用于预览，不应该能提交
+          // 表单（重鬼鱼遇模型出的链接）或将 referrer 泄漏到第三方。
+          sandbox="allow-scripts"
+          referrerPolicy="no-referrer"
           style={{
             width: "100%",
             height: 360,

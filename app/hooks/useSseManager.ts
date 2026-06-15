@@ -79,6 +79,9 @@ export function useSseManager(
   const lastSeqRef = useRef<
     Map<RunnerKey, { agentId: string; seq: number }>
   >(new Map());
+  // F5：为每个连接分配 generation token。close 后迟到的 message 不会被发布。
+  const generationRef = useRef<Map<RunnerKey, number>>(new Map());
+  const nextGenRef = useRef<number>(1);
 
   // 回调 ref：让 attachSseFor 不依赖 onEvent / onStatusChange 的引用稳定性
   // （ChatApp 内 handleAgentEvent 是函数声明，每次 render 重建；
@@ -97,26 +100,39 @@ export function useSseManager(
     const es = esMapRef.current.get(key);
     if (es) {
       try {
+        // F5：先拆 handler（避免迟到 message 还走老闭包）再 close。
+        es.onmessage = null;
+        es.onerror = null;
+        es.onopen = null;
         es.close();
       } catch {
         // close 失败不影响 map 清理
       }
       esMapRef.current.delete(key);
     }
+    generationRef.current.delete(key);
+    lastSeqRef.current.delete(key);
   }, []);
 
   // ===== 打开 =====
   const attachSseFor = useCallback<UseSseManagerReturn["attachSseFor"]>(
     (key, agentId) => {
-      // 已存在则先关掉，避免泄漏
+      // F5：老连接状态独立拆除。不能复用同一 ES 的 lastSeqRef，避免
+      // 同一 key 被不同 agent 复用时 since 起点错乱。
       const prev = esMapRef.current.get(key);
       if (prev) {
         try {
+          prev.onmessage = null;
+          prev.onerror = null;
+          prev.onopen = null;
           prev.close();
         } catch {
           // ignore
         }
       }
+
+      const myGen = nextGenRef.current++;
+      generationRef.current.set(key, myGen);
 
       const lastSeqRecord = lastSeqRef.current.get(key);
       const lastSeq =
@@ -126,17 +142,30 @@ export function useSseManager(
       const sinceValue =
         typeof lastSeq === "number" && Number.isFinite(lastSeq)
           ? String(lastSeq)
-          : "latest";
+          : "-1";
       const es = new EventSource(
         `/api/agent/${agentId}/events?since=${encodeURIComponent(sinceValue)}`
       );
       esMapRef.current.set(key, es);
 
+      // 任何回调都要在 dispatch 前校验：
+      //   1. esMapRef.current.get(key) === es（当前有效连接仍是我）
+      //   2. generationRef.current.get(key) === myGen（同一 key 从未被重 attach）
+      // 迟到事件会被丢。
+      const isStillCurrent = (): boolean => {
+        return (
+          esMapRef.current.get(key) === es &&
+          generationRef.current.get(key) === myGen
+        );
+      };
+
       es.onopen = () => {
+        if (!isStillCurrent()) return;
         onStatusChangeRef.current(key, { sseStatus: "active" });
       };
 
       es.onmessage = (ev) => {
+        if (!isStillCurrent()) return;
         try {
           const event = JSON.parse(ev.data);
           // 后端 SSE envelope 带 id: <seq>，浏览器把它写到 ev.lastEventId
@@ -156,6 +185,7 @@ export function useSseManager(
       };
 
       es.onerror = (e) => {
+        if (!isStillCurrent()) return;
         console.warn("sse error", e);
         onStatusChangeRef.current(key, { sseStatus: "lost" });
       };
@@ -167,9 +197,13 @@ export function useSseManager(
   useEffect(() => {
     const map = esMapRef.current;
     const lastSeq = lastSeqRef.current;
+    const generations = generationRef.current;
     return () => {
       for (const es of map.values()) {
         try {
+          es.onmessage = null;
+          es.onerror = null;
+          es.onopen = null;
           es.close();
         } catch {
           // ignore
@@ -177,6 +211,7 @@ export function useSseManager(
       }
       map.clear();
       lastSeq.clear();
+      generations.clear();
     };
   }, []);
 

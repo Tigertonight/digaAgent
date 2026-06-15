@@ -5,7 +5,7 @@
  *
  * 职责：
  *   - 持有 sessions（左侧列表）/ selectedId（当前选中）/ lastSeenMap（已读追踪）
- *   - localStorage 持久化 lastSeenMap（lazy init，**修复刷新页面已读丢失 bug**）
+ *   - session meta 持久化 lastSeenAt；localStorage 只作为旧版本兼容缓存
  *   - groupedSessions —— 按 parentSessionPath 分组（parents + childrenByParent）
  *   - refreshSessions —— GET /api/sessions
  *   - 轮询 + visibilitychange 刷新（15s 间隔，不可见时跳过）
@@ -107,6 +107,53 @@ function persistServerLastSeen(sessionId: string, modifiedIso: string): void {
   }).catch(() => {});
 }
 
+function withSessionLastSeen(
+  sessions: SessionInfoLite[],
+  sessionId: string,
+  lastSeenAt: number
+): SessionInfoLite[] {
+  let changed = false;
+  const next = sessions.map((session) => {
+    if (session.id !== sessionId) return session;
+    if (session.meta?.lastSeenAt === lastSeenAt) return session;
+    changed = true;
+    return {
+      ...session,
+      meta: {
+        ...session.meta,
+        id: session.id,
+        lastSeenAt,
+      },
+    };
+  });
+  return changed ? next : sessions;
+}
+
+function applyLastSeenMapToSessions(
+  sessions: SessionInfoLite[],
+  lastSeenMap: Record<string, string>
+): SessionInfoLite[] {
+  let changed = false;
+  const next = sessions.map((session) => {
+    const seenIso = lastSeenMap[session.id];
+    if (!seenIso) return session;
+    const seenMs = Date.parse(seenIso);
+    if (!Number.isFinite(seenMs)) return session;
+    const serverSeen = session.meta?.lastSeenAt;
+    if (typeof serverSeen === "number" && serverSeen >= seenMs) return session;
+    changed = true;
+    return {
+      ...session,
+      meta: {
+        ...session.meta,
+        id: session.id,
+        lastSeenAt: seenMs,
+      },
+    };
+  });
+  return changed ? next : sessions;
+}
+
 function sameSessionList(a: SessionInfoLite[], b: SessionInfoLite[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i += 1) {
@@ -189,14 +236,11 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
   /**
    * 已查看的 session id → 上次查看时该 session 的 modified ISO。
    * 若 sessions[i].modified > lastSeenMap[sessions[i].id]，视为有新内容（未读）。
-   *
-   * **lazy init 修复**（RFC-1 B1）：旧实现先 useState({}) 再 useEffect 加载 LS，
-   * mount 后第一次 render lastSeenMap={}，导致 selectedId 初始 effect 触发的
-   * markSessionSeen 用 prev={} 覆盖 LS，**其他所有 session 的 lastSeen 全丢**。
-   * lazy init 让初始值直接来自 LS，从源头消除这个 race。
+   * server meta 是跨版本持久化来源；localStorage 只用于兼容旧版本尚未迁移的
+   * 已读状态。
    */
-  const [lastSeenMap, setLastSeenMap] = useState<Record<string, string>>(
-    readLastSeenFromStorage
+  const [lastSeenMap, setLastSeenMap] = useState<Record<string, string>>(() =>
+    mergeServerLastSeen(readLastSeenFromStorage(), initialSessions)
   );
 
   // refs：让外部回调（如宠物 doPush）在不进依赖的前提下读最新
@@ -204,6 +248,11 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
+
+  const selectedIdRef = useRef<string | null>(selectedId);
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
 
   const lastSeenMapRef = useRef<Record<string, string>>(lastSeenMap);
   useEffect(() => {
@@ -215,6 +264,7 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
     (sessionId: string, sessionsSnapshot: SessionInfoLite[]) => {
       const cur = sessionsSnapshot.find((s) => s.id === sessionId);
       if (!cur) return;
+      const lastSeenAt = Date.parse(cur.modified);
       setLastSeenMap((prev) => {
         if (prev[sessionId] === cur.modified) return prev;
         const next = { ...prev, [sessionId]: cur.modified };
@@ -222,6 +272,9 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
         persistServerLastSeen(sessionId, cur.modified);
         return next;
       });
+      if (Number.isFinite(lastSeenAt)) {
+        setSessions((prev) => withSessionLastSeen(prev, sessionId, lastSeenAt));
+      }
     },
     []
   );
@@ -296,8 +349,23 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
     void fetch("/api/sessions")
       .then((r) => r.json())
       .then((d: { sessions?: SessionInfoLite[] }) => {
-        const next = d.sessions ?? [];
+        const next = applyLastSeenMapToSessions(
+          d.sessions ?? [],
+          lastSeenMapRef.current
+        );
         setSessions((prev) => (sameSessionList(prev, next) ? prev : next));
+        const nextIds = new Set(next.map((session) => session.id));
+        const nextPaths = new Set(next.map((session) => session.path));
+        const currentSelectedId = selectedIdRef.current;
+        const currentActiveKey = activeKeyRef.current;
+        if (currentSelectedId && !nextIds.has(currentSelectedId)) {
+          setSelectedId(null);
+        }
+        if (currentActiveKey !== DRAFT_KEY && !nextPaths.has(currentActiveKey)) {
+          closeSseFor(currentActiveKey);
+          runnersRef.current.delete(currentActiveKey);
+          switchTo(DRAFT_KEY);
+        }
         setLastSeenMap((prev) => {
           const merged = mergeServerLastSeen(prev, next);
           if (merged !== prev) writeLastSeenToStorage(merged);
@@ -305,7 +373,7 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
         });
       })
       .catch(() => {});
-  }, []);
+  }, [activeKeyRef, closeSseFor, runnersRef, switchTo]);
 
   // 首屏立即校验最新 session 列表。SSR / E2E / 移动远程入口可能先给
   // 一个轻量初始列表，主动刷新能减少切 session 前的空白等待。

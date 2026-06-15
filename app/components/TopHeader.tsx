@@ -125,19 +125,11 @@ function MobilePairDialog({
   const [installingCloudflared, setInstallingCloudflared] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const localFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    const headers = new Headers(init?.headers);
-    if (electronApi) {
-      try {
-        const secret = await electronApi.getLocalSecret();
-        if (secret) headers.set("x-diga-agent-local-secret", secret);
-      } catch {
-        // In browser/dev mode the preload bridge can exist without the
-        // getLocalSecret IPC handler. Localhost remains allowed by the API.
-      }
-    }
-    return fetch(input, { ...init, headers });
-  };
+  // Electron 主进程会在 webRequest.onBeforeSendHeaders 里给同源 fetch 注入
+  // x-diga-agent-local-secret。renderer 不再拿 secret 事实明文（避免 XSS / 外站
+  // 嵌入场景拿到后提权）。这里留 wrapper 名是为了少改调用点。
+  const localFetch = (input: RequestInfo | URL, init?: RequestInit) =>
+    fetch(input, init);
 
   const loadStatus = async () => {
     setBusy(true);

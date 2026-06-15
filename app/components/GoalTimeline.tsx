@@ -55,15 +55,21 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
   const [data, setData] = useState<TimelinePayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // G4：agentId 变化时丢弃老数据（避免 A 的 timeline 短暂出现在 B 上）会在
+  // 下面的 useEffect 中手动重置 — 以 cancelled 模式避免 setState in effect 警告。
 
   const load = useCallback(async () => {
     if (!agentId) return;
+    const aidAtStart = agentId;
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/agent/${agentId}?action=goal_timeline`);
+      const res = await fetch(`/api/agent/${aidAtStart}?action=goal_timeline`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = (await res.json()) as Partial<TimelinePayload>;
+      // 返回后校验 agentId 未变。这个闭包里 agentId 是发起时的，
+      // useCallback 重建后老 closure 里仍是老 aidAtStart — 不能仅靠该判断。
+      // 用下面的 useEffect 里的 cancelled token 是主要防护。
       setData({
         turns: Array.isArray(json.turns) ? json.turns : [],
         evidence: Array.isArray(json.evidence) ? json.evidence : [],
@@ -77,16 +83,37 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
 
   useEffect(() => {
     if (!open) return;
-    // Defer to a microtask so the load (which sets state) does not run
-    // synchronously inside the effect body.
+    if (!agentId) return;
+    // 进 effect 后调一个 microtask：先用 cancelled 跨过同步阶段，避免
+    // 在 effect 体里同步 setState。重置 + fetch 全部在微任务里，取消后不再 setState。
     let cancelled = false;
-    void Promise.resolve().then(() => {
-      if (!cancelled) void load();
+    const aidAtStart = agentId;
+    void Promise.resolve().then(async () => {
+      if (cancelled) return;
+      setData(null);
+      setError(null);
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/agent/${aidAtStart}?action=goal_timeline`);
+        if (cancelled) return;
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = (await res.json()) as Partial<TimelinePayload>;
+        if (cancelled) return;
+        setData({
+          turns: Array.isArray(json.turns) ? json.turns : [],
+          evidence: Array.isArray(json.evidence) ? json.evidence : [],
+        });
+      } catch (e) {
+        if (cancelled) return;
+        setError(userFacingMessage(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     });
     return () => {
       cancelled = true;
     };
-  }, [open, load]);
+  }, [agentId, open]);
 
   if (!open) return null;
 

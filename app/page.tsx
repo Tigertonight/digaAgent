@@ -34,6 +34,12 @@ export default async function Home({
         messageCount: s.messageCount,
         firstMessage: s.firstMessage,
         isRunning: s.isRunning,
+        runtimeState: s.runtimeState,
+        waitingApprovalCount: s.waitingApprovalCount,
+        waitingClarificationCount: s.waitingClarificationCount,
+        lastEventSeq: s.lastEventSeq,
+        runtimeUpdatedAt: s.runtimeUpdatedAt,
+        meta: s.meta,
       }))}
       defaultCwd={cwd}
     />
