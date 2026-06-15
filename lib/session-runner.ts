@@ -92,9 +92,23 @@ export interface RunnerState {
   agentSessionId: string | null;
   /** 后端 SDK 写的 .jsonl 文件路径；首次发送拿到 data.sessionFile 后填上 */
   sessionFile: string | null;
+  /**
+   * 本 runner 的工作目录。未创建 agent 前记录用户选择的 cwd；
+   * 创建 agent 后以后端所记 cwd 为权威（并同步下发到 runner.cwd）。
+   * 发送时不读全局 cwd，避免 Explorer 切路径后老 agent 被误备份。
+   */
+  cwd: string | null;
+  /**
+   * 用于跨起 agent 请求的代码路径变更提示：user 改了 cwd，但该 runner 已有
+   * agent，由用户决定是否为新路径起新 session。UI 由 ChatModals.cwd-mismatch 点击。
+   */
+  pendingCwd: string | null;
 
   // 对话内容
   chatState: ReducerState;
+  /** 历史 session 冷启动时，正在从 /api/sessions/:id/context 拉取上下文 */
+  contextLoading: boolean;
+  contextError: string | null;
   forkableUserMessages: ForkableUserMessage[];
   forkingIndex: number | null;
   forkText: string;
@@ -129,6 +143,13 @@ export interface RunnerState {
   input: string;
   pendingImages: ImageContentLite[];
   pendingFiles: PendingAttachment[];
+  /**
+   * 结构化 Composer 第一版：“mode chip”。
+   *  - 用户输入 "/goal " 或 "/workflow " 后，前端提取为 chip，textarea 只留正文。
+   *  - send 时根据 mode 走 startGoal / startWorkflow / 普通 send。
+ *  - per-runner：切 session 不串台；重启丢失（transient，不需持久化）。
+   */
+  composerMode: "goal" | "workflow" | null;
 
   // SSE
   sseStatus: SseStatus;
@@ -148,8 +169,12 @@ export function emptyRunner(): RunnerState {
     agentId: null,
     agentSessionId: null,
     sessionFile: null,
+    cwd: null,
+    pendingCwd: null,
 
     chatState: createInitialState(),
+    contextLoading: false,
+    contextError: null,
     forkableUserMessages: [],
     forkingIndex: null,
     forkText: "",
@@ -176,6 +201,7 @@ export function emptyRunner(): RunnerState {
     input: "",
     pendingImages: [],
     pendingFiles: [],
+    composerMode: null,
 
     sseStatus: "idle",
     lastSeq: 0,

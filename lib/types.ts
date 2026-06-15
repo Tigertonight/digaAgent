@@ -199,6 +199,11 @@ export type MessagePart =
       reason: string;
       status: SubagentBatchStatus;
       restored?: boolean;
+      /**
+       * S5：在卡片里记住该 batch 属于哪个 parent agent。重试/恢复会以它
+       * 为准，避免误发到当前 active session。
+       */
+      parentAgentId?: string;
       planning?: SubagentBatchPlan;
       verification?: SubagentBatchVerification;
       synthesis?: SubagentBatchSynthesis;
@@ -293,6 +298,28 @@ export interface ChatMessage {
   timestamp?: number;
   /** SDK message 级别元信息；用于把模型名 / token 用量固定到具体 assistant 回复上 */
   meta?: ChatMessageMeta;
+  /**
+   * Optimistic user message 标记（F3）。UI 可用来调色、显示“发送中”。
+   * SSE 收到服务端的 user message_start 后会被衰变为正常 message（去掉 pending）。
+   */
+  pending?: boolean;
+  /**
+   * Optimistic dedupe key。后端 Recovery 或 message_start 都不携带该值，仅前端内部使用。
+   */
+  clientRequestId?: string;
+  /**
+   * 结构化 Composer Phase A6：user 气泡底部的轻量 metadata strip。
+   *  - mode：表现本次发送走了 Goal / Workflow 能力。
+   *  - refs：本次发送附带的文件/目录路径列表，主要用于计数与 tooltip。
+   * 仅从顶层 ChatApp send 路径写入，不从服务端恢复。
+   */
+  composerMeta?: ChatMessageComposerMeta;
+}
+
+export interface ChatMessageComposerMeta {
+  mode?: "goal" | "workflow";
+  /** 引用的文件/目录路径。UI 只用于计数与 tooltip，不代表发送是否含它们。 */
+  refs?: string[];
 }
 
 export interface ChatMessageUsage {
@@ -310,6 +337,8 @@ export interface ChatMessageMeta {
   api?: string;
   responseId?: string;
   usage?: ChatMessageUsage;
+  /** F3：发送表状 / 错误原因（UI 可选显示）。 */
+  errorMessage?: string;
 }
 
 /** SDK getUserMessagesForForking() 返回的条目 */

@@ -153,6 +153,17 @@ interface AnyEvent {
   trace?: WorkflowTraceEvent;
   traceEvents?: WorkflowTraceEvent[];
   returnValue?: unknown;
+  // F3 optimistic user message。仅前端内部派发，不会出现在 SSE。
+  clientRequestId?: string;
+  text?: string;
+  images?: Array<{ data: string; mimeType: string }>;
+  attachments?: string[];
+  reason?: "timeout" | "failed" | "manual";
+  // F-A5 optimistic_user_ack：后端调 SDK prompt 之前发，带上服务端最终
+  // 要发出的 displayText（去 mention/aside 之后的文本）。
+  displayText?: string;
+  // 结构化 Composer A6：optimistic_user 事件可携带 mode，reducer 写到 message.composerMeta。
+  composerMode?: "goal" | "workflow";
 }
 
 export interface ReducerState {
@@ -586,6 +597,7 @@ function subagentBatchPartFromPersistedBatch(
     reason: batch.reason,
     status: batch.status,
     restored: true,
+    parentAgentId: batch.parentAgentId,
     planning: batch.planning,
     verification: batch.verification,
     synthesis: batch.synthesis,
@@ -714,6 +726,97 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
   };
 
   switch (ev.type) {
+    // F3：optimistic user message。send 后本地先插 user message，SSE message_start 到达
+    // 后衰变为正常消息。如果 SSE 未到，这条仍以 pending 状态留在 UI。
+    case "__optimistic_user": {
+      const text = ev.text ?? "";
+      const images = ev.images ?? [];
+      const attachments = ev.attachments ?? [];
+      const parts: MessagePart[] = [];
+      const visibleText = stripContextAside(text);
+      if (visibleText) parts.push({ kind: "text", text: visibleText });
+      for (const img of images) {
+        if (img.data && img.mimeType) {
+          parts.push({ kind: "image", data: img.data, mimeType: img.mimeType });
+        }
+      }
+      // 结构化 Composer Phase A6：将 mode + refs 写到气泡上，MessageView 用于渲染 metadata strip。
+      const composerMode = (ev as { composerMode?: "goal" | "workflow" }).composerMode;
+      const composerMeta =
+        composerMode || attachments.length > 0
+          ? {
+              ...(composerMode ? { mode: composerMode } : {}),
+              ...(attachments.length > 0 ? { refs: attachments } : {}),
+            }
+          : undefined;
+      state.messages.push({
+        role: "user",
+        parts,
+        text: visibleText,
+        timestamp: Date.now(),
+        pending: true,
+        clientRequestId: ev.clientRequestId,
+        // attachment refs 不进气泡文本，仅供 UI 提示。
+        ...(attachments.length > 0 ? { raw: { attachments } } : {}),
+        ...(composerMeta ? { composerMeta } : {}),
+      });
+      return state;
+    }
+
+    // F-A5 optimistic user ack：后端在调 SDK prompt 之前 push，带上服务端最终
+    // 发出的 displayText（去掉 @mention / 上下文 aside）。前端以 clientRequestId
+    // 定位，将 pending user 气泡衰变为这个最终文本与 parts，避免后续 SDK 的
+    // user message_start 与 optimistic 文本不一致产生双气泡。
+    case "optimistic_user_ack": {
+      const requestId = (ev as unknown as { clientRequestId?: string })
+        .clientRequestId;
+      const finalText = (ev as unknown as { displayText?: string }).displayText
+        ?? "";
+      if (!requestId) return state;
+      for (let i = state.messages.length - 1; i >= 0; i -= 1) {
+        const msg = state.messages[i];
+        if (
+          msg.role === "user" &&
+          msg.clientRequestId === requestId &&
+          msg.pending
+        ) {
+          // 保留 image parts（optimistic 里插入的），只替换 text part。
+          const oldParts = msg.parts ?? [];
+          const imageParts = oldParts.filter((p) => p.kind === "image");
+          const newParts: MessagePart[] = [];
+          if (finalText) newParts.push({ kind: "text", text: finalText });
+          newParts.push(...imageParts);
+          // 结构化 Composer A6：ack 路径保留 optimistic 期间写上的 composerMeta。
+          state.messages[i] = {
+            ...msg,
+            parts: newParts,
+            text: finalText,
+            pending: false,
+          };
+          break;
+        }
+      }
+      return state;
+    }
+
+    // F3：optimistic user message 发送失败 / 超时 → 标记但不删除，供用户重发。
+    case "__optimistic_user_failed": {
+      const requestId = ev.clientRequestId;
+      if (!requestId) return state;
+      for (let i = state.messages.length - 1; i >= 0; i -= 1) {
+        const msg = state.messages[i];
+        if (msg.role === "user" && msg.clientRequestId === requestId && msg.pending) {
+          state.messages[i] = {
+            ...msg,
+            pending: false,
+            meta: { ...(msg.meta ?? {}), errorMessage: ev.reason ?? "failed" } as ChatMessageMeta,
+          };
+          break;
+        }
+      }
+      return state;
+    }
+
     case "message_start": {
       const m = ev.message;
       if (!m) return state;
@@ -732,6 +835,43 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
           } else if (c.type === "image" && c.data && c.mimeType) {
             parts.push({ kind: "image", data: c.data, mimeType: c.mimeType });
           }
+        }
+        // F3 / F-A5 reconcile：末尾如果是 optimistic user。两个可接受场景：
+        //   1. 仍在 pending（还没收到 ack），文本一致会包含 @mention，并不一定与
+        //      textJoined 相等。这里允许带 clientRequestId 的 pending user 被衰变。
+        //   2. ack 已到 → pending=false、text 已被换为 displayText，与 textJoined 一致，
+        //      同样衰变为正式条。
+        const lastIdx = state.messages.length - 1;
+        const last = lastIdx >= 0 ? state.messages[lastIdx] : null;
+        const lastText = last?.text ?? "";
+        const isPendingOptimistic =
+          !!last &&
+          last.role === "user" &&
+          last.pending === true &&
+          typeof last.clientRequestId === "string";
+        const isAckedOptimistic =
+          !!last &&
+          last.role === "user" &&
+          last.pending !== true &&
+          typeof last.clientRequestId === "string" &&
+          lastText === textJoined;
+        if (last && (isPendingOptimistic || isAckedOptimistic)) {
+          state.messages[lastIdx] = {
+            role: "user",
+            parts,
+            text: textJoined,
+            timestamp: m.timestamp ?? last.timestamp,
+            // 结构化 Composer A6：optimistic 期写上的 composerMeta 不能被 message_start 衰变丢失。
+            ...(last.composerMeta ? { composerMeta: last.composerMeta } : {}),
+          };
+          return state;
+        }
+        // “控制指令”修复：aside-only 的合成 user message（如 goal continuation、未来可能的
+        // hidden system prompt）stripContextAside 后可见部分为空。这里跳过添加，
+        // 避免 UI 上出现空气泡或重复 goal.objective。
+        // 仅在“净空”（无 text 且无 image）时跳；动画/图片单产品不受影响。
+        if (parts.length === 0) {
+          return state;
         }
         state.messages.push({
           role: "user",
@@ -1064,6 +1204,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
           id: batch.id,
           reason: batch.reason,
           status: batch.status,
+          parentAgentId: batch.parentAgentId,
           planning: batch.planning,
           verification: batch.verification,
           synthesis: batch.synthesis,
@@ -1374,8 +1515,13 @@ export function ctxToMessages(
       data?: string;
       mimeType?: string;
     }>;
-  }>
+  }>,
+  opts: {
+    unfinishedToolStatus?: "running" | "error";
+    unfinishedToolResult?: string;
+  } = {}
 ): ChatMessage[] {
+  const unfinishedToolStatus = opts.unfinishedToolStatus ?? "running";
   const out: ChatMessage[] = [];
   // 把 tool_result 按 tool_use_id 索引，到 assistant 遇到 tool_use 时回填
   const toolResults = new Map<
@@ -1442,14 +1588,19 @@ export function ctxToMessages(
         ) {
           const tr = toolResults.get(c.id);
           const args = c.input ?? c.arguments;
+          const missingResultIsError = !tr && unfinishedToolStatus === "error";
           parts.push({
             kind: "tool",
             toolCallId: c.id,
             toolName: c.name,
             args,
-            result: tr?.result,
-            isError: tr?.isError ?? false,
-            status: tr ? (tr.isError ? "error" : "done") : "running",
+            result: tr?.result ?? (missingResultIsError ? opts.unfinishedToolResult : undefined),
+            isError: tr?.isError ?? missingResultIsError,
+            status: tr
+              ? tr.isError
+                ? "error"
+                : "done"
+              : unfinishedToolStatus,
           });
           if (c.name === "delegate_subagents" && tr) {
             const subagentPart = subagentBatchPartFromToolResult({

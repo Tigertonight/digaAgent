@@ -1176,3 +1176,274 @@ describe("applyEvent — workflow script events", () => {
     expect(part.returnValue).toEqual({ ok: true });
   });
 });
+
+describe("applyEvent — optimistic user ack + @mention reconcile", () => {
+  it("ack 把 pending optimistic user 的 text 衰变为 displayText 并去掉 pending", () => {
+    const initial = applyEvent(createInitialState(), {
+      type: "__optimistic_user",
+      clientRequestId: "crid-1",
+      text: "@coder fix this bug",
+    });
+    expect(initial.messages).toHaveLength(1);
+    const before = initial.messages[0];
+    expect(before.role).toBe("user");
+    expect(before.pending).toBe(true);
+    expect(before.text).toBe("@coder fix this bug");
+
+    const acked = applyEvent(initial, {
+      type: "optimistic_user_ack",
+      clientRequestId: "crid-1",
+      displayText: "fix this bug",
+    });
+    const after = acked.messages[0];
+    expect(after.pending).toBe(false);
+    expect(after.text).toBe("fix this bug");
+    expect(after.parts?.[0]).toEqual({ kind: "text", text: "fix this bug" });
+  });
+
+  it("ack 后真实 user message_start 同文本会替换该条，不再产生双气泡", () => {
+    let state = applyEvent(createInitialState(), {
+      type: "__optimistic_user",
+      clientRequestId: "crid-2",
+      text: "@reviewer review the diff",
+    });
+    state = applyEvent(state, {
+      type: "optimistic_user_ack",
+      clientRequestId: "crid-2",
+      displayText: "review the diff",
+    });
+    state = applyEvent(state, {
+      type: "message_start",
+      message: {
+        role: "user",
+        timestamp: 100,
+        content: [{ type: "text", text: "review the diff" }],
+      },
+    });
+    expect(state.messages).toHaveLength(1);
+    const only = state.messages[0];
+    expect(only.role).toBe("user");
+    expect(only.pending).toBeFalsy();
+    expect(only.text).toBe("review the diff");
+    expect(only.timestamp).toBe(100);
+  });
+
+  it("ack 还没到，真实 user message_start 仍然能替换 pending optimistic（用 clientRequestId 锚点）", () => {
+    const state = applyEvent(
+      applyEvent(createInitialState(), {
+        type: "__optimistic_user",
+        clientRequestId: "crid-3",
+        text: "@coder fix this bug",
+      }),
+      {
+        type: "message_start",
+        message: {
+          role: "user",
+          timestamp: 200,
+          content: [{ type: "text", text: "fix this bug" }],
+        },
+      }
+    );
+    // pending optimistic 被替换为最终 message，不应有两条 user
+    expect(state.messages).toHaveLength(1);
+    const only = state.messages[0];
+    expect(only.role).toBe("user");
+    expect(only.pending).toBeFalsy();
+    expect(only.text).toBe("fix this bug");
+  });
+});
+
+describe("ctxToMessages — unfinished tool recovery (crash-after-tool-use)", () => {
+  it("默认 unfinishedToolStatus=running：未配对 tool_use 渲染为 running", () => {
+    const out = ctxToMessages([
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "t1", name: "bash", input: { cmd: "ls" } }],
+      },
+    ]);
+    expect(out).toHaveLength(1);
+    const part = out[0].parts?.[0];
+    if (part?.kind !== "tool") throw new Error("expected tool part");
+    expect(part.status).toBe("running");
+    expect(part.isError).toBeFalsy();
+  });
+
+  it("unfinishedToolStatus=error：未配对 tool_use 渲染为 error 且带 fallback result", () => {
+    const out = ctxToMessages(
+      [
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "t1", name: "bash", input: { cmd: "ls" } },
+          ],
+        },
+      ],
+      {
+        unfinishedToolStatus: "error",
+        unfinishedToolResult: "上次运行被中断",
+      }
+    );
+    const part = out[0].parts?.[0];
+    if (part?.kind !== "tool") throw new Error("expected tool part");
+    expect(part.status).toBe("error");
+    expect(part.isError).toBe(true);
+    expect(part.result).toBe("上次运行被中断");
+  });
+
+  it("已配对的 tool_use 不受 unfinishedToolStatus 影响", () => {
+    const out = ctxToMessages(
+      [
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "t1", name: "bash", input: { cmd: "ls" } },
+          ],
+        },
+        {
+          role: "tool",
+          content: [
+            { type: "tool_result", tool_use_id: "t1", content: "ok" },
+          ],
+        },
+      ],
+      { unfinishedToolStatus: "error" }
+    );
+    const part = out[0].parts?.[0];
+    if (part?.kind !== "tool") throw new Error("expected tool part");
+    expect(part.status).toBe("done");
+    expect(part.result).toBe("ok");
+  });
+});
+
+describe("applyEvent — aside-only user message 不入气泡（控制指令隐藏）", () => {
+  it("纯 CONTEXT_ASIDE 包裹的 user message_start 不会创建 user 气泡", () => {
+    let s = createInitialState();
+    const asideOnly =
+      "<<<CONTEXT_ASIDE>>>\nContinue working toward the active goal: 打磨发布流程。\n请调用 update_progress。\n<<<END_CONTEXT_ASIDE>>>";
+    s = applyEvent(s, {
+      type: "message_start",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: asideOnly }],
+        timestamp: 100,
+      },
+    });
+    expect(s.messages).toHaveLength(0);
+  });
+
+  it("user 原文 + aside 仍会渲染气泡，气泡只有原文", () => {
+    let s = createInitialState();
+    const text =
+      "实现 X 功能\n\n<<<CONTEXT_ASIDE>>>\n请使用 dynamic workflow。\n<<<END_CONTEXT_ASIDE>>>";
+    s = applyEvent(s, {
+      type: "message_start",
+      message: {
+        role: "user",
+        content: [{ type: "text", text }],
+        timestamp: 100,
+      },
+    });
+    expect(s.messages).toHaveLength(1);
+    const m = s.messages[0];
+    expect(m.role).toBe("user");
+    expect(m.text).toBe("实现 X 功能");
+    const textPart = m.parts?.find((p) => p.kind === "text");
+    expect(textPart && (textPart as { text: string }).text).toBe("实现 X 功能");
+  });
+
+  it("仅 image、无 text 的 user message 仍渲染气泡（不被 aside-only 跳过路径误伤）", () => {
+    let s = createInitialState();
+    s = applyEvent(s, {
+      type: "message_start",
+      message: {
+        role: "user",
+        content: [
+          { type: "image", data: "Zg==", mimeType: "image/png" },
+        ],
+        timestamp: 100,
+      },
+    });
+    expect(s.messages).toHaveLength(1);
+    expect(s.messages[0].parts?.[0]?.kind).toBe("image");
+  });
+});
+
+describe("applyEvent — composerMeta on user message (Phase A6)", () => {
+  it("__optimistic_user with composerMode → message.composerMeta.mode 写入", () => {
+    let s = createInitialState();
+    s = applyEvent(s, {
+      type: "__optimistic_user",
+      clientRequestId: "r1",
+      text: "实现一个 release smoke",
+      composerMode: "goal",
+    });
+    const msg = s.messages.at(-1)!;
+    expect(msg.composerMeta?.mode).toBe("goal");
+    expect(msg.composerMeta?.refs).toBeUndefined();
+  });
+
+  it("__optimistic_user with attachments → composerMeta.refs 写入", () => {
+    let s = createInitialState();
+    s = applyEvent(s, {
+      type: "__optimistic_user",
+      clientRequestId: "r2",
+      text: "看下这两个",
+      attachments: ["/a/b.ts", "/c/d.tsx"],
+    });
+    const msg = s.messages.at(-1)!;
+    expect(msg.composerMeta?.refs).toEqual(["/a/b.ts", "/c/d.tsx"]);
+  });
+
+  it("composerMeta 在 message_start reconcile（pending → 正式）后保留", () => {
+    let s = createInitialState();
+    s = applyEvent(s, {
+      type: "__optimistic_user",
+      clientRequestId: "r3",
+      text: "做个 workflow",
+      composerMode: "workflow",
+      attachments: ["/x.ts"],
+    });
+    s = applyEvent(s, {
+      type: "message_start",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "做个 workflow\n\n<<<CONTEXT_ASIDE>>>aside<<<END_CONTEXT_ASIDE>>>" }],
+        timestamp: 1000,
+      },
+    });
+    const msg = s.messages.at(-1)!;
+    expect(msg.role).toBe("user");
+    expect(msg.pending).toBeUndefined(); // 已 reconcile
+    expect(msg.composerMeta?.mode).toBe("workflow");
+    expect(msg.composerMeta?.refs).toEqual(["/x.ts"]);
+  });
+
+  it("optimistic_user_ack 不丢 composerMeta", () => {
+    let s = createInitialState();
+    s = applyEvent(s, {
+      type: "__optimistic_user",
+      clientRequestId: "r4",
+      text: "@coder fix this",
+      composerMode: "goal",
+    });
+    s = applyEvent(s, {
+      type: "optimistic_user_ack",
+      clientRequestId: "r4",
+      displayText: "fix this",
+    });
+    const msg = s.messages.at(-1)!;
+    expect(msg.text).toBe("fix this");
+    expect(msg.composerMeta?.mode).toBe("goal");
+  });
+
+  it("没 mode 也没 refs → 不写 composerMeta", () => {
+    let s = createInitialState();
+    s = applyEvent(s, {
+      type: "__optimistic_user",
+      clientRequestId: "r5",
+      text: "纯文本",
+    });
+    const msg = s.messages.at(-1)!;
+    expect(msg.composerMeta).toBeUndefined();
+  });
+});
