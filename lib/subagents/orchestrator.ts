@@ -39,6 +39,7 @@ import { resolveIsolationBaseRef, resolveIsolationMode } from "./isolation";
 import { runSubagentStartHook, runSubagentStopHook } from "./hooks";
 import type { WorkflowWorktree, WorkflowWorktreeManager } from "@/lib/workflows/types";
 import type { ApprovalResponse } from "@/lib/collab/types";
+import { readMeta, writeMeta } from "@/lib/meta/store";
 
 const DEFAULT_MAX_TASKS = 8;
 const EXPLICIT_MAX_TASKS = 32;
@@ -105,6 +106,11 @@ export interface RunSubagentBatchDeps {
 interface RunningBatchController {
   childAgentIds: Set<string>;
   abortController: AbortController;
+  /**
+   * A2-1：batch_end 仅 push 一次。abort 路径在收尾后置 true；worker fn finally
+   * 走到 push 之前看到 true 则跳过，避免 UI 卡片接连看到两次 batch_end。
+   */
+  endedPushed?: boolean;
 }
 
 const runningControllers = new Map<string, RunningBatchController>();
@@ -158,8 +164,12 @@ function sanitizeTask(raw: SubagentTask, index: number): SubagentTaskRuntime {
   const id = raw.id?.trim() || `task-${index + 1}`;
   const requestedTools = sanitizeAllowedTools(raw.allowedTools);
   const writePaths = sanitizeWritePaths(raw.writePaths);
-  const allowedTools =
-    requestedTools && writePaths?.length
+  // S2 + S3：worktree 隔离下不剖写工具。是否 worktree 以 task / 后面的 specialist
+  // 为准；sanitize 阶段只能看到 task。后续 orchestrator 会以 isolationMode 作为权威。
+  const isolatedFromTask = raw.isolation === "worktree";
+  const allowedTools = isolatedFromTask
+    ? requestedTools
+    : requestedTools && writePaths?.length
       ? requestedTools
       : requestedTools?.filter((tool) => !isWriteCapableTool(tool));
   const specialistId = raw.specialistId?.trim().slice(0, 80) || undefined;
@@ -169,6 +179,10 @@ function sanitizeTask(raw: SubagentTask, index: number): SubagentTaskRuntime {
     prompt: raw.prompt.trim().slice(0, 12000),
     role: normalizeRole(raw.role),
     specialistId,
+    isolation:
+      raw.isolation === "none" || raw.isolation === "worktree"
+        ? raw.isolation
+        : undefined,
     cwd: raw.cwd,
     allowedTools,
     writePaths,
@@ -197,6 +211,34 @@ export function validateDelegateInput(input: DelegateSubagentsInput): {
     .filter((task) => task.prompt.length > 0);
   if (tasks.length === 0) {
     throw new Error("delegate_subagents tasks must include non-empty prompts");
+  }
+  // S7：duplicate task id 提前拒绝。模型偶尔会为两个任务写同个 id（例如
+  // 都叫 "q1"）， reducer 以 taskId 合并会串乱结果。这里在进入运行期之前
+  // 自动改名为 id-2 / id-3 并补一条 warning，模型下一轮调用能看到提示。
+  const dedupedTaskIds: string[] = [];
+  {
+    const seen = new Map<string, number>();
+    for (const task of tasks) {
+      const original = task.id;
+      const count = seen.get(original) ?? 0;
+      if (count > 0) {
+        // 挥在最多 4 位，仍以 task title 为主要识别。最高 80 字符限制避免
+        // 超过 type sanitize 边界。
+        let candidate = `${original}-${count + 1}`;
+        let dupGuard = 0;
+        while (seen.has(candidate) && dupGuard++ < 16) {
+          candidate = `${original}-${count + 1 + dupGuard}`;
+        }
+        task.id = candidate.slice(0, 80);
+        dedupedTaskIds.push(`${original} -> ${task.id}`);
+      }
+      seen.set(task.id, (seen.get(task.id) ?? 0) + 1);
+      // 记住最后一次使用该 original id 的计数。
+      seen.set(original, count + 1);
+    }
+  }
+  if (dedupedTaskIds.length > 0) {
+    // 这个 warning 会被带进 planning.warnings。
   }
   const requestedConcurrency =
     typeof input.concurrency === "number" && Number.isFinite(input.concurrency)
@@ -230,6 +272,11 @@ export function validateDelegateInput(input: DelegateSubagentsInput): {
       `${unsafeWriteRequests.length} task(s) requested write-capable tools without writePaths; write tools were removed.`
     );
   }
+  if (dedupedTaskIds.length > 0) {
+    warnings.push(
+      `Renamed ${dedupedTaskIds.length} duplicate task id(s): ${dedupedTaskIds.join(", ")}.`
+    );
+  }
   const boundedWriteTasks = tasks.filter((task) =>
     task.allowedTools?.some(isWriteCapableTool)
   );
@@ -256,7 +303,66 @@ export function validateDelegateInput(input: DelegateSubagentsInput): {
   };
 }
 
-function makeSubagentPrompt(
+/**
+ * Subagent 首条 user prompt。
+ *
+ * 设计原则（问题定位后调整）：“子任务是什么”优先于“你是一个 subagent”。
+ * 原因：
+ *  - SDK 以首条 user message 开头几句作为 session title。以前主动把“你是一个
+ *    subagent、只负责…”放在最前面，导致 sidebar / list 里所有 subagent 标题全一样。
+ *  - 用户主诉：并行 subagent 难以辨认。
+ *
+ * 新布局：
+ *  1. 任务头（标题 / 角色 / 内容）
+ *  2. 写入边界（如有）
+ *  3. 角色设定 / 长期记忆（如有）
+ *  4. 分隔线 `---`
+ *  5. 通用规则（只回答当前 / 不追问 / 输出格式）
+ */
+/**
+ * 为 child session 补写 sidebar 可识别的 meta.title。
+ *
+ * 底层原因：SDK 默认 title 提取首条 user message 开头几句，即使
+ * makeSubagentPrompt 已调为“任务明细前置”，在某些路径上（多行裁剪、表情”
+ * 文本 title 生成“仍可能取到“子任务：...”这种模板头。写 meta.title 是二道
+ * 保险——diga-agent 自己的 meta 会被 listAllSessions 优先用于列表显示。
+ *
+ * 调用点：createChild 后、runOneTask 开始跳事件之前。写入失败不阈任务 — sidebar
+ * title 仅是体验项，不能拖垮并行 batch。
+ */
+export async function applyChildSessionTitle(
+  sessionId: string,
+  taskTitle: string
+): Promise<void> {
+  if (!sessionId) return;
+  const trimmedTitle = (taskTitle || "").trim();
+  if (!trimmedTitle) return;
+  // 8个字段全使用可能太长，限 60 字符（中文估不超过 sidebar 2 行）。
+  const titleBase = trimmedTitle.length > 60
+    ? trimmedTitle.slice(0, 60).trimEnd() + "…"
+    : trimmedTitle;
+  const finalTitle = `Subagent: ${titleBase}`;
+  try {
+    const existing = await readMeta(sessionId);
+    // 如果用户后期手动改过 title，尊重它不覆盖（existing.title 不以 "Subagent: "
+    // 开头表示被人改过）。首次写入与“调度期刷新”都受这个保护。
+    const isCustomTitle =
+      existing?.title &&
+      existing.title.length > 0 &&
+      !existing.title.startsWith("Subagent: ");
+    if (isCustomTitle) return;
+    if (existing?.title === finalTitle) return;
+    await writeMeta({
+      ...(existing ?? {}),
+      id: sessionId,
+      title: finalTitle,
+    });
+  } catch {
+    // 忽略：meta 写失败不该冲到主任务路径。
+  }
+}
+
+export function makeSubagentPrompt(
   task: SubagentTaskRuntime,
   specialistPrompt?: string,
   memoryBlock?: string
@@ -271,18 +377,26 @@ function makeSubagentPrompt(
           "如果需要修改文件，只能修改上述路径；不要修改边界外的文件。",
         ]
       : [];
-  // Specialist system prompt is injected after the generic rules and before the
-  // task body, acting as the role setup (修正 3: caller truncates length).
   const specialistScope =
     specialistPrompt && specialistPrompt.trim()
       ? ["", "你的角色设定：", specialistPrompt.trim()]
       : [];
-  // Compact long-term memory for this specialist (Sprint 2 memory v1).
   const memoryScope =
     memoryBlock && memoryBlock.trim()
       ? ["", "你的长期记忆（供参考，不要照搬）：", memoryBlock.trim()]
       : [];
   return [
+    `子任务：${task.title}`,
+    `角色：${task.role ?? "general"}`,
+    "",
+    "任务内容：",
+    task.prompt,
+    ...writeScope,
+    ...specialistScope,
+    ...memoryScope,
+    "",
+    "---",
+    "",
     "你是一个 subagent，只负责当前被委派的一个子任务。",
     "",
     "规则：",
@@ -290,15 +404,6 @@ function makeSubagentPrompt(
     "- 优先给出可核验依据；如果依据不足，明确说明缺口。",
     "- 不要向用户追问；信息不足时直接写明无法确认的部分。",
     "- 最终输出包含：结论、依据、注意事项。",
-    ...specialistScope,
-    ...memoryScope,
-    "",
-    `子任务标题：${task.title}`,
-    `子任务角色：${task.role ?? "general"}`,
-    ...writeScope,
-    "",
-    "子任务内容：",
-    task.prompt,
   ].join("\n");
 }
 
@@ -758,7 +863,8 @@ function unregisterRunningBatch(parentAgentId: string, batchId: string) {
 
 export async function abortRunningSubagentBatches(
   parentAgentId: string,
-  getChild: (agentId: string) => ChildAgentRecord | undefined
+  getChild: (agentId: string) => ChildAgentRecord | undefined,
+  pushParentEvent?: (event: SubagentEvent) => void
 ): Promise<void> {
   const batchIds = runningByParent.get(parentAgentId);
   if (!batchIds) return;
@@ -767,12 +873,74 @@ export async function abortRunningSubagentBatches(
       const controller = runningControllers.get(batchId);
       if (!controller) return;
       controller.abortController.abort();
-      updateBatchStatus(batchId, "aborted", Date.now());
+      // A2-1：锁住 end push 隔离。worker fn finally 跳过。
+      controller.endedPushed = true;
+      const endedAt = Date.now();
+      // S8：同步把未终态的 task 改为 aborted + 写 verification + push end。
+      // 以前只动 batch.status，task 代码还在 “running” 挂着、卡片一直转圈。
+      const batchSnapshot = getBatch(batchId);
+      if (batchSnapshot) {
+        for (const task of batchSnapshot.tasks) {
+          if (isTerminalTaskStatus(task.status)) continue;
+          const result: SubagentResult = {
+            taskId: task.id,
+            agentId: task.agentId ?? "",
+            status: "aborted",
+            error: "Batch aborted by parent.",
+            startedAt: task.startedAt ?? endedAt,
+            endedAt,
+          };
+          const verification = verifyTaskResult(task, result, endedAt);
+          updateTask(batchId, task.id, {
+            status: "aborted",
+            endedAt,
+            error: result.error,
+            verification,
+          });
+          pushParentEvent?.({
+            type: "subagent_task_end",
+            batchId,
+            taskId: task.id,
+            status: "aborted",
+            error: result.error,
+            endedAt,
+            verification,
+          });
+        }
+      }
+      updateBatchStatus(batchId, "aborted", endedAt);
+      // 子 agent abort
       await Promise.all(
         Array.from(controller.childAgentIds).map((agentId) =>
           getChild(agentId)?.session.abort().catch(() => undefined)
         )
       );
+      // 取一下最新 audit 还太早；batch_completed 托给运行中的 worker finally 口口 push。
+      // 为了保证前端卡片能及时跳出 running，主动 push 一条 batch_end。
+      const finalBatch = getBatch(batchId);
+      pushParentEvent?.({
+        type: "subagent_batch_end",
+        batchId,
+        status: "aborted",
+        results:
+          finalBatch?.tasks.map((task) => ({
+            taskId: task.id,
+            agentId: task.agentId ?? "",
+            sessionFile: task.sessionFile,
+            status: isTerminalTaskStatus(task.status)
+              ? task.status
+              : ("aborted" as const),
+            answer: task.answer,
+            error: task.error,
+            startedAt: task.startedAt ?? endedAt,
+            endedAt: task.endedAt ?? endedAt,
+            usage: task.usage,
+          })) ?? [],
+        endedAt,
+        verification: finalBatch?.verification,
+        synthesis: finalBatch?.synthesis,
+        auditEvents: finalBatch?.auditEvents,
+      });
     })
   );
 }
@@ -796,10 +964,18 @@ async function runOneTask(
   const startedAt = Date.now();
   updateTask(batchId, task.id, { status: "running", startedAt });
 
+  // S2：先算 isolation，再算 permission。worktree 隔离下 permission 不该被剖成
+  // read-only —— 干奥会让需要写的 implementation specialist 干不了活。
+  const isolationMode = resolveIsolationMode(definition, task);
+
   // Merge permission: definition is the ceiling; runtime cannot escalate (修正 4).
   const permission = resolveSubagentPermission(
     definition,
-    { requestedTools: task.allowedTools, writePaths: task.writePaths },
+    {
+      requestedTools: task.allowedTools,
+      writePaths: task.writePaths,
+      isolatedWorktree: isolationMode === "worktree",
+    },
     defaultToolsForRole(role)
   );
   // Per-agent model policy: a specialist may pin its own model (safe fallback to
@@ -808,10 +984,6 @@ async function runOneTask(
     provider: deps.provider,
     modelId: deps.modelId,
   });
-
-  // Isolation (Sprint 3): implementation specialists may run in a dedicated git
-  // worktree so writes never touch the parent working tree until merged.
-  const isolationMode = resolveIsolationMode(definition, task);
   let worktree: WorkflowWorktree | null = null;
   let childCwd = task.cwd || deps.cwd;
   let childWritePaths = permission.writePaths;
@@ -876,6 +1048,11 @@ async function runOneTask(
     });
     controller.childAgentIds.add(child.id);
     updateTask(batchId, task.id, { agentId: child.id });
+    // 补写 sidebar title（meta.title）。在 createChild 返回后、启动 prompt 之前调，
+    // 避免使用者“一闪看到默认 title”。写失败不阈任务。
+    if (child.sessionId) {
+      void applyChildSessionTitle(child.sessionId, task.title);
+    }
     if (definition) {
       appendAuditEvent(
         batchId,
@@ -1367,16 +1544,22 @@ export async function runSubagentBatch(
     );
     const auditEvents = getBatch(batchId)?.auditEvents;
 
-    deps.pushParentEvent({
-      type: "subagent_batch_end",
-      batchId,
-      status: finalStatus,
-      results,
-      endedAt,
-      verification,
-      synthesis,
-      auditEvents,
-    });
+    // A2-1：abort 路径已 push 过一次 batch_end。这里不再重复，避免 UI 衰减事件
+    // 覆盖 audit_events 与闪闪。注意：如果是正常完成/失败路径（未被 abort），
+    // controller.endedPushed 仍为 undefined，push 照旧。
+    if (!controller.endedPushed) {
+      controller.endedPushed = true;
+      deps.pushParentEvent({
+        type: "subagent_batch_end",
+        batchId,
+        status: finalStatus,
+        results,
+        endedAt,
+        verification,
+        synthesis,
+        auditEvents,
+      });
+    }
 
     return results;
   };
@@ -1480,16 +1663,20 @@ export async function retrySubagentTask(
     finalStatus === "running" ? {} : finalizeBatchArtifacts(batchId);
   const auditEvents = getBatch(batchId)?.auditEvents;
 
-  deps.pushParentEvent({
-    type: "subagent_batch_end",
-    batchId,
-    status: finalStatus,
-    results: [result],
-    endedAt: Date.now(),
-    verification,
-    synthesis,
-    auditEvents,
-  });
+  // A2-1：如果被 abort 路径走过，endedPushed 已为 true。这里只在未被 abort 时才 push。
+  if (!controller.endedPushed) {
+    controller.endedPushed = true;
+    deps.pushParentEvent({
+      type: "subagent_batch_end",
+      batchId,
+      status: finalStatus,
+      results: [result],
+      endedAt: Date.now(),
+      verification,
+      synthesis,
+      auditEvents,
+    });
+  }
 
   return result;
 }
@@ -1600,16 +1787,20 @@ export async function resumeSubagentBatch(
   );
   const auditEvents = getBatch(batchId)?.auditEvents;
 
-  deps.pushParentEvent({
-    type: "subagent_batch_end",
-    batchId,
-    status: finalStatus,
-    results,
-    endedAt,
-    verification,
-    synthesis,
-    auditEvents,
-  });
+  // A2-1：abort 路径已推过一条 batch_end，这里不重复。
+  if (!controller.endedPushed) {
+    controller.endedPushed = true;
+    deps.pushParentEvent({
+      type: "subagent_batch_end",
+      batchId,
+      status: finalStatus,
+      results,
+      endedAt,
+      verification,
+      synthesis,
+      auditEvents,
+    });
+  }
 
   return { batchId, results, synthesis, auditEvents };
 }

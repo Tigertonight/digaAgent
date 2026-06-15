@@ -22,12 +22,24 @@ const RoleSchema = Type.Union([
   Type.Literal("implementation"),
 ]);
 
+const IsolationSchema = Type.Union([
+  Type.Literal("none"),
+  Type.Literal("worktree"),
+]);
+
 const TaskSchema = Type.Object({
   id: Type.Optional(
     Type.String({ description: "Stable task id, e.g. q1 or module-hooks." })
   ),
   title: Type.String({
-    description: "Short checklist title for this subagent task.",
+    description:
+      "Subagent 子任务的高信息密度标题（会直接进入 sidebar / batch 卡片 / session list）。\n" +
+      "要求：\n" +
+      "- 8–24 字符（中文 4–12 字）。\n" +
+      "- 包含明确的对象 + 动作，例如“检查 Electron 启动链路”、“梳理 Sidebar 标题来源”、\n" +
+      "  “验证 Workflow 续跑语义”。\n" +
+      "- 不要用 “Question 1 / Task 1 / Review / Subtask” 这种无区分性模板。\n" +
+      "- 不要重复 “subagent 作为 / 帮我检查一下” 这种上下文词。",
   }),
   prompt: Type.String({
     description:
@@ -39,6 +51,9 @@ const TaskSchema = Type.Object({
       description:
         "Optional registered specialist id (from .agents/subagents/*.md) to run this task as. Merges that specialist's prompt, tools, and permission mode.",
     })
+  ),
+  isolation: Type.Optional(
+    IsolationSchema
   ),
   cwd: Type.Optional(
     Type.String({ description: "Optional working directory override." })
@@ -120,6 +135,7 @@ type DelegateParamsValue = {
     prompt: string;
     role?: unknown;
     specialistId?: string;
+    isolation?: "none" | "worktree";
     cwd?: string;
     allowedTools?: string[];
     writePaths?: string[];
@@ -176,6 +192,12 @@ function normalizeRole(role: unknown): SubagentRole | undefined {
     : undefined;
 }
 
+function normalizeIsolation(
+  value: unknown
+): "none" | "worktree" | undefined {
+  return value === "none" || value === "worktree" ? value : undefined;
+}
+
 function normalizeInput(params: DelegateParamsValue): DelegateSubagentsInput {
   return {
     reason: params.reason,
@@ -188,6 +210,7 @@ function normalizeInput(params: DelegateParamsValue): DelegateSubagentsInput {
       prompt: task.prompt,
       role: normalizeRole(task.role),
       specialistId: task.specialistId,
+      isolation: normalizeIsolation(task.isolation),
       cwd: task.cwd,
       allowedTools: task.allowedTools,
       writePaths: task.writePaths,
@@ -262,6 +285,7 @@ export function createDelegateSubagentsTool(
       "Each task prompt must be standalone and scoped to exactly one subtask.",
       "Do not delegate tasks that require parallel file edits unless the user explicitly asks and the edit boundaries are isolated.",
       "After delegate_subagents returns, synthesize the results; do not merely paste them verbatim unless the user asked for per-task answers.",
+      "Each task.title must be a high-signal scannable name (8–24 chars / 4–12 中文字) that pairs an object and an action, e.g. '检查 Electron 启动链路'. Do not use 'Question 1 / Task 1 / Review' or repeat 'subagent / 帮我检查'—titles drive sidebar discovery for parallel tasks.",
     ],
     parameters: DelegateParams,
     executionMode: "sequential",

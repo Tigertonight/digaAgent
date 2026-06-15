@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  abortRunningSubagentBatches,
   resumeSubagentBatch,
   retrySubagentTask,
   runSubagentBatch,
@@ -125,6 +126,24 @@ describe("validateDelegateInput", () => {
         expect.stringContaining("constrained to declared writePaths"),
       ])
     );
+  });
+
+  it("S7：重复 task id 被自动改名，同时在 warnings 里告知", () => {
+    const out = validateDelegateInput({
+      reason: "two tasks accidentally share an id",
+      tasks: [
+        { id: "q1", title: "First", prompt: "answer first" },
+        { id: "q1", title: "Second", prompt: "answer second" },
+        { id: "q1", title: "Third", prompt: "answer third" },
+      ],
+    });
+    const ids = out.tasks.map((t) => t.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids[0]).toBe("q1");
+    expect(ids.slice(1)).toEqual(
+      expect.arrayContaining(["q1-2", "q1-3"])
+    );
+    expect(out.planning.warnings.join(" | ")).toMatch(/duplicate task id/i);
   });
 });
 
@@ -713,6 +732,160 @@ describe("resumeSubagentBatch", () => {
       expect(pushParentEvent).toHaveBeenCalledWith(
         expect.objectContaining({ type: "subagent_batch_start" })
       );
+    } finally {
+      __setSubagentStoreRootForTest(null);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("abortRunningSubagentBatches", () => {
+  it("S8：abort 时同步把未终态 task 标 aborted 并 push task_end + batch_end", async () => {
+    __resetSubagentStoreForTest();
+    const listeners = new Set<
+      (event: { type: string; message?: unknown }) => void
+    >();
+    // SDK 被 abort 后会推一条 agent_end，prompt() 随之返回。
+    const session = {
+      sessionFile: "/tmp/abort-child.jsonl",
+      subscribe: vi.fn((listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      }),
+      prompt: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            // 被 abort 触发后才 resolve
+            session._resolvePrompt = resolve;
+          })
+      ),
+      abort: vi.fn(async () => {
+        // 模拟 SDK 推 agent_end 让 taskDone resolve
+        for (const l of listeners) l({ type: "agent_end" });
+        session._resolvePrompt?.();
+      }),
+      dispose: vi.fn(),
+      _resolvePrompt: undefined as undefined | (() => void),
+    } as unknown as {
+      sessionFile: string;
+      subscribe: ReturnType<typeof vi.fn>;
+      prompt: ReturnType<typeof vi.fn>;
+      abort: ReturnType<typeof vi.fn>;
+      dispose: ReturnType<typeof vi.fn>;
+      _resolvePrompt?: () => void;
+    };
+    const pushParentEvent = vi.fn();
+    const deps: RunSubagentBatchDeps = {
+      parentAgentId: "abort-parent",
+      provider: "test",
+      modelId: "test",
+      cwd: "/tmp",
+      createChild: vi.fn(async () => ({
+        id: "abort-child",
+        sessionId: "session-abort",
+        sessionFile: "/tmp/abort-child.jsonl",
+      })),
+      getChild: () => ({ id: "abort-child", session }),
+      disposeChild: vi.fn(),
+      pushParentEvent,
+    };
+
+    const runPromise = runSubagentBatch(deps, {
+      reason: "long running task",
+      tasks: [
+        {
+          id: "long",
+          title: "Long task",
+          prompt: "hang here",
+          allowedTools: [],
+        },
+      ],
+    });
+
+    // 等 task 进入 running
+    await new Promise((r) => setTimeout(r, 50));
+
+    // 触发 abort 并验证同步 push 行为
+    await abortRunningSubagentBatches(
+      "abort-parent",
+      () => ({ id: "abort-child", session }),
+      pushParentEvent
+    );
+
+    // 等 runPromise 收尾（worker 内部的 finally / catch 会再 push 一次）
+    await runPromise;
+
+    const taskEnds = pushParentEvent.mock.calls
+      .map((c) => c[0])
+      .filter(
+        (e) => e.type === "subagent_task_end" && e.taskId === "long"
+      );
+    const batchEnds = pushParentEvent.mock.calls
+      .map((c) => c[0])
+      .filter((e) => e.type === "subagent_batch_end");
+    expect(taskEnds.length).toBeGreaterThanOrEqual(1);
+    expect(taskEnds[0].status).toBe("aborted");
+    // A2-1：batch_end 仅推一次（abort 路径设上 endedPushed，worker fn finally 跳过）。
+    expect(batchEnds).toHaveLength(1);
+    expect(batchEnds[0].status).toBe("aborted");
+
+    const batch = getBatch(taskEnds[0].batchId);
+    expect(batch?.status).toBe("aborted");
+    expect(batch?.tasks[0].status).toBe("aborted");
+    expect(batch?.tasks[0].verification?.status).toBeDefined();
+  });
+});
+
+describe("subagent store hydrate downgrade (C9-1)", () => {
+  it("重启后 status===running 的 batch 降级为 detached，未终态 task 转 aborted", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "diga-agent-hydrate-"));
+    try {
+      const dir = path.join(root, "subagents", "batches");
+      mkdirSync(dir, { recursive: true });
+      const onDisk = {
+        id: "b-running",
+        parentAgentId: "p-1",
+        parentSessionPath: "/tmp/p.jsonl",
+        status: "running",
+        reason: "stale running batch",
+        tasks: [
+          {
+            id: "t-running",
+            title: "T running",
+            prompt: "still running",
+            status: "running",
+          },
+          {
+            id: "t-pending",
+            title: "T pending",
+            prompt: "never started",
+            status: "pending",
+          },
+          {
+            id: "t-done",
+            title: "T done",
+            prompt: "already completed",
+            status: "completed",
+            answer: "ok",
+          },
+        ],
+        createdAt: 1,
+      };
+      writeFileSync(
+        path.join(dir, `${onDisk.id}.json`),
+        JSON.stringify(onDisk),
+        "utf8"
+      );
+      __setSubagentStoreRootForTest(root);
+      // 触发 hydrate
+      const batch = getBatch(onDisk.id);
+      expect(batch?.status).toBe("detached");
+      expect(batch?.endedAt).toBeGreaterThan(0);
+      const byId = new Map(batch!.tasks.map((t) => [t.id, t]));
+      expect(byId.get("t-running")?.status).toBe("aborted");
+      expect(byId.get("t-pending")?.status).toBe("aborted");
+      expect(byId.get("t-done")?.status).toBe("completed");
+      expect(byId.get("t-running")?.error ?? "").toMatch(/restart/i);
     } finally {
       __setSubagentStoreRootForTest(null);
       rmSync(root, { recursive: true, force: true });
