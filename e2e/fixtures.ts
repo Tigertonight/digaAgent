@@ -81,10 +81,12 @@ export async function installApiFixtures(
         parentSessionId?: string | null;
       }>;
       __mockAgentCounter: number;
+      __lastAgentNewBody?: unknown;
       __E2E__: boolean;
     };
     w.__mockSessions = [];
     w.__mockAgentCounter = 0;
+    w.__lastAgentNewBody = undefined;
     w.__E2E__ = true; // 让 ChatApp 挂诊断钩子到 window.__chatAppDiag
   });
 
@@ -294,9 +296,16 @@ export async function installApiFixtures(
     // === Agent 创建：每次返回一个递增 fakeId + sessionFile ===
     //   并把对应的 session row push 进 __mockSessions，让 sidebar refresh 后能看到
     if (pathname.endsWith("/api/agent/new") && method === "POST") {
-      const created = await page.evaluate(() => {
+      let requestBody: unknown = {};
+      try {
+        requestBody = route.request().postDataJSON();
+      } catch {
+        requestBody = {};
+      }
+      const created = await page.evaluate((body) => {
         const w = window as unknown as {
           __mockAgentCounter: number;
+          __lastAgentNewBody?: unknown;
           __mockSessions: Array<{
             id: string;
             path: string;
@@ -306,6 +315,7 @@ export async function installApiFixtures(
             modified: string;
           }>;
         };
+        w.__lastAgentNewBody = body;
         w.__mockAgentCounter += 1;
         const c = w.__mockAgentCounter;
         const sessionId = `00000000-0000-0000-0000-${String(c).padStart(12, "0")}`;
@@ -319,7 +329,7 @@ export async function installApiFixtures(
           modified: new Date().toISOString(),
         });
         return { id: `agent-${c}`, sessionId, sessionFile };
-      });
+      }, requestBody);
       return route.fulfill({
         json: {
           ...created,

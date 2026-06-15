@@ -183,6 +183,125 @@ test("sidebar: session more menu opens actions and rename remains clickable", as
   await expect(page.locator('input[value="Session 1"]')).toBeVisible();
 });
 
+test("New chat 只切到空草稿,发送时才创建后端 session", async ({
+  bootedPage: page,
+}) => {
+  const before = await page.evaluate(() => {
+    const w = window as unknown as { __mockAgentCounter: number };
+    return w.__mockAgentCounter;
+  });
+
+  await newChatBtn(page).click();
+  await expect(editor(page)).toHaveValue("");
+  await expect(page.getByLabel("滚动到底部")).not.toBeVisible();
+  expect(await activeKey(page)).toBe("draft");
+
+  const afterClick = await page.evaluate(() => {
+    const w = window as unknown as { __mockAgentCounter: number };
+    return w.__mockAgentCounter;
+  });
+  expect(afterClick).toBe(before);
+
+  const { aid, key } = await startSessionWith(page, "create on first send");
+  expect(aid).toBe(`agent-${before + 1}`);
+  expect(key).not.toBe("draft");
+});
+
+test("空 session 状态下直接发送会新建 session,不续接旧 sessionPath", async ({
+  bootedPage: page,
+}) => {
+  expect(await activeKey(page)).toBe("draft");
+
+  const { key } = await startSessionWith(page, "first message from empty state");
+  expect(key).not.toBe("draft");
+
+  const body = await page.evaluate(() => {
+    const w = window as unknown as { __lastAgentNewBody?: Record<string, unknown> };
+    return w.__lastAgentNewBody ?? null;
+  });
+  expect(body).toMatchObject({
+    provider: "openai-codex",
+    modelId: "gpt-5.5",
+    cwd: "/tmp/e2e-cwd",
+  });
+  expect(body).not.toHaveProperty("sessionPath");
+});
+
+test("session 列表被外部清空后,右侧同步回到空草稿", async ({
+  bootedPage: page,
+}) => {
+  const prompt = "message before external clear";
+  const staleText = "stale right pane content";
+  const { aid, key } = await startSessionWith(page, prompt);
+  expect(key).not.toBe("draft");
+  await pushAssistantStart(page, aid);
+  await pushTextDelta(page, aid, staleText, 3);
+  await expect(page.getByText(staleText)).toBeVisible();
+
+  await page.evaluate(() => {
+    const w = window as unknown as { __mockSessions: unknown[] };
+    w.__mockSessions = [];
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+
+  await expect(page.getByText("暂无会话。点击 + New 开始。")).toBeVisible();
+  await expect(page.getByText(staleText)).not.toBeVisible();
+  await expect(editor(page)).toHaveValue("");
+  expect(await activeKey(page)).toBe("draft");
+});
+
+test("切换历史 session 拉取上下文时显示 loading,不闪新会话空态", async ({
+  page,
+}) => {
+  const modified = "2026-06-11T09:00:00.000Z";
+  await installSseMock(page);
+  await installApiFixtures(page, {
+    sessionsResponse: {
+      sessions: [
+        {
+          id: "session-loading",
+          path: "/tmp/e2e-sessions/session-loading.jsonl",
+          cwd: "/tmp/e2e-cwd",
+          name: "Session loading",
+          firstMessage: "Session loading",
+          modified,
+          messageCount: 1,
+        },
+      ],
+    },
+  });
+
+  let releaseContext!: () => void;
+  const contextReady = new Promise<void>((resolve) => {
+    releaseContext = resolve;
+  });
+  await page.route("**/api/sessions/session-loading/context", async (route) => {
+    await contextReady;
+    return route.fulfill({
+      json: {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "loaded historical message" }],
+            timestamp: Date.parse(modified),
+          },
+        ],
+        forkableUserMessages: [],
+      },
+    });
+  });
+
+  await page.goto("/?e2e=1");
+  await expect(page.getByText("Session loading")).toBeVisible();
+
+  await page.getByRole("button", { name: /Session loading/ }).first().click();
+  await expect(page.getByText("Loading Session loading")).toBeVisible();
+  await expect(page.getByText("loaded historical message")).not.toBeVisible();
+
+  releaseContext();
+  await expect(page.getByText("loaded historical message")).toBeVisible();
+});
+
 // ---------- 场景 1 ----------
 test("场景 1: A 流式中切到 B,B 输入框可以独立打字", async ({
   bootedPage: page,

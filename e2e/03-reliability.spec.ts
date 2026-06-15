@@ -56,7 +56,7 @@ test("reliability: pending approval 可通过 snapshot 恢复为审批气泡", a
   await expect(page.getByText("rm -rf /tmp/e2e-danger")).toBeVisible();
 });
 
-test("reliability: 桌面端首次 SSE attach 只监听最新事件", async ({
+test("reliability: 桌面端首次 SSE attach 从头回放避免漏掉刚发送的 user message", async ({
   bootedPage: page,
 }) => {
   await editor(page).fill("check first sse cursor");
@@ -72,7 +72,7 @@ test("reliability: 桌面端首次 SSE attach 只监听最新事件", async ({
       .find((h) => h.readyState === 1)?.url;
   });
 
-  expect(latestOpenUrl).toContain("since=latest");
+  expect(latestOpenUrl).toContain("since=-1");
 });
 
 test("reliability: pending clarification 可恢复并提交推荐项", async ({
