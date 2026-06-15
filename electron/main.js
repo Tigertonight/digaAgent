@@ -29,6 +29,9 @@ const http = require("node:http");
 const crypto = require("node:crypto");
 const settingsModule = require("./settings");
 const updaterModule = require("./updater");
+const securityPolicy = require("./security-policy");
+const diagLogger = require("./diag-logger");
+const diagCollector = require("./diag-collector");
 
 const DEV = process.env.ELECTRON_DEV === "1";
 const DEV_URL = process.env.ELECTRON_DEV_URL || "http://localhost:3000";
@@ -359,17 +362,46 @@ function createTray() {
 }
 
 function attachWindowDiagnostics(win, label) {
-  if (!DEV) return;
+  // Diag-1：生产也要订阅，以便“白屏 / chunk 加载失败 / renderer 崩溃”进入 diag
+  // ring buffer 并能在“导出诊断信息”里看到。
   win.webContents.on(
     "did-fail-load",
     (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-      console.warn(
-        `[electron:${label}:did-fail-load] ${errorCode} ${errorDescription} ${validatedURL} mainFrame=${isMainFrame}`
-      );
+      const line = `[${label}:did-fail-load] code=${errorCode} desc=${errorDescription} url=${validatedURL} mainFrame=${isMainFrame}`;
+      console.warn("[electron]", line);
+      try {
+        diagLogger.logDiag("warn", "renderer", line);
+      } catch {
+        /* ignore */
+      }
     }
   );
   win.webContents.on("render-process-gone", (_event, details) => {
-    console.warn(`[electron:${label}:render-process-gone]`, details);
+    const line = `[${label}:render-process-gone] reason=${details && details.reason} exitCode=${details && details.exitCode}`;
+    console.warn("[electron]", line);
+    try {
+      diagLogger.logDiag("error", "renderer", line);
+    } catch {
+      /* ignore */
+    }
+  });
+  win.webContents.on("unresponsive", () => {
+    const line = `[${label}:unresponsive]`;
+    console.warn("[electron]", line);
+    try {
+      diagLogger.logDiag("warn", "renderer", line);
+    } catch {
+      /* ignore */
+    }
+  });
+  win.webContents.on("console-message", (_event, level, message, _line, sourceId) => {
+    // 只抓 error 级别的 renderer console，避免震荡 ring buffer。level: 0=verbose 1=info 2=warning 3=error
+    if (level !== 3) return;
+    try {
+      diagLogger.logDiag("error", "renderer", `[${label}] ${message} (${sourceId || ""})`);
+    } catch {
+      /* ignore */
+    }
   });
 }
 
@@ -447,10 +479,14 @@ async function startStandaloneServer() {
   }
 
   // 走 wrapper：parent 死了它会自杀（防 Electron 被 SIGKILL 时留孤儿）
+  // 从“stdio: inherit”改为“pipe”，让 diagLogger 能记下 server 子进程的 stdout/stderr；
+  // 这是诊断包中“server 启动失败”问题唯一可靠的证据源。
+  // 同时原艸 inherit 会拍到 Console.app，TUI 调试不交互。
   serverChild = fork(wrapperFile, [], {
     env: mergedEnv,
-    stdio: ["ignore", "inherit", "inherit", "ipc"],
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
+  diagLogger.attachChildProcess(serverChild, "server");
 
   serverChild.on("exit", (code, signal) => {
     console.log(`[electron] server exited code=${code} signal=${signal}`);
@@ -497,11 +533,47 @@ async function startStandaloneServer() {
 function registerWebviewPocIpc() {
   const { webContents } = require("electron");
 
-  /** 拿到 webview 的 webContents（前端传 getWebContentsId() 的返回值） */
-  function getWebviewContents(webContentsId) {
+  /**
+   * 校验 IPC sender 是主窗口 / 设置窗 / 宠物窗之一，不接受未知 webContents
+   * （例如被嵌入 <webview> 中的页面伪造 IPC，虽然 contextIsolation 下
+   * 极不可能，但多一道门锁不赔）。
+   */
+  function assertSenderIsAppWindow(sender) {
+    const known = [mainWin, settingsWin, petWin]
+      .filter(Boolean)
+      .map((win) => win.webContents.id);
+    if (!known.includes(sender.id)) {
+      throw new Error(
+        `webviewPoc IPC rejected: sender ${sender.id} is not a known app window`
+      );
+    }
+  }
+
+  /**
+   * 拿到 webview 的 webContents。狭化点（fix-S2.b）：
+   *   - 必须存在且未销毁
+   *   - type 必须是 "webview"——避免调用方传入主窗口 / 设置窗
+   *     的 webContentsId 后越权控制。
+   *   - hostWebContents 必须是 sender。防 A 窗口拿 B 窗口下的 webview。
+   */
+  function getWebviewContents(sender, webContentsId) {
     const wc = webContents.fromId(webContentsId);
     if (!wc || wc.isDestroyed()) {
       throw new Error(`webview webContents not found: ${webContentsId}`);
+    }
+    if (wc.getType() !== "webview") {
+      throw new Error(
+        `webviewPoc IPC rejected: target is type=${wc.getType()}, expected webview`
+      );
+    }
+    if (
+      wc.hostWebContents &&
+      sender &&
+      wc.hostWebContents.id !== sender.id
+    ) {
+      throw new Error(
+        "webviewPoc IPC rejected: webview does not belong to caller window"
+      );
     }
     return wc;
   }
@@ -514,8 +586,9 @@ function registerWebviewPocIpc() {
   }
 
   // attach debugger 到指定 webview，验证 CDP 通道可用
-  ipcMain.handle("webviewPoc:attach", async (_e, webContentsId) => {
-    const wc = getWebviewContents(webContentsId);
+  ipcMain.handle("webviewPoc:attach", async (e, webContentsId) => {
+    assertSenderIsAppWindow(e.sender);
+    const wc = getWebviewContents(e.sender, webContentsId);
     ensureDebuggerAttached(wc);
     // 启用核心 CDP domain，验证命令可下发
     await wc.debugger.sendCommand("Page.enable");
@@ -525,8 +598,9 @@ function registerWebviewPocIpc() {
   });
 
   // 通过 CDP 导航（区别于 webview.src，验证 agent 可主动驱动导航）
-  ipcMain.handle("webviewPoc:navigate", async (_e, webContentsId, url) => {
-    const wc = getWebviewContents(webContentsId);
+  ipcMain.handle("webviewPoc:navigate", async (e, webContentsId, url) => {
+    assertSenderIsAppWindow(e.sender);
+    const wc = getWebviewContents(e.sender, webContentsId);
     ensureDebuggerAttached(wc);
     try {
       await wc.debugger.sendCommand("Page.navigate", { url });
@@ -542,8 +616,9 @@ function registerWebviewPocIpc() {
   });
 
   // 取页面标题/URL（验证 DOM/Runtime 读取链路）
-  ipcMain.handle("webviewPoc:inspect", async (_e, webContentsId) => {
-    const wc = getWebviewContents(webContentsId);
+  ipcMain.handle("webviewPoc:inspect", async (e, webContentsId) => {
+    assertSenderIsAppWindow(e.sender);
+    const wc = getWebviewContents(e.sender, webContentsId);
     ensureDebuggerAttached(wc);
     const titleEval = await wc.debugger.sendCommand("Runtime.evaluate", {
       expression: "document.title",
@@ -561,8 +636,9 @@ function registerWebviewPocIpc() {
   });
 
   // CDP 截图（验证画面采集；对比 screencast，这里是按需单帧）
-  ipcMain.handle("webviewPoc:screenshot", async (_e, webContentsId) => {
-    const wc = getWebviewContents(webContentsId);
+  ipcMain.handle("webviewPoc:screenshot", async (e, webContentsId) => {
+    assertSenderIsAppWindow(e.sender);
+    const wc = getWebviewContents(e.sender, webContentsId);
     const image = await Promise.race([
       wc.capturePage(),
       new Promise((_, reject) =>
@@ -576,8 +652,9 @@ function registerWebviewPocIpc() {
   });
 
   // CDP 坐标点击（验证 agent 操控链路：Input.dispatchMouseEvent）
-  ipcMain.handle("webviewPoc:click", async (_e, webContentsId, x, y) => {
-    const wc = getWebviewContents(webContentsId);
+  ipcMain.handle("webviewPoc:click", async (e, webContentsId, x, y) => {
+    assertSenderIsAppWindow(e.sender);
+    const wc = getWebviewContents(e.sender, webContentsId);
     ensureDebuggerAttached(wc);
     const base = { x, y, button: "left", clickCount: 1 };
     await wc.debugger.sendCommand("Input.dispatchMouseEvent", {
@@ -592,9 +669,16 @@ function registerWebviewPocIpc() {
   });
 
   // detach（清理）
-  ipcMain.handle("webviewPoc:detach", async (_e, webContentsId) => {
+  ipcMain.handle("webviewPoc:detach", async (e, webContentsId) => {
+    assertSenderIsAppWindow(e.sender);
     const wc = webContents.fromId(webContentsId);
-    if (wc && !wc.isDestroyed() && wc.debugger.isAttached()) {
+    if (
+      wc &&
+      !wc.isDestroyed() &&
+      wc.getType() === "webview" &&
+      wc.hostWebContents?.id === e.sender.id &&
+      wc.debugger.isAttached()
+    ) {
       wc.debugger.detach();
     }
     return { ok: true };
@@ -624,7 +708,28 @@ function registerIpc() {
   }));
 
   ipcMain.handle("app:getApiBase", () => apiBase || DEV_URL);
-  ipcMain.handle("app:getLocalSecret", () => localSessionSecret);
+  // 注意：app:getLocalSecret 已被移除。renderer 不该拿到明文 secret
+  // ——避免 XSS / webview / 二方脚本事后拿去调鉴权接口。
+  // 必须带 secret 的 same-origin fetch，由 webRequest.onBeforeSendHeaders 自动注入。
+
+  // 诊断信息导出：renderer 点“导出诊断信息”按钮时会调。
+  // 主进程负责 collect + dialog，避免 renderer 接触 fs / dialog。
+  // Diag-2：renderer 可传一份 snapshot（location.href / providers 数 / window.errorCount 等）
+  // 会被 merge 到 JSON 的 .renderer 字段。
+  ipcMain.handle("diag:export", async (_e, rendererSnapshot) => {
+    await exportDiagnosticsInteractive(
+      sanitizeRendererSnapshot(rendererSnapshot)
+    );
+    return { ok: true };
+  });
+  ipcMain.handle("diag:collect", async (_e, rendererSnapshot) => {
+    return diagCollector.collectDiagnostics({
+      app,
+      apiBase,
+      localSecret: localSessionSecret,
+      renderer: sanitizeRendererSnapshot(rendererSnapshot),
+    });
+  });
 
   ipcMain.handle("deps:cloudflaredStatus", () => {
     const cloudflaredPath = resolveCloudflaredPath();
@@ -1140,6 +1245,11 @@ function buildAppMenu() {
       role: "help",
       submenu: [
         {
+          label: "导出诊断信息…",
+          click: () => void exportDiagnosticsInteractive(),
+        },
+        { type: "separator" },
+        {
           label: "Learn More",
           click: () =>
             void shell.openExternal(
@@ -1152,7 +1262,235 @@ function buildAppMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+/**
+ * 导出诊断包：弹保存对话框 → collectDiagnostics → 写 JSON → 在 Finder 里选中。
+ * 使用“随时可调”的全局函数（这里定义）× menu 菜单 + IPC + 设置页。
+ */
+// sanitizeRendererSnapshot 抽到 diag-collector，这里重导以便复用。
+const sanitizeRendererSnapshot = diagCollector.sanitizeRendererSnapshot;
+
+async function exportDiagnosticsInteractive(rendererSnapshot) {
+  try {
+    const data = await diagCollector.collectDiagnostics({
+      app,
+      apiBase,
+      localSecret: localSessionSecret,
+      renderer: rendererSnapshot || null,
+    });
+    const ts = new Date()
+      .toISOString()
+      .replace(/[:.]/g, "-")
+      .replace("T", "_")
+      .slice(0, 19);
+    const defaultName = `diga-agent-diagnostics-${ts}.json`;
+    const owner = getPrimaryMainWindow();
+    const result = await dialog.showSaveDialog(owner || undefined, {
+      title: "导出诊断信息",
+      defaultPath: path.join(app.getPath("downloads"), defaultName),
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (result.canceled || !result.filePath) return;
+    fs.writeFileSync(result.filePath, JSON.stringify(data, null, 2), "utf8");
+    // 在 Finder 里选中该文件。
+    shell.showItemInFolder(result.filePath);
+  } catch (e) {
+    console.error("[diag] exportDiagnosticsInteractive failed:", e);
+    try {
+      await dialog.showMessageBox({
+        type: "error",
+        message: "导出诊断失败",
+        detail: (e && e.message) || String(e),
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/**
+ * Sx-1：启动失败时弹窗，避免“双击闪退”静默失败。
+ *
+ * 可能原因：
+ *  - standalone server 起不来（port 被占 / asar 文件损坏 / native module 不兼容）
+ *  - keytar 被系统拒权
+ *  - 首次启动名下目录不可写
+ *
+ * 提供三个出口：导出诊断信息 / 打开日志目录 / 退出。
+ */
+async function showStartupFailureDialog(error) {
+  try {
+    const message = (error && error.message) || String(error);
+    const logPath = diagLogger.getLogFilePath() || "(unknown)";
+    const userData = (() => {
+      try {
+        return app.getPath("userData");
+      } catch {
+        return "(unknown)";
+      }
+    })();
+    const result = await dialog.showMessageBox({
+      type: "error",
+      title: "Diga Agent 启动失败",
+      message: "Diga Agent 无法启动。",
+      detail:
+        `错误：${message}\n\n` +
+        `日志路径：${logPath}\n` +
+        `配置目录：${userData}\n\n` +
+        "可以导出诊断信息发给我们定位问题。",
+      buttons: ["导出诊断信息…", "打开日志文件夹", "退出"],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true,
+    });
+    if (result.response === 0) {
+      // 诊断信息导出。注意：apiBase 可能为 null，diag-collector 会跳过 HTTP probe。
+      try {
+        const data = await diagCollector.collectDiagnostics({
+          app,
+          apiBase,
+          localSecret: localSessionSecret,
+        });
+        const ts = new Date()
+          .toISOString()
+          .replace(/[:.]/g, "-")
+          .replace("T", "_")
+          .slice(0, 19);
+        const target = path.join(
+          app.getPath("downloads"),
+          `diga-agent-startup-failure-${ts}.json`
+        );
+        fs.writeFileSync(target, JSON.stringify(data, null, 2), "utf8");
+        shell.showItemInFolder(target);
+      } catch (e) {
+        console.error("[diag] save startup-failure JSON failed:", e);
+      }
+    } else if (result.response === 1) {
+      try {
+        if (logPath && logPath !== "(unknown)") {
+          shell.showItemInFolder(logPath);
+        } else if (userData !== "(unknown)") {
+          shell.openPath(userData);
+        }
+      } catch (e) {
+        console.error("[diag] open log folder failed:", e);
+      }
+    }
+  } catch (e) {
+    console.error("[diag] showStartupFailureDialog itself failed:", e);
+  }
+}
+
+/**
+ * Electron 全局 web-contents 安全守守（fix-S2.b）。
+ *
+ * webPreferences.webviewTag 在主窗口被打开，以受控方式使用 webview 容器。
+ * 默认 attach 行为会从 <webview> 标签读任意 attribute（包括 nodeIntegration
+ * / preload）。这里接管 will-attach-webview，强制设为最严隔离、创除一切
+ * 能提权的 webPreferences，并且拒绝任意 preload。
+ *
+ * 另外拦 setWindowOpenHandler / will-navigate / setPermissionRequestHandler，
+ * 避免页内脚本诱导主进程跳出受信 origin 或伸请传感器权限。
+ */
+function installWebviewSecurityGuards() {
+  app.on("web-contents-created", (_event, contents) => {
+    contents.on("will-attach-webview", (event, webPreferences, params) => {
+      // 默认 sandbox + contextIsolation + nodeIntegration off + 删 preload
+      webPreferences.contextIsolation = true;
+      webPreferences.sandbox = true;
+      webPreferences.nodeIntegration = false;
+      webPreferences.nodeIntegrationInWorker = false;
+      webPreferences.nodeIntegrationInSubFrames = false;
+      webPreferences.webSecurity = true;
+      webPreferences.allowRunningInsecureContent = false;
+      webPreferences.experimentalFeatures = false;
+      delete webPreferences.preload;
+      delete webPreferences.preloadURL;
+      // params 是 <webview> 标签上用户设的 attributes，同样要狭化。
+      params.nodeintegration = false;
+      params.allowpopups = false;
+      params.disablewebsecurity = false;
+
+      // A4-3：src 协议白名单。限 http/https + about:blank；拒绝 file://、chrome://、
+      // javascript:、data: 等能读本地资源或执行脚本的协议。
+      const verdict = securityPolicy.isAllowedWebviewSrc(params.src);
+      if (!verdict.ok) {
+        console.warn(
+          `[security] webview attach denied (${verdict.reason}): src=${params.src}`
+        );
+        event.preventDefault();
+      }
+    });
+
+    // A4-3：webview 运行期内部跳转也走同一套协议白名单，避免页内脚本
+    // 在被 attach 之后用 location.href = "file://..." 跳出。
+    contents.on("did-attach-webview", (_e, wc) => {
+      wc.on("will-navigate", (navEvent, url) => {
+        const v = securityPolicy.isAllowedWebviewSrc(url);
+        if (!v.ok) {
+          console.warn(
+            `[security] webview navigation denied (${v.reason}): url=${url}`
+          );
+          navEvent.preventDefault();
+        }
+      });
+    });
+
+    // 遵循 shell.openExternal 路线处理外链；webview/iframe 不允许主窗口
+    // 被诱导跳走。
+    contents.setWindowOpenHandler(({ url }) => {
+      try {
+        const protocol = new URL(url).protocol;
+        if (protocol === "http:" || protocol === "https:") {
+          shell.openExternal(url);
+        }
+      } catch {
+        // ignore malformed URL
+      }
+      return { action: "deny" };
+    });
+
+    // 限制主窗口 will-navigate 只能留在已知 origin（apiBase / DEV_URL）以内。
+    // webview 本身会走自己的导航事件，不受此限制。
+    contents.on("will-navigate", (event, url) => {
+      if (contents.getType() !== "window") return;
+      try {
+        const target = new URL(url);
+        const allowed = [apiBase, DEV_URL].filter(Boolean).map((b) => new URL(b));
+        const ok = allowed.some(
+          (base) =>
+            target.protocol === base.protocol &&
+            target.hostname === base.hostname &&
+            target.port === base.port
+        );
+        if (!ok) {
+          event.preventDefault();
+          shell.openExternal(url);
+        }
+      } catch {
+        event.preventDefault();
+      }
+    });
+
+    // 默认拒绝高风险权限请求（地理位置 / 摄像头 / 麦克风等）。
+    contents.session?.setPermissionRequestHandler?.((_wc, permission, callback) => {
+      const allowList = new Set(["clipboard-read", "clipboard-sanitized-write"]);
+      callback(allowList.has(permission));
+    });
+  });
+}
+
 app.whenReady().then(async () => {
+  // 优先初始化诊断日志：越早 hook console、越早可以“启动阶段诊断”
+  // （后续任何 console.log 会一起入环形缓冲）。
+  try {
+    diagLogger.initDiagLogger({
+      userDataDir: app.getPath("userData"),
+    });
+  } catch (e) {
+    // 不阻塞启动
+    process.stderr.write(`[diag] init failed: ${e && e.message}\n`);
+  }
+  installWebviewSecurityGuards();
   registerIpc();
   installLocalSecretHeaderHook();
   buildAppMenu();
@@ -1174,6 +1512,7 @@ app.whenReady().then(async () => {
     await createWindow();
   } catch (e) {
     console.error("[electron] failed to start:", e);
+    await showStartupFailureDialog(e);
     app.quit();
   }
 

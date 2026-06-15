@@ -30,7 +30,8 @@ contextBridge.exposeInMainWorld("digaAgent", {
 
   /** standalone server 的真实 URL（留作未来给 main 进程内部用，renderer 不需要） */
   getApiBase: () => ipcRenderer.invoke("app:getApiBase"),
-  getLocalSecret: () => ipcRenderer.invoke("app:getLocalSecret"),
+  // 注意：getLocalSecret 已移除。renderer 不应该拿到 secret 明文。
+  // same-origin fetch 由主进程 onBeforeSendHeaders 自动注入 x-diga-agent-local-secret。
 
   dependencies: {
     getCloudflaredStatus: () =>
@@ -63,6 +64,16 @@ contextBridge.exposeInMainWorld("digaAgent", {
 
   /** 用系统默认浏览器打开 URL（用于外链） */
   openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
+
+  /* ---- Diag-2：诊断信息（可选附带 renderer 状态） ---- */
+  diag: {
+    /** 弹保存对话框写 JSON。可选传 rendererSnapshot 把 renderer 状态合并进去。 */
+    exportInteractive: (rendererSnapshot) =>
+      ipcRenderer.invoke("diag:export", rendererSnapshot ?? null),
+    /** 直接拿 JSON 对象，不弹窗（renderer 自定义“复制到剪贴板”体验时用）。 */
+    collect: (rendererSnapshot) =>
+      ipcRenderer.invoke("diag:collect", rendererSnapshot ?? null),
+  },
 
   /* ---- [PoC] webview 容器方案验证：CDP 控制 <webview> ---- */
   webviewPoc: {
