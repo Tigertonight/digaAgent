@@ -70,16 +70,16 @@ export type BudgetDimension = "cost" | "turns" | "duration";
 
 /**
  * 默认的全局 budget。
- * 选值理由见 RFC-2 §3.2.1：
- *   - $5：一杯咖啡，符合"快任务" sense
- *   - 30 turn：经验值，超过通常意味着 agent 陷入循环
- *   - 600 sec（10 分钟）：用户离开屏幕的常见时长
- *   - pause：给用户选择，比直接停温柔
+ *
+ * 修正（B1）：默认不限流。历史原因这里写过 $5 / 30 turns / 600s，
+ * 但项目没有服务端持久化，localStorage 丢失后会被重置为默认限流，
+ * 用户看起来就是“不能设”。现在默认全 undefined，action 仅决定命中后是否
+ * 弹窗；是否启用限流交由用户在 settings 里明确选择。
  */
 export const DEFAULT_BUDGET: SessionBudget = {
-  maxCostUsd: 5.0,
-  maxTurns: 30,
-  maxDurationSec: 600,
+  maxCostUsd: undefined,
+  maxTurns: undefined,
+  maxDurationSec: undefined,
   action: "pause",
 };
 

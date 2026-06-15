@@ -29,11 +29,12 @@ export interface BudgetExceededModalProps {
   trigger: BudgetTrigger | null;
   onClose: () => void;
   /**
-   * 用户点"提高上限并继续"。父级负责：
+   * B4：用户点“提高上限并恢复”。父级负责：
    *   - 把当前 budget 各维度 × 2 写入 session override
-   *   - 决定是否要重新触发一次 send（Phase A 暂不自动续发，仅放开上限）
+   *   - 主动 goal_resume 及发一条“请继续” prompt，避免“点了但卡住”体感。
+   * 返回 Promise，modal 不需要等 — 只是选择接受 async handler。
    */
-  onRaiseAndContinue: (trigger: BudgetTrigger) => void;
+  onRaiseAndContinue: (trigger: BudgetTrigger) => void | Promise<void>;
 }
 
 export function BudgetExceededModal({
@@ -64,13 +65,13 @@ export function BudgetExceededModal({
           style={{ borderColor: "var(--border-soft)" }}
         >
           <h2 className="text-token-body font-semibold" style={{ color: "var(--color-danger)" }}>
-            Budget 已触发，会话已暂停
+            预算已触发，本轮任务已中止
           </h2>
         </div>
 
         <div className="px-4 py-3 text-token-ui leading-relaxed">
           <p style={{ color: "var(--text-muted)" }}>
-            本会话命中了以下 Budget 维度，已自动 abort：
+            本会话命中了以下预算维度，上一轮任务已中止：
           </p>
           <ul className="mt-2 ml-3 list-disc">
             {triggered.map((d) => (
@@ -94,8 +95,9 @@ export function BudgetExceededModal({
             className="mt-3 text-token-sm"
             style={{ color: "var(--text-muted)" }}
           >
-            选择「提高上限并继续」会把当前 Budget 各维度 × 2 写入本会话的临时 override，
-            再次发送时生效；选择「关闭」则保持暂停，可在右上角 ⏱ 处查看消耗。
+            点「提高上限并恢复」会把当前预算各维度 × 2 写入本会话临时 override，
+            随后主动发一条「请继续」让 agent 真接上轮任务跑；点「停止」则保持中止，
+            可在右上角 ⏱ 查看消耗。
           </p>
         </div>
 
@@ -109,11 +111,11 @@ export function BudgetExceededModal({
             className="px-3 py-1.5 text-xs rounded border hover:opacity-80"
             style={{ borderColor: "var(--border)" }}
           >
-            关闭
+            停止
           </button>
           <button
             type="button"
-            onClick={() => onRaiseAndContinue(trigger)}
+            onClick={() => void onRaiseAndContinue(trigger)}
             className="px-3 py-1.5 text-xs rounded hover:opacity-80"
             style={{
               background: "var(--accent)",
@@ -121,7 +123,7 @@ export function BudgetExceededModal({
               fontWeight: 500,
             }}
           >
-            提高上限并继续
+            提高上限并恢复
           </button>
         </div>
       </div>

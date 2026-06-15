@@ -1,30 +1,33 @@
 "use client";
 
 /**
- * useBudget —— 会话级 Budget MVP（RFC-2 Phase A2）
+ * useBudget —— 会话级 Budget MVP（RFC-2 Phase A2 / B2 持久化重构）
  *
  * 职责：
- *   - 实时从当前 active runner 读取 spent（cost / turns / duration）
- *   - 解析当前生效的 SessionBudget（session override > global > DEFAULT）
- *   - 输出 BudgetStatus（含 remaining / triggered）供 UI 展示
- *   - 暴露 setBudget / clearOverride 修改入口（Settings 区块 & 单 session override）
+ *   - async 从 /api/budget-settings 加载当前生效的 global budget；写入也走 PATCH。
+ *   - session override 仍走 localStorage（临时、会话级，不打扰服务端）。
+ *   - 一次性 migration：如果 localStorage 里有旧 pi-budget 而服务端还没设置过 budget，
+ *     把它 PATCH 上去再删本地（避免重启后回到 $5/30/600s）。
+ *   - 实时从 active runner 读 spent；evaluateBudget 算 status。
  *
- * 不在本 hook 内的职责：
- *   - 命中阈值后的 abort + Modal 弹出 → Phase A3 单独 hook/组件 处理
- *   - 写入 runStartedAt → 已由 useAgentEvents 在 agent_start/agent_end 处理
+ * 不在本 hook 内：
+ *   - 命中阈值的 abort + Modal → useBudgetEnforcer / BudgetExceededModal。
+ *   - "提高上限并继续" 后的 resume 续发逻辑 → ChatApp。
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RunnerState } from "@/lib/session-runner";
 import {
   DEFAULT_BUDGET,
   evaluateBudget,
   loadSessionOverride,
-  resolveBudget,
-  saveGlobalBudget,
+  normalizeBudget,
   saveSessionOverride,
   clearSessionOverride,
 } from "@/lib/budget";
+import {
+  BUDGET_STORAGE_KEY,
+} from "@/lib/budget/types";
 import type {
   BudgetSpent,
   BudgetStatus,
@@ -32,41 +35,26 @@ import type {
 } from "@/lib/budget/types";
 
 export interface UseBudgetOptions {
-  /** 当前活跃 runner 的快照（由 useRunners 提供） */
   activeSnapshot: RunnerState;
-  /** 当前活跃 agentId（用于 override key）；草稿态可能为 null */
   agentId: string | null;
-  /**
-   * 每 N ms 重算 duration（默认 1000）。
-   * cost/turns 跟 snapshot 变化天然刷新，但 duration 需要 wall-clock tick。
-   */
   durationTickMs?: number;
 }
 
 export interface UseBudgetReturn {
-  /** 当前生效的 budget（已经过 resolveBudget 解析三层优先级） */
   budget: SessionBudget;
-  /** 是否启用了 session override（非 null 即启用） */
   hasOverride: boolean;
-  /** 实时消耗 + remaining + triggered */
   status: BudgetStatus;
-  /** 当前消耗（裸值，方便外部展示） */
   spent: BudgetSpent;
 
-  /** 写全局默认（settings 区块用） */
-  setGlobalBudget: (b: SessionBudget) => void;
-  /** 写当前 session override（要求 agentId 非空） */
+  /**
+   * 写全局默认（持久化到服务端 settings.json）。
+   * async 完成后 hook 自身的 budget state 会被刷新。
+   */
+  setGlobalBudget: (b: SessionBudget) => Promise<void>;
   setSessionOverride: (b: SessionBudget) => void;
-  /** 清当前 session override，回退到全局 */
   clearCurrentOverride: () => void;
 }
 
-/**
- * 从 RunnerState 抽取 BudgetSpent。
- * - cost：runner.stats.cost ?? 0
- * - turns：chatState.messages 里 role === 'user' 的条数
- * - duration：streaming 中按 (now - runStartedAt) 计；非 streaming 视为 0（本轮结束）
- */
 function computeSpent(snapshot: RunnerState, now: number): BudgetSpent {
   const costUsd = snapshot.stats?.cost ?? 0;
   const turns = snapshot.chatState.messages.filter(
@@ -79,30 +67,97 @@ function computeSpent(snapshot: RunnerState, now: number): BudgetSpent {
   return { costUsd, turns, durationSec };
 }
 
+/**
+ * 一次性把 localStorage 里的旧 pi-budget migrate 到服务端。
+ * 只在第一次加载、且服务端 budget 还是 DEFAULT 时跑；跑完不管成败都清掉本地 key。
+ */
+async function migrateLegacyLocalBudget(
+  serverBudget: SessionBudget
+): Promise<SessionBudget> {
+  if (typeof window === "undefined") return serverBudget;
+  const raw = window.localStorage.getItem(BUDGET_STORAGE_KEY);
+  if (!raw) return serverBudget;
+  // 服务端已有非默认 budget → 不覆盖（信任服务端）。
+  const serverIsDefault =
+    serverBudget.maxCostUsd === undefined &&
+    serverBudget.maxTurns === undefined &&
+    serverBudget.maxDurationSec === undefined;
+  try {
+    if (serverIsDefault) {
+      const legacy = normalizeBudget(JSON.parse(raw));
+      const r = await fetch("/api/budget-settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ budget: legacy }),
+      });
+      if (r.ok) {
+        const d = (await r.json()) as { budget?: SessionBudget };
+        window.localStorage.removeItem(BUDGET_STORAGE_KEY);
+        if (d.budget) return normalizeBudget(d.budget);
+      }
+    } else {
+      // 服务端已有，把本地 legacy 删了避免下次再 migrate
+      window.localStorage.removeItem(BUDGET_STORAGE_KEY);
+    }
+  } catch {
+    // migration best-effort
+  }
+  return serverBudget;
+}
+
 export function useBudget(opts: UseBudgetOptions): UseBudgetReturn {
   const { activeSnapshot, agentId, durationTickMs = 1000 } = opts;
 
-  // budget 配置：mount + 每次 agentId 切换 重新解析；
-  // setter 内手动 trigger 一次 reload 来推动 UI。
+  const [globalBudget, setGlobalBudgetState] =
+    useState<SessionBudget>(DEFAULT_BUDGET);
+  const [override, setOverrideState] = useState<SessionBudget | null>(null);
   const [budgetVersion, setBudgetVersion] = useState(0);
-  const [budget, setBudgetState] = useState<SessionBudget>(DEFAULT_BUDGET);
-  const [hasOverride, setHasOverride] = useState(false);
+  const migratedRef = useRef(false);
 
+  // 加载持久化全局 budget（async）。每次 budgetVersion + agentId 变化重新拉。
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await fetch("/api/budget-settings", { cache: "no-store" });
+        if (!r.ok) return;
+        const d = (await r.json()) as { budget?: SessionBudget };
+        if (cancelled || !d.budget) return;
+        let next = normalizeBudget(d.budget);
+        if (!migratedRef.current) {
+          migratedRef.current = true;
+          next = await migrateLegacyLocalBudget(next);
+          if (cancelled) return;
+        }
+        setGlobalBudgetState(next);
+      } catch {
+        // 服务端不可达时退回 DEFAULT_BUDGET（不限流）。
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [budgetVersion]);
+
+  // session override 仍走 localStorage，agent 切换或显式写入时刷新。
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
-      setBudgetState(resolveBudget(agentId));
-      setHasOverride(agentId ? loadSessionOverride(agentId) != null : false);
+      setOverrideState(agentId ? loadSessionOverride(agentId) : null);
     });
     return () => {
       cancelled = true;
     };
   }, [agentId, budgetVersion]);
 
-  // duration tick：仅 streaming 中才订阅 setInterval，省 CPU。
-  // 非 streaming 时 runStartedAt === null，computeSpent 直接返回 0，不依赖 tickNow，
-  // 因此不需要在 streaming 切换时同步 setTickNow（避免 set-state-in-effect 警告）。
+  const budget = useMemo<SessionBudget>(
+    () => override ?? globalBudget,
+    [override, globalBudget]
+  );
+  const hasOverride = override != null;
+
+  // duration tick：仅 streaming 中订阅。
   const [tickNow, setTickNow] = useState<number>(() => Date.now());
   const isStreaming = activeSnapshot.streaming;
   useEffect(() => {
@@ -115,14 +170,25 @@ export function useBudget(opts: UseBudgetOptions): UseBudgetReturn {
     () => computeSpent(activeSnapshot, tickNow),
     [activeSnapshot, tickNow]
   );
-
   const status = useMemo<BudgetStatus>(
     () => evaluateBudget(budget, spent),
     [budget, spent]
   );
 
-  const setGlobalBudget = useCallback((b: SessionBudget) => {
-    saveGlobalBudget(b);
+  const setGlobalBudget = useCallback(async (b: SessionBudget) => {
+    try {
+      const r = await fetch("/api/budget-settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ budget: b }),
+      });
+      if (r.ok) {
+        const d = (await r.json()) as { budget?: SessionBudget };
+        if (d.budget) setGlobalBudgetState(normalizeBudget(d.budget));
+      }
+    } catch {
+      // 服务端不可达时不报错；下一次成功 PATCH 就会同步。
+    }
     setBudgetVersion((v) => v + 1);
   }, []);
 

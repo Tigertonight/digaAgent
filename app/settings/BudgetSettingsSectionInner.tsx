@@ -1,22 +1,16 @@
 "use client";
 
 /**
- * BudgetSettingsSectionInner —— Budget 设置区的纯 CSR 实现（RFC-2 Phase A4）
+ * BudgetSettingsSectionInner —— Budget 设置区的纯 CSR 实现（B2 持久化重构）
  *
- * 设计：
- *   - 仅通过 next/dynamic({ ssr: false }) 加载，因此 useState lazy init 时
- *     window/localStorage 一定可用 ——> 不再需要 useEffect 做 mount 后同步，
- *     从而避免 react-hooks/set-state-in-effect 警告（91 warnings 持平偏好）。
- *   - 三维度均可独立启用 / 禁用（开关 + 数值）；action 单选 pause/stop。
- *   - 没有 Save 按钮：每次合法变更立刻 saveGlobalBudget。
+ * 设计变更：不再读写 localStorage。改成 GET /api/budget-settings 加载、
+ * PATCH 写入。重启 / 升级 / 切 origin / 清浏览器缓存都不会丢。
+ *
+ * 默认 DEFAULT_BUDGET 三维全 undefined（不限流），三个开关默认全关。
  */
 
-import { useCallback, useState } from "react";
-import {
-  DEFAULT_BUDGET,
-  loadGlobalBudget,
-  saveGlobalBudget,
-} from "@/lib/budget";
+import { useCallback, useEffect, useState } from "react";
+import { DEFAULT_BUDGET, normalizeBudget } from "@/lib/budget";
 import type { SessionBudget } from "@/lib/budget/types";
 import { FieldInput } from "@/app/components/DesignPrimitives";
 
@@ -39,24 +33,51 @@ function fromDimState(s: DimState): number | undefined {
   return n;
 }
 
+async function loadBudgetFromServer(): Promise<SessionBudget> {
+  try {
+    const r = await fetch("/api/budget-settings", { cache: "no-store" });
+    if (!r.ok) return DEFAULT_BUDGET;
+    const d = (await r.json()) as { budget?: SessionBudget };
+    return d.budget ? normalizeBudget(d.budget) : DEFAULT_BUDGET;
+  } catch {
+    return DEFAULT_BUDGET;
+  }
+}
+
+async function saveBudgetToServer(budget: SessionBudget): Promise<void> {
+  try {
+    await fetch("/api/budget-settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ budget }),
+    });
+  } catch {
+    // best-effort；下一次成功就会同步
+  }
+}
+
 export default function BudgetSettingsSectionInner() {
-  // 这是纯 CSR 组件（ssr: false 包装），lazy init 时直接读 localStorage。
-  const [cost, setCost] = useState<DimState>(() => {
-    const b = loadGlobalBudget();
-    return toDimState(b.maxCostUsd, DEFAULT_BUDGET.maxCostUsd ?? 5);
-  });
-  const [turns, setTurns] = useState<DimState>(() => {
-    const b = loadGlobalBudget();
-    return toDimState(b.maxTurns, DEFAULT_BUDGET.maxTurns ?? 30);
-  });
-  const [dur, setDur] = useState<DimState>(() => {
-    const b = loadGlobalBudget();
-    return toDimState(b.maxDurationSec, DEFAULT_BUDGET.maxDurationSec ?? 600);
-  });
-  const [action, setAction] = useState<"pause" | "stop">(() => {
-    const b = loadGlobalBudget();
-    return b.action ?? "pause";
-  });
+  // 默认三维都关（不限流）。展示时仍给 input 一个友好的 placeholder 数值。
+  const [cost, setCost] = useState<DimState>({ enabled: false, value: "5" });
+  const [turns, setTurns] = useState<DimState>({ enabled: false, value: "30" });
+  const [dur, setDur] = useState<DimState>({ enabled: false, value: "600" });
+  const [action, setAction] = useState<"pause" | "stop">("pause");
+
+  // mount 时拉服务端值。空 deps：ssr:false 包装 + 单次加载。
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const b = await loadBudgetFromServer();
+      if (cancelled) return;
+      setCost(toDimState(b.maxCostUsd, 5));
+      setTurns(toDimState(b.maxTurns, 30));
+      setDur(toDimState(b.maxDurationSec, 600));
+      setAction(b.action ?? "pause");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const persist = useCallback(
     (next: Partial<{ c: DimState; t: DimState; d: DimState; a: "pause" | "stop" }>) => {
@@ -70,7 +91,7 @@ export default function BudgetSettingsSectionInner() {
         maxDurationSec: fromDimState(d),
         action: a,
       };
-      saveGlobalBudget(budget);
+      void saveBudgetToServer(budget);
     },
     [cost, turns, dur, action]
   );
@@ -79,7 +100,8 @@ export default function BudgetSettingsSectionInner() {
     <section className="mb-6 rounded-token border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-4">
       <h2 className="mb-1 text-token-body font-semibold">任务用量保护</h2>
       <p className="mb-4 text-token-sm text-[color:var(--text-muted)]">
-        防止单次任务消耗过多时间或费用。达到任一启用上限后，会按你的选择暂停或停止。
+        默认不限流；任意启用一项后，达到上限会按下方策略处理。设置存到本机
+        {" "}<code>~/.diga-agent/settings.json</code>，重启不丢。
       </p>
 
       <div className="flex flex-col gap-3 text-token-body">
@@ -186,7 +208,7 @@ export default function BudgetSettingsSectionInner() {
                 persist({ a: "pause" });
               }}
             />
-            <span>暂停并询问我</span>
+            <span>询问我是否提高上限</span>
           </label>
           <label className="flex items-center gap-1.5">
             <input
