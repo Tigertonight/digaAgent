@@ -197,6 +197,10 @@ export const ApprovalBubble = memo(function ApprovalBubble({
    * 仅影响 Allow 路径；Deny 不提供 remember（避免危险的"自动 deny"语义，留 Phase C）。
    */
   const [rememberThisSession, setRememberThisSession] = useState(false);
+  // 体验优化：点下 Allow/Deny 后立即置 disabled，避免双击及“点了但没反应”。
+  // 真正状态仍以 SSE approval_resolved 为准，那一条到达后 part.status 会变为
+  // allowed/denied，本组件上面的分支会接接手渲染，pending UI 被换掉。
+  const [submitting, setSubmitting] = useState(false);
 
   if (part.status === "allowed") {
     return (
@@ -316,29 +320,35 @@ export const ApprovalBubble = memo(function ApprovalBubble({
         <div className="flex gap-2">
           <button
             type="button"
-            onClick={() => onDeny?.(part.toolCallId, "Denied by user.")}
-            className="px-2.5 py-1 rounded text-xs border hover:opacity-80"
+            disabled={submitting}
+            onClick={() => {
+              setSubmitting(true);
+              onDeny?.(part.toolCallId, "Denied by user.");
+            }}
+            className="px-2.5 py-1 rounded text-xs border hover:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed"
             style={{
               borderColor: "var(--border)",
               color: "var(--fg)",
             }}
           >
-            Deny
+            {submitting ? "提交中…" : "Deny"}
           </button>
           <button
             type="button"
-            onClick={() =>
+            disabled={submitting}
+            onClick={() => {
+              setSubmitting(true);
               onApprove?.(
                 part.toolCallId,
                 rememberThisSession && part.ruleId
                   ? { remember: "this-session", ruleId: part.ruleId }
                   : undefined
-              )
-            }
-            className="rounded px-2.5 py-1 text-xs text-[color:var(--color-bg)] hover:opacity-90"
+              );
+            }}
+            className="rounded px-2.5 py-1 text-xs text-[color:var(--color-bg)] hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed"
             style={{ background: "var(--accent)" }}
           >
-            Allow
+            {submitting ? "提交中…" : "Allow"}
           </button>
         </div>
       </div>

@@ -33,6 +33,13 @@ export interface UseApprovalsOptions {
   agentId: string | null;
   /** POST 失败时报错（通常接 setError） */
   onError?: (msg: string) => void;
+  /**
+   * 问题 2 修复的“兑底”路径：approve/deny POST 成功后调一次 refreshSessions。
+   * 正常路径下 sidebar 状态是靠 useAgentEvents 里 approval_resolved SSE 触发的
+   * scheduleRefreshSessions 双入口兑底。这里是“SSE 丢了 / 样本期还没发起”的兑底：
+   * 点完按钮返回 200 就调一次，避免遇到难复现的 “需确认” 快不干净。
+   */
+  refreshSessions?: () => void;
 }
 
 /** B4：approve 的可选项——传 remember 让 server 把 (agentId, ruleId) 加入 session 记忆。 */
@@ -60,7 +67,8 @@ interface PostDecisionBody {
 async function postDecision(
   agentId: string,
   body: PostDecisionBody,
-  onError: ((m: string) => void) | undefined
+  onError: ((m: string) => void) | undefined,
+  onSuccess?: () => void
 ): Promise<void> {
   try {
     const r = await fetch(`/api/agent/${agentId}/approval`, {
@@ -71,14 +79,16 @@ async function postDecision(
     if (!r.ok) {
       const text = await r.text().catch(() => "");
       onError?.(userFacingMessage(text || `HTTP ${r.status}`));
+      return;
     }
+    onSuccess?.();
   } catch (e) {
     onError?.(userFacingMessage(e));
   }
 }
 
 export function useApprovals(opts: UseApprovalsOptions): UseApprovalsReturn {
-  const { agentId, onError } = opts;
+  const { agentId, onError, refreshSessions } = opts;
 
   const loadPending = useCallback<UseApprovalsReturn["loadPending"]>(
     async () => {
@@ -111,10 +121,11 @@ export function useApprovals(opts: UseApprovalsOptions): UseApprovalsReturn {
           remember: approveOpts?.remember,
           ruleId: approveOpts?.ruleId,
         },
-        onError
+        onError,
+        refreshSessions
       );
     },
-    [agentId, onError]
+    [agentId, onError, refreshSessions]
   );
 
   const deny = useCallback<UseApprovalsReturn["deny"]>(
@@ -123,10 +134,11 @@ export function useApprovals(opts: UseApprovalsOptions): UseApprovalsReturn {
       await postDecision(
         agentId,
         { toolCallId, decision: "deny", denyReason },
-        onError
+        onError,
+        refreshSessions
       );
     },
-    [agentId, onError]
+    [agentId, onError, refreshSessions]
   );
 
   return { approve, deny, loadPending };

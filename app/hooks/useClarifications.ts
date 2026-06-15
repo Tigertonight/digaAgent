@@ -7,6 +7,11 @@ import { userFacingMessage } from "@/lib/user-facing-error";
 export interface UseClarificationsOptions {
   agentId: string | null;
   onError?: (msg: string) => void;
+  /**
+   * 问题 2 兑底：choose/respond POST 成功后调一次 refreshSessions，
+   * 避免 SSE clarification_resolved 丢包时 sidebar “需确认” 不消。
+   */
+  refreshSessions?: () => void;
 }
 
 export interface UseClarificationsReturn {
@@ -22,7 +27,8 @@ async function postClarification(
     selectedOptionId?: string;
     customText?: string;
   },
-  onError: ((m: string) => void) | undefined
+  onError: ((m: string) => void) | undefined,
+  onSuccess?: () => void
 ): Promise<void> {
   try {
     const r = await fetch(`/api/agent/${agentId}/clarification`, {
@@ -33,7 +39,9 @@ async function postClarification(
     if (!r.ok) {
       const text = await r.text().catch(() => "");
       onError?.(userFacingMessage(text || `HTTP ${r.status}`));
+      return;
     }
+    onSuccess?.();
   } catch (e) {
     onError?.(userFacingMessage(e));
   }
@@ -42,7 +50,7 @@ async function postClarification(
 export function useClarifications(
   opts: UseClarificationsOptions
 ): UseClarificationsReturn {
-  const { agentId, onError } = opts;
+  const { agentId, onError, refreshSessions } = opts;
 
   const loadPending = useCallback<UseClarificationsReturn["loadPending"]>(
     async () => {
@@ -72,18 +80,24 @@ export function useClarifications(
       await postClarification(
         agentId,
         { requestId, selectedOptionId },
-        onError
+        onError,
+        refreshSessions
       );
     },
-    [agentId, onError]
+    [agentId, onError, refreshSessions]
   );
 
   const respond = useCallback<UseClarificationsReturn["respond"]>(
     async (requestId, customText) => {
       if (!agentId) return;
-      await postClarification(agentId, { requestId, customText }, onError);
+      await postClarification(
+        agentId,
+        { requestId, customText },
+        onError,
+        refreshSessions
+      );
     },
-    [agentId, onError]
+    [agentId, onError, refreshSessions]
   );
 
   return { choose, respond, loadPending };

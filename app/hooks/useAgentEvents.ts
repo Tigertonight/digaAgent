@@ -23,7 +23,7 @@
  * 下游：useRunners.updateRunner + useAudio.playDoneSound + ChatApp 的 refresh* 回调
  */
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { applyEvent } from "@/lib/chat-reducer";
 import type { ApprovalRequest } from "@/lib/collab/types";
 import type { ClarificationRequest } from "@/lib/clarification/types";
@@ -39,6 +39,19 @@ import type { ThinkingLevel } from "@/lib/types";
 
 /** SSE event 的通用形状 —— 业务字段通过 cast 收窄 */
 type AgentEvent = { type: string; [k: string]: unknown };
+
+/**
+ * 问题 2：哪些 SSE 事件需要让左侧 sidebar “需确认” 计数及时跟上。
+ * 抽为纯函数以便单测。agent_end / state_reset 不走这里——它们有独立跱径。
+ */
+export function shouldRefreshSidebarOnEvent(eventType: string): boolean {
+  return (
+    eventType === "approval_request" ||
+    eventType === "approval_resolved" ||
+    eventType === "clarification_request" ||
+    eventType === "clarification_resolved"
+  );
+}
 
 function settleProgressAfterAgentEnd(
   progress: AgentProgress | null
@@ -214,9 +227,57 @@ export function useAgentEvents(
     onBrowserState,
   } = opts;
 
+  // 问题 2 修复：approval/clarification 事件到达后需要让左侧 sidebar
+  // 的“需确认”计数跟上。原本只靠 useSessions 的 15s 轮询 / agent_end。
+  // 这里加轻量 debounce：200ms 内多个事件只跳一次 fetch /api/sessions。
+  const refreshSessionsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+  const refreshSessionsLatestRef = useRef(refreshSessions);
+  useEffect(() => {
+    refreshSessionsLatestRef.current = refreshSessions;
+  }, [refreshSessions]);
+  const scheduleRefreshSessions = useCallback(() => {
+    if (refreshSessionsTimerRef.current !== null) return;
+    refreshSessionsTimerRef.current = setTimeout(() => {
+      refreshSessionsTimerRef.current = null;
+      try {
+        refreshSessionsLatestRef.current();
+      } catch {
+        /* ignore */
+      }
+    }, 200);
+  }, []);
+  useEffect(
+    () => () => {
+      if (refreshSessionsTimerRef.current !== null) {
+        clearTimeout(refreshSessionsTimerRef.current);
+        refreshSessionsTimerRef.current = null;
+      }
+    },
+    []
+  );
+
   const handleAgentEvent = useCallback<UseAgentEventsReturn["handleAgentEvent"]>(
     (ev, aidForEvents, ownerKey) => {
       switch (ev.type) {
+        // ===== fix-S3.e SSE ring buffer overrun =====
+        // 服务端检测到 since 越过已覆盖区间会下发这个事件。
+        // 前端应该重拉 sessions 列表 + 当前 agent stats，让 useSessions 重建。
+        case "state_reset": {
+          refreshSessions();
+          if (aidForEvents) {
+            void refreshStats(aidForEvents, ownerKey);
+          }
+          if (typeof console !== "undefined") {
+            console.warn(
+              "[diga-agent] SSE state_reset: server ring buffer overran, refreshing.",
+              { aid: aidForEvents, key: ownerKey, since: ev.since, latest: ev.latest }
+            );
+          }
+          return;
+        }
+
         // ===== 流式生命周期 =====
         case "agent_start":
           updateRunner(ownerKey, {
@@ -225,6 +286,10 @@ export function useAgentEvents(
             // RFC-2 Phase A：记录本轮起始时间，用于 Budget duration 维度
             runStartedAt: Date.now(),
           });
+          // 是刷一次 sidebar，让 optimistic loading session 尽快被服务端真值覆盖
+          // （firstMessage 从“输入框快照”变为 SDK 实际写进 jsonl 的首句）。
+          // debounce 200ms，不会压到后端。
+          scheduleRefreshSessions();
           return;
 
         case "agent_end":
@@ -348,6 +413,15 @@ export function useAgentEvents(
           }));
           return;
 
+        // ===== F-A5：optimistic user message ack =====
+        // 后端在调 SDK prompt 之前 push。reducer 按 clientRequestId 将 pending user 气泡
+        // 衰变为服务端最终要发出的 displayText。走与 reducer 质同的 patch-as-function。
+        case "optimistic_user_ack":
+          updateRunner(ownerKey, (s) => ({
+            chatState: applyEvent(s.chatState, ev),
+          }));
+          return;
+
         // ===== RFC-2 Phase B3 / B4：审批气泡（collab 自定义事件） =====
         // 与 reducer 事件同走 applyEvent；不影响 agentPhase（保留当前 phase）。
         // 用户感知：危险命令前，chat 流出现一个 approval part；点完后 status 变更。
@@ -368,12 +442,15 @@ export function useAgentEvents(
           updateRunner(ownerKey, (s) => ({
             chatState: applyEvent(s.chatState, ev),
           }));
+          // 问题 2：sidebar “需确认”计数不再等 15s 轮询。
+          scheduleRefreshSessions();
           return;
         }
         case "approval_resolved":
           updateRunner(ownerKey, (s) => ({
             chatState: applyEvent(s.chatState, ev),
           }));
+          scheduleRefreshSessions();
           return;
 
         // ===== RFC-5：主动追问 / 推荐下一步（clarification 自定义事件） =====
@@ -382,6 +459,8 @@ export function useAgentEvents(
           updateRunner(ownerKey, (s) => ({
             chatState: applyEvent(s.chatState, ev),
           }));
+          // sidebar waiting_user / waitingClarificationCount 立即跟上。
+          scheduleRefreshSessions();
           return;
 
         // ===== RFC-6：Multi-subagent 协作状态卡（subagent 自定义事件） =====
@@ -420,6 +499,7 @@ export function useAgentEvents(
       isCollabEnabled,
       autoApprove,
       onBrowserState,
+      scheduleRefreshSessions,
     ]
   );
 
