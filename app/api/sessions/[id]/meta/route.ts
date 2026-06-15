@@ -18,6 +18,7 @@ import {
   type MetaWritableFieldV0,
   type SessionMeta,
 } from "@/lib/meta/types";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,7 +57,7 @@ function pickWritable(body: unknown): Partial<SessionMeta> {
   return out;
 }
 
-export async function GET(
+export const GET = withRemoteAuth(async function (
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -70,9 +71,9 @@ export async function GET(
       { status: 500 }
     );
   }
-}
+});
 
-export async function PATCH(
+export const PATCH = withRemoteAuth(async function (
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -98,4 +99,4 @@ export async function PATCH(
       { status: 500 }
     );
   }
-}
+});

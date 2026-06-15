@@ -25,6 +25,7 @@ import {
   getModelRegistry,
   abortSubagentsForParent,
   abortWorkflowsForParent,
+  pushExternalEvent,
   pushGoalEvent,
   pushProgressEvent,
   claimClientRequest,
@@ -37,6 +38,7 @@ import {
 } from "@/lib/agent-registry";
 import {
   clearGoal,
+  findAgentIdBySessionId,
   getGoal,
   listGoalEvidence,
   listGoalTurns,
@@ -133,11 +135,39 @@ export async function GET(
   const auth = await assertRemoteAuth(req);
   if (auth) return auth;
   const { id } = await params;
-  const rec = getAgent(id);
-  if (!rec) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   const url = new URL(req.url);
   const action = url.searchParams.get("action");
+
+  // G2：goal_timeline 不要求 live agent 存在。重启 / 版本更新后，只要
+  // goal/turn/evidence 在磁盘上（根据 agentId 或 sessionId）能 hydrate 出来，就能返回。
+  if (action === "goal_timeline") {
+    const directGoal = getGoal(id);
+    if (directGoal) {
+      return NextResponse.json({
+        goal: directGoal,
+        turns: listGoalTurns(id),
+        evidence: listGoalEvidence(id),
+      });
+    }
+    // 本 agentId 没有 envelope，试看能不能通过该 agent 的 sessionId 反查老 envelope。
+    const liveRec = getAgent(id);
+    const fallbackSessionId = liveRec?.session.sessionId;
+    if (fallbackSessionId) {
+      const fallbackAgentId = findAgentIdBySessionId(fallbackSessionId);
+      if (fallbackAgentId && fallbackAgentId !== id) {
+        return NextResponse.json({
+          goal: getGoal(fallbackAgentId),
+          turns: listGoalTurns(fallbackAgentId),
+          evidence: listGoalEvidence(fallbackAgentId),
+        });
+      }
+    }
+    return NextResponse.json({ goal: null, turns: [], evidence: [] });
+  }
+
+  const rec = getAgent(id);
+  if (!rec) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   if (action === "get_tools") {
     // 用 SDK 的 getAllTools()/getActiveToolNames() 返回全量工具 + 当前已启用的名字
@@ -194,16 +224,6 @@ export async function GET(
       );
     }
   }
-  if (action === "goal_timeline") {
-    // Goal timeline: goal (incl. structured blockedState) plus its persisted
-    // turn and evidence history. Survives restart (read from the goal store).
-    return NextResponse.json({
-      goal: getGoal(id),
-      turns: listGoalTurns(id),
-      evidence: listGoalEvidence(id),
-    });
-  }
-
   if (action === "runtime_events") {
     return NextResponse.json({
       events: listRuntimeEvents({
@@ -423,6 +443,18 @@ export async function POST(
           ? `${displayText}\n\n${CONTEXT_ASIDE_OPEN}\n${asideContext}\n${CONTEXT_ASIDE_CLOSE}`
           : displayText;
 
+        // F-A5 双气泡修复：prompt 进 SDK 之前先 push 一条 optimistic_user_ack，
+        // 让前端 reducer 按 clientRequestId 把 pending user 气泡的 text 衰变为 displayText
+        // （stripAgentMentions 后的版本）。后面 SDK 的 user message_start 同文本重间
+        // 同一条不会产生双气泡。仅在拿到 clientRequestId 时 push。
+        if (clientRequestId) {
+          pushExternalEvent(rec, {
+            type: "optimistic_user_ack",
+            clientRequestId,
+            displayText,
+          });
+        }
+
         try {
           if (isLocalCodingAssistantAgent(rec)) {
             await promptLocalCodingAssistantAgent(rec, finalText);
@@ -516,16 +548,21 @@ export async function POST(
         await persistProgressForAgent(rec, progress);
         pushProgressEvent(rec, progress);
 
-        const prompt = [
-          "Start working toward this active goal:",
-          "",
-          objective,
-          "",
+        // 控制规则走 CONTEXT_ASIDE，UI 可见部分 = 用户 objective 原文。
+        const goalAside = [
+          "This is the active goal context. Treat the visible text above as the goal to start working toward.",
           "The goal text is both the starting prompt and the completion criteria.",
           "For multi-step work, call update_progress early with concrete progress nodes and keep it current as milestones finish.",
           "Attach evidence artifacts with update_progress when you create files, URLs, screenshots, tests, diffs, logs, or browser observations.",
           "If the full goal is achieved, call goal_update with status=complete.",
           "If you are truly blocked and cannot make meaningful progress without user input or an external change, call goal_update with status=blocked and include a short blockedReason.",
+        ].join("\n");
+        const prompt = [
+          objective,
+          "",
+          CONTEXT_ASIDE_OPEN,
+          goalAside,
+          CONTEXT_ASIDE_CLOSE,
         ].join("\n");
 
         if (rec.isStreaming) await rec.session.followUp(prompt);
@@ -546,13 +583,18 @@ export async function POST(
         const goal = setGoalStatus(id, "active");
         pushGoalEvent(rec, goal);
         if (goal && !rec.isStreaming) {
+          // 同样：UI 可见 = goal.objective、控制指令走 aside。
+          const resumeAside = [
+            "Resume working toward this active goal. Treat the visible text above as the goal.",
+            "Do the next useful step. Use goal_update when the goal is complete or truly blocked.",
+          ].join("\n");
           await rec.session.prompt(
             [
-              "Resume working toward the active goal:",
-              "",
               goal.objective,
               "",
-              "Do the next useful step. Use goal_update when the goal is complete or truly blocked.",
+              CONTEXT_ASIDE_OPEN,
+              resumeAside,
+              CONTEXT_ASIDE_CLOSE,
             ].join("\n")
           );
         }

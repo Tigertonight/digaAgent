@@ -1,38 +1,45 @@
 /**
- * 文件 API（去掉了官方 pi-web 的白名单限制）：
+ * 文件 API：
  *   GET    /api/files?path=<abs>           读文件 / 列目录
  *   PUT    /api/files?path=<abs>           写文件（body 是新内容，text/plain）
  *   DELETE /api/files?path=<abs>           删文件/空目录
  *   POST   /api/files?op=move              { from, to } 移动/重命名
  *
- * 软保护：可设 DIGA_AGENT_WEB_ROOT 环境变量，仅允许操作该根目录下的路径。
- *   默认值：$HOME（你的 home 目录）。
- *   设为 "" 或 "/" 即关闭限制。
+ * 路径护栏（fix-S2）：
+ *   - 优先读 DIGA_AGENT_FILE_ROOTS（`:` 分隔的多个绝对路径根）
+ *   - 其次读 DIGA_AGENT_WEB_ROOT（老字段，向后兼容，换算为单一根）
+ *   - 都没有 → 默认 [$HOME]。如要关闭限制，设 DIGA_AGENT_FILE_ROOTS="/"。
+ *
+ * 写入护栏：
+ *   - 单个写入 ≤ DIGA_AGENT_FILE_MAX_BYTES（默认 5MB）。
+ *   - 远程（!isLocalRequest）默认拒绝写入；设 DIGA_AGENT_REMOTE_FILE_WRITE=1 才允许。
  */
 import { NextResponse } from "next/server";
 import path from "node:path";
 import fs from "node:fs/promises";
-import os from "node:os";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
+import { isLocalRequest } from "@/lib/remote/store";
+import {
+  assertPathAllowed as assertAllowed,
+  assertWritePathAllowed as assertWriteAllowed,
+  getFileMaxBytes as maxBytes,
+} from "@/lib/files/policy";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function getRoot(): string {
-  const r = process.env.DIGA_AGENT_WEB_ROOT;
-  if (r === undefined) return os.homedir();
-  if (r === "" || r === "/") return "/";
-  return path.resolve(r);
-}
-
-function assertAllowed(p: string) {
-  const root = getRoot();
-  const abs = path.resolve(p);
-  if (root === "/") return abs;
-  const rel = path.relative(root, abs);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
-    throw new Error(`path outside DIGA_AGENT_WEB_ROOT (${root}): ${abs}`);
-  }
-  return abs;
+/** 写入护栏：远程默认拒绝。 */
+function guardWrite(req: Request): Response | null {
+  if (isLocalRequest(req)) return null;
+  const allow = process.env.DIGA_AGENT_REMOTE_FILE_WRITE === "1";
+  if (allow) return null;
+  return NextResponse.json(
+    {
+      error:
+        "remote write disabled. Set DIGA_AGENT_REMOTE_FILE_WRITE=1 to enable.",
+    },
+    { status: 403 }
+  );
 }
 
 function err(msg: string, status = 400) {
@@ -113,7 +120,7 @@ async function recursiveSearch(
   return { hits, truncated: false };
 }
 
-export async function GET(req: Request) {
+export const GET = withRemoteAuth(async (req: Request) => {
   const url = new URL(req.url);
   const p = url.searchParams.get("path");
   const raw = url.searchParams.get("raw") === "1";
@@ -241,15 +248,22 @@ export async function GET(req: Request) {
   } catch (e) {
     return err((e as Error).message, 500);
   }
-}
+});
 
-export async function PUT(req: Request) {
+export const PUT = withRemoteAuth(async (req: Request) => {
+  const blocked = guardWrite(req);
+  if (blocked) return blocked;
   const url = new URL(req.url);
   const p = url.searchParams.get("path");
   if (!p) return err("path required");
   try {
-    const abs = assertAllowed(p);
+    // A4-2：写路径多一道 symlink 防越界。
+    const abs = await assertWriteAllowed(p);
     const body = await req.text();
+    const limit = maxBytes();
+    if (Buffer.byteLength(body, "utf8") > limit) {
+      return err(`payload too large (>${limit} bytes)`, 413);
+    }
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await fs.writeFile(abs, body, "utf8");
     const st = await fs.stat(abs);
@@ -262,14 +276,16 @@ export async function PUT(req: Request) {
   } catch (e) {
     return err((e as Error).message, 500);
   }
-}
+});
 
-export async function DELETE(req: Request) {
+export const DELETE = withRemoteAuth(async (req: Request) => {
+  const blocked = guardWrite(req);
+  if (blocked) return blocked;
   const url = new URL(req.url);
   const p = url.searchParams.get("path");
   if (!p) return err("path required");
   try {
-    const abs = assertAllowed(p);
+    const abs = await assertWriteAllowed(p);
     const st = await fs.stat(abs);
     if (st.isDirectory()) {
       await fs.rmdir(abs); // 只删空目录，安全起见不递归
@@ -280,20 +296,55 @@ export async function DELETE(req: Request) {
   } catch (e) {
     return err((e as Error).message, 500);
   }
-}
+});
 
-export async function POST(req: Request) {
+export const POST = withRemoteAuth(async (req: Request) => {
   const url = new URL(req.url);
   const op = url.searchParams.get("op");
+  // op=exists 不是写操作，不走 guardWrite。路径仍要过 file roots。
+  if (op === "exists") {
+    try {
+      const body = await req.json().catch(() => ({}));
+      const list = Array.isArray((body as { paths?: unknown }).paths)
+        ? ((body as { paths: unknown[] }).paths.filter(
+            (p): p is string => typeof p === "string"
+          ) as string[])
+        : [];
+      // 最多 64 个，避免遭滥用。
+      const capped = list.slice(0, 64);
+      const out: Record<string, boolean> = {};
+      await Promise.all(
+        capped.map(async (p) => {
+          try {
+            const abs = assertAllowed(p);
+            try {
+              await fs.access(abs);
+              out[p] = true;
+            } catch {
+              out[p] = false;
+            }
+          } catch {
+            // 出越界设为 false，不报 403 免得拖垮整个 check。
+            out[p] = false;
+          }
+        })
+      );
+      return NextResponse.json({ paths: out });
+    } catch (e) {
+      return err((e as Error).message, 500);
+    }
+  }
+  const blocked = guardWrite(req);
+  if (blocked) return blocked;
   if (op !== "move") return err("unknown op");
   try {
     const body = await req.json();
-    const fromAbs = assertAllowed(body.from);
-    const toAbs = assertAllowed(body.to);
+    const fromAbs = await assertWriteAllowed(body.from);
+    const toAbs = await assertWriteAllowed(body.to);
     await fs.mkdir(path.dirname(toAbs), { recursive: true });
     await fs.rename(fromAbs, toAbs);
     return NextResponse.json({ ok: true, from: fromAbs, to: toAbs });
   } catch (e) {
     return err((e as Error).message, 500);
   }
-}
+});

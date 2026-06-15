@@ -1,14 +1,15 @@
 import { NextResponse } from "next/server";
-import { isLocalRequest, updateRemoteAccessSettings } from "@/lib/remote/store";
+import { updateRemoteAccessSettings } from "@/lib/remote/store";
 import { stopPublicTunnel } from "@/lib/remote/public-tunnel";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function POST(req: Request) {
-  if (!isLocalRequest(req)) {
-    return NextResponse.json({ error: "local access required" }, { status: 403 });
-  }
-  await updateRemoteAccessSettings({ publicTunnelDisabled: true });
-  return NextResponse.json(await stopPublicTunnel());
-}
+export const POST = withRemoteAuth(
+  async function () {
+    await updateRemoteAccessSettings({ publicTunnelDisabled: true });
+    return NextResponse.json(await stopPublicTunnel());
+  },
+  { requireLocalOnly: true }
+);

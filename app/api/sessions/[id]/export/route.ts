@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { findSessionPathById } from "@/lib/sessions";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,7 +48,7 @@ async function loadExportFromFile(): Promise<ExportFn> {
 }
 
 /** GET: 导出 session 为 HTML 字符串 */
-export async function GET(
+export const GET = withRemoteAuth(async function (
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -88,4 +89,4 @@ export async function GET(
       }
     );
   }
-}
+});

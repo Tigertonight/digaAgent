@@ -11,6 +11,7 @@
  * 排序：按 installs 降序。
  */
 import { NextResponse, type NextRequest } from "next/server";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -51,7 +52,7 @@ function installsRank(s: string): number {
   return n * mul;
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withRemoteAuth(async function (req: NextRequest) {
   try {
     const body = (await req.json()) as { query?: string; limit?: number };
     const query = (body?.query ?? "").trim();
@@ -99,4 +100,4 @@ export async function POST(req: NextRequest) {
       { status: 500 }
     );
   }
-}
+});

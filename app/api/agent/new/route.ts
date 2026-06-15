@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAgent, getAgent } from "@/lib/agent-registry";
 import { assertRemoteAuth } from "@/lib/remote/auth";
+import { assertPathAllowed } from "@/lib/files/policy";
 import type { ThinkingLevel } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -13,7 +14,18 @@ export async function POST(req: Request) {
     const body = await req.json().catch(() => ({}));
     const provider = body.provider as string | undefined;
     const modelId = body.modelId as string | undefined;
-    const cwd = (body.cwd as string | undefined) ?? process.cwd();
+    const rawCwd = (body.cwd as string | undefined) ?? process.cwd();
+    let cwd: string;
+    try {
+      cwd = assertPathAllowed(rawCwd);
+    } catch (e) {
+      return NextResponse.json(
+        {
+          error: `cwd outside allowed file roots: ${(e as Error).message}`,
+        },
+        { status: 403 }
+      );
+    }
     const sessionPath = body.sessionPath as string | undefined;
     const thinkingLevel = body.thinkingLevel as ThinkingLevel | undefined;
 

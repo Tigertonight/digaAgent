@@ -6,13 +6,15 @@ import {
 } from "@/lib/mcp/registry";
 import { listMcpTools, disposeMcpClient } from "@/lib/mcp/runtime";
 import type { McpServerConfig } from "@/lib/mcp/types";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
+import { isLocalRequest } from "@/lib/remote/store";
 
 export const dynamic = "force-dynamic";
 
 /** GET: list configured MCP servers. */
-export async function GET() {
+export const GET = withRemoteAuth(async () => {
   return NextResponse.json({ servers: listMcpServers() });
-}
+});
 
 function parseServer(body: Record<string, unknown>): McpServerConfig | null {
   if (typeof body.id !== "string") return null;
@@ -34,8 +36,16 @@ function parseServer(body: Record<string, unknown>): McpServerConfig | null {
   };
 }
 
-/** POST: upsert / remove / test a server. body.type selects the action. */
-export async function POST(req: Request) {
+/**
+ * POST: upsert / remove / test a server. body.type selects the action.
+ *
+ * 安全收敛（fix-S2 / S1.4）：
+ *   - 所有动作需要远程鉴权（token）。
+ *   - upsert 可以 spawn 任意 stdio 子进程（= 远程 RCE），额外要求
+ *     `isLocalRequest`：仅 Electron renderer / dev 本地 fetch 可调，远程设备一律拒绝。
+ *     远程设备需要调试 MCP 时，可走 settings UI 走主进程 IPC（TODO：S2 交付模板机制）。
+ */
+export const POST = withRemoteAuth(async (req: Request) => {
   let body: Record<string, unknown> = {};
   try {
     body = (await req.json()) as Record<string, unknown>;
@@ -46,6 +56,15 @@ export async function POST(req: Request) {
 
   try {
     if (type === "upsert") {
+      if (!isLocalRequest(req)) {
+        return NextResponse.json(
+          {
+            error:
+              "MCP upsert is local-only. Use the desktop settings UI to add servers.",
+          },
+          { status: 403 }
+        );
+      }
       const config = parseServer(body);
       if (!config) {
         return NextResponse.json(
@@ -94,4 +113,4 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
-}
+});

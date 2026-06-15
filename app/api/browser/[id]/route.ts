@@ -30,11 +30,12 @@ import {
   type InAppBrowserCommandResult,
 } from "@/lib/browser/runtime";
 import { agentIdFromBrowserId } from "@/lib/browser/browser-id";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(
+export const GET = withRemoteAuth(async function (
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -43,9 +44,9 @@ export async function GET(
     snapshot: getBrowserSnapshot(id),
     headless: isBrowserHeadless(),
   });
-}
+});
 
-export async function POST(
+export const POST = withRemoteAuth(async function (
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -270,4 +271,4 @@ export async function POST(
       { status: 500 }
     );
   }
-}
+});

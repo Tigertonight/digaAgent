@@ -17,6 +17,8 @@ import {
   getAgentDir,
   parseFrontmatter,
 } from "@earendil-works/pi-coding-agent";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
+import { isLocalRequest } from "@/lib/remote/store";
 import os from "node:os";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
@@ -28,7 +30,7 @@ function resolveCwd(input: string | null | undefined): string {
   return os.homedir();
 }
 
-export async function GET(req: Request) {
+export const GET = withRemoteAuth(async function (req: Request) {
   try {
     const url = new URL(req.url);
     const cwd = resolveCwd(url.searchParams.get("cwd"));
@@ -80,10 +82,10 @@ export async function GET(req: Request) {
       { status: 500 }
     );
   }
-}
+});
 
 // PATCH /api/skills —— 切换 SKILL.md 的 disable-model-invocation 字段
-export async function PATCH(req: Request) {
+export const PATCH = withRemoteAuth(async function (req: Request) {
   try {
     const body = (await req.json()) as {
       filePath?: string;
@@ -124,9 +126,16 @@ export async function PATCH(req: Request) {
       { status: 500 }
     );
   }
-}
+});
 
-export async function POST(req: Request) {
+// POST install/remove/update 是在主机上跑 npm/git，同样仅本地可调。
+export const POST = withRemoteAuth(async function (req: Request) {
+  if (!isLocalRequest(req)) {
+    return NextResponse.json(
+      { error: "skill management is local-only" },
+      { status: 403 }
+    );
+  }
   try {
     let body: Record<string, unknown> = {};
     try {
@@ -178,4 +187,4 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
-}
+});

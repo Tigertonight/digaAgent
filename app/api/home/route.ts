@@ -3,10 +3,11 @@
  */
 import { NextResponse } from "next/server";
 import { homedir } from "node:os";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export const GET = withRemoteAuth(async () => {
   return NextResponse.json({ home: homedir() });
-}
+});

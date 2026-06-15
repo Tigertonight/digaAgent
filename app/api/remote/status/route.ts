@@ -8,11 +8,12 @@ import { ensurePublicTunnel, getPublicTunnelStatus } from "@/lib/remote/public-t
 import { pickDefaultFlatModel } from "@/lib/default-model";
 import { tunnelTargetFromRequest } from "@/lib/remote/request-target";
 import { ensureLongTaskScheduler } from "@/lib/tasks/scheduler";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(req: Request) {
+export const GET = withRemoteAuth(async function (req: Request) {
   ensureLongTaskScheduler();
   const settings = await getRemoteAccessSettings();
   const tunnelTarget = tunnelTargetFromRequest(req, settings.port);
@@ -61,4 +62,4 @@ export async function GET(req: Request) {
     activeAgents: listAgentSummaries().filter((agent) => !agent.hidden),
     version: (pkg as { version?: string }).version ?? "0.0.0",
   });
-}
+});

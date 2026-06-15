@@ -1,21 +1,20 @@
 import { NextResponse } from "next/server";
 import {
   abortSubagentsForParent,
-  createAgent,
-  disposeAgent,
+  buildSubagentDepsForAgent,
   getAgent,
-  pushExternalEvent,
 } from "@/lib/agent-registry";
 import { listBatches } from "@/lib/subagents/server-store";
 import {
   resumeSubagentBatch,
   retrySubagentTask,
 } from "@/lib/subagents/orchestrator";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(
+export const GET = withRemoteAuth(async function (
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -23,9 +22,9 @@ export async function GET(
   const rec = getAgent(id);
   if (!rec) return NextResponse.json({ error: "agent not found" }, { status: 404 });
   return NextResponse.json({ batches: listBatches(id) });
-}
+});
 
-export async function POST(
+export const POST = withRemoteAuth(async function (
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -49,26 +48,15 @@ export async function POST(
         { status: 400 }
       );
     }
-    const model = rec.session.model;
-    if (!model) {
-      return NextResponse.json({ error: "agent model not ready" }, { status: 500 });
+    if (!rec.session.model) {
+      return NextResponse.json(
+        { error: "agent model not ready" },
+        { status: 500 }
+      );
     }
-    const result = await retrySubagentTask(
-      {
-        parentAgentId: id,
-        parentSessionPath: rec.session.sessionFile,
-        provider: model.provider,
-        modelId: model.id,
-        cwd: rec.cwd,
-        thinkingLevel: rec.session.thinkingLevel,
-        createChild: createAgent,
-        getChild: (agentId) => getAgent(agentId),
-        disposeChild: disposeAgent,
-        pushParentEvent: (event) => pushExternalEvent(rec, event),
-      },
-      batchId,
-      taskId
-    );
+    // S1：复用首走 deps（resolveDefinition / worktrees / merge approval / mcp在 createChild里沉淀）。
+    const deps = buildSubagentDepsForAgent(rec);
+    const result = await retrySubagentTask(deps, batchId, taskId);
     return NextResponse.json({ ok: true, result });
   }
 
@@ -80,25 +68,14 @@ export async function POST(
         { status: 400 }
       );
     }
-    const model = rec.session.model;
-    if (!model) {
-      return NextResponse.json({ error: "agent model not ready" }, { status: 500 });
+    if (!rec.session.model) {
+      return NextResponse.json(
+        { error: "agent model not ready" },
+        { status: 500 }
+      );
     }
-    const result = await resumeSubagentBatch(
-      {
-        parentAgentId: id,
-        parentSessionPath: rec.session.sessionFile,
-        provider: model.provider,
-        modelId: model.id,
-        cwd: rec.cwd,
-        thinkingLevel: rec.session.thinkingLevel,
-        createChild: createAgent,
-        getChild: (agentId) => getAgent(agentId),
-        disposeChild: disposeAgent,
-        pushParentEvent: (event) => pushExternalEvent(rec, event),
-      },
-      batchId
-    );
+    const deps = buildSubagentDepsForAgent(rec);
+    const result = await resumeSubagentBatch(deps, batchId);
     return NextResponse.json({ ok: true, result });
   }
 
@@ -108,4 +85,4 @@ export async function POST(
       { status: 400 }
     );
   }
-}
+});

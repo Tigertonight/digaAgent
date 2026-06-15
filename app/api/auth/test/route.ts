@@ -9,6 +9,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { completeSimple } from "@earendil-works/pi-ai";
 import { getModelRegistry } from "@/lib/agent-registry";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -24,7 +25,7 @@ function pickModel(provider: string, modelId?: string) {
   return mr.getAll().find((m) => m.provider === provider) ?? null;
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withRemoteAuth(async (req: NextRequest) => {
   const startedAt = Date.now();
   let httpStatus: number | undefined;
   try {
@@ -127,4 +128,4 @@ export async function POST(req: NextRequest) {
       { status: 500 }
     );
   }
-}
+});

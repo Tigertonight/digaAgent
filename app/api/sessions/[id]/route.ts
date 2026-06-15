@@ -4,11 +4,12 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { findSessionPathById, getSessionDetail } from "@/lib/sessions";
 import { deleteMeta } from "@/lib/meta/store";
 import { deletePersistedProgress } from "@/lib/progress/file-store";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(
+export const GET = withRemoteAuth(async function (
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -25,10 +26,10 @@ export async function GET(
       { status: 500 }
     );
   }
-}
+});
 
 /** PATCH: 重命名 session（写一条 session_info entry） */
-export async function PATCH(
+export const PATCH = withRemoteAuth(async function (
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -55,10 +56,10 @@ export async function PATCH(
       { status: 500 }
     );
   }
-}
+});
 
 /** DELETE: 删除 session 文件 */
-export async function DELETE(
+export const DELETE = withRemoteAuth(async function (
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -80,4 +81,4 @@ export async function DELETE(
       { status: 500 }
     );
   }
-}
+});

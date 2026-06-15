@@ -10,11 +10,12 @@
  */
 import { NextResponse } from "next/server";
 import { getAuth, getModelRegistry } from "@/lib/agent-registry";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export const GET = withRemoteAuth(async () => {
   try {
     const auth = getAuth();
     const mr = getModelRegistry();
@@ -54,9 +55,9 @@ export async function GET() {
       { status: 500 }
     );
   }
-}
+});
 
-export async function PUT(req: Request) {
+export const PUT = withRemoteAuth(async (req: Request) => {
   try {
     const body = (await req.json()) as {
       provider?: string;
@@ -79,9 +80,9 @@ export async function PUT(req: Request) {
       { status: 500 }
     );
   }
-}
+});
 
-export async function DELETE(req: Request) {
+export const DELETE = withRemoteAuth(async (req: Request) => {
   try {
     const url = new URL(req.url);
     const provider = url.searchParams.get("provider");
@@ -101,4 +102,4 @@ export async function DELETE(req: Request) {
       { status: 500 }
     );
   }
-}
+});

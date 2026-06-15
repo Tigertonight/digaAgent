@@ -13,6 +13,7 @@
  */
 import {
   getAgent,
+  getEarliestEventSeq,
   getEventsSince,
   getLatestEventSeq,
   onNewEvent,
@@ -69,11 +70,29 @@ export async function GET(
         }
       };
 
-      // 1. 起手回放
+      // 1. 起手回放。若 since 落在 ring buffer 已被覆盖的区间（fix-S3.e），
+      //    先推一条 type=state_reset，客户端拿到后应该丢本地 reducer 状态、
+      //    重新拉 /api/sessions/[id] 重建。
       safeEnqueue(`retry: 3000\n\n`);
-      for (const { seq, event } of getEventsSince(id, since)) {
-        safeEnqueue(sseEncode(seq, event));
-        lastSentSeq = seq;
+      const earliest = getEarliestEventSeq(id);
+      const latest = getLatestEventSeq(id);
+      if (since >= 0 && earliest > 0 && since < earliest - 1) {
+        // 序列跳号：客户端需要从头拉。不予 ring buffer 重放。
+        safeEnqueue(
+          sseEncode(latest >= 0 ? latest : earliest, {
+            type: "state_reset",
+            reason: "event-buffer-overrun",
+            since,
+            earliest,
+            latest,
+          })
+        );
+        lastSentSeq = latest;
+      } else {
+        for (const { seq, event } of getEventsSince(id, since)) {
+          safeEnqueue(sseEncode(seq, event));
+          lastSentSeq = seq;
+        }
       }
 
       // 2. 监听新事件 —— 用 16ms 节流合并同帧内的高频 token

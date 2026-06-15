@@ -27,7 +27,7 @@
  * 注意：本路由不做权限校验（与其他 /api/agent/[id]/* 路由一致——dev 假设单用户本地）。
  */
 import { NextResponse } from "next/server";
-import { getAgent } from "@/lib/agent-registry";
+import { getAgent, maybeResumeGoalAfterUserInput } from "@/lib/agent-registry";
 import { assertRemoteAuth } from "@/lib/remote/auth";
 import {
   addSessionRemember,
@@ -129,6 +129,13 @@ export async function POST(
       },
       { status: 409 }
     );
+  }
+
+  // G5：审批 resolve 后如 goal 被“等用户输入”暂停，自动恢复。
+  try {
+    maybeResumeGoalAfterUserInput(agentId);
+  } catch (e) {
+    console.error("[approval] maybeResumeGoalAfterUserInput failed:", e);
   }
 
   return NextResponse.json({ ok: true });

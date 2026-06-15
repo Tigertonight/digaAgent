@@ -19,6 +19,8 @@
 import { NextResponse } from "next/server";
 import { getPackageManager } from "@/lib/agent-registry";
 import os from "node:os";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
+import { isLocalRequest } from "@/lib/remote/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,7 +30,15 @@ function resolveCwd(input: string | null | undefined): string {
   return os.homedir();
 }
 
-export async function POST(req: Request) {
+// 安装 npm package = 在主机上跑任意脚本。仅本地调用人可调，
+// 远程 token 身份不会被允许 — 留给以后走 collab approval。
+export const POST = withRemoteAuth(async (req: Request) => {
+  if (!isLocalRequest(req)) {
+    return NextResponse.json(
+      { error: "skill install is local-only" },
+      { status: 403 }
+    );
+  }
   try {
     const body = (await req.json().catch(() => ({}))) as {
       package?: string;
@@ -63,4 +73,4 @@ export async function POST(req: Request) {
     const msg = (e as Error).message || String(e);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
-}
+});

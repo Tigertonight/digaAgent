@@ -6,11 +6,12 @@ import {
   loadBrowserSitePolicy,
   removeBrowserSitePolicy,
 } from "@/lib/browser/policy";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(req: Request) {
+export const GET = withRemoteAuth(async (req: Request) => {
   const url = new URL(req.url);
   const target = url.searchParams.get("url");
   if (!target) {
@@ -24,9 +25,9 @@ export async function GET(req: Request) {
       { status: 400 }
     );
   }
-}
+});
 
-export async function POST(req: Request) {
+export const POST = withRemoteAuth(async (req: Request) => {
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
   const type = body.type as string | undefined;
   const target = (body.origin as string | undefined) ?? (body.url as string | undefined);
@@ -52,4 +53,4 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
-}
+});

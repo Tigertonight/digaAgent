@@ -128,15 +128,20 @@ export async function createPairingPayload(
     port: settings.port,
     protocol: "http",
   }).map((c) => c.url);
-  let tunnel = getPublicTunnelStatus();
-  if (
-    !settings.publicTunnelDisabled &&
-    (!tunnel.running || !tunnel.url || tunnel.healthy === false)
-  ) {
-    tunnel = await ensurePublicTunnel(tunnelTarget ?? settings.port);
-  }
-  if (tunnel.running && tunnel.url) {
+  // R6：不要 await ensurePublicTunnel。它最多能阻塞 20s — 用户只是想生成同
+  // Wi-Fi 二维码也要等。预期：
+  //   - tunnel 已跑且 healthy → 直接拼进 candidates。
+  //   - tunnel 未跑 / unhealthy → 在后台启动 / 修复，本次先返 LAN+VPN candidates
+  //     让手机先连同 Wi-Fi。下一次 createPairingPayload 或 ensurePublicTunnel
+  //     在设置面被调时会拿到公网 URL。
+  const tunnel = getPublicTunnelStatus();
+  if (tunnel.running && tunnel.url && tunnel.healthy !== false) {
     candidates.unshift(tunnel.url);
+  } else if (!settings.publicTunnelDisabled) {
+    // 后台启动，不阻塞本次。
+    void ensurePublicTunnel(tunnelTarget ?? settings.port).catch(() => {
+      // 失败也不报错：本次 payload 已报了同 Wi-Fi/VPN candidates。
+    });
   }
   const payload: RemotePairPayload = {
     v: 1,
@@ -217,6 +222,84 @@ export async function verifyRemoteToken(token: string): Promise<RemoteDevice | n
   return null;
 }
 
+/* ---------------------------------------------------------------------------
+ * R5：SSE stream ticket。
+ *
+ * EventSource 不支持自定义 header，所以必须走 query。为了不让设备长期
+ * token 走进 URL（进访问日志 / 代理 / 浏览器历史），前端先拿 device token
+ * 换一个短期、一次性、仅限 SSE 使用的 ticket，在 SSE URL 里传它。
+ * ticket 被占用或过期后不能再用。
+ *
+ * 不持久化：进程重启后所有 ticket 失效是预期的（前端会重拉一个新 ticket）。
+ * ------------------------------------------------------------------------ */
+
+interface SseTicket {
+  ticketHash: string;
+  deviceId: string;
+  expiresAt: number;
+  used?: boolean;
+}
+
+interface SseTicketStore {
+  tickets: Map<string, SseTicket>;
+}
+
+const gSse = globalThis as unknown as {
+  __digaAgentSseTickets?: SseTicketStore;
+};
+if (!gSse.__digaAgentSseTickets) {
+  gSse.__digaAgentSseTickets = { tickets: new Map() };
+}
+const sseStore = gSse.__digaAgentSseTickets;
+
+const SSE_TICKET_TTL_MS = 5 * 60 * 1000;
+
+function sweepExpiredTickets(now: number): void {
+  for (const [hash, t] of sseStore.tickets) {
+    if (t.expiresAt <= now || t.used) sseStore.tickets.delete(hash);
+  }
+}
+
+export async function issueRemoteSseTicket(
+  token: string
+): Promise<{ ticket: string; expiresAt: number } | null> {
+  const device = await verifyRemoteToken(token);
+  if (!device) return null;
+  const ticket = randomToken(24);
+  const ticketHash = sha256(ticket);
+  const now = Date.now();
+  sweepExpiredTickets(now);
+  sseStore.tickets.set(ticketHash, {
+    ticketHash,
+    deviceId: device.id,
+    expiresAt: now + SSE_TICKET_TTL_MS,
+  });
+  return { ticket, expiresAt: now + SSE_TICKET_TTL_MS };
+}
+
+/**
+ * 验证并消费 SSE ticket。返回 deviceId 供上层检查设备是否仍未被吊销。
+ * 一次性：验证后立即标记 used + 删除，同一 ticket 不能再走。
+ */
+export function consumeRemoteSseTicket(ticket: string): {
+  deviceId: string;
+} | null {
+  if (!ticket) return null;
+  const hash = sha256(ticket);
+  const now = Date.now();
+  sweepExpiredTickets(now);
+  const entry = sseStore.tickets.get(hash);
+  if (!entry || entry.used || entry.expiresAt <= now) return null;
+  entry.used = true;
+  sseStore.tickets.delete(hash);
+  return { deviceId: entry.deviceId };
+}
+
+/** 测试用：清空 SSE ticket store。 */
+export function __resetSseTicketsForTest(): void {
+  sseStore.tickets.clear();
+}
+
 export async function listRemoteDevices(): Promise<Array<Omit<RemoteDevice, "tokenHash">>> {
   const settings = await getRemoteAccessSettings();
   return settings.devices.map((device) => ({
@@ -249,27 +332,40 @@ export async function revokeAllRemoteDevices(): Promise<void> {
   });
 }
 
+/**
+ * 仅读 Authorization 头。R5 已下架 ?remoteToken= 查询参数路径，避免设备 token
+ * 走进访问日志 / 代理 / 浏览器历史。所有 fetch 调用需使用 Authorization；
+ * SSE 走一次性 ?sseTicket=...（见 issueRemoteSseTicket / consumeRemoteSseTicket）。
+ */
 export function parseBearer(req: Request): string | null {
   const value = req.headers.get("authorization");
-  if (value) {
-    const match = value.match(/^Bearer\s+(.+)$/i);
-    if (match) return match[1].trim();
-  }
-  try {
-    const url = new URL(req.url);
-    const token = url.searchParams.get("remoteToken");
-    return token && token.length > 0 ? token : null;
-  } catch {
-    return null;
-  }
+  if (!value) return null;
+  const match = value.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : null;
 }
 
+/**
+ * 判断请求是否来自「受信本地 origin」。
+ *
+ * 安全模型变化（fix-S2）：
+ *   - 原实现：没有 secret 时，仅依赖 Host 头判断 localhost
+ *     → 远程攻击者可以伪造 `Host: localhost:3000` 直接绕过。
+ *   - 现在：必须有 DIGA_AGENT_LOCAL_SECRET，且 header `x-diga-agent-local-secret` 命中。
+ *     - Electron 主进程通过 webRequest.onBeforeSendHeaders 给同源请求注入。
+ *     - 纯 web 模式（next dev / next start）需要在启动脚本里 export 该 secret，
+ *       并通过开发者工具或浏览器扩展手工带 header 才能命中——降低误开放风险。
+ *
+ * 注：仅判断 "local"，不替代 token 鉴权。`assertRemoteAuth` 在远程路径里仍要求 token。
+ */
 export function isLocalRequest(req: Request): boolean {
   const secret = process.env.DIGA_AGENT_LOCAL_SECRET;
-  if (secret && req.headers.get("x-diga-agent-local-secret") === secret) {
-    return true;
+  if (secret) {
+    return req.headers.get("x-diga-agent-local-secret") === secret;
   }
-  if (secret) return false;
+  // dev fallback：仅在 NODE_ENV=development 且未设置 secret 时，
+  // 才依赖 host 判断 localhost。生产 / Electron 包装后 secret 一定存在，
+  // 不会走进这个分支。next dev 在本机调试时依赖它保持顺手。
+  if (process.env.NODE_ENV !== "development") return false;
   const host = req.headers.get("host") ?? "";
   return (
     host.startsWith("localhost:") ||

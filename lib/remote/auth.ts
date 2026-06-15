@@ -1,6 +1,12 @@
 import "server-only";
 import { NextResponse } from "next/server";
-import { getRemoteAccessSettings, isLocalRequest, parseBearer, verifyRemoteToken } from "./store";
+import {
+  consumeRemoteSseTicket,
+  getRemoteAccessSettings,
+  isLocalRequest,
+  parseBearer,
+  verifyRemoteToken,
+} from "./store";
 import { listRemoteCandidates } from "./network";
 import { getPublicTunnelStatus } from "./public-tunnel";
 
@@ -46,6 +52,28 @@ export async function assertRemoteAuth(req: Request): Promise<NextResponse | nul
   const origin = originHost(req.headers.get("origin"));
   if (origin && !allowedHosts.has(origin)) {
     return NextResponse.json({ error: "origin not allowed" }, { status: 403 });
+  }
+
+  // R5：SSE 走一次性 ticket（?sseTicket=...）。ticket 被验证一下就作废，
+  // 不会沉积到访问日志里拿手重放。仅 GET（SSE）采用。
+  if (req.method === "GET") {
+    try {
+      const url = new URL(req.url);
+      const ticketRaw = url.searchParams.get("sseTicket");
+      if (ticketRaw) {
+        const consumed = consumeRemoteSseTicket(ticketRaw);
+        if (consumed) {
+          // 成功：sse ticket 已刷。不再检查 token。
+          return null;
+        }
+        return NextResponse.json(
+          { error: "sse ticket invalid or expired" },
+          { status: 401 }
+        );
+      }
+    } catch {
+      // 错误 URL 下划走后面的 token 检查。
+    }
   }
 
   const token = parseBearer(req);

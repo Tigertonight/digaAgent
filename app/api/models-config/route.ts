@@ -20,6 +20,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { getModelRegistry } from "@/lib/agent-registry";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -40,7 +41,7 @@ function readModelsJson(): unknown {
   }
 }
 
-export async function GET() {
+export const GET = withRemoteAuth(async () => {
   try {
     const data = readModelsJson();
     return NextResponse.json({
@@ -53,9 +54,9 @@ export async function GET() {
       { status: 500 }
     );
   }
-}
+});
 
-export async function PUT(req: NextRequest) {
+export const PUT = withRemoteAuth(async (req: NextRequest) => {
   try {
     const body = await req.json();
     // 基本校验：必须是 object 且含 providers 字段（即使为空 dict）
@@ -89,4 +90,4 @@ export async function PUT(req: NextRequest) {
       { status: 500 }
     );
   }
-}
+});

@@ -1,17 +1,19 @@
 import { NextResponse } from "next/server";
-import { isLocalRequest, revokeRemoteDevice } from "@/lib/remote/store";
+import { revokeRemoteDevice } from "@/lib/remote/store";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function DELETE(
-  req: Request,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  if (!isLocalRequest(req)) {
-    return NextResponse.json({ error: "local access required" }, { status: 403 });
-  }
-  const { id } = await params;
-  const ok = await revokeRemoteDevice(id);
-  return NextResponse.json({ ok });
-}
+// 设备吊销是敏感操作，仅本地（主进程 renderer / dev local）可调。
+export const DELETE = withRemoteAuth(
+  async function (
+    _req: Request,
+    { params }: { params: Promise<{ id: string }> }
+  ) {
+    const { id } = await params;
+    const ok = await revokeRemoteDevice(id);
+    return NextResponse.json({ ok });
+  },
+  { requireLocalOnly: true }
+);

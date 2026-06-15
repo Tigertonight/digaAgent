@@ -18,6 +18,7 @@ import { NextResponse } from "next/server";
 
 import { search } from "@/lib/search";
 import type { SearchResponse } from "@/lib/search/types";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 
 import { getSearchIndexWithMeta } from "./cache";
 
@@ -27,7 +28,7 @@ export const dynamic = "force-dynamic";
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 
-export async function POST(req: Request) {
+export const POST = withRemoteAuth(async function (req: Request) {
   const t0 = Date.now();
   try {
     const body = (await req.json().catch(() => ({}))) as {
@@ -62,4 +63,4 @@ export async function POST(req: Request) {
       { status: 500 },
     );
   }
-}
+});

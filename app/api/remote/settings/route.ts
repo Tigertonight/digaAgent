@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import {
   getRemoteAccessSettings,
-  isLocalRequest,
   updateRemoteAccessSettings,
 } from "@/lib/remote/store";
 import type { RemoteAccessMode } from "@/lib/remote/types";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,24 +13,23 @@ function validMode(value: unknown): value is RemoteAccessMode {
   return value === "off" || value === "vpn" || value === "lan";
 }
 
-export async function GET(req: Request) {
-  if (!isLocalRequest(req)) {
-    return NextResponse.json({ error: "local access required" }, { status: 403 });
-  }
-  const settings = await getRemoteAccessSettings();
-  return NextResponse.json({
-    mode: settings.mode,
-    port: settings.port,
-    instanceId: settings.instanceId,
-    tlsFingerprint: settings.tlsFingerprint,
-    publicTunnelDisabled: settings.publicTunnelDisabled === true,
-  });
-}
+// 远程访问设置只能本地调（从 desktop settings UI）。
+export const GET = withRemoteAuth(
+  async function () {
+    const settings = await getRemoteAccessSettings();
+    return NextResponse.json({
+      mode: settings.mode,
+      port: settings.port,
+      instanceId: settings.instanceId,
+      tlsFingerprint: settings.tlsFingerprint,
+      publicTunnelDisabled: settings.publicTunnelDisabled === true,
+    });
+  },
+  { requireLocalOnly: true }
+);
 
-export async function PATCH(req: Request) {
-  if (!isLocalRequest(req)) {
-    return NextResponse.json({ error: "local access required" }, { status: 403 });
-  }
+export const PATCH = withRemoteAuth(
+  async function (req: Request) {
   const body = (await req.json().catch(() => ({}))) as {
     mode?: unknown;
     port?: unknown;
@@ -57,4 +56,6 @@ export async function PATCH(req: Request) {
     tlsFingerprint: settings.tlsFingerprint,
     publicTunnelDisabled: settings.publicTunnelDisabled === true,
   });
-}
+  },
+  { requireLocalOnly: true }
+);

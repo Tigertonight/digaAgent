@@ -15,17 +15,19 @@ import {
   workflowResumeSnapshot,
 } from "@/lib/workflows/server-store";
 import type { WorkflowWorktree } from "@/lib/workflows/types";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(
+// F12：workflow 历史是持久化存储，不应该依赖 live agent registry。
+// 如果重启 / 版本更新后 in-memory agent 丢失，历史 workflow 还在 server-store 里，
+// 只要 parentAgentId 匹配，GET 仍然返回。注意：这里仍需远程鉴权。
+export const GET = withRemoteAuth(async function (
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const rec = getAgent(id);
-  if (!rec) return NextResponse.json({ error: "agent not found" }, { status: 404 });
   const url = new URL(req.url);
   const workflowId = url.searchParams.get("id") ?? url.searchParams.get("workflowId");
   const debug = url.searchParams.get("debug") === "1";
@@ -49,9 +51,9 @@ export async function GET(
     workflows,
     resumes: workflows.map(workflowResumeSnapshot),
   });
-}
+});
 
-export async function POST(
+export const POST = withRemoteAuth(async function (
   req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -78,6 +80,37 @@ export async function POST(
       return NextResponse.json(
         { error: "valid workflow worktree metadata is required" },
         { status: 400 }
+      );
+    }
+    // F11：验证该 worktree 是该 workflow 创建的 artifact。
+    // 创建时 script-runtime 会 putWorkflowArtifact(workflowId, { name: `worktree:${id}`, value: <metadata>, ... })。
+    // 这里要求 artifact 名匹配 且 value.path 与传入 worktree.path 一致。
+    const ownerArtifact = workflow.artifacts.find(
+      (a) => a.name === `worktree:${worktree.id}`
+    );
+    if (!ownerArtifact) {
+      return NextResponse.json(
+        {
+          error: `worktree ${worktree.id} is not part of workflow ${workflowId}`,
+        },
+        { status: 403 }
+      );
+    }
+    const artifactValue = ownerArtifact.value as
+      | { path?: unknown; branchName?: unknown }
+      | null;
+    if (
+      !artifactValue ||
+      typeof artifactValue.path !== "string" ||
+      artifactValue.path !== worktree.path ||
+      typeof artifactValue.branchName !== "string" ||
+      artifactValue.branchName !== worktree.branchName
+    ) {
+      return NextResponse.json(
+        {
+          error: `worktree metadata mismatch with original workflow artifact`,
+        },
+        { status: 403 }
       );
     }
     const manager = createGitWorktreeManager(rec.cwd);
@@ -126,7 +159,7 @@ export async function POST(
       { status: 400 }
     );
   }
-}
+});
 
 function parseWorkflowWorktree(raw: unknown): WorkflowWorktree | null {
   if (!raw || typeof raw !== "object") return null;

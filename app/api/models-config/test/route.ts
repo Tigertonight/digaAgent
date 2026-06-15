@@ -18,6 +18,7 @@ import {
   AuthStorage,
 } from "@earendil-works/pi-coding-agent";
 import { completeSimple } from "@earendil-works/pi-ai";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -35,7 +36,7 @@ function trimStringField(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
 }
 
-export async function POST(req: NextRequest) {
+export const POST = withRemoteAuth(async (req: NextRequest) => {
   let tempDir: string | undefined;
   const startedAt = Date.now();
   let httpStatus: number | undefined;
@@ -176,4 +177,4 @@ export async function POST(req: NextRequest) {
       }
     }
   }
-}
+});

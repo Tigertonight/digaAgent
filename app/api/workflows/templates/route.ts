@@ -5,11 +5,12 @@ import {
   listWorkflowTemplates,
   putWorkflowTemplate,
 } from "@/lib/workflows/template-store";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(req: Request) {
+export const GET = withRemoteAuth(async function (req: Request) {
   const url = new URL(req.url);
   const id = url.searchParams.get("id") ?? url.searchParams.get("templateId");
   if (id) {
@@ -20,9 +21,9 @@ export async function GET(req: Request) {
     return NextResponse.json({ template });
   }
   return NextResponse.json({ templates: listWorkflowTemplates() });
-}
+});
 
-export async function POST(req: Request) {
+export const POST = withRemoteAuth(async function (req: Request) {
   const body = await req.json().catch(() => ({}));
   try {
     const template = putWorkflowTemplate({
@@ -46,9 +47,9 @@ export async function POST(req: Request) {
       { status: 400 }
     );
   }
-}
+});
 
-export async function DELETE(req: Request) {
+export const DELETE = withRemoteAuth(async function (req: Request) {
   const url = new URL(req.url);
   const id = url.searchParams.get("id") ?? url.searchParams.get("templateId");
   if (!id) {
@@ -62,4 +63,4 @@ export async function DELETE(req: Request) {
       { status: 400 }
     );
   }
-}
+});

@@ -4,11 +4,12 @@ import {
   listWorkflowNetworkAudits,
   setWorkflowNetworkPolicy,
 } from "@/lib/workflows/network-policy";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET(req: Request) {
+export const GET = withRemoteAuth(async function (req: Request) {
   const url = new URL(req.url);
   const auditLimit = Number(url.searchParams.get("auditLimit") ?? 50);
   const outcome = url.searchParams.get("outcome");
@@ -25,9 +26,9 @@ export async function GET(req: Request) {
       q: url.searchParams.get("q") ?? undefined,
     }),
   });
-}
+});
 
-export async function PUT(req: Request) {
+export const PUT = withRemoteAuth(async function (req: Request) {
   const body = await req.json().catch(() => ({}));
   const rawPolicy =
     body && typeof body === "object" && "policy" in body
@@ -35,4 +36,4 @@ export async function PUT(req: Request) {
       : body;
   const policy = setWorkflowNetworkPolicy(rawPolicy);
   return NextResponse.json({ policy });
-}
+});

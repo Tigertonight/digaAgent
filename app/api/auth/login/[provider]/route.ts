@@ -11,6 +11,7 @@
  */
 import { type NextRequest, NextResponse } from "next/server";
 import { getAuth, getModelRegistry } from "@/lib/agent-registry";
+import { withRemoteAuth } from "@/lib/remote/with-auth";
 import type {
   OAuthAuthInfo,
   OAuthDeviceCodeInfo,
@@ -70,7 +71,9 @@ function gcCallbacks() {
   }
 }
 
-export async function GET(
+// OAuth 登录 SSE 只能在本地（Electron renderer / dev local）发起。
+// 远程设备不能走 OAuth，他们应该走设备配对。
+export const GET = withRemoteAuth(async function (
   req: NextRequest,
   ctx: { params: Promise<{ provider: string }> }
 ) {
@@ -228,9 +231,9 @@ export async function GET(
       "X-Accel-Buffering": "no",
     },
   });
-}
+}, { requireLocalOnly: true });
 
-export async function POST(
+export const POST = withRemoteAuth(async function (
   req: NextRequest,
   ctx: { params: Promise<{ provider: string }> }
 ) {
@@ -287,4 +290,4 @@ export async function POST(
       { status: 500 }
     );
   }
-}
+}, { requireLocalOnly: true });
