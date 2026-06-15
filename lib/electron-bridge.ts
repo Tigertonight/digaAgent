@@ -198,7 +198,8 @@ export interface DependenciesApi {
 export interface ElectronApi {
   getAppInfo(): Promise<AppInfo>;
   getApiBase(): Promise<string>;
-  getLocalSecret(): Promise<string>;
+  // 移除：getLocalSecret。renderer 不应该能读取 secret。
+  // same-origin fetch 由主进程 onBeforeSendHeaders 自动注入。
   dependencies?: DependenciesApi;
   updater: UpdaterApi;
   selectDirectory(opts?: SelectDirectoryOptions): Promise<string | null>;

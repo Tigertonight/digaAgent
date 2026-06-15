@@ -15,13 +15,19 @@ interface PairPayload {
 }
 
 async function probeCandidate(base: string): Promise<boolean> {
+  // R2：/api/remote/ping 现在是公开 health endpoint，手机未配对前也能调。
+  // 带上一个随机后缀参数，防中间代理误缓存。
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 1500);
   try {
-    const res = await fetch(`${base}/api/remote/ping`, {
-      signal: controller.signal,
-      cache: "no-store",
-    });
+    const cacheBuster = Math.random().toString(36).slice(2, 8);
+    const res = await fetch(
+      `${base}/api/remote/ping?probe=${cacheBuster}`,
+      {
+        signal: controller.signal,
+        cache: "no-store",
+      }
+    );
     return res.ok;
   } catch {
     return false;

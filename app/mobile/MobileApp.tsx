@@ -1,8 +1,10 @@
 "use client";
 
 import {
+  createContext,
   memo,
   useCallback,
+  useContext,
   useEffect,
   useRef,
   useState,
@@ -190,10 +192,12 @@ function mobileSleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-function buildRemoteUrl(base: string, path: string, token?: string): string {
-  const url = new URL(path, base);
-  if (token) url.searchParams.set("remoteToken", token);
-  return url.toString();
+function buildRemoteUrl(base: string, path: string, _token?: string): string {
+  // R5：不再把 remoteToken 写进 URL。普通请求一律用 Authorization 头，
+  // SSE 走一次性 stream ticket（另劤处理）。保留 _token 参数只是为了
+  // 调用点不动。
+  void _token;
+  return new URL(path, base).toString();
 }
 
 function mobileBaseLabel(base: string): string {
@@ -493,6 +497,286 @@ function MobileDisclosure({
           {children}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// S9: 移动端 subagent 卡片需要调 retry/resume/open session，但渲染函数是
+// file-scope 的。用 Context 避免一层层 props drilling。由顶层 MobileApp Provider 提供。
+export interface MobileSubagentControls {
+  retryTask?: (
+    batchId: string,
+    taskId: string,
+    parentAgentId?: string
+  ) => Promise<void> | void;
+  resumeBatch?: (
+    batchId: string,
+    parentAgentId?: string
+  ) => Promise<void> | void;
+  openSession?: (sessionFile: string) => Promise<void> | void;
+}
+const MobileSubagentControlsContext = createContext<MobileSubagentControls>({});
+
+function MobileSubagentBatchCard({
+  part,
+}: {
+  part: Extract<MessagePart, { kind: "subagent_batch" }>;
+}) {
+  const { retryTask, resumeBatch, openSession } = useContext(
+    MobileSubagentControlsContext
+  );
+  const [resuming, setResuming] = useState(false);
+  const [retryingTaskIds, setRetryingTaskIds] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [showAudit, setShowAudit] = useState(false);
+  const done = part.tasks.filter((task) => task.status === "completed").length;
+  const failedCount = part.tasks.filter(
+    (t) => t.status === "failed" || t.status === "aborted" || t.status === "timeout"
+  ).length;
+  const hasUnfinished = part.tasks.some(
+    (task) => task.status === "pending" || task.status === "running"
+  );
+  const canResume =
+    Boolean(resumeBatch) &&
+    Boolean(part.restored) &&
+    hasUnfinished &&
+    !resuming;
+
+  return (
+    <MobileDisclosure
+      title={`子任务协作 · ${part.status}`}
+      subtitle={`${done}/${part.tasks.length} completed${
+        failedCount > 0 ? ` · ${failedCount} failed` : ""
+      } · ${part.reason}`}
+      icon={<Layers3 size={14} />}
+    >
+      <div className="space-y-2">
+        {part.verification ? (
+          <div
+            className="rounded border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-2 py-1.5 text-token-xs"
+            style={{
+              color:
+                part.verification.status === "passed"
+                  ? "var(--color-success)"
+                  : part.verification.status === "warning"
+                    ? "var(--color-warning)"
+                    : "var(--color-danger)",
+            }}
+          >
+            verification: {part.verification.status} · {part.verification.summary}
+          </div>
+        ) : null}
+        {canResume ? (
+          <button
+            type="button"
+            disabled={!canResume}
+            onClick={async () => {
+              if (!resumeBatch) return;
+              setResuming(true);
+              try {
+                await resumeBatch(part.id, part.parentAgentId);
+              } finally {
+                setResuming(false);
+              }
+            }}
+            className="w-full rounded border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-2 py-1.5 text-xs disabled:opacity-50"
+          >
+            {resuming ? "继续中…" : "继续未完成的子任务"}
+          </button>
+        ) : null}
+        {part.tasks.map((task) => {
+          const retryKey = task.id;
+          const isRetrying = retryingTaskIds.has(retryKey);
+          const canRetry =
+            Boolean(retryTask) &&
+            (task.status === "failed" ||
+              task.status === "aborted" ||
+              task.status === "timeout") &&
+            !isRetrying;
+          return (
+            <div
+              key={task.id}
+              className="rounded-lg border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] p-2 text-xs"
+            >
+              <div className="flex gap-2">
+                <span className={statusTone(task.status)}>{task.status}</span>
+                <span className="min-w-0 flex-1 truncate font-medium">
+                  {task.title}
+                </span>
+                {task.verification ? (
+                  <span
+                    className="rounded border border-[color:var(--border-soft)] px-1 text-token-xs"
+                    style={{
+                      color:
+                        task.verification.status === "passed"
+                          ? "var(--color-success)"
+                          : task.verification.status === "warning"
+                            ? "var(--color-warning)"
+                            : "var(--color-danger)",
+                    }}
+                    title={task.verification.checks
+                      .map((c) => `${c.id}: ${c.status}`)
+                      .join(" | ")}
+                  >
+                    {task.verification.status}
+                  </span>
+                ) : null}
+              </div>
+              {task.answerPreview || task.error ? (
+                <div className="mt-1 line-clamp-3 text-[color:var(--text-muted)]">
+                  {task.answerPreview || task.error}
+                </div>
+              ) : null}
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {canRetry ? (
+                  <button
+                    type="button"
+                    disabled={!canRetry}
+                    onClick={async () => {
+                      if (!retryTask) return;
+                      setRetryingTaskIds((cur) => {
+                        const n = new Set(cur);
+                        n.add(retryKey);
+                        return n;
+                      });
+                      try {
+                        await retryTask(part.id, task.id, part.parentAgentId);
+                      } finally {
+                        setRetryingTaskIds((cur) => {
+                          const n = new Set(cur);
+                          n.delete(retryKey);
+                          return n;
+                        });
+                      }
+                    }}
+                    className="rounded border border-[color:var(--border-soft)] px-2 py-0.5 text-token-xs disabled:opacity-50"
+                  >
+                    {isRetrying ? "重试中…" : "重试"}
+                  </button>
+                ) : null}
+                {task.sessionFile && openSession ? (
+                  <button
+                    type="button"
+                    onClick={() => void openSession(task.sessionFile!)}
+                    className="rounded border border-[color:var(--border-soft)] px-2 py-0.5 text-token-xs"
+                  >
+                    打开 child session
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          );
+        })}
+        {part.auditEvents && part.auditEvents.length > 0 ? (
+          <div className="rounded-lg border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-2">
+            <button
+              type="button"
+              onClick={() => setShowAudit((v) => !v)}
+              className="flex w-full items-center justify-between text-xs"
+            >
+              <span>审计事件（{part.auditEvents.length}）</span>
+              {showAudit ? (
+                <ChevronDown size={14} />
+              ) : (
+                <ChevronRight size={14} />
+              )}
+            </button>
+            {showAudit ? (
+              <ul className="mt-1.5 space-y-1 text-token-xs text-[color:var(--text-muted)]">
+                {part.auditEvents.map((ev, i) => (
+                  <li key={i} className="truncate" title={ev.message}>
+                    [{ev.type}] {ev.message}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </MobileDisclosure>
+  );
+}
+
+// C5: 移动端追问卡片。独立于全局 composer input——在卡片里会独立输入
+// 自定义回复，避免误以为“发送新 prompt”被 clarification 吞掉。
+function MobileClarificationCard({
+  part,
+  clarify,
+}: {
+  part: Extract<MessagePart, { kind: "clarification" }>;
+  clarify: (
+    requestId: string,
+    body: { selectedOptionId?: string; customText?: string }
+  ) => Promise<void> | void;
+}) {
+  const [draft, setDraft] = useState("");
+  const [submitting, setSubmitting] = useState<"option" | "custom" | null>(
+    null
+  );
+
+  const submitChoice = async (optionId: string) => {
+    if (submitting) return;
+    setSubmitting("option");
+    try {
+      await clarify(part.requestId, { selectedOptionId: optionId });
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  const submitCustom = async () => {
+    const text = draft.trim();
+    if (!text || submitting) return;
+    setSubmitting("custom");
+    try {
+      await clarify(part.requestId, { customText: text });
+      setDraft("");
+    } finally {
+      setSubmitting(null);
+    }
+  };
+
+  return (
+    <div className="space-y-2 rounded-token-lg border border-[color:var(--accent)] bg-[color:var(--color-accent-bg)] p-3">
+      <div className="font-medium">{part.title}</div>
+      <div className="whitespace-pre-wrap text-sm">{part.question}</div>
+      {part.status === "pending" ? (
+        <>
+          <div className="space-y-1">
+            {part.options.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                disabled={submitting !== null}
+                onClick={() => void submitChoice(option.id)}
+                className="block w-full rounded border border-[color:var(--border-soft)] px-2 py-1.5 text-left text-xs disabled:opacity-50"
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value.slice(0, 500))}
+              placeholder="自定义回复…"
+              disabled={submitting !== null}
+              className="min-w-0 flex-1 rounded border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] px-2 py-1.5 text-xs outline-none disabled:opacity-60"
+            />
+            <button
+              type="button"
+              onClick={() => void submitCustom()}
+              disabled={!draft.trim() || submitting !== null}
+              className="rounded border border-[color:var(--border)] px-2 py-1 text-xs disabled:opacity-50"
+            >
+              {submitting === "custom" ? "发送中…" : "发送"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="text-xs text-[color:var(--text-muted)]">已回复</div>
+      )}
     </div>
   );
 }
@@ -992,6 +1276,7 @@ function MobileProcessGroup({
 
 function MobileMessagePart({
   part,
+  // C5 之后不再使用，仅保留接口类型。用 ”赋一次 void“ 避免 unused warning。
   input,
   streaming = false,
   approve,
@@ -1012,6 +1297,8 @@ function MobileMessagePart({
     body: { selectedOptionId?: string; customText?: string }
   ) => Promise<void>;
 }) {
+  // C5：保留 input prop 以保持调用点向后兼容，但不再使用。
+  void input;
   if (part.kind === "text") {
     return (
       <div className="mobile-message-markdown min-w-0 overflow-hidden">
@@ -1123,77 +1410,13 @@ function MobileMessagePart({
   }
 
   if (part.kind === "clarification") {
-    return (
-      <div className="space-y-2 rounded-token-lg border border-[color:var(--accent)] bg-[color:var(--color-accent-bg)] p-3">
-        <div className="font-medium">{part.title}</div>
-        <div className="whitespace-pre-wrap text-sm">{part.question}</div>
-        {part.status === "pending" ? (
-          <>
-            <div className="space-y-1">
-              {part.options.map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  onClick={() =>
-                    void clarify(part.requestId, {
-                      selectedOptionId: option.id,
-                    })
-                  }
-                  className="block w-full rounded border border-[color:var(--border-soft)] px-2 py-1.5 text-left text-xs"
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={() =>
-                void clarify(part.requestId, {
-                  customText: input || "继续按最佳判断推进。",
-                })
-              }
-              className="rounded border border-[color:var(--border)] px-2 py-1 text-xs"
-            >
-              用输入框内容回复
-            </button>
-          </>
-        ) : (
-          <div className="text-xs text-[color:var(--text-muted)]">已回复</div>
-        )}
-      </div>
-    );
+    // C5：不再复用全局 composer input，用专属输入框（避免把用户准备发的
+    // 新 prompt 当成 clarification 答案消耗掉）。
+    return <MobileClarificationCard part={part} clarify={clarify} />;
   }
 
   if (part.kind === "subagent_batch") {
-    const done = part.tasks.filter((task) => task.status === "completed").length;
-    return (
-      <MobileDisclosure
-        title={`子任务协作 · ${part.status}`}
-        subtitle={`${done}/${part.tasks.length} completed · ${part.reason}`}
-        icon={<Layers3 size={14} />}
-      >
-        <div className="space-y-2">
-          {part.tasks.map((task) => (
-            <div
-              key={task.id}
-              className="rounded-lg border border-[color:var(--border-soft)] bg-[color:var(--bg-panel)] p-2 text-xs"
-            >
-              <div className="flex gap-2">
-                <span className={statusTone(task.status)}>{task.status}</span>
-                <span className="min-w-0 flex-1 truncate font-medium">
-                  {task.title}
-                </span>
-              </div>
-              {task.answerPreview || task.error ? (
-                <div className="mt-1 line-clamp-3 text-[color:var(--text-muted)]">
-                  {task.answerPreview || task.error}
-                </div>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      </MobileDisclosure>
-    );
+    return <MobileSubagentBatchCard part={part} />;
   }
 
   if (part.kind === "workflow_run") {
@@ -1851,49 +2074,76 @@ export default function MobileApp({
       const sinceValue =
         replay && typeof lastSeqRef.current === "number"
           ? String(lastSeqRef.current)
-          : "latest";
-      const since = `?since=${encodeURIComponent(sinceValue)}`;
-      const tokenJoin = since ? "&" : "?";
-      const remoteToken = remote?.token
-        ? `${tokenJoin}remoteToken=${encodeURIComponent(remote.token)}`
-        : "";
-      const es = new EventSource(
-        `${baseUrlRef.current || baseUrl}/api/agent/${nextAgentId}/events${since}${remoteToken}`
-      );
-      eventSourceRef.current = es;
-      es.onopen = () => {
-        reconnectAttemptRef.current = 0;
-        setConnection("connected");
-        scheduleReconcileSelectedSession("sse_open", 600);
-      };
-      es.onmessage = (ev) => {
-        const seq = ev.lastEventId ? Number(ev.lastEventId) : NaN;
-        if (Number.isFinite(seq)) lastSeqRef.current = seq;
-        const event = JSON.parse(ev.data);
-        if (event?.type === "agent_start") setAgentRunning(true);
-        if (event?.type === "agent_end") {
-          setAgentRunning(false);
-          scheduleReconcileSelectedSession("agent_end", 450);
-          void loadAll();
+          : "-1";
+      // R5：先过 ticket 接口拿一次性 SSE ticket，再 attach。
+      // ticket 进 URL 可接受——短期、一次性，即使被代理记下也不能重放。
+      const start = async () => {
+        const storage = remoteRef.current;
+        const base = baseUrlRef.current || baseUrl;
+        let ticket: string | null = null;
+        if (storage?.token) {
+          try {
+            const r = await fetch(
+              new URL("/api/remote/sse-ticket", base).toString(),
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${storage.token}`,
+                },
+                body: "{}",
+                cache: "no-store",
+              }
+            );
+            if (r.ok) {
+              const d = (await r.json()) as { ticket?: string };
+              if (d.ticket) ticket = d.ticket;
+            }
+          } catch {
+            // 拿不到 ticket 就走本地开发 fallback（同源会被 isLocalRequest 放行）。
+          }
         }
-        setChatState((prev) => applyEvent(prev, event));
+        const params = new URLSearchParams();
+        params.set("since", sinceValue);
+        if (ticket) params.set("sseTicket", ticket);
+        const url = `${base}/api/agent/${nextAgentId}/events?${params.toString()}`;
+        const es = new EventSource(url);
+        eventSourceRef.current = es;
+        es.onopen = () => {
+          reconnectAttemptRef.current = 0;
+          setConnection("connected");
+          scheduleReconcileSelectedSession("sse_open", 600);
+        };
+        es.onmessage = (ev) => {
+          const seq = ev.lastEventId ? Number(ev.lastEventId) : NaN;
+          if (Number.isFinite(seq)) lastSeqRef.current = seq;
+          const event = JSON.parse(ev.data);
+          if (event?.type === "agent_start") setAgentRunning(true);
+          if (event?.type === "agent_end") {
+            setAgentRunning(false);
+            scheduleReconcileSelectedSession("agent_end", 450);
+            void loadAll();
+          }
+          setChatState((prev) => applyEvent(prev, event));
+        };
+        es.onerror = () => {
+          es.close();
+          if (eventSourceRef.current === es) eventSourceRef.current = null;
+          setConnection("reconnecting");
+          const attempt = reconnectAttemptRef.current++;
+          const delay = Math.min(30000, 1000 * 2 ** attempt);
+          if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = setTimeout(() => {
+            void (async () => {
+              await refreshReachableBase();
+              attachSse(nextAgentId, { replay: true });
+            })();
+          }, delay);
+        };
       };
-      es.onerror = () => {
-        es.close();
-        if (eventSourceRef.current === es) eventSourceRef.current = null;
-        setConnection("reconnecting");
-        const attempt = reconnectAttemptRef.current++;
-        const delay = Math.min(30000, 1000 * 2 ** attempt);
-        if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-        reconnectTimerRef.current = setTimeout(() => {
-          void (async () => {
-            await refreshReachableBase();
-            attachSse(nextAgentId, { replay: true });
-          })();
-        }, delay);
-      };
+      void start();
     },
-    [baseUrl, loadAll, refreshReachableBase, remote?.token, scheduleReconcileSelectedSession]
+    [baseUrl, loadAll, refreshReachableBase, scheduleReconcileSelectedSession]
   );
 
   useEffect(() => {
@@ -2403,6 +2653,70 @@ export default function MobileApp({
     }
   };
 
+  // S9：移动端 subagent 卡片控件。parentAgentId 优先，不坐在当前 active session 上。
+  const subagentRetryTask = useCallback(
+    async (batchId: string, taskId: string, parentAgentId?: string) => {
+      const aid = parentAgentId ?? agentId;
+      if (!aid) {
+        setError("当前没有可用的 parent agent，无法重试 subagent task");
+        return;
+      }
+      const r = await apiFetch(`/api/agent/${aid}/subagents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "retry", batchId, taskId }),
+      });
+      const data = (await r.json().catch(() => null)) as {
+        error?: string;
+      } | null;
+      if (!r.ok || data?.error) {
+        setError(data?.error ?? `重试 subagent task 失败: HTTP ${r.status}`);
+      } else {
+        scheduleReconcileSelectedSession("subagent-retry", 600);
+      }
+    },
+    [agentId, apiFetch, scheduleReconcileSelectedSession]
+  );
+
+  const subagentResumeBatch = useCallback(
+    async (batchId: string, parentAgentId?: string) => {
+      const aid = parentAgentId ?? agentId;
+      if (!aid) {
+        setError("当前没有可用的 parent agent，无法继续 subagent batch");
+        return;
+      }
+      const r = await apiFetch(`/api/agent/${aid}/subagents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "resume", batchId }),
+      });
+      const data = (await r.json().catch(() => null)) as {
+        error?: string;
+      } | null;
+      if (!r.ok || data?.error) {
+        setError(data?.error ?? `继续 subagent batch 失败: HTTP ${r.status}`);
+      } else {
+        scheduleReconcileSelectedSession("subagent-resume", 600);
+      }
+    },
+    [agentId, apiFetch, scheduleReconcileSelectedSession]
+  );
+
+  const subagentOpenSession = useCallback(
+    async (sessionFile: string) => {
+      const session = sessions.find((s) => s.path === sessionFile);
+      if (!session) {
+        setError("找不到这个 child subagent session，请刷新 session 列表。");
+        return;
+      }
+      await selectSession(session);
+    },
+    // selectSession 是个底层顶函数（deps 太多不宜抽 useCallback）。这里只需
+    // sessions 变化重构即可；selectSession 在 closure 里拿到的是实际调用时的最新版本。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessions]
+  );
+
   const openTaskRunSession = (sessionFile?: string | null) => {
     if (!sessionFile) {
       setError("这个任务还没有可打开的会话记录。");
@@ -2708,6 +3022,13 @@ export default function MobileApp({
   const composerCompact = composerFocused && keyboardCompact;
 
   return (
+    <MobileSubagentControlsContext.Provider
+      value={{
+        retryTask: subagentRetryTask,
+        resumeBatch: subagentResumeBatch,
+        openSession: subagentOpenSession,
+      }}
+    >
     <main className="mobile-safe-screen flex min-w-0 flex-col overflow-hidden bg-[color:var(--bg)] text-[color:var(--text)]">
       <header className="mobile-safe-top shrink-0 border-b border-[color:var(--border)] bg-[color:var(--bg-panel)] px-3 pb-2">
         <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2">
@@ -3324,5 +3645,6 @@ export default function MobileApp({
         </section>
       </div>
     </main>
+    </MobileSubagentControlsContext.Provider>
   );
 }
