@@ -43,12 +43,14 @@ export async function listAllSessions(): Promise<SessionInfoWithStatus[]> {
   // 在这里做一次动态 import,避免 client bundle 误把 server-only 的 agent-registry
   // 拉进来 —— 这个文件本身有 "server-only" 守门,但 import 顺序还是显式更清楚。
   const { listAgentSummaries } = await import("./agent-registry");
+  const summaries = listAgentSummaries().filter(
+    (agent) => !agent.hidden && agent.sessionFile
+  );
   const runtimeByPath = new Map(
-    listAgentSummaries()
-      .filter((agent) => !agent.hidden && agent.sessionFile)
-      .map((agent) => [agent.sessionFile!, agent])
+    summaries.map((agent) => [agent.sessionFile!, agent])
   );
   const list = await SessionManager.listAll();
+  const onDiskPaths = new Set(list.map((s) => s.path));
   const metas = await batchReadMeta(list.map((s) => s.id));
   const enriched: SessionInfoWithStatus[] = list.map((s) => {
     const runtime = runtimeByPath.get(s.path);
@@ -63,6 +65,42 @@ export async function listAllSessions(): Promise<SessionInfoWithStatus[]> {
       meta: metas.get(s.id),
     };
   });
+
+  // P4 兑底：registry 里有 sessionFile / sessionId 但 SessionManager.listAll() 还
+  // 拾不到的（SDK 还没把首行落盘、文件刚创建还没被底层缓存拿到等）补一个
+  // stub。它是“运行中会话”，不会在代码仓库里太久。后续正常 listAll 拾到后
+  // id 冲突，不会重复。
+  const stubMetas = await batchReadMeta(
+    summaries
+      .filter((s) => !onDiskPaths.has(s.sessionFile!))
+      .map((s) => s.sessionId)
+      .filter((sid): sid is string => Boolean(sid))
+  );
+  for (const summary of summaries) {
+    if (!summary.sessionFile) continue;
+    if (onDiskPaths.has(summary.sessionFile)) continue;
+    if (!summary.sessionId) continue;
+    const now = new Date(summary.updatedAt ?? Date.now());
+    enriched.push({
+      id: summary.sessionId,
+      path: summary.sessionFile,
+      cwd: summary.cwd ?? "",
+      created: now,
+      modified: now,
+      messageCount: 0,
+      firstMessage: "",
+      allMessagesText: "",
+      isRunning:
+        summary.runtimeState === "streaming" || summary.isStreaming === true,
+      runtimeState: summary.runtimeState,
+      waitingApprovalCount: summary.waitingApprovalCount,
+      waitingClarificationCount: summary.waitingClarificationCount,
+      lastEventSeq: summary.lastEventSeq,
+      runtimeUpdatedAt: summary.updatedAt,
+      meta: stubMetas.get(summary.sessionId),
+    });
+  }
+
   return enriched.sort((a, b) => {
     // pinned 始终最优先（无论是否 running）
     const ap = a.meta?.pinned ? 1 : 0;
@@ -248,7 +286,11 @@ export async function getForkableUserMessages(
         }
       }
     }
-    out.push({ entryId: e.id, text: stripContextAside(text) });
+    // 剩下净空（仅含 control aside、无可见原文）的 entry 不进 fork list。
+    // 包括 goal continuation 之类“系统推进”同步到 jsonl 的 user message。
+    const visible = stripContextAside(text);
+    if (!visible) continue;
+    out.push({ entryId: e.id, text: visible });
   }
   return out;
 }
