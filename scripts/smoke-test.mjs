@@ -184,6 +184,50 @@ async function main() {
     assert(r.status === 200, `expected 200, got ${r.status}`);
   });
 
+  // Smoke-2：agent / SSE 路径的 negative case——验证该路径不会在 prod 包中 throw 500。
+  await check("POST /api/agent/new 缺字段 → 400", async () => {
+    const r = await fetch(`${BASE}/api/agent/new`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    assert(
+      r.status === 400,
+      `expected 400 for missing provider/modelId, got ${r.status}`
+    );
+  });
+
+  await check("POST /api/agent/<unknown> 不崩", async () => {
+    const r = await fetch(`${BASE}/api/agent/agent-does-not-exist`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "prompt", text: "hi" }),
+    });
+    // 4xx 都可接受（404 / 400）。关键是不能 500。
+    assert(
+      r.status >= 400 && r.status < 500,
+      `expected 4xx for unknown agent, got ${r.status}`
+    );
+  });
+
+  await check("GET /api/agent/<unknown>/events 不崩", async () => {
+    const r = await fetch(`${BASE}/api/agent/agent-does-not-exist/events`);
+    assert(
+      r.status >= 400 && r.status < 500,
+      `expected 4xx for unknown agent SSE, got ${r.status}`
+    );
+  });
+
+  await check("GET /api/sessions/<unknown>/context 不崩", async () => {
+    const r = await fetch(
+      `${BASE}/api/sessions/${encodeURIComponent("/tmp/does-not-exist.jsonl")}/context`
+    );
+    assert(
+      r.status >= 400 && r.status < 500,
+      `expected 4xx for unknown session, got ${r.status}`
+    );
+  });
+
   // 短暂等待 SSE 连接的悬挂 callback 被 GC，避免 server 进程被 abort 干扰
   await sleep(200);
 

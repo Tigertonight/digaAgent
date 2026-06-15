@@ -57,10 +57,12 @@
     "public-surface:check": "node scripts/check-public-surface.mjs",
     "internal-runtime:check": "node scripts/check-internal-runtime.mjs",
     "workflow:sandbox:check": "node scripts/check-workflow-sandbox.mjs",
+    "route-auth:check": "node scripts/check-route-auth.mjs",
     "electron:dev": "ELECTRON_DEV=1 electron electron/main.js",
     "electron:start": "electron electron/main.js",
     "clean": "rm -rf dist .next",
-    "electron:build": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --mac --arm64"
+    "electron:build": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --mac --arm64",
+    "release:smoke": "node scripts/release-smoke.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.78.0",
