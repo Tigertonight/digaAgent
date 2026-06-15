@@ -24,6 +24,8 @@ export {
   addGoalEvidence,
   listGoalEvidence,
   buildGoalRecap,
+  bindGoalSession,
+  findAgentIdBySessionId,
   __setGoalStoreRootForTest,
   __resetGoalStoreForTest,
 } from "./file-store";

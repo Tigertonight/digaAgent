@@ -61,6 +61,14 @@ export interface SubagentPermissionInput {
   requestedTools?: string[];
   /** Write paths the runtime task declared. */
   writePaths?: string[];
+  /**
+   * S2: 该 task 在隔离 worktree 里跑。此时“写入边界”就是 worktree 路径，
+   * 应该能拿到写工具 + 常见实现型工具（bash 等）。这里只控制底层哲学：
+   *   - definition.defaultTools 仍是上限。
+   *   - definition.permissionMode === "worktree" 或 input.isolatedWorktree===true
+   *     时，不会被误剖成 read-only。
+   */
+  isolatedWorktree?: boolean;
 }
 
 export interface ResolvedSubagentPermission {
@@ -69,6 +77,22 @@ export interface ResolvedSubagentPermission {
   appliedMode: SubagentPermissionMode | "role-default";
   notes: string[];
 }
+
+/**
+ * S2: worktree 隔离下的 “实现型” 默认工具。包括 read 及常见写工具。
+ * 这些名字与主 agent 可用工具保持一致（write / edit / apply_patch 等是 SDK 默认 builtin）。
+ * 仅在调用方没有明确传 requested tools 且 definition 也没 pin defaultTools 时使用。
+ */
+export const WORKTREE_DEFAULT_TOOLS: readonly string[] = [
+  "read",
+  "grep",
+  "find",
+  "ls",
+  "bash",
+  "edit",
+  "write",
+  "apply_patch",
+];
 
 /**
  * Resolve the final permission for a subagent task.
@@ -141,6 +165,28 @@ export function resolveSubagentPermission(
     return { allowedTools: tools, appliedMode: "readOnly", notes };
   }
 
+  // S2：worktree 模式的完整处理。以 worktree 路径作为写入边界；不要被作 read-only。
+  if (mode === "worktree") {
+    // 如果调用方没传 requested tools 也没 pin defaultTools，拉上 worktree 默认实现型工具。
+    if (
+      (!input.requestedTools || input.requestedTools.length === 0) &&
+      (!definition.defaultTools || definition.defaultTools.length === 0)
+    ) {
+      tools = dedupe(WORKTREE_DEFAULT_TOOLS as string[]);
+      notes.push(
+        "worktree mode: applied default implementation toolset (read+write)."
+      );
+    }
+    return {
+      allowedTools: tools,
+      // worktree 路径由 orchestrator 在 createChild 时以 child cwd 代替，这里仅传出用户
+      // 明确声明的 writePaths（若有）供审计。
+      writePaths: nonEmpty(input.writePaths),
+      appliedMode: "worktree",
+      notes,
+    };
+  }
+
   if (mode === "boundedWrite") {
     const writePaths = nonEmpty(input.writePaths);
     if (!writePaths) {
@@ -162,6 +208,18 @@ export function resolveSubagentPermission(
   }
 
   // Definition without an explicit mode: keep tools, honor declared writePaths.
+  // S2：如果调用方明确表示这份 run 在 isolated worktree 里，不要反转成 read-only。
+  if (input.isolatedWorktree) {
+    return {
+      allowedTools: tools,
+      writePaths: nonEmpty(input.writePaths),
+      appliedMode: "role-default",
+      notes: [
+        ...notes,
+        "isolated worktree: write-capable tools allowed within the worktree.",
+      ],
+    };
+  }
   return {
     allowedTools: tools,
     writePaths: nonEmpty(input.writePaths),

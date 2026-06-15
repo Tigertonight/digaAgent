@@ -1,6 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   __resetCollabStoreForTest,
+  __setCollabStoreRootForTest,
   listPendingApprovals,
   registerPendingApproval,
   resolveApproval,
@@ -22,6 +26,15 @@ function approval(agentId: string, toolCallId: string): ApprovalRequest {
 }
 
 describe("collab server-store pending approvals", () => {
+  let tmp: string;
+  beforeAll(() => {
+    tmp = mkdtempSync(join(tmpdir(), "collab-test-"));
+    __setCollabStoreRootForTest(tmp);
+  });
+  afterAll(() => {
+    __setCollabStoreRootForTest(null);
+    if (tmp) rmSync(tmp, { recursive: true, force: true });
+  });
   afterEach(() => {
     __resetCollabStoreForTest();
   });

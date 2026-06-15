@@ -25,6 +25,10 @@ import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import os from "node:os";
 import { createCollabExtension } from "./collab/extension";
+import {
+  CONTEXT_ASIDE_CLOSE,
+  CONTEXT_ASIDE_OPEN,
+} from "./context-aside";
 import { createClarificationExtension } from "./clarification/extension";
 import { createBrowserExtension } from "./browser/extension";
 import { disposeBrowser } from "./browser/runtime";
@@ -50,6 +54,7 @@ import { getWorkflowNetworkPolicy } from "./workflows/network-policy";
 import { resolveLocalCodingAssistantCli } from "./local-coding-assistant/cli";
 import { DEFAULT_RULES } from "./collab/rules";
 import {
+  clearAllStaleApprovals,
   clearSessionRemember,
   hasSessionRemember,
   listPendingApprovals,
@@ -57,10 +62,12 @@ import {
 } from "./collab/server-store";
 import {
   clearAgentClarifications,
+  clearAllStaleClarifications,
   listPendingClarifications,
   registerPendingClarification,
 } from "./clarification/server-store";
 import {
+  bindGoalSession,
   buildGoalRecap,
   clearGoal,
   finishGoalTurn,
@@ -79,10 +86,16 @@ import {
   callMcpTool as callMcpToolRuntime,
 } from "./mcp/runtime";
 import { listEnabledMcpServers } from "./mcp/registry";
-import { updateProgress } from "./progress/server-store";
+import { clearProgress, updateProgress } from "./progress/server-store";
 import { writePersistedProgress } from "./progress/file-store";
-import { appendEvidenceMany } from "./evidence/server-store";
-import { appendRuntimeEvent } from "./runtime/event-store";
+import {
+  appendEvidenceMany,
+  disposeEvidenceForAgent,
+} from "./evidence/server-store";
+import {
+  appendRuntimeEvent,
+  disposeRuntimeEventsForAgent,
+} from "./runtime/event-store";
 import { bridgeAgentEventToRuntime } from "./runtime/agent-event-bridge";
 import {
   DEFAULT_CLIENT_REQUEST_TTL_MS,
@@ -127,6 +140,19 @@ function workflowFetchUrlRuleId(rawUrl: string): string {
  * 注：把 union 包给 events 字段使用，对 SSE encode 路径透明（JSON.stringify 即可），
  * 对 SDK subscribe 路径也不影响（subscribe handler 仍然只塞 AgentSessionEvent）。
  */
+/**
+ * F-A5：optimistic user message 确认事件。后端调 SDK prompt 之前 push，
+ * 带上服务端最终发给模型的 displayText（stripAgentMentions 后的文本）。
+ * 前端 reducer 收到后按 clientRequestId 找到 pending user 气泡，把其 text 衰变
+ * 为 displayText 并去 pending；SDK 后续发的 user message_start 还是同一文本，
+ * reducer 可以以一致文本重间同一条、不会产生双气泡。
+ */
+export interface OptimisticUserAckEvent {
+  type: "optimistic_user_ack";
+  clientRequestId: string;
+  displayText: string;
+}
+
 export type RingBufferEvent =
   | AgentSessionEvent
   | ApprovalRequestEvent
@@ -137,7 +163,8 @@ export type RingBufferEvent =
   | SubagentEvent
   | WorkflowEvent
   | GoalUpdatedEvent
-  | ProgressUpdatedEvent;
+  | ProgressUpdatedEvent
+  | OptimisticUserAckEvent;
 
 export const LOCAL_CODING_ASSISTANT_PROVIDER_ID = "local-coding-assistant";
 export const LOCAL_CODING_ASSISTANT_MODEL_ID = "local-coding-assistant";
@@ -232,11 +259,36 @@ interface GlobalRegistry {
   packageManagers?: Map<string, DefaultPackageManager>;
 }
 
-const g = globalThis as unknown as { __digaAgent?: GlobalRegistry };
+const g = globalThis as unknown as {
+  __digaAgent?: GlobalRegistry;
+  __digaAgentClarStaleSwept?: boolean;
+  __digaAgentApprStaleSwept?: boolean;
+};
 if (!g.__digaAgent) {
   g.__digaAgent = { agents: new Map() };
 }
 const reg = g.__digaAgent!;
+
+// C1：进程启动后一次性清掉从磁盘 hydrate 出来的所有 stale clarification。
+if (!g.__digaAgentClarStaleSwept) {
+  g.__digaAgentClarStaleSwept = true;
+  try {
+    clearAllStaleClarifications();
+  } catch (e) {
+    console.error("[clarification] startup stale sweep failed:", e);
+  }
+}
+
+// F-A6：同样一次性清掉 stale approval。重启后 UI 还能列出来的 approval
+// promise 已丢，点只会 409。
+if (!g.__digaAgentApprStaleSwept) {
+  g.__digaAgentApprStaleSwept = true;
+  try {
+    clearAllStaleApprovals();
+  } catch (e) {
+    console.error("[approval] startup stale sweep failed:", e);
+  }
+}
 
 export function getAuth(): AuthStorage {
   if (!reg.authStorage) {
@@ -364,6 +416,7 @@ export function pushExternalEvent(
     | WorkflowEvent
     | GoalUpdatedEvent
     | ProgressUpdatedEvent
+    | OptimisticUserAckEvent
 ): void {
   pushAgentEvent(rec, event);
 }
@@ -379,11 +432,17 @@ export function pushProgressEvent(
   pushExternalEvent(rec, { type: "progress_updated", progress });
 }
 
+/**
+ * Goal 后台续跑时发给模型的 prompt。
+ *
+ * 这是“系统推进”表 —— 不是用户说的话，不该以 user 气泡形式进入会话历史。
+ * 设计：**整个 prompt 都裹在 CONTEXT_ASIDE 里**，可见文本为空。前端
+ * chat-reducer 在 user message_start 看到 parts.length===0 时跳过添加，
+ * 避免出现空气泡或重复出现同样的 goal.objective。
+ */
 function buildGoalContinuationPrompt(goal: AgentGoal, recap?: string): string {
-  return [
-    "Continue working toward the active goal:",
-    "",
-    goal.objective,
+  const aside = [
+    `Continue working toward the active goal: ${goal.objective}`,
     ...(recap && recap.trim()
       ? ["", "Context from previous turns (do not repeat finished work):", recap]
       : []),
@@ -393,6 +452,7 @@ function buildGoalContinuationPrompt(goal: AgentGoal, recap?: string): string {
     "If you are truly blocked and cannot make meaningful progress without user input or an external change, call goal_update with status=blocked and include a short blockedReason.",
     "Otherwise continue implementation, verification, or investigation. Keep the user informed with concise progress.",
   ].join("\n");
+  return [CONTEXT_ASIDE_OPEN, aside, CONTEXT_ASIDE_CLOSE].join("\n");
 }
 
 function maybeContinueGoal(rec: AgentRecord): void {
@@ -416,7 +476,7 @@ function maybeContinueGoal(rec: AgentRecord): void {
     listPendingClarifications(rec.id).length > 0
   ) {
     const paused = setGoalStatus(rec.id, "paused", {
-      pauseReason: "Waiting for user input.",
+      pauseReason: GOAL_PAUSE_WAITING_USER,
     });
     pushGoalEvent(rec, paused);
     return;
@@ -441,12 +501,46 @@ function maybeContinueGoal(rec: AgentRecord): void {
   }, 200);
 }
 
+/**
+ * G5：当追问/审批 resolve 后调一次。如果 goal 是“等用户输入”被暂停的，
+ * 且现在再也没有未处理的 approval / clarification 了，就自动恢复到 active 并
+ * 推进下一轮。这个函数幂等，反复调只在含义匹配时才跳进。
+ */
+export const GOAL_PAUSE_WAITING_USER = "Waiting for user input.";
+
+export function maybeResumeGoalAfterUserInput(agentId: string): void {
+  const rec = reg.agents.get(agentId);
+  if (!rec) return;
+  const goal = getGoal(agentId);
+  if (!goal) return;
+  if (goal.status !== "paused") return;
+  if (goal.pauseReason !== GOAL_PAUSE_WAITING_USER) return;
+  if (
+    listPendingApprovals(agentId).length > 0 ||
+    listPendingClarifications(agentId).length > 0
+  ) {
+    return;
+  }
+  const resumed = setGoalStatus(agentId, "active");
+  pushGoalEvent(rec, resumed);
+  // 调一下推进，由 maybeContinueGoal 决定是否起 prompt。
+  maybeContinueGoal(rec);
+}
+
 function pushAgentEvent(rec: AgentRecord, event: RingBufferEvent): void {
   const seq = rec.nextSeq++;
   rec.updatedAt = Date.now();
   rec.events[seq % MAX_EVENTS_PER_AGENT] = { seq, event };
   mirrorRuntimeEvent(rec, seq, event);
-  for (const l of rec.listeners) l();
+  // fix-S3.d：任一 listener 抛错不能影响后面的。多 tab / pet 窗口 / 移动端
+  // 同时订阅同一 agent 时，其中一个跳出 controller 会报错，不应该宜后面的 SSE。
+  for (const l of rec.listeners) {
+    try {
+      l();
+    } catch (err) {
+      console.error("[agent-registry] listener threw:", err);
+    }
+  }
 }
 
 function mirrorRuntimeEvent(
@@ -475,15 +569,9 @@ function mirrorRuntimeEvent(
   }
 }
 
-function messageHasStopReason(event: unknown): event is { message: unknown } {
-  if (!event || typeof event !== "object") return false;
-  const e = event as {
-    message?: { role?: string; stopReason?: unknown };
-    assistantMessageEvent?: { partial?: { role?: string; stopReason?: unknown } };
-  };
-  const msg = e.message ?? e.assistantMessageEvent?.partial;
-  return msg?.role === "assistant" && typeof msg.stopReason === "string";
-}
+// fix-S5.b：原本有个 messageHasStopReason 拽起的空 if-branch，存在原因是为了
+// 记录“不要根据 partial assistant message 推断轮次结束”的决策。现在提取
+// 成上面这句注释并删除未使用的 helper，保持代码干净。
 
 function clearFinishWatchdog(rec: AgentRecord) {
   if (rec.finishWatchdog) {
@@ -875,6 +963,19 @@ export async function createAgent(opts: CreateOptions): Promise<{
   sessionId: string;
   sessionFile: string | undefined;
 }> {
+  if (opts.sessionPath) {
+    const existing = Array.from(reg.agents.values()).find(
+      (rec) => !rec.hidden && rec.session.sessionFile === opts.sessionPath
+    );
+    if (existing) {
+      return {
+        id: existing.id,
+        sessionId: existing.session.sessionId,
+        sessionFile: existing.session.sessionFile,
+      };
+    }
+  }
+
   if (
     opts.provider === LOCAL_CODING_ASSISTANT_PROVIDER_ID &&
     islocalCodingAssistantModelId(opts.modelId)
@@ -1088,54 +1189,7 @@ export async function createAgent(opts: CreateOptions): Promise<{
     return resp;
   }
 
-  async function requestSubagentWorktreeMergeApproval(params: {
-    taskId: string;
-    title: string;
-    worktree: { id: string; path: string; branchName: string; baseRef: string };
-    diff: { stat: string; diff: string };
-  }) {
-    const rec = recordHolder.current;
-    if (!rec) {
-      return {
-        decision: "deny" as const,
-        denyReason: "No UI approval channel was available.",
-      };
-    }
-    const toolCallId = `subagent-merge:${params.taskId}:${params.worktree.id}`;
-    const req = {
-      id: `${id}:${toolCallId}`,
-      agentId: id,
-      toolCallId,
-      toolName: "subagent:merge_worktree",
-      input: {
-        taskId: params.taskId,
-        title: params.title,
-        worktree: params.worktree,
-        stat: params.diff.stat,
-        diffPreview: params.diff.diff.slice(0, 12000),
-        truncated: params.diff.diff.length > 12000,
-      },
-      reason: "manual" as const,
-      ruleId: "subagent-merge-worktree",
-      defaultDecision: "deny" as const,
-      createdAt: Date.now(),
-    };
-    pushExternalEvent(rec, { type: "approval_request", request: req });
-    const resp = await registerPendingApproval(req);
-    const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
-      resp.denyReason === undefined && resp.decision === req.defaultDecision
-        ? "timeout"
-        : "user";
-    pushExternalEvent(rec, {
-      type: "approval_resolved",
-      id: req.id,
-      toolCallId: req.toolCallId,
-      decision: resp.decision,
-      resolvedBy,
-      denyReason: resp.denyReason,
-    });
-    return resp;
-  }
+  // 闭包内 requestSubagentWorktreeMergeApproval 已被 buildSubagentDepsForAgent 取代。
 
   async function requestMcpToolApproval(params: {
     serverId: string;
@@ -1574,65 +1628,25 @@ export async function createAgent(opts: CreateOptions): Promise<{
         }),
   });
   const clipboardExtension = createClipboardExtension();
+
+  // S6：三个入口共用一套 deps（包括 worktrees + approval + resolveDefinition + mcp 范围）。
+  const buildSubagentDeps = () => {
+    const rec = recordHolder.current;
+    if (!rec) throw new Error("agent record not ready");
+    if (!rec.session.model) throw new Error("model not ready");
+    return buildSubagentDepsForAgent(rec);
+  };
+
   const delegateSubagentsTool = createDelegateSubagentsTool({
-    onDelegate: async (input, signal) => {
-      const rec = recordHolder.current;
-      if (!rec) throw new Error("agent record not ready");
-      const model = rec.session.model;
-      if (!model) throw new Error("model not ready");
-      return runSubagentBatch(
-        {
-          parentAgentId: id,
-          parentSessionPath: rec.session.sessionFile,
-          provider: model.provider,
-          modelId: model.id,
-          cwd: opts.cwd,
-          thinkingLevel: rec.session.thinkingLevel,
-          createChild: createAgent,
-          getChild: getAgent,
-          disposeChild: disposeAgent,
-          pushParentEvent: (event) => pushExternalEvent(rec, event),
-          resolveDefinition: (sid) => getDefinition(opts.cwd, sid),
-          worktrees: createGitWorktreeManager(opts.cwd),
-          approveSubagentMerge: (params) =>
-            requestSubagentWorktreeMergeApproval({
-              taskId: params.taskId,
-              title: params.title,
-              worktree: params.worktree,
-              diff: params.diff,
-            }),
-        },
-        input,
-        signal
-      );
-    },
+    onDelegate: async (input, signal) =>
+      runSubagentBatch(buildSubagentDeps(), input, signal),
   });
   const dynamicWorkflowTool = createDynamicWorkflowTool({
     onRunWorkflow: async (input, signal) => {
-      const rec = recordHolder.current;
-      if (!rec) throw new Error("agent record not ready");
-      const model = rec.session.model;
-      if (!model) throw new Error("model not ready");
       return runDynamicWorkflow(
         {
           runSubagents: (subagentInput, subagentSignal) =>
-            runSubagentBatch(
-              {
-                parentAgentId: id,
-                parentSessionPath: rec.session.sessionFile,
-                provider: model.provider,
-                modelId: model.id,
-                cwd: opts.cwd,
-                thinkingLevel: rec.session.thinkingLevel,
-                createChild: createAgent,
-                getChild: getAgent,
-                disposeChild: disposeAgent,
-                pushParentEvent: (event) => pushExternalEvent(rec, event),
-                resolveDefinition: (sid) => getDefinition(opts.cwd, sid),
-              },
-              subagentInput,
-              subagentSignal
-            ),
+            runSubagentBatch(buildSubagentDeps(), subagentInput, subagentSignal),
         },
         input,
         signal
@@ -1641,30 +1655,10 @@ export async function createAgent(opts: CreateOptions): Promise<{
   });
   const workflowScriptTool = createWorkflowScriptTool({
     onRunWorkflow: async (input, signal) => {
-      const rec = recordHolder.current;
-      if (!rec) throw new Error("agent record not ready");
-      const model = rec.session.model;
-      if (!model) throw new Error("model not ready");
       return runDynamicWorkflow(
         {
           runSubagents: (subagentInput, subagentSignal) =>
-            runSubagentBatch(
-              {
-                parentAgentId: id,
-                parentSessionPath: rec.session.sessionFile,
-                provider: model.provider,
-                modelId: model.id,
-                cwd: opts.cwd,
-                thinkingLevel: rec.session.thinkingLevel,
-                createChild: createAgent,
-                getChild: getAgent,
-                disposeChild: disposeAgent,
-                pushParentEvent: (event) => pushExternalEvent(rec, event),
-                resolveDefinition: (sid) => getDefinition(opts.cwd, sid),
-              },
-              subagentInput,
-              subagentSignal
-            ),
+            runSubagentBatch(buildSubagentDeps(), subagentInput, subagentSignal),
         },
         input,
         signal
@@ -1735,23 +1729,7 @@ export async function createAgent(opts: CreateOptions): Promise<{
             };
           },
           runSubagents: (subagentInput, subagentSignal) =>
-            runSubagentBatch(
-              {
-                parentAgentId: id,
-                parentSessionPath: rec.session.sessionFile,
-                provider: model.provider,
-                modelId: model.id,
-                cwd: opts.cwd,
-                thinkingLevel: rec.session.thinkingLevel,
-                createChild: createAgent,
-                getChild: getAgent,
-                disposeChild: disposeAgent,
-                pushParentEvent: (event) => pushExternalEvent(rec, event),
-                resolveDefinition: (sid) => getDefinition(opts.cwd, sid),
-              },
-              subagentInput,
-              subagentSignal
-            ),
+            runSubagentBatch(buildSubagentDeps(), subagentInput, subagentSignal),
         },
         input,
         signal
@@ -1881,17 +1859,19 @@ export async function createAgent(opts: CreateOptions): Promise<{
       clearFinishWatchdog(record);
       finishStreamingRun(record);
       record.updatedAt = Date.now();
-    } else if (messageHasStopReason(event)) {
-      // Do not synthesize completion from partial assistant messages. For
-      // OpenAI-compatible tool-call turns the SDK emits stopReason-bearing
-      // partials before tool execution; closing the turn here prevents custom
-      // tools from ever running. Providers that correctly send a final DONE
-      // event are handled by the normal message_end/agent_end path.
     }
     pushAgentEvent(record, event);
   });
 
   reg.agents.set(id, record);
+
+  // G2：让 goal store 能按 sessionId 反查。重启后 UI 拿到新 agentId，
+  // 服务端仍能从老 envelope 里调出 goal。
+  try {
+    bindGoalSession(id, session.sessionId, session.sessionFile);
+  } catch {
+    // best-effort
+  }
 
   return {
     id,
@@ -1902,6 +1882,101 @@ export async function createAgent(opts: CreateOptions): Promise<{
 
 export function getAgent(id: string): AgentRecord | undefined {
   return reg.agents.get(id);
+}
+
+/**
+ * S1：独立于 createAgent 闭包的子 agent worktree merge 审批。
+ * retry/resume 路由复用，以便重试/恢复时 specialist 要求的 isolation 与首走一致。
+ */
+export async function requestSubagentWorktreeMergeApprovalFor(
+  rec: AgentRecord,
+  params: {
+    taskId: string;
+    title: string;
+    worktree: { id: string; path: string; branchName: string; baseRef: string };
+    diff: { stat: string; diff: string };
+  }
+): Promise<{ decision: "allow" | "deny"; denyReason?: string }> {
+  const toolCallId = `subagent-merge:${params.taskId}:${params.worktree.id}`;
+  const req = {
+    id: `${rec.id}:${toolCallId}`,
+    agentId: rec.id,
+    toolCallId,
+    toolName: "subagent:merge_worktree",
+    input: {
+      taskId: params.taskId,
+      title: params.title,
+      worktree: params.worktree,
+      stat: params.diff.stat,
+      diffPreview: params.diff.diff.slice(0, 12000),
+      truncated: params.diff.diff.length > 12000,
+    },
+    reason: "manual" as const,
+    ruleId: "subagent-merge-worktree",
+    defaultDecision: "deny" as const,
+    createdAt: Date.now(),
+  };
+  pushExternalEvent(rec, { type: "approval_request", request: req });
+  const resp = await registerPendingApproval(req);
+  const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
+    resp.denyReason === undefined && resp.decision === req.defaultDecision
+      ? "timeout"
+      : "user";
+  pushExternalEvent(rec, {
+    type: "approval_resolved",
+    id: req.id,
+    toolCallId: req.toolCallId,
+    decision: resp.decision,
+    resolvedBy,
+    denyReason: resp.denyReason,
+  });
+  return resp;
+}
+
+/**
+ * S1 / S6：构造 retry/resume 与 workflow 内部 runSubagents 都能复用的 deps，
+ * 包括 resolveDefinition + worktrees + merge approval，保证“二次入口”的能力与首走一致。
+ */
+export function buildSubagentDepsForAgent(
+  rec: AgentRecord
+): {
+  parentAgentId: string;
+  parentSessionPath?: string;
+  provider: string;
+  modelId: string;
+  cwd: string;
+  thinkingLevel?: import("./types").ThinkingLevel;
+  createChild: typeof createAgent;
+  getChild: typeof getAgent;
+  disposeChild: typeof disposeAgent;
+  pushParentEvent: (event: SubagentEvent) => void;
+  resolveDefinition: (sid: string) => ReturnType<typeof getDefinition>;
+  worktrees: ReturnType<typeof createGitWorktreeManager>;
+  approveSubagentMerge: (params: {
+    taskId: string;
+    title: string;
+    worktree: { id: string; path: string; branchName: string; baseRef: string };
+    diff: { stat: string; diff: string };
+  }) => Promise<{ decision: "allow" | "deny"; denyReason?: string }>;
+} {
+  const model = rec.session.model;
+  if (!model) throw new Error("agent model not ready");
+  return {
+    parentAgentId: rec.id,
+    parentSessionPath: rec.session.sessionFile,
+    provider: model.provider,
+    modelId: model.id,
+    cwd: rec.cwd,
+    thinkingLevel: rec.session.thinkingLevel,
+    createChild: createAgent,
+    getChild: getAgent,
+    disposeChild: disposeAgent,
+    pushParentEvent: (event) => pushExternalEvent(rec, event),
+    resolveDefinition: (sid) => getDefinition(rec.cwd, sid),
+    worktrees: createGitWorktreeManager(rec.cwd),
+    approveSubagentMerge: (params) =>
+      requestSubagentWorktreeMergeApprovalFor(rec, params),
+  };
 }
 
 /**
@@ -1920,7 +1995,14 @@ export function getRunningSessionFiles(): Set<string> {
 }
 
 export async function abortSubagentsForParent(parentAgentId: string): Promise<void> {
-  await abortRunningSubagentBatches(parentAgentId, getAgent);
+  // S8：传 pushParentEvent，让 abort 后能同步 push subagent_task_end / subagent_batch_end，
+  // 前端卡片不会除 batch.status 之外还反复转圈。
+  const rec = reg.agents.get(parentAgentId);
+  await abortRunningSubagentBatches(
+    parentAgentId,
+    getAgent,
+    rec ? (event) => pushExternalEvent(rec, event) : undefined
+  );
 }
 
 export async function abortWorkflowsForParent(parentAgentId: string): Promise<void> {
@@ -1938,10 +2020,15 @@ export function disposeAgent(id: string) {
   rec.unsubscribe();
   rec.session.dispose();
   reg.agents.delete(id);
-  // B4：清理"本 session 不再问"记忆，避免悬挂（其他 agentId 复用同 globalThis store 不受影响）
+  // 清理 per-agent 的全局 store，避免长期运行进程内存越爷越大。
   clearSessionRemember(id);
   clearAgentClarifications(id);
   clearGoal(id);
+  clearProgress(id);
+  // runtime/event-store + evidence/server-store 是跨 agent 共享 Map，
+  // 按 agentId 扫一遍释放。dispose 是低频操作，O(N) 扫可接受。
+  disposeRuntimeEventsForAgent(id);
+  disposeEvidenceForAgent(id);
   void disposeBrowser(agentBrowserId(id));
 }
 
@@ -1966,6 +2053,20 @@ export function getEventsSince(
 export function getLatestEventSeq(agentId: string): number {
   const rec = reg.agents.get(agentId);
   return rec ? rec.nextSeq - 1 : -1;
+}
+
+/**
+ * 返回 ring buffer 中当前仍可访问的最早 seq。这个值决定 SSE 重连时
+ * since 是否过期；since < earliestSeq 意味着这些事件已被覆盖，需要让
+ * client 丢掉本地状态、重新拉全量。
+ */
+export function getEarliestEventSeq(agentId: string): number {
+  const rec = reg.agents.get(agentId);
+  if (!rec) return -1;
+  // ring buffer 未满：物理 0..nextSeq-1 全部可访问。
+  if (rec.nextSeq <= MAX_EVENTS_PER_AGENT) return 0;
+  // 已满 → 最早可访问的 seq = nextSeq - MAX_EVENTS_PER_AGENT。
+  return rec.nextSeq - MAX_EVENTS_PER_AGENT;
 }
 
 /** 注册一个事件监听器（用于 SSE 长连接），返回取消函数 */

@@ -1,6 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   __resetClarificationStoreForTest,
+  __setClarificationStoreRootForTest,
   clearAgentClarifications,
   listPendingClarifications,
   registerPendingClarification,
@@ -38,6 +42,15 @@ function clarification(
 }
 
 describe("clarification server-store", () => {
+  let tmp: string;
+  beforeAll(() => {
+    tmp = mkdtempSync(join(tmpdir(), "clarification-test-"));
+    __setClarificationStoreRootForTest(tmp);
+  });
+  afterAll(() => {
+    __setClarificationStoreRootForTest(null);
+    if (tmp) rmSync(tmp, { recursive: true, force: true });
+  });
   afterEach(() => {
     __resetClarificationStoreForTest();
   });

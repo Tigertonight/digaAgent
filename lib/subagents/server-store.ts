@@ -59,9 +59,12 @@ function indexBatch(batch: SubagentBatch): void {
 }
 
 function isBatchStatus(value: unknown): value is SubagentBatchStatus {
+  // S4：detached 也是有效状态。丢了后台运行的 batch 在重启后会被跳过，
+  // 导致恢复/审计入口丢。hydrate 后仅作为“历史 detached”，是否允许 resume 由上层决定。
   return (
     value === "pending" ||
     value === "running" ||
+    value === "detached" ||
     value === "completed" ||
     value === "failed" ||
     value === "aborted"
@@ -137,6 +140,7 @@ function hydrateFromDisk(): void {
   hydrated = true;
   const dir = batchDir();
   if (!existsSync(dir)) return;
+  const now = Date.now();
   for (const name of readdirSync(dir)) {
     if (!name.endsWith(".json")) continue;
     try {
@@ -144,6 +148,21 @@ function hydrateFromDisk(): void {
         JSON.parse(readFileSync(path.join(dir, name), "utf8"))
       );
       if (!batch) continue;
+      // C9-1: 重启后的 "running" 是虚假的——进程已丢，runtime controller 不存在。
+      // 降级为 detached（保留可 resume 语义）、未终态 task 降为 aborted 并补 endedAt。
+      // 不调 persistBatch（活跃请求会在后续 putBatch 重写）。
+      if (batch.status === "running" || batch.status === "pending") {
+        batch.status = "detached";
+        if (!batch.endedAt) batch.endedAt = now;
+      }
+      for (const task of batch.tasks) {
+        if (task.status === "running" || task.status === "pending") {
+          task.status = "aborted";
+          task.error =
+            task.error ?? "Process restarted before this task finished.";
+          task.endedAt = task.endedAt ?? now;
+        }
+      }
       store.batches.set(batch.id, batch);
       indexBatch(batch);
     } catch {

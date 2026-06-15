@@ -24,24 +24,36 @@ const CURRENT_VERSION = 1 as const;
  * On-disk (and in-memory) record for a single agent's goal. turn/evidence
  * history lives at the top level alongside `goal` (M1 修正 2) so it is never
  * double-written into AgentGoal.
+ *
+ * G2：envelope 额外记录该 goal 所属 session 的 sessionId/sessionFile，
+ * 以便重启后能将 goal 复原到新 agentId。
  */
 export interface GoalStoreEnvelope {
   version: number;
   goal: AgentGoal;
   turns?: GoalTurn[];
   evidence?: GoalEvidence[];
+  /** 指向 SDK Session。重启后仅靠 agentId 会丢，所以以 sessionId 作为可恢复锪。 */
+  sessionId?: string;
+  sessionFile?: string;
 }
 
 interface GoalStore {
   /** agentId -> envelope */
   envelopes: Map<string, GoalStoreEnvelope>;
+  /** sessionId -> agentId（最后一个拥有该 session goal 的 agentId）。仅作反查加速。 */
+  sessionIndex: Map<string, string>;
 }
 
 const g = globalThis as unknown as { __digaAgentGoalsV2?: GoalStore };
 if (!g.__digaAgentGoalsV2) {
-  g.__digaAgentGoalsV2 = { envelopes: new Map() };
+  g.__digaAgentGoalsV2 = {
+    envelopes: new Map(),
+    sessionIndex: new Map(),
+  };
 }
 const store = g.__digaAgentGoalsV2;
+if (!store.sessionIndex) store.sessionIndex = new Map();
 
 let activeRoot: string | null = null;
 let hydrated = false;
@@ -125,6 +137,14 @@ function sanitizeEnvelope(raw: unknown): GoalStoreEnvelope | null {
     evidence: Array.isArray(src.evidence)
       ? (src.evidence as GoalEvidence[])
       : undefined,
+    sessionId:
+      typeof src.sessionId === "string" && src.sessionId.length > 0
+        ? src.sessionId
+        : undefined,
+    sessionFile:
+      typeof src.sessionFile === "string" && src.sessionFile.length > 0
+        ? src.sessionFile
+        : undefined,
   };
 }
 
@@ -155,6 +175,9 @@ function hydrateFromDisk(): void {
       );
       if (!envelope) continue;
       store.envelopes.set(agentId, envelope);
+      if (envelope.sessionId) {
+        store.sessionIndex.set(envelope.sessionId, agentId);
+      }
     } catch {
       // Ignore corrupt metadata files; they must not block other goals.
     }
@@ -171,7 +194,47 @@ function setEnvelope(agentId: string, envelope: GoalStoreEnvelope): void {
   // silently swallowed by the best-effort persist try/catch.
   assertSafeAgentId(agentId);
   store.envelopes.set(agentId, envelope);
+  if (envelope.sessionId) {
+    store.sessionIndex.set(envelope.sessionId, agentId);
+  }
   persistEnvelope(agentId, envelope);
+}
+
+/**
+ * G2：把当前 agent 的 goal 与 session 绑定。agent-registry 在创建 session
+ * 后调一次；如果该 agent 还没 envelope·换言之该 agent 还没 setGoal，这里
+ * 不会凄生出 empty envelope —— 仅作 session 绑定记录在内存中。
+ */
+export function bindGoalSession(
+  agentId: string,
+  sessionId: string | undefined,
+  sessionFile: string | undefined
+): void {
+  if (!sessionId) return;
+  hydrateFromDisk();
+  store.sessionIndex.set(sessionId, agentId);
+  const envelope = store.envelopes.get(agentId);
+  if (!envelope) return; // 没有 goal，不必落盘
+  if (
+    envelope.sessionId === sessionId &&
+    envelope.sessionFile === (sessionFile ?? envelope.sessionFile)
+  ) {
+    return;
+  }
+  setEnvelope(agentId, {
+    ...envelope,
+    sessionId,
+    sessionFile: sessionFile ?? envelope.sessionFile,
+  });
+}
+
+/**
+ * G2：按 sessionId 反查 agentId。重启后 UI 拿到新 agentId，变项能通过
+ * sessionId 找到老 envelope。返回仅供服务端使用。
+ */
+export function findAgentIdBySessionId(sessionId: string): string | null {
+  hydrateFromDisk();
+  return store.sessionIndex.get(sessionId) ?? null;
 }
 
 // ---------------------------------------------------------------------------

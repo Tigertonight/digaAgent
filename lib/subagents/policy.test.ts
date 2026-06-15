@@ -99,6 +99,43 @@ describe("resolveSubagentPermission", () => {
     );
     expect(res.allowedTools).toEqual(["read", "grep"]);
   });
+
+  it("worktree permissionMode 不剖写工具，不传 requested 时拉上默认实现型工具", () => {
+    const res = resolveSubagentPermission(
+      def({ permissionMode: "worktree" }),
+      {},
+      ROLE_DEFAULT
+    );
+    expect(res.appliedMode).toBe("worktree");
+    // 实现型默认包含 read + bash + edit + write + apply_patch 等
+    expect(res.allowedTools).toEqual(
+      expect.arrayContaining(["read", "edit", "write", "apply_patch", "bash"])
+    );
+  });
+
+  it("worktree permissionMode 尊重 definition.defaultTools 作上限", () => {
+    const res = resolveSubagentPermission(
+      def({
+        permissionMode: "worktree",
+        defaultTools: ["read", "edit", "bash"],
+      }),
+      { requestedTools: ["read", "edit", "bash", "shell"] },
+      ROLE_DEFAULT
+    );
+    // shell 不在上限 → 被过滤
+    expect(res.allowedTools).toEqual(["read", "edit", "bash"]);
+    expect(res.appliedMode).toBe("worktree");
+  });
+
+  it("isolatedWorktree input 让没 permissionMode 的 definition 也保留写工具", () => {
+    const res = resolveSubagentPermission(
+      def({ defaultTools: ["read", "edit", "write"] }),
+      { requestedTools: ["read", "edit", "write"], isolatedWorktree: true },
+      ROLE_DEFAULT
+    );
+    expect(res.allowedTools).toEqual(["read", "edit", "write"]);
+    expect(res.notes.join(" ")).toMatch(/isolated worktree/);
+  });
 });
 
 describe("resolveSubagentModel", () => {
