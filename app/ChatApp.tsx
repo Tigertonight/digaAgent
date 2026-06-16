@@ -3209,6 +3209,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           removePendingImage={removePendingImage}
           removePendingFile={removePendingFile}
           addImageFiles={addImageFiles}
+          addPathAttachment={addPathAttachment}
           composerMode={composerMode}
           setComposerMode={setComposerMode}
           acMode={acMode}

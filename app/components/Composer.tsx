@@ -77,6 +77,7 @@ import { extractModeFromInput } from "@/lib/composer/mode-chip";
 import type { ComposerMode } from "@/lib/composer/mode-chip";
 import { ModeChip } from "./ModeChip";
 import { computeDisambigByPath } from "@/lib/composer/disambig";
+import { extractStructuredInput } from "@/lib/composer/structured-input";
 import { InputAutocomplete } from "./InputAutocomplete";
 import type { AutocompleteItem } from "./InputAutocomplete";
 import { PillSelect } from "./PillSelect";
@@ -114,6 +115,8 @@ export interface ComposerProps {
   removePendingImage: (index: number) => void;
   removePendingFile: (path: string) => void;
   addImageFiles: (files: FileList) => Promise<void> | void;
+  /** 程序化恢复 input 中的 @/abs/path 时，也走和粘贴/Explorer 一样的结构化入口。 */
+  addPathAttachment: (absPath: string) => "added" | "duplicate";
 
   // ===== 结构化 Composer：mode chip =====
   /** 用户选中的 mode（当前 “goal” 或 “workflow”）。null = 普通 prompt。 */
@@ -189,6 +192,7 @@ export function Composer(props: ComposerProps) {
     removePendingImage,
     removePendingFile,
     addImageFiles,
+    addPathAttachment,
     composerMode,
     setComposerMode,
     acMode,
@@ -262,16 +266,38 @@ export function Composer(props: ComposerProps) {
   onFollowUpRef.current = onFollowUp;
   const onAbortRef = useRef(onAbort);
   onAbortRef.current = onAbort;
+  const setComposerModeRef = useRef(setComposerMode);
+  setComposerModeRef.current = setComposerMode;
+  const composerModeRef = useRef<ComposerMode | null>(composerMode);
+  composerModeRef.current = composerMode;
 
-  // 外部写回：父 input 变了且与本地不一致，且不是自己刚刚 flush 的值 → 覆盖回 local
+  // 外部写回：先归一化结构化旧字面量，再决定是否覆盖 local。
+  // 同时兜底处理“程序化/重启恢复”的旧字面量：
+  //   - /goal foo      → mode chip + textarea foo
+  //   - /workflow foo  → mode chip + textarea foo
+  //   - @/abs/path     → FileChip reference + textarea 删除该 token
+  // 冷启动时 input/localInput/lastFlushed 可能三者相等，也必须先解析。
   useEffect(() => {
+    const structured = extractStructuredInput(input, composerModeRef.current);
+    if (structured.changed) {
+      if (structured.mode) setComposerModeRef.current(structured.mode);
+      for (const p of structured.paths) addPathAttachment(p);
+      setLocalInput(structured.text);
+      lastFlushedRef.current = structured.text;
+      if (structured.text !== input) {
+        // 回写父层，避免下一次发送/恢复仍带着机器友好字面量。
+        setInputRef.current(structured.text);
+      }
+      return;
+    }
+
     if (input !== localInput && input !== lastFlushedRef.current) {
       setLocalInput(input);
       lastFlushedRef.current = input;
     }
     // 注意：不把 localInput 加进依赖，否则每次本地改动也会跑这个 effect 把 local 覆盖
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [input]);
+  }, [input, addPathAttachment]);
 
   // 低优先级 sync：deferred(localInput) 稳定后写回上层（idle / 下一次 paint 之后）
   const deferredLocalInput = useDeferredValue(localInput);
@@ -350,11 +376,7 @@ export function Composer(props: ComposerProps) {
   );
 
   // 结构化 Composer：“/goal ”/“/workflow ” 一旦出现在输入头，提为 chip。
-  // 这里用 ref 保证的 stale closure 安全。
-  const setComposerModeRef = useRef(setComposerMode);
-  setComposerModeRef.current = setComposerMode;
-  const composerModeRef = useRef<ComposerMode | null>(composerMode);
-  composerModeRef.current = composerMode;
+  // 这里用 ref 保证 stale closure 安全。
   // chip “键盘选中”态：第一次 Backspace at caret=0 激活，第二次 Backspace 删除。
   // mode 被清时 chipActive 自然不再被渲染看到。避免在 effect 中 setState。
   const [chipActive, setChipActive] = useState(false);

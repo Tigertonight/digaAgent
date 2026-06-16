@@ -21,6 +21,7 @@ import Image from "next/image";
 import type { ReactNode } from "react";
 import { memo, useEffect, useRef, useState } from "react";
 import {
+  Bot,
   CheckCircle2,
   Circle,
   CornerDownLeft,
@@ -1280,7 +1281,10 @@ function SubagentBatchCard({
       task.status === "aborted" ||
       task.status === "timeout"
   ).length;
-  const running = part.tasks.some((task) => task.status === "running");
+  const runningCount = part.tasks.filter((task) => task.status === "running").length;
+  const pendingCount = part.tasks.filter((task) => task.status === "pending").length;
+  const running = runningCount > 0;
+  const activeCount = runningCount + pendingCount;
   const hasUnfinished = part.tasks.some(
     (task) => task.status === "pending" || task.status === "running"
   );
@@ -1299,19 +1303,49 @@ function SubagentBatchCard({
       ? "var(--color-danger)"
       : "var(--text-muted)";
 
+  const statusLabel =
+    activeCount > 0
+      ? `${activeCount} 个子智能体正在运行`
+      : failed > 0
+      ? `${completed} 个完成，${failed} 个失败`
+      : `${completed} 个子智能体已完成`;
+  const hasBatchMeta = Boolean(
+    part.planning || part.synthesis || (part.auditEvents && part.auditEvents.length > 0)
+  );
+
   return (
     <div
-      className="space-y-2"
+      className="space-y-3"
       style={{
         color: "var(--text)",
       }}
     >
-      <div className="flex items-center gap-2 text-xs">
-        <span className="font-semibold">Subagents</span>
-        {running && <Loader2 size={13} className="animate-spin" />}
+      <div className="flex items-start gap-2 text-token-sm">
+        <span className="mt-0.5 font-mono text-token-lg" style={{ color: "var(--text-muted)" }}>
+          ›_
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate" style={{ color: "var(--text-muted)" }}>
+              {part.reason || `等待 ${part.tasks.length} 个子任务完成`}
+            </span>
+            <span
+              className="ml-auto shrink-0 text-token-xs tabular-nums"
+              style={{ color: "var(--text-muted)" }}
+            >
+              {duration ? `${duration}s` : ""}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 text-token-lg font-semibold" style={{ color: "var(--accent)" }}>
+        <Bot size={24} strokeWidth={2.2} />
+        {running && <Loader2 size={16} className="animate-spin" />}
+        <span>{statusLabel}</span>
         {part.verification && (
           <span
-            className="inline-flex h-6 items-center gap-1 rounded border px-1.5 text-token-xs"
+            className="ml-1 inline-flex h-6 items-center gap-1 rounded-token-sm border px-1.5 text-token-xs font-medium"
             style={{
               borderColor: "var(--border-soft)",
               color: verificationColor,
@@ -1335,8 +1369,8 @@ function SubagentBatchCard({
                 setResuming(false);
               }
             }}
-            className="inline-flex h-6 items-center gap-1 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)] disabled:cursor-not-allowed disabled:opacity-45"
-            style={{ borderColor: "var(--border-soft)" }}
+            className="ml-auto inline-flex h-7 items-center gap-1 rounded-token-sm border px-2 text-token-xs font-medium hover:bg-[color:var(--bg-hover)] disabled:cursor-not-allowed disabled:opacity-45"
+            style={{ borderColor: "var(--border-soft)", color: "var(--text)" }}
             title="继续执行未完成的 subagent tasks"
             aria-label="继续执行未完成的 subagent tasks"
           >
@@ -1348,113 +1382,103 @@ function SubagentBatchCard({
             Continue
           </button>
         )}
-        <span
-          className="ml-auto text-token-xs"
+      </div>
+      {hasBatchMeta && (
+        <details
+          className="rounded-token-sm text-token-xs"
           style={{ color: "var(--text-muted)" }}
         >
-          {completed}/{part.tasks.length}
-          {failed > 0 ? ` · ${failed} failed` : ""}
-          {duration ? ` · ${duration}s` : ""}
-        </span>
-      </div>
-      <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-        {part.reason}
-      </div>
-      {part.planning && (
-        <div
-          className="rounded border px-2.5 py-2 text-token-xs"
-          style={{
-            borderColor: "var(--border-soft)",
-            background: "var(--bg-subtle)",
-            color: "var(--text-muted)",
-          }}
-          title={part.planning.warnings.join("\n")}
-        >
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="font-semibold" style={{ color: "var(--text)" }}>
-              Planner: {part.planning.status}
-            </span>
-            <span>{part.planning.taskCount} tasks</span>
-            <span>concurrency {part.planning.concurrency}</span>
-            {part.planning.warnings.length > 0 && (
-              <span>{part.planning.warnings.length} warnings</span>
-            )}
-          </div>
-        </div>
-      )}
-      {part.synthesis && (
-        <div
-          className="rounded border px-2.5 py-2 text-token-xs"
-          style={{
-            borderColor: "var(--border-soft)",
-            background: "var(--bg-subtle)",
-            color: "var(--text-muted)",
-          }}
-          title={part.synthesis.instructions}
-        >
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="font-semibold" style={{ color: "var(--text)" }}>
-              Synthesis: {part.synthesis.status}
-            </span>
-            <span>{part.synthesis.summary}</span>
-          </div>
-          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
-            <span>{part.synthesis.usableTaskIds.length} usable</span>
-            <span>{part.synthesis.cautionTaskIds.length} caution</span>
-            <span>{part.synthesis.rejectedTaskIds.length} rejected</span>
-          </div>
-        </div>
-      )}
-      {part.auditEvents && part.auditEvents.length > 0 && (
-        <details
-          className="rounded border px-2.5 py-2 text-token-xs"
-          style={{
-            borderColor: "var(--border-soft)",
-            background: "var(--bg-subtle)",
-            color: "var(--text-muted)",
-          }}
-        >
-          <summary className="cursor-pointer list-none font-semibold text-token-xs [&::-webkit-details-marker]:hidden">
-            <span style={{ color: "var(--text)" }}>
-              Audit: {part.auditEvents.length} events
-            </span>
-            <span className="ml-2 font-normal" style={{ color: "var(--text-muted)" }}>
-              {part.auditEvents.at(-1)?.message}
+          <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-token-sm px-1.5 py-1 hover:bg-[color:var(--bg-hover)] [&::-webkit-details-marker]:hidden">
+            Details
+            <span className="tabular-nums">
+              {part.planning ? " · planner" : ""}
+              {part.synthesis ? " · synthesis" : ""}
+              {part.auditEvents?.length ? ` · ${part.auditEvents.length} audit` : ""}
             </span>
           </summary>
-          <div className="mt-2 space-y-1">
-            {part.auditEvents.slice(-12).map((event, index) => (
+          <div className="mt-2 space-y-2">
+            {part.planning && (
               <div
-                key={`${event.at}:${event.type}:${event.taskId ?? ""}:${index}`}
-                className="grid grid-cols-[86px_minmax(0,1fr)] gap-2"
+                className="rounded border px-2.5 py-2"
+                style={{
+                  borderColor: "var(--border-soft)",
+                  background: "var(--bg-subtle)",
+                }}
+                title={part.planning.warnings.join("\n")}
               >
-                <span className="font-mono" style={{ color: "var(--text-muted)" }}>
-                  {new Date(event.at).toLocaleTimeString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    second: "2-digit",
-                  })}
-                </span>
-                <span className="min-w-0">
-                  <span className="font-mono">{event.type}</span>
-                  {event.taskId ? (
-                    <span style={{ color: "var(--text-muted)" }}>
-                      {" "}
-                      {event.taskId}
-                    </span>
-                  ) : null}
-                  <span style={{ color: "var(--text-muted)" }}>
-                    {" "}
-                    {event.message}
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="font-semibold" style={{ color: "var(--text)" }}>
+                    Planner: {part.planning.status}
                   </span>
-                </span>
+                  <span>{part.planning.taskCount} tasks</span>
+                  <span>concurrency {part.planning.concurrency}</span>
+                  {part.planning.warnings.length > 0 && (
+                    <span>{part.planning.warnings.length} warnings</span>
+                  )}
+                </div>
               </div>
-            ))}
+            )}
+            {part.synthesis && (
+              <div
+                className="rounded border px-2.5 py-2"
+                style={{
+                  borderColor: "var(--border-soft)",
+                  background: "var(--bg-subtle)",
+                }}
+                title={part.synthesis.instructions}
+              >
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="font-semibold" style={{ color: "var(--text)" }}>
+                    Synthesis: {part.synthesis.status}
+                  </span>
+                  <span>{part.synthesis.summary}</span>
+                </div>
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                  <span>{part.synthesis.usableTaskIds.length} usable</span>
+                  <span>{part.synthesis.cautionTaskIds.length} caution</span>
+                  <span>{part.synthesis.rejectedTaskIds.length} rejected</span>
+                </div>
+              </div>
+            )}
+            {part.auditEvents && part.auditEvents.length > 0 && (
+              <div
+                className="rounded border px-2.5 py-2"
+                style={{
+                  borderColor: "var(--border-soft)",
+                  background: "var(--bg-subtle)",
+                }}
+              >
+                <div className="font-semibold" style={{ color: "var(--text)" }}>
+                  Audit: {part.auditEvents.length} events
+                </div>
+                <div className="mt-2 space-y-1">
+                  {part.auditEvents.slice(-12).map((event, index) => (
+                    <div
+                      key={`${event.at}:${event.type}:${event.taskId ?? ""}:${index}`}
+                      className="grid grid-cols-[86px_minmax(0,1fr)] gap-2"
+                    >
+                      <span className="font-mono">
+                        {new Date(event.at).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                          second: "2-digit",
+                        })}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="font-mono">{event.type}</span>
+                        {event.taskId ? <span> {event.taskId}</span> : null}
+                        <span> {event.message}</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </details>
       )}
-      <div className="space-y-1.5">
-        {part.tasks.map((task, index) => {
+      <div className="flex flex-wrap gap-2">
+        {part.tasks.map((task) => {
           const isDone = task.status === "completed";
           const isRunning = task.status === "running";
           const isFailed =
@@ -1481,51 +1505,51 @@ function SubagentBatchCard({
               : task.verification?.status === "failed"
               ? "var(--color-danger)"
               : "var(--text-muted)";
-          const openByDefault =
-            isRunning || (index === 0 && Boolean(answer || task.error));
+          const openByDefault = isRunning;
+          const statusIcon = isDone ? (
+            <CheckCircle2 size={13} style={{ color: "var(--color-success)" }} />
+          ) : isFailed ? (
+            <XCircle size={13} style={{ color: "var(--color-danger)" }} />
+          ) : isRunning ? (
+            <Loader2
+              size={13}
+              className="animate-spin"
+              style={{ color: "var(--accent)" }}
+            />
+          ) : (
+            <Circle size={13} style={{ color: "var(--text-muted)" }} />
+          );
           return (
             <details
               key={task.id}
               open={openByDefault}
-              className="group/subagent rounded-md"
+              className="group/subagent max-w-full"
             >
-              <summary className="grid cursor-pointer list-none grid-cols-[18px_minmax(0,1fr)] gap-2 rounded px-1.5 py-1 hover:bg-[color:var(--bg-hover)] [&::-webkit-details-marker]:hidden">
-                <span className="pt-0.5">
-                  {isDone ? (
-                    <CheckCircle2 size={13} style={{ color: "var(--color-success)" }} />
-                  ) : isFailed ? (
-                    <XCircle size={13} style={{ color: "var(--color-danger)" }} />
-                  ) : isRunning ? (
-                    <Loader2
-                      size={13}
-                      className="animate-spin"
-                      style={{ color: "var(--accent)" }}
-                    />
-                  ) : (
-                    <Circle size={13} style={{ color: "var(--text-muted)" }} />
-                  )}
+              <summary
+                className="inline-flex max-w-full cursor-pointer list-none items-center gap-2 rounded-full border px-3 py-1.5 text-token-sm shadow-sm hover:bg-[color:var(--bg-hover)] [&::-webkit-details-marker]:hidden"
+                style={{
+                  borderColor: isFailed
+                    ? "var(--color-danger)"
+                    : isRunning
+                    ? "var(--accent)"
+                    : "var(--border-soft)",
+                  background: "var(--bg-panel)",
+                  color: "var(--text)",
+                }}
+                title={`${task.status}: ${task.title}`}
+              >
+                <span className="font-mono text-token-lg leading-none" style={{ color: "var(--text-muted)" }}>
+                  ⋮
                 </span>
-                <div className="flex min-w-0 items-baseline gap-2">
-                  <span className="shrink-0 text-xs font-semibold">
-                    Subagent:
-                  </span>
-                  <span
-                    className="shrink-0 text-xs font-semibold"
-                    style={{ color: "var(--text)" }}
-                  >
-                    {task.role ?? "general"}
-                  </span>
-                  <span
-                    className="truncate text-xs"
-                    style={{ color: "var(--text-muted)" }}
-                  >
-                    {task.title}
-                  </span>
-                </div>
+                <span className="shrink-0">{statusIcon}</span>
+                <span className="min-w-0 truncate">{task.title}</span>
               </summary>
               <div
-                className="ml-[28px] border-l py-2 pl-4"
-                style={{ borderColor: "var(--border-soft)" }}
+                className="mt-2 w-[min(760px,calc(100vw-96px))] rounded-token-md border p-3"
+                style={{
+                  borderColor: "var(--border-soft)",
+                  background: "var(--bg-panel)",
+                }}
               >
                 <div
                   className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-token-xs"
