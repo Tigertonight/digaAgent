@@ -37,6 +37,7 @@ export const POST = withRemoteAuth(async (req: Request) => {
     locale: typeof body.locale === "string" ? body.locale : "zh-CN",
     ruleText: typeof body.ruleText === "string" ? body.ruleText : "",
     tool,
+    signal: req.signal,
   });
   return NextResponse.json({ narration: result.text, enhanced: result.enhanced, reason: result.reason });
 });

@@ -43,6 +43,7 @@ import type { AgentPhase } from "@/lib/session-runner";
 import { formatMessageTime, formatTokens } from "@/lib/format";
 import { previewStore } from "@/lib/preview-store";
 import { narrateTool, shouldHideTool } from "@/lib/narration/tool";
+import { dedupeToolLabels } from "@/lib/narration/summary";
 import Markdown from "./Markdown";
 import ToolRender from "./ToolRender";
 import { ApprovalBubble } from "./ApprovalBubble";
@@ -794,7 +795,8 @@ function summarizeProcessParts(parts: MessagePart[]): {
       approvals += 1;
     }
   }
-  const toolSummary = toolLabels.slice(0, 3);
+  const dedupedLabels = dedupeToolLabels(toolLabels);
+  const toolSummary = dedupedLabels.slice(0, 3);
   const fallback = [
     thinking > 0 ? `思考×${thinking}` : "",
     approvals > 0 ? `确认×${approvals}` : "",
@@ -1531,7 +1533,7 @@ function SubagentBatchCard({
               : task.verification?.status === "failed"
               ? "var(--color-danger)"
               : "var(--text-muted)";
-          const openByDefault = isRunning;
+          const openByDefault = isRunning && part.tasks.length <= 5;
           const statusIcon = isDone ? (
             <CheckCircle2 size={13} style={{ color: "var(--color-success)" }} />
           ) : isFailed ? (

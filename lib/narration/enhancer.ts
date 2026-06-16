@@ -13,6 +13,8 @@ interface NarrateParams {
   locale?: string;
   tool: ToolPart;
   ruleText?: string;
+  /** 客户端 abort 会同步取消 LLM 调用，避免心跳后继续燃烧 token。 */
+  signal?: AbortSignal;
 }
 
 const cache = new Map<string, string>();
@@ -47,6 +49,9 @@ export async function enhanceToolNarration(params: NarrateParams): Promise<{
   const cached = cache.get(key);
   if (cached) return { text: cached, enhanced: true, reason: "cache" };
 
+  if (params.signal?.aborted) {
+    return { text: ruleText, enhanced: false, reason: "aborted" };
+  }
   const task = requestNarration(params, ruleText, settings)
     .then((text) => {
       const cleaned = cleanModelOutput(text, params.locale || "zh-CN");
@@ -98,6 +103,7 @@ async function requestNarration(
       maxTokens: 80,
       timeoutMs: Math.max(1000, settings.timeoutMs + 500),
       maxRetries: 0,
+      ...(params.signal ? { signal: params.signal } : {}),
       ...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
       ...(auth.headers ? { headers: auth.headers } : {}),
     }

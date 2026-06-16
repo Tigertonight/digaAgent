@@ -17,6 +17,7 @@ import {
   RotateCw,
   Shield,
   Smartphone,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import QRCode from "qrcode";
@@ -30,6 +31,7 @@ import { Badge, Button, FieldInput } from "@/app/components/DesignPrimitives";
 import SkillsPanel from "@/app/components/SkillsPanel";
 import { BudgetSettingsSection } from "./BudgetSettingsSection";
 import { CollabSettingsSection } from "./CollabSettingsSection";
+import { NarrationSettingsSection } from "./NarrationSettingsSection";
 import { WorkflowNetworkPolicySection } from "./WorkflowNetworkPolicySection";
 import { McpServersSection } from "./McpServersSection";
 import { userFacingMessage } from "@/lib/user-facing-error";
@@ -64,6 +66,7 @@ type SettingsSectionId =
   | "models"
   | "safety"
   | "usage"
+  | "narration"
   | "skills"
   | "mcp"
   | "browser"
@@ -97,6 +100,13 @@ const SETTINGS_SECTIONS: Array<{
     label: "用量保护",
     description: "限制单次任务的费用、轮数和运行时间。",
     icon: CreditCard,
+  },
+  {
+    group: "核心",
+    id: "narration",
+    label: "思维链叙事",
+    description: "控制工具反检过程的人话叙事体验、超时和可选 LLM 增强。",
+    icon: Sparkles,
   },
   {
     group: "工具与集成",
@@ -780,6 +790,7 @@ function WebSettingsPanel() {
 
       {activeSection === "safety" ? <CollabSettingsSection /> : null}
       {activeSection === "usage" ? <BudgetSettingsSection /> : null}
+      {activeSection === "narration" ? <NarrationSettingsSection /> : null}
       {activeSection === "skills" ? <SkillsSettingsSection /> : null}
       {activeSection === "mobile" ? (
         <RemoteAccessSection
@@ -1907,6 +1918,7 @@ export default function SettingsPanel() {
 
       {activeSection === "safety" ? <CollabSettingsSection /> : null}
       {activeSection === "usage" ? <BudgetSettingsSection /> : null}
+      {activeSection === "narration" ? <NarrationSettingsSection /> : null}
       {activeSection === "skills" ? <SkillsSettingsSection /> : null}
       {activeSection === "mobile" && electronApi ? (
         <RemoteAccessSection

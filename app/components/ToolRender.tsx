@@ -20,6 +20,7 @@ import {
   narrateTool,
   shouldHideTool,
 } from "@/lib/narration/tool";
+import { requestToolNarration } from "@/app/lib/narration-client";
 
 type ToolPart = Extract<MessagePart, { kind: "tool" }>;
 type ToolRenderProps = { tool: ToolPart; questionContext?: string };
@@ -113,28 +114,22 @@ function ToolFrame({
     if (narration.hidden || !isWorthNarrating(tool)) return;
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 1400);
-    void fetch("/api/narration/tool", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+    requestToolNarration({
+      id: narrationKey,
+      question: questionContext || "",
+      locale: navigator.language || "zh-CN",
+      ruleText: narration.primary,
+      tool: {
+        toolCallId: tool.toolCallId,
+        toolName: tool.toolName,
+        args: tool.args,
+        status: tool.status,
+        isError: tool.isError,
+      },
       signal: controller.signal,
-      body: JSON.stringify({
-        question: questionContext || "",
-        locale: navigator.language || "zh-CN",
-        ruleText: narration.primary,
-        tool: {
-          toolCallId: tool.toolCallId,
-          toolName: tool.toolName,
-          args: tool.args,
-          status: tool.status,
-          isError: tool.isError,
-        },
-      }),
     })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d: { narration?: unknown } | null) => {
-        if (typeof d?.narration === "string" && d.narration.trim()) {
-          setEnhancedPrimary({ key: narrationKey, text: d.narration.trim() });
-        }
+      .then((text) => {
+        if (text) setEnhancedPrimary({ key: narrationKey, text });
       })
       .catch(() => {
         /* rule narration is the fallback */
