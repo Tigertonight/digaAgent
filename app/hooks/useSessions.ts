@@ -175,6 +175,7 @@ function sameSessionList(a: SessionInfoLite[], b: SessionInfoLite[]): boolean {
       left.waitingClarificationCount !== right.waitingClarificationCount ||
       left.lastEventSeq !== right.lastEventSeq ||
       left.runtimeUpdatedAt !== right.runtimeUpdatedAt ||
+      left.lastAgentEndAt !== right.lastAgentEndAt ||
       left.meta?.title !== right.meta?.title ||
       left.meta?.pinned !== right.meta?.pinned ||
       left.meta?.lastSeenAt !== right.meta?.lastSeenAt

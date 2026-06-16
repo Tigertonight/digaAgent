@@ -29,6 +29,8 @@ export type SessionInfoWithStatus = SessionInfo & {
   waitingClarificationCount?: number;
   lastEventSeq?: number;
   runtimeUpdatedAt?: number;
+  /** 上一轮 agent_end 的时间戳（ms），用于 sidebar 未读蒙点。 */
+  lastAgentEndAt?: number | null;
   /** RFC-3 Phase A：~/.diga-agent/sessions/{id}.meta.json 内容，未建时缺省 undefined */
   meta?: SessionMeta;
 };
@@ -62,6 +64,7 @@ export async function listAllSessions(): Promise<SessionInfoWithStatus[]> {
       waitingClarificationCount: runtime?.waitingClarificationCount,
       lastEventSeq: runtime?.lastEventSeq,
       runtimeUpdatedAt: runtime?.updatedAt,
+      lastAgentEndAt: runtime?.lastAgentEndAt ?? null,
       meta: metas.get(s.id),
     };
   });
@@ -97,6 +100,7 @@ export async function listAllSessions(): Promise<SessionInfoWithStatus[]> {
       waitingClarificationCount: summary.waitingClarificationCount,
       lastEventSeq: summary.lastEventSeq,
       runtimeUpdatedAt: summary.updatedAt,
+      lastAgentEndAt: summary.lastAgentEndAt ?? null,
       meta: stubMetas.get(summary.sessionId),
     });
   }

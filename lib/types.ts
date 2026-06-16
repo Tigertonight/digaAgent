@@ -40,6 +40,8 @@ export interface SessionInfoLite {
   waitingClarificationCount?: number;
   lastEventSeq?: number;
   runtimeUpdatedAt?: number;
+  /** 上一轮 agent_end 的时间戳（ms）；sidebar 未读蒙点以该时间为准。 */
+  lastAgentEndAt?: number | null;
   /**
    * RFC-3 Phase A：diga-agent 自维护的元数据（title / pinned / ...）。
    * 没有 meta 文件时缺省 undefined；UI 自己做 fallback。
@@ -69,6 +71,11 @@ export interface SessionRuntimeState {
   waitingClarificationCount: number;
   lastEventSeq: number;
   updatedAt: number;
+  /**
+   * 上一轮 agent_end 的时间戳（ms）。sidebar 未读蒙点以该时间为准，
+   * 避免中间 turn 结束（message_end）也被误当成一轮会话结束。
+   */
+  lastAgentEndAt?: number | null;
   runtimeState: SessionRuntimePhase;
 }
 

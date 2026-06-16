@@ -388,19 +388,16 @@ export const MessageView = memo(function MessageView({
           )}
         </div>
       )}
-      {showCompactRow && (
+      {showCompactRow && isStreaming && streamingPhase ? (
         <div
           className="text-token-xs mb-1 flex items-center gap-1.5"
           style={{ color: "var(--text-dim)" }}
         >
-          <TurnDot state="compact" />
-          {/* compact 上记只在“整轮还在跑”且该轮是本轮末尾时显示 phase，
-              补上 message_end 到下一个 message_start 之间的状态真空。 */}
-          {isStreaming && streamingPhase ? (
-            <AssistantStreamMeta phase={streamingPhase} parts={parts} />
-          ) : null}
+          {/* compact turn 不带状态点；仅在“整轮还在跑”且该轮是本轮末尾时
+              为了补上 message_end 到下一个 message_start 之间的状态真空、才升起 phase。 */}
+          <AssistantStreamMeta phase={streamingPhase} parts={parts} />
         </div>
-      )}
+      ) : null}
       {showLiveDot && (
         <div className="text-token-xs mb-1 flex items-center gap-1.5">
           <TurnDot state="live" />

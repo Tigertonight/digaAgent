@@ -40,6 +40,7 @@ import {
   X,
 } from "lucide-react";
 import type { SessionInfoLite } from "@/lib/types";
+import { isSessionUnread } from "@/lib/sessions/unread";
 import { formatRelativeTime, shortCwd } from "@/lib/format";
 import { BrandLogo } from "./BrandLogo";
 import SidebarExplorer from "./SidebarExplorer";
@@ -481,9 +482,16 @@ export function Sidebar(props: SidebarProps) {
                 : undefined;
             const seenAt = lastSeenMap[s.id] ?? serverSeenAt;
             // hydrated gate：SSR/首次 hydrate 时强制 false，避免 lastSeenMap
-            // 在客户端注水前误判全部未读。
+            // 在客户端注水前误判全部未读。判定逻辑抽到
+            // lib/sessions/unread.ts，以 lastAgentEndAt 为准。
             const isUnread =
-              hydrated && !isRunning && !isWaitingUser && (!seenAt || seenAt < s.modified);
+              hydrated &&
+              isSessionUnread({
+                session: s,
+                seenAt,
+                isRunning,
+                isWaitingUser,
+              });
             if (isPendingDelete) {
               return (
                 <div

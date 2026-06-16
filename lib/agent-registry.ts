@@ -219,6 +219,11 @@ export interface AgentRecord {
   isStreaming: boolean;
   /** 最近一次 runtime 相关更新，用于 PC/移动端 reconcile。 */
   updatedAt: number;
+  /**
+   * 上一轮 agent_end 的时间戳。sidebar “未读”蒙点看这个而不是
+   * “jsonl mtime”，避免多 turn 错误拍上蒙点。
+   */
+  lastAgentEndAt: number | null;
   /** 短时间内的客户端请求去重，避免弱网/双击重复 prompt。 */
   recentClientRequests: Map<string, number>;
   /** local shim 可能给完整 assistant 内容但漏掉 done/end，用 watchdog 兜底收尾 */
@@ -327,6 +332,7 @@ export function listAgentSummaries(): SessionRuntimeState[] {
       waitingApprovalCount,
       waitingClarificationCount,
       lastEventSeq: rec.nextSeq - 1,
+      lastAgentEndAt: rec.lastAgentEndAt,
       updatedAt: rec.updatedAt ?? Date.now(),
       runtimeState,
     };
@@ -584,6 +590,7 @@ function clearFinishWatchdog(rec: AgentRecord) {
 function finishStreamingRun(rec: AgentRecord): void {
   if (!rec.isStreaming) return;
   rec.isStreaming = false;
+  rec.lastAgentEndAt = Date.now();
   // Close the open goal turn before deciding whether to auto-continue. The
   // goal's terminal status (complete/blocked) maps onto the turn status.
   const goal = getGoal(rec.id);
@@ -854,6 +861,7 @@ export async function promptLocalCodingAssistantAgent(
     );
     rec.isStreaming = false;
     rec.updatedAt = Date.now();
+    rec.lastAgentEndAt = rec.updatedAt;
     pushAgentEvent(rec, { type: "agent_end" } as RingBufferEvent);
     return;
   }
@@ -904,6 +912,7 @@ export async function promptLocalCodingAssistantAgent(
     } as RingBufferEvent);
     rec.isStreaming = false;
     rec.updatedAt = Date.now();
+    rec.lastAgentEndAt = rec.updatedAt;
     if (rec.external) rec.external.child = null;
     pushAgentEvent(rec, { type: "agent_end" } as RingBufferEvent);
   });
@@ -920,6 +929,7 @@ export async function abortLocalCodingAssistantAgent(rec: AgentRecord): Promise<
   if (rec.isStreaming) {
     rec.isStreaming = false;
     rec.updatedAt = Date.now();
+    rec.lastAgentEndAt = rec.updatedAt;
     pushAgentEvent(rec, { type: "agent_end" } as RingBufferEvent);
   }
 }
@@ -945,6 +955,7 @@ async function createLocalCodingAssistantAgent(opts: CreateOptions): Promise<{
     unsubscribe: () => {},
     isStreaming: false,
     updatedAt: Date.now(),
+    lastAgentEndAt: null,
     recentClientRequests: new Map(),
     finishWatchdog: null,
     pendingFinishMessage: null,
@@ -1831,6 +1842,7 @@ export async function createAgent(opts: CreateOptions): Promise<{
     unsubscribe: () => {},
     isStreaming: false,
     updatedAt: Date.now(),
+    lastAgentEndAt: null,
     recentClientRequests: new Map(),
     finishWatchdog: null,
     pendingFinishMessage: null,
