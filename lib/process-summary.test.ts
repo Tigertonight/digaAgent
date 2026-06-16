@@ -43,8 +43,9 @@ describe("buildProcessSummary", () => {
     expect(summary.title).toContain("GPT-5.5");
     expect(summary.title).toContain("3 个步骤");
     expect(summary.title).toContain("1 个问题已恢复");
-    expect(summary.detail).toContain("bash");
-    expect(summary.detail).toContain("read");
+    // detail 现在走 narrateTool 人话叙事，不再是原始 toolName
+    expect(summary.detail).toContain("运行终端命令");
+    expect(summary.detail).toContain("查看");
     expect(summary.detail).toContain("$0.0123");
   });
 

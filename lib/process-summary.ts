@@ -1,4 +1,6 @@
 import { formatTokens } from "./format";
+import { dedupeToolLabels } from "./narration/summary";
+import { narrateTool, shouldHideTool } from "./narration/tool";
 import type { ChatMessage, ChatMessageMeta, MessagePart } from "./types";
 
 export interface ProcessSummary {
@@ -48,7 +50,7 @@ export function buildProcessSummary({
   let approvals = 0;
   let thinking = 0;
   let runningCount = 0;
-  const tools = new Map<string, number>();
+  const toolLabels: string[] = [];
   const models = new Map<string, number>();
   let input = 0;
   let output = 0;
@@ -66,7 +68,10 @@ export function buildProcessSummary({
 
   for (const part of sourceParts) {
     if (part.kind === "tool") {
-      tools.set(part.toolName, (tools.get(part.toolName) ?? 0) + 1);
+      if (!shouldHideTool(part)) {
+        const label = narrateTool(part).primary;
+        if (label) toolLabels.push(label);
+      }
       if (part.status === "running") runningCount += 1;
       if (part.status === "error" || part.isError) errorRecoveredCount += 1;
     } else if (part.kind === "thinking") {
@@ -81,10 +86,7 @@ export function buildProcessSummary({
     }
   }
 
-  const toolNames = [...tools.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 4)
-    .map(([name, count]) => (count > 1 ? `${name}×${count}` : name));
+  const toolNames = dedupeToolLabels(toolLabels).slice(0, 3);
   const fallbacks = [
     thinking > 0 ? `思考×${thinking}` : "",
     approvals > 0 ? `确认×${approvals}` : "",
