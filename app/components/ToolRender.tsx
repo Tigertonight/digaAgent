@@ -8,7 +8,7 @@
  * 内部用宽松的取值。后续可以根据 ToolRegistry 类型严格化。
  */
 import Image from "next/image";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { MessagePart } from "@/lib/types";
 import { unifiedDiff, isNoChange, type DiffLine } from "@/lib/diff-utils";
 import { previewStore } from "@/lib/preview-store";
@@ -16,17 +16,20 @@ import {
   asString,
   extractTextFromResult,
   getArg,
+  isWorthNarrating,
   narrateTool,
   shouldHideTool,
 } from "@/lib/narration/tool";
 
 type ToolPart = Extract<MessagePart, { kind: "tool" }>;
+type ToolRenderProps = { tool: ToolPart; questionContext?: string };
 
 interface Props {
   tool: ToolPart;
+  questionContext?: string;
 }
 
-export default function ToolRender({ tool }: Props) {
+export default function ToolRender({ tool, questionContext }: Props) {
   // Phase 2 降噪：内部治理类 tool（update_progress / goal_update / Process: xxx 等）
   // 不在主视图里占一行。这些序列仍会被 CollapsedPartProcessGroup 计入组总数，
   // 但展开面上不会重复占位。
@@ -35,31 +38,31 @@ export default function ToolRender({ tool }: Props) {
   switch (name) {
     case "read":
     case "read_file":
-      return <ReadTool tool={tool} />;
+      return <ReadTool tool={tool} questionContext={questionContext} />;
     case "edit":
     case "edit_file":
     case "str_replace":
-      return <EditTool tool={tool} />;
+      return <EditTool tool={tool} questionContext={questionContext} />;
     case "write":
     case "write_file":
     case "create_file":
-      return <WriteTool tool={tool} />;
+      return <WriteTool tool={tool} questionContext={questionContext} />;
     case "bash":
     case "shell":
     case "exec":
-      return <BashTool tool={tool} />;
+      return <BashTool tool={tool} questionContext={questionContext} />;
     case "grep":
     case "search":
-      return <GrepTool tool={tool} />;
+      return <GrepTool tool={tool} questionContext={questionContext} />;
     case "find":
     case "glob":
-      return <FindTool tool={tool} />;
+      return <FindTool tool={tool} questionContext={questionContext} />;
     case "ls":
     case "list":
     case "list_directory":
-      return <LsTool tool={tool} />;
+      return <LsTool tool={tool} questionContext={questionContext} />;
     default:
-      return <GenericTool tool={tool} />;
+      return <GenericTool tool={tool} questionContext={questionContext} />;
   }
 }
 
@@ -86,15 +89,62 @@ function ToolFrame({
   subtitle,
   defaultOpen = false,
   children,
+  questionContext,
 }: {
   tool: ToolPart;
   title: string;
   subtitle?: string;
   defaultOpen?: boolean;
   children?: React.ReactNode;
+  questionContext?: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  const narration = narrateTool(tool);
+  const narration = useMemo(() => narrateTool(tool), [tool]);
+  const narrationKey = useMemo(
+    () =>
+      `${tool.toolCallId}:${tool.toolName}:${tool.status}:${JSON.stringify(tool.args ?? {})}:${questionContext ?? ""}`,
+    [questionContext, tool.args, tool.status, tool.toolCallId, tool.toolName]
+  );
+  const [enhancedPrimary, setEnhancedPrimary] = useState<{
+    key: string;
+    text: string;
+  } | null>(null);
+  useEffect(() => {
+    if (narration.hidden || !isWorthNarrating(tool)) return;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 1400);
+    void fetch("/api/narration/tool", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        question: questionContext || "",
+        locale: navigator.language || "zh-CN",
+        ruleText: narration.primary,
+        tool: {
+          toolCallId: tool.toolCallId,
+          toolName: tool.toolName,
+          args: tool.args,
+          status: tool.status,
+          isError: tool.isError,
+        },
+      }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { narration?: unknown } | null) => {
+        if (typeof d?.narration === "string" && d.narration.trim()) {
+          setEnhancedPrimary({ key: narrationKey, text: d.narration.trim() });
+        }
+      })
+      .catch(() => {
+        /* rule narration is the fallback */
+      })
+      .finally(() => window.clearTimeout(timeout));
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [narration.hidden, narration.primary, narrationKey, questionContext, tool]);
   if (narration.hidden) return null;
   return (
     <div
@@ -114,7 +164,9 @@ function ToolFrame({
         <StatusDot status={tool.status} />
         <span className="min-w-0 flex-1">
           <div className="text-token-sm leading-5" style={{ color: "var(--fg)" }}>
-            {narration.primary}
+            {enhancedPrimary?.key === narrationKey
+              ? enhancedPrimary.text
+              : narration.primary}
           </div>
           {narration.secondary ? (
             <div
@@ -349,7 +401,7 @@ function resultToText(result: unknown, fallback: string): string {
 
 /* ---------- 具体渲染器 ---------- */
 
-function ReadTool({ tool }: { tool: ToolPart }) {
+function ReadTool({ tool, questionContext }: ToolRenderProps) {
   const path = asString(getArg(tool.args, "path", "file_path", "file"));
   const offset = getArg(tool.args, "offset");
   const limit = getArg(tool.args, "limit");
@@ -363,6 +415,7 @@ function ReadTool({ tool }: { tool: ToolPart }) {
   return (
     <ToolFrame
       tool={tool}
+      questionContext={questionContext}
       title={path || "(no path)"}
       subtitle={
         offset != null || limit != null ? `lines ${offset ?? 0}+${limit ?? "?"}` : undefined
@@ -375,14 +428,14 @@ function ReadTool({ tool }: { tool: ToolPart }) {
   );
 }
 
-function EditTool({ tool }: { tool: ToolPart }) {
+function EditTool({ tool, questionContext }: ToolRenderProps) {
   const path = asString(getArg(tool.args, "path", "file_path", "file"));
   const oldStr = asString(getArg(tool.args, "oldString", "old_string", "old"));
   const newStr = asString(getArg(tool.args, "newString", "new_string", "new"));
   const [mode, setMode] = useState<"diff" | "code" | "raw">("diff");
   const noChange = isNoChange(oldStr, newStr);
   return (
-    <ToolFrame tool={tool} title={path || "(no path)"} subtitle="edit">
+    <ToolFrame tool={tool} questionContext={questionContext} title={path || "(no path)"} subtitle="edit">
       {errorBanner(tool)}
       <ToolImages tool={tool} />
       <ViewModeSwitch
@@ -440,7 +493,7 @@ function EditTool({ tool }: { tool: ToolPart }) {
   );
 }
 
-function WriteTool({ tool }: { tool: ToolPart }) {
+function WriteTool({ tool, questionContext }: ToolRenderProps) {
   const path = asString(getArg(tool.args, "path", "file_path", "file"));
   const content = asString(getArg(tool.args, "content", "text"));
   const isHtml = /\.(html?|xhtml)$/i.test(path);
@@ -456,7 +509,12 @@ function WriteTool({ tool }: { tool: ToolPart }) {
         { id: "raw", label: "Raw" },
       ];
   return (
-    <ToolFrame tool={tool} title={path || "(no path)"} subtitle="write">
+    <ToolFrame
+      tool={tool}
+      questionContext={questionContext}
+      title={path || "(no path)"}
+      subtitle="write"
+    >
       {errorBanner(tool)}
       <ToolImages tool={tool} />
       <ViewModeSwitch
@@ -486,7 +544,7 @@ function WriteTool({ tool }: { tool: ToolPart }) {
   );
 }
 
-function BashTool({ tool }: { tool: ToolPart }) {
+function BashTool({ tool, questionContext }: ToolRenderProps) {
   const cmd = asString(getArg(tool.args, "command", "cmd"));
   const desc = asString(getArg(tool.args, "description", "desc"));
   const result = tool.result ?? tool.partialResult;
@@ -499,6 +557,7 @@ function BashTool({ tool }: { tool: ToolPart }) {
   return (
     <ToolFrame
       tool={tool}
+      questionContext={questionContext}
       title={cmd ? `$ ${cmd}` : "(no command)"}
       subtitle={desc || undefined}
     >
@@ -509,7 +568,7 @@ function BashTool({ tool }: { tool: ToolPart }) {
   );
 }
 
-function GrepTool({ tool }: { tool: ToolPart }) {
+function GrepTool({ tool, questionContext }: ToolRenderProps) {
   const pattern = asString(getArg(tool.args, "pattern", "query"));
   const path = asString(getArg(tool.args, "path", "dir"));
   const include = asString(getArg(tool.args, "include", "glob"));
@@ -523,6 +582,7 @@ function GrepTool({ tool }: { tool: ToolPart }) {
   return (
     <ToolFrame
       tool={tool}
+      questionContext={questionContext}
       title={pattern ? `/${pattern}/` : "(no pattern)"}
       subtitle={[path, include].filter(Boolean).join(" · ") || undefined}
     >
@@ -533,13 +593,13 @@ function GrepTool({ tool }: { tool: ToolPart }) {
   );
 }
 
-function FindTool({ tool }: { tool: ToolPart }) {
+function FindTool({ tool, questionContext }: ToolRenderProps) {
   const pattern = asString(getArg(tool.args, "pattern", "glob"));
   const path = asString(getArg(tool.args, "path", "dir"));
   const result = tool.result ?? tool.partialResult;
   const text = resultToText(result, asString(result));
   return (
-    <ToolFrame tool={tool} title={pattern || "(no pattern)"} subtitle={path || undefined}>
+    <ToolFrame tool={tool} questionContext={questionContext} title={pattern || "(no pattern)"} subtitle={path || undefined}>
       {errorBanner(tool)}
       <ToolImages tool={tool} />
       <CodeBlock text={text || "(none)"} />
@@ -547,12 +607,12 @@ function FindTool({ tool }: { tool: ToolPart }) {
   );
 }
 
-function LsTool({ tool }: { tool: ToolPart }) {
+function LsTool({ tool, questionContext }: ToolRenderProps) {
   const path = asString(getArg(tool.args, "path", "dir"));
   const result = tool.result ?? tool.partialResult;
   const text = resultToText(result, asString(result));
   return (
-    <ToolFrame tool={tool} title={path || "."} subtitle="ls">
+    <ToolFrame tool={tool} questionContext={questionContext} title={path || "."} subtitle="ls">
       {errorBanner(tool)}
       <ToolImages tool={tool} />
       <CodeBlock text={text || "(empty)"} />
@@ -560,7 +620,7 @@ function LsTool({ tool }: { tool: ToolPart }) {
   );
 }
 
-function GenericTool({ tool }: { tool: ToolPart }) {
+function GenericTool({ tool, questionContext }: ToolRenderProps) {
   const argsStr = asString(tool.args);
   const result = tool.result ?? tool.partialResult;
   const hasImages = extractImages(result).length > 0;
@@ -571,7 +631,7 @@ function GenericTool({ tool }: { tool: ToolPart }) {
     ? textFromBlocks
     : asString(result);
   return (
-    <ToolFrame tool={tool} title={tool.toolName} subtitle={tool.status}>
+    <ToolFrame tool={tool} questionContext={questionContext} title={tool.toolName} subtitle={tool.status}>
       {errorBanner(tool)}
       <ToolImages tool={tool} />
       {argsStr && argsStr !== "{}" && (

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { narrateTool, shouldHideTool, type ToolPart } from "./tool";
+import { isWorthNarrating, narrateTool, shouldHideTool, type ToolPart } from "./tool";
 
 const mk = (over: Partial<ToolPart>): ToolPart => ({
   kind: "tool",
@@ -99,6 +99,32 @@ describe("narrateTool — Phase 1 规则升级", () => {
     );
     expect(n.recovery).toBeTruthy();
     expect(n.recovery).toContain("ENOENT");
+  });
+});
+
+describe("isWorthNarrating — Phase 3 LLM 白名单", () => {
+  it("只允许 exec / 搜索类进入 LLM 增强", () => {
+    expect(
+      isWorthNarrating(
+        mk({ toolName: "bash", args: { command: "hibo info 年假" } })
+      )
+    ).toBe(true);
+    expect(
+      isWorthNarrating(
+        mk({ toolName: "web_search", args: { query: "小红书新闻" } })
+      )
+    ).toBe(true);
+    expect(
+      isWorthNarrating(mk({ toolName: "read", args: { path: "/a/b/Foo.ts" } }))
+    ).toBe(false);
+    expect(
+      isWorthNarrating(
+        mk({
+          toolName: "bash",
+          args: { command: "/app/skills/weather/scripts/run.sh" },
+        })
+      )
+    ).toBe(false);
   });
 });
 

@@ -43,6 +43,20 @@ export function shouldHideTool(tool: ToolPart): boolean {
   return /^Process:\s*[-\w]+$/i.test(target) || /^quiet-[a-z-]+$/i.test(target);
 }
 
+/** Phase 3 LLM 白名单：只增强 Exec / 搜索类，文件读写和内部治理工具规则直出。 */
+export function isWorthNarrating(tool: ToolPart): boolean {
+  if (shouldHideTool(tool)) return false;
+  const name = normalizeToolName(tool.toolName);
+  if (!(EXEC_NAMES.has(name) || SEARCH_NAMES.has(name))) return false;
+  const target = summarizeToolTarget(tool);
+  if (!target) return false;
+  const cmd = commandArg(tool);
+  const path = pathArg(tool);
+  // 技能脚本 / SKILL.md 已有很明确的规则文案，不再浪费 LLM。
+  if (detectSkillFromPath(path) || detectSkillFromPath(cmd)) return false;
+  return true;
+}
+
 export function narrateTool(tool: ToolPart): ToolNarration {
   if (shouldHideTool(tool)) return { primary: "", hidden: true };
   const name = normalizeToolName(tool.toolName);

@@ -190,6 +190,8 @@ export function MessagesScrollArea({
                 (m.timestamp != null
                   ? `${m.role}:${m.timestamp}:${i}`
                   : `i${i}`);
+              const questionContext =
+                m.role === "assistant" ? findPreviousUserText(messages, i) : undefined;
               const view = (
                 <MessageView
                   msg={m}
@@ -217,6 +219,7 @@ export function MessagesScrollArea({
                   }
                   isStreaming={isActiveAssistant && streaming}
                   cwd={cwd}
+                  questionContext={questionContext}
                   onApproveCall={onApproveCall}
                   onDenyCall={onDenyCall}
                   onChooseClarification={onChooseClarification}
@@ -404,6 +407,20 @@ function buildVisibleOrdinalByMessageIndex(messages: ChatMessage[]): number[] {
     }
   }
   return ordinals;
+}
+
+function findPreviousUserText(messages: ChatMessage[], index: number): string {
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (msg?.role !== "user") continue;
+    const fromParts = msg.parts
+      ?.map((part) => (part.kind === "text" ? part.text : ""))
+      .join(" ")
+      .trim();
+    const text = fromParts || msg.text || "";
+    return text.trim();
+  }
+  return "";
 }
 
 function buildCollapsedProcessItems({

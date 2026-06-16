@@ -74,6 +74,8 @@ export interface MessageViewProps {
   isStreaming?: boolean;
   /** 当前会话 cwd：传给 Markdown 用于解析消息里出现的相对图片路径 */
   cwd?: string;
+  /** 最近一条用户问题，用于 tool narration LLM 增强理解意图。 */
+  questionContext?: string;
   /** 点击 assistant 里的 http(s) 链接时，交给右侧 Browser Panel 打开 */
   onOpenUrl?: (href: string) => void;
   /**
@@ -143,6 +145,7 @@ export const MessageView = memo(function MessageView({
   streamingPhase,
   isStreaming,
   cwd,
+  questionContext,
   onOpenUrl,
   onApproveCall,
   onDenyCall,
@@ -402,7 +405,7 @@ export const MessageView = memo(function MessageView({
             );
           }
           if (p.kind === "tool") {
-            return <ToolRender key={i} tool={p} />;
+            return <ToolRender key={i} tool={p} questionContext={questionContext} />;
           }
           if (p.kind === "approval") {
             return (
@@ -481,7 +484,11 @@ export const MessageView = memo(function MessageView({
                 i += 1;
               }
               rendered.push(
-                <CollapsedPartProcessGroup key={`process-${start}`} parts={group} />
+                <CollapsedPartProcessGroup
+                  key={`process-${start}`}
+                  parts={group}
+                  questionContext={questionContext}
+                />
               );
               continue;
             }
@@ -652,7 +659,13 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function CollapsedPartProcessGroup({ parts }: { parts: MessagePart[] }) {
+function CollapsedPartProcessGroup({
+  parts,
+  questionContext,
+}: {
+  parts: MessagePart[];
+  questionContext?: string;
+}) {
   const [open, setOpen] = useState(false);
   const summary = summarizeProcessParts(parts);
   return (
@@ -698,7 +711,11 @@ function CollapsedPartProcessGroup({ parts }: { parts: MessagePart[] }) {
           style={{ borderColor: "var(--border-soft)" }}
         >
           {parts.map((part, index) => (
-            <ProcessPartDetail key={index} part={part} />
+            <ProcessPartDetail
+              key={index}
+              part={part}
+              questionContext={questionContext}
+            />
           ))}
         </div>
       ) : null}
@@ -706,8 +723,16 @@ function CollapsedPartProcessGroup({ parts }: { parts: MessagePart[] }) {
   );
 }
 
-function ProcessPartDetail({ part }: { part: MessagePart }) {
-  if (part.kind === "tool") return <ToolRender tool={part} />;
+function ProcessPartDetail({
+  part,
+  questionContext,
+}: {
+  part: MessagePart;
+  questionContext?: string;
+}) {
+  if (part.kind === "tool") {
+    return <ToolRender tool={part} questionContext={questionContext} />;
+  }
   if (part.kind === "thinking") {
     return (
       <ThinkingBlock
