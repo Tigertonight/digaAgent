@@ -54,9 +54,17 @@ export type SlashName = (typeof SLASH_COMMANDS)[number]["name"];
  * 把 /api/files 返回的目录条目过滤 + 排序 + 截断 + 包装为 AutocompleteItem。
  * 拆出来是因为 cache hit 与 debounce fetch 两条路径都要复用同一份格式化逻辑。
  */
-function buildFileItems(
-  entries: Array<{ name: string; isDir: boolean; path: string }>,
-  query: string
+type FilesEntry = { name: string; isDir: boolean; path?: string };
+
+function joinPath(base: string, name: string): string {
+  if (!base) return name;
+  return `${base.replace(/\/+$/g, "")}/${name.replace(/^\/+/g, "")}`;
+}
+
+export function buildFileItems(
+  entries: FilesEntry[],
+  query: string,
+  rootPath: string
 ): AutocompleteItem[] {
   return entries
     .filter(
@@ -70,7 +78,7 @@ function buildFileItems(
     .map<AutocompleteItem>((e) => ({
       label: e.name + (e.isDir ? "/" : ""),
       hint: e.isDir ? "dir" : "file",
-      value: `@${e.path}`,
+      value: `@${e.path ?? joinPath(rootPath, e.name)}`,
     }));
 }
 
@@ -178,7 +186,6 @@ export function useAutocomplete(
   //   降低连击 keystroke 的网络/解析压力。
   // - acMode 当前为 null 且未检测到触发 token 时，直接 return 不再调
   //   closeAutocomplete()，避免无谓 setState 触发上层 re-render。
-  type FilesEntry = { name: string; isDir: boolean; path: string };
   const filesCacheRef = useRef<
     Map<string, { ts: number; entries: FilesEntry[] }>
   >(new Map());
@@ -253,7 +260,7 @@ export function useAutocomplete(
       const cached = filesCacheRef.current.get(cwdKey);
       const now = Date.now();
       if (cached && now - cached.ts < FILES_CACHE_TTL_MS) {
-        setAcItems(buildFileItems(cached.entries, query));
+        setAcItems(buildFileItems(cached.entries, query, cwdKey));
         return;
       }
       debounceTimerRef.current = setTimeout(() => {
@@ -264,7 +271,7 @@ export function useAutocomplete(
             // 过期请求：在 fetch 期间用户又改了输入 / 关掉了 AC，丢弃
             if (seq !== debounceSeqRef.current) return;
             if (acModeRef.current !== "@") return;
-            setAcItems(buildFileItems(entries, query));
+            setAcItems(buildFileItems(entries, query, cwdKey));
           } catch {
             if (seq !== debounceSeqRef.current) return;
             setAcItems([]);
