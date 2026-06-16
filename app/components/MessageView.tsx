@@ -381,7 +381,6 @@ export const MessageView = memo(function MessageView({
               if (parts[j].kind === "text") { tailTextIdx = j; break; }
             }
           }
-          const finalTextIdx = findFinalTextPartIndex(parts);
           const renderPart = (p: MessagePart, i: number) => {
           if (p.kind === "thinking") {
             return (
@@ -472,15 +471,14 @@ export const MessageView = memo(function MessageView({
           };
           const rendered: ReactNode[] = [];
           let i = 0;
+          // 任何连续的 process parts（thinking / tool / approval / clarification 等）
+          // 都收纳到一个进度折叠组里，不再以“最后一段 text 之前”为边界，
+          // 避免 text 之后的工具调用裸露在 assistant 气泡末尾。
           while (i < parts.length) {
-            if (
-              finalTextIdx > 0 &&
-              i < finalTextIdx &&
-              isProcessPart(parts[i])
-            ) {
+            if (isProcessPart(parts[i])) {
               const group: MessagePart[] = [];
               const start = i;
-              while (i < finalTextIdx && isProcessPart(parts[i])) {
+              while (i < parts.length && isProcessPart(parts[i])) {
                 group.push(parts[i]);
                 i += 1;
               }
@@ -755,14 +753,6 @@ function ProcessPartDetail({
       {part.kind}
     </div>
   );
-}
-
-function findFinalTextPartIndex(parts: MessagePart[]): number {
-  for (let i = parts.length - 1; i >= 0; i -= 1) {
-    const part = parts[i];
-    if (part.kind === "text" && part.text.trim().length > 0) return i;
-  }
-  return -1;
 }
 
 function isProcessPart(part: MessagePart): boolean {
