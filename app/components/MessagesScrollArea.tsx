@@ -11,6 +11,10 @@ import type { AgentPhase } from "@/lib/session-runner";
 import type { ProviderInfo } from "@/lib/types";
 import type { WorkflowWorktreeAction } from "./MessageView";
 import { buildProcessSummary } from "@/lib/process-summary";
+import {
+  deriveTurnChromeState,
+  isLastAssistantOfTurn,
+} from "@/lib/turn-state";
 
 const INITIAL_RENDER_ITEM_WINDOW = 120;
 const RENDER_ITEM_WINDOW_STEP = 120;
@@ -164,6 +168,13 @@ export function MessagesScrollArea({
                   : -1;
               const isActiveAssistant =
                 m.role === "assistant" && i === activeAssistantIndex;
+              // Q1–Q3 turn chrome：deriveTurnChromeState 纯函数判定。
+              const turnState = deriveTurnChromeState({
+                messages,
+                index: i,
+                streaming,
+                isActiveAssistant,
+              });
               const usage = m.meta?.usage;
               const messageMeta =
                 usage && (usage.total > 0 || usage.cost > 0)
@@ -213,9 +224,15 @@ export function MessagesScrollArea({
                   onOpenUrl={onOpenUrl}
                   modelLabel={messageModelLabel}
                   assistantChrome={assistantChrome}
+                  turnState={turnState}
                   meta={messageMeta}
                   streamingPhase={
-                    isActiveAssistant && streaming ? agentPhase : undefined
+                    streaming &&
+                    (isActiveAssistant ||
+                      (m.role === "assistant" &&
+                        isLastAssistantOfTurn(messages, i)))
+                      ? agentPhase
+                      : undefined
                   }
                   isStreaming={isActiveAssistant && streaming}
                   cwd={cwd}

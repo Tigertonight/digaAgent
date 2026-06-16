@@ -68,6 +68,14 @@ export interface MessageViewProps {
   modelLabel?: string;
   /** 在执行组件展开态中复用 MessageView 时隐藏重复的 assistant 身份/usage chrome。 */
   assistantChrome?: "full" | "content";
+  /**
+   * Q1–Q3 turn chrome 表达：
+   *   - "final"   该轮最后一条 assistant 且整轮已结束→ 展开完整 chrome (model / token / cost / timestamp)
+   *   - "compact" 已封盘但不展全量 chrome→ 只保留复制 + 状态点
+   *   - "live"    当前正在写的 turn → 状态点闪烁，隐藏复制
+   * 默认 "final"（历史记录、嵌套场景保持原体验）。
+   */
+  turnState?: "final" | "compact" | "live";
   /** 仅最后一条 assistant 的本轮 token meta */
   meta?: { input: number; output: number; cost: number };
   /** 仅最后一条 assistant + 正在 streaming 时传入：用于 phase 标签 + t/s pill */
@@ -142,6 +150,7 @@ export const MessageView = memo(function MessageView({
   onForkToNewSession,
   modelLabel,
   assistantChrome = "full",
+  turnState = "final",
   meta,
   streamingPhase,
   isStreaming,
@@ -355,20 +364,47 @@ export const MessageView = memo(function MessageView({
 
   const captionText = modelLabel || "Assistant";
   const showAssistantChrome = assistantChrome === "full";
+  // Q1+Q2+Q3：
+  // - showFullChrome：只在整轮完结、且是该轮最后一条 assistant 时才出。
+  // - showCompactRow：已封盘、但不走 full——仅显示 copy + 状态点。
+  // - showLiveDot：该轮还在写这条——仅显示闪烁点。
+  const showFullChrome = showAssistantChrome && turnState === "final";
+  const showCompactRow = showAssistantChrome && turnState === "compact";
+  const showLiveDot = showAssistantChrome && turnState === "live";
   if (!showAssistantChrome && parts.length === 0) return null;
 
   const plainText = extractPlainText(parts);
   return (
     <div className="group">
-      {showAssistantChrome && (
+      {showFullChrome && (
         <div
           className="text-token-xs mb-1 flex items-center gap-2"
           style={{ color: "var(--text-muted)" }}
         >
+          <TurnDot state="final" />
           <span>{captionText}</span>
           {isStreaming && (
             <AssistantStreamMeta phase={streamingPhase ?? null} parts={parts} />
           )}
+        </div>
+      )}
+      {showCompactRow && (
+        <div
+          className="text-token-xs mb-1 flex items-center gap-1.5"
+          style={{ color: "var(--text-dim)" }}
+        >
+          <TurnDot state="compact" />
+          {/* compact 上记只在“整轮还在跑”且该轮是本轮末尾时显示 phase，
+              补上 message_end 到下一个 message_start 之间的状态真空。 */}
+          {isStreaming && streamingPhase ? (
+            <AssistantStreamMeta phase={streamingPhase} parts={parts} />
+          ) : null}
+        </div>
+      )}
+      {showLiveDot && (
+        <div className="text-token-xs mb-1 flex items-center gap-1.5">
+          <TurnDot state="live" />
+          <AssistantStreamMeta phase={streamingPhase ?? null} parts={parts} />
         </div>
       )}
       <div className="space-y-2 text-sm">
@@ -497,7 +533,7 @@ export const MessageView = memo(function MessageView({
           return rendered;
         })()}
       </div>
-      {showAssistantChrome && (
+      {showFullChrome && (
         <div
           className="text-token-xs mt-2 flex items-center gap-2"
           style={{ color: "var(--text-muted)" }}
@@ -528,6 +564,14 @@ export const MessageView = memo(function MessageView({
               {formatMessageTime(msg.timestamp)}
             </span>
           )}
+        </div>
+      )}
+      {showCompactRow && (
+        <div
+          className="text-token-xs mt-1.5 flex items-center justify-end"
+          style={{ color: "var(--text-dim)" }}
+        >
+          <CopyButton text={plainText} />
         </div>
       )}
     </div>
@@ -631,6 +675,32 @@ function phaseLabel(phase: AgentPhase): string {
   if (phase.kind === "waiting_model") return "Waiting for model…";
   if (phase.kind === "thinking") return "Thinking…";
   return "";
+}
+
+/**
+ * Q3：Claude Code 风格的状态点，用颜色 + 脉冲表达 turn 状态。
+ *   - final：绿色稳定——该轮完整结束
+ *   - compact：灰色稳定——已封盘但整轮还在跑
+ *   - live：灰色脉冲——该轮正在写这条
+ */
+function TurnDot({ state }: { state: "final" | "compact" | "live" }) {
+  const color =
+    state === "final" ? "var(--color-success)" : "var(--text-dim)";
+  const animated = state === "live";
+  return (
+    <span
+      aria-hidden="true"
+      className={animated ? "animate-pulse" : undefined}
+      style={{
+        display: "inline-block",
+        width: 6,
+        height: 6,
+        borderRadius: 9999,
+        backgroundColor: color,
+        flexShrink: 0,
+      }}
+    />
+  );
 }
 
 function CopyButton({ text }: { text: string }) {
