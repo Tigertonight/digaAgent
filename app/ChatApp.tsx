@@ -1609,6 +1609,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     key: "",
     visible: false,
   });
+  // 切会话后默认则满。换了 activeKey 会把 key 入栈，
+  // 等 chatState 渲染完下一帧后一次性 snap 到底，清空。
+  // 这里存 key 而不是布尔，是为了防止 effect 跨 key 贩贩：
+  // 换了 A→B→A 三次后，A 的 jump 不应该后被 B 的 streamSignature 勾起。
+  const pendingJumpToBottomKeyRef = useRef<RunnerKey | null>(null);
   const showScrollToBottom =
     scrollToBottomState.key === activeKey && scrollToBottomState.visible;
 
@@ -1737,6 +1742,45 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     if (!stickToBottomRef.current) return;
     scrollMessagesToBottom();
   }, [progress?.updatedAt, scrollMessagesToBottom]);
+
+  // 切换 activeKey（选了另一个 session）：记上“该 key 渲染完后要 jump 到底”。
+  // 这里不直接调 scrollMessagesToBottom，因为此时 chatState 可能还是空的：
+  //  - 已有 runner：switchTo 后 chatState 立刻到位，下一帧 layout 后 jump 即可
+  //  - 冷启动：刚切过去是空，ctx fetch 回来后 messages 才出现，jump 需等同步到那个点
+  // 所以看下面那个“message layout 完 → 如果 key 还是 pending 就 jump” effect。
+  useEffect(() => {
+    if (!activeKey) return;
+    pendingJumpToBottomKeyRef.current = activeKey;
+    // 清除其他 ref 锁定，避免跟 jump 争抢；spacer 在 jump effect 的 RAF 里退。
+    pendingPinUserCountRef.current = null;
+  }, [activeKey]);
+
+  // 渲染到包含该 key 的内容后，在下一帧 layout 完成时一次性 jump。
+  // 用 messages.length 作为变更信号，冷启动、switchTo 都覆盖。
+  useEffect(() => {
+    if (pendingJumpToBottomKeyRef.current !== activeKey) return;
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    // 空会话空页也算“到底”：clear 锁、取消 jump，stickToBottomRef 保留 true。
+    if (chatState.messages.length === 0) {
+      pendingJumpToBottomKeyRef.current = null;
+      stickToBottomRef.current = true;
+      return;
+    }
+    // force ：跳过 user-scroll lock。切 session 是明确的 “重置视图” 语义。
+    requestAnimationFrame(() => {
+      const node = messagesScrollRef.current;
+      if (!node) return;
+      node.scrollTop = node.scrollHeight;
+      stickToBottomRef.current = true;
+      setScrollToBottomState((state) =>
+        state.visible ? { ...state, visible: false } : state,
+      );
+      // jump 完成后那一帧一并清 spacer，避免上一个 session 遗留的 send 锁头未释。
+      setPinSpacer(false);
+      pendingJumpToBottomKeyRef.current = null;
+    });
+  }, [activeKey, chatState.messages.length]);
 
   // 选已有 session(P1-8):
   //  - runnersRef 已有该 session 的 runner → 直接 switchTo(不动 SSE,后台流式继续)
