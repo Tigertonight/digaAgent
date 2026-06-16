@@ -138,10 +138,10 @@ export function summarizeToolError(
 }
 
 /**
- * 从 args 里挑出"对用户最有意义"的目标短语：路径/URL/命令/查询词等。
- * 不做语言区分；调用方拿到后自行决定怎么拼前缀。
+ * 从 args 里挑出“对用户最有意义”的目标短语：路径/URL/命令/查询词。
+ * tool.ts 里另有一个以 ToolPart 为入参、会对 path 走 shortPath 的包装。
  */
-export function summarizeToolTarget(
+export function summarizeRecordTarget(
   args: unknown,
   result: unknown,
 ): string {

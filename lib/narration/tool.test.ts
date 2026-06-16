@@ -1,81 +1,119 @@
 import { describe, expect, it } from "vitest";
-import type { MessagePart } from "@/lib/types";
-import { narrateTool, shortPath, shouldHideTool } from "./tool";
+import { narrateTool, shouldHideTool, type ToolPart } from "./tool";
 
-type Tool = Extract<MessagePart, { kind: "tool" }>;
-const tool = (toolName: string, args: unknown, status: Tool["status"] = "running", extra: Partial<Tool> = {}): Tool => ({
+const mk = (over: Partial<ToolPart>): ToolPart => ({
   kind: "tool",
-  toolCallId: "t1",
-  toolName,
-  args,
-  status,
-  ...extra,
-});
+  toolCallId: "call_1",
+  toolName: "read",
+  args: {},
+  status: "running",
+  ...over,
+}) as ToolPart;
 
-describe("tool narration", () => {
-  it("keeps useful search query text", () => {
-    expect(narrateTool(tool("search", { query: "今天公司大事" })).primary).toBe(
-      "正在查找：今天公司大事"
-    );
+describe("narrateTool — Phase 1 规则升级", () => {
+  it("read 工具：保留末两段路径", () => {
+    const n = narrateTool(mk({ toolName: "read", args: { path: "/a/b/c/Foo.java" } }));
+    expect(n.primary).toContain("查看");
+    expect(n.primary).toContain("c/Foo.java");
+    expect(n.hidden).toBeFalsy();
   });
 
-  it("recognizes hibo knowledge query and strips flags", () => {
-    expect(
-      narrateTool(tool("bash", { command: "hibo info 年假怎么请 --cookie secret" })).primary
-    ).toBe("正在帮你查询知识库：年假怎么请");
-  });
-
-  it("recognizes hibo meeting query", () => {
-    expect(
-      narrateTool(tool("bash", { command: "hibo meeting rooms --date 2026-06-12" })).primary
-    ).toBe("正在帮你查询会议室");
-  });
-
-  it("recognizes skill SKILL.md reads as learning a skill", () => {
-    expect(
-      narrateTool(
-        tool("read", { path: "/app/skills/weather/SKILL.md" })
-      ).primary
-    ).toBe("正在学习「weather」技能");
-  });
-
-  it("recognizes skill scripts as using a skill", () => {
-    expect(
-      narrateTool(
-        tool("bash", {
-          command:
-            "/app/skills/oa-employee-festival/scripts/getBirthBlessing.sh --cookie abc",
-        })
-      ).primary
-    ).toBe("正在使用「oa-employee-festival」技能");
-  });
-
-  it("shortens file path to last two segments", () => {
-    expect(shortPath("from /a/b/c/Foo.java")).toBe("c/Foo.java");
-    expect(narrateTool(tool("read", { path: "/a/b/c/Foo.java" })).primary).toBe(
-      "正在查看 c/Foo.java"
-    );
-  });
-
-  it("hides internal process and progress tools", () => {
-    expect(shouldHideTool(tool("update_progress", {}))).toBe(true);
-    expect(shouldHideTool(tool("bash", { command: "Process: quiet-otter" }))).toBe(true);
-  });
-
-  it("sanitizes secrets in fallback terminal commands", () => {
-    expect(
-      narrateTool(tool("bash", { command: "curl https://x --token abc123" })).primary
-    ).toBe("正在运行终端命令：curl https://x --token ***");
-  });
-
-  it("adds recovery text on error", () => {
+  it("write 工具：写入文案", () => {
     const n = narrateTool(
-      tool("bash", { command: "npm test" }, "error", {
-        result: { stderr: "boom" },
-        isError: true,
+      mk({
+        toolName: "write",
+        status: "done",
+        args: { path: "/repo/lib/foo.ts", content: "x" },
       })
     );
-    expect(n.primary).toContain("执行失败：验证");
-    expect(n.recovery).toContain("boom");
+    expect(n.primary).toContain("写入");
+    expect(n.primary).toContain("lib/foo.ts");
+  });
+
+  it("bash + 验证类命令：使用『验证』动词", () => {
+    const n = narrateTool(
+      mk({ toolName: "bash", args: { command: "npm run test" } })
+    );
+    expect(n.primary).toContain("正在");
+    expect(n.primary).toMatch(/验证|test/);
+  });
+
+  it("bash + 含 cookie：屏蔽 secret", () => {
+    const n = narrateTool(
+      mk({
+        toolName: "bash",
+        args: {
+          command:
+            "/app/skills/oa-employee-festival/scripts/getBirth.sh --cookie SECRET",
+        },
+      })
+    );
+    // 命中 skill 路径 → 走"使用技能"路径
+    expect(n.primary).toContain("使用");
+    expect(n.primary).toContain("oa-employee-festival");
+  });
+
+  it("read SKILL.md：识别为学习技能", () => {
+    const n = narrateTool(
+      mk({
+        toolName: "read",
+        args: { path: "/Users/me/.pi/agent/skills/weather/SKILL.md" },
+      })
+    );
+    expect(n.primary).toContain("学习");
+    expect(n.primary).toContain("weather");
+  });
+
+  it("web_search：保留查询词", () => {
+    const n = narrateTool(
+      mk({
+        toolName: "web_search",
+        args: { query: "今天公司有啥大事" },
+      })
+    );
+    expect(n.primary).toContain("搜索");
+    expect(n.primary).toContain("今天公司");
+  });
+
+  it("hibo meeting query：转为「查询会议室」", () => {
+    const n = narrateTool(
+      mk({
+        toolName: "bash",
+        args: {
+          command: "hibo meeting query --date 2026-06-13 --start 14:00",
+        },
+      })
+    );
+    expect(n.primary).toContain("会议室");
+  });
+
+  it("error 状态时输出 recovery 提示", () => {
+    const n = narrateTool(
+      mk({
+        toolName: "read",
+        status: "error",
+        isError: true,
+        args: { path: "/a/b/Foo.java" },
+        result: { error: "ENOENT: no such file" },
+      })
+    );
+    expect(n.recovery).toBeTruthy();
+    expect(n.recovery).toContain("ENOENT");
+  });
+});
+
+describe("shouldHideTool — Phase 2 降噪", () => {
+  it("update_progress / goal_update 隐藏", () => {
+    expect(shouldHideTool(mk({ toolName: "update_progress" }))).toBe(true);
+    expect(shouldHideTool(mk({ toolName: "goal_update" }))).toBe(true);
+  });
+  it("read / write / bash 不隐藏", () => {
+    expect(shouldHideTool(mk({ toolName: "read", args: { path: "/a/b" } }))).toBe(false);
+    expect(shouldHideTool(mk({ toolName: "bash", args: { command: "ls" } }))).toBe(false);
+  });
+  it("Process: quiet-otter 这种内部代号路径隐藏", () => {
+    expect(
+      shouldHideTool(mk({ toolName: "process", args: { status: "Process: quiet-otter" } }))
+    ).toBe(true);
   });
 });

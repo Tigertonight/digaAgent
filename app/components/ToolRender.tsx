@@ -17,6 +17,7 @@ import {
   extractTextFromResult,
   getArg,
   narrateTool,
+  shouldHideTool,
 } from "@/lib/narration/tool";
 
 type ToolPart = Extract<MessagePart, { kind: "tool" }>;
@@ -26,6 +27,10 @@ interface Props {
 }
 
 export default function ToolRender({ tool }: Props) {
+  // Phase 2 降噪：内部治理类 tool（update_progress / goal_update / Process: xxx 等）
+  // 不在主视图里占一行。这些序列仍会被 CollapsedPartProcessGroup 计入组总数，
+  // 但展开面上不会重复占位。
+  if (shouldHideTool(tool)) return null;
   const name = (tool.toolName || "").toLowerCase();
   switch (name) {
     case "read":
