@@ -42,6 +42,7 @@ import type {
 import type { AgentPhase } from "@/lib/session-runner";
 import { formatMessageTime, formatTokens } from "@/lib/format";
 import { previewStore } from "@/lib/preview-store";
+import { narrateTool, shouldHideTool } from "@/lib/narration/tool";
 import Markdown from "./Markdown";
 import ToolRender from "./ToolRender";
 import { ApprovalBubble } from "./ApprovalBubble";
@@ -755,10 +756,12 @@ function summarizeProcessParts(parts: MessagePart[]): {
   let errorCount = 0;
   let thinking = 0;
   let approvals = 0;
-  const tools = new Map<string, number>();
+  const toolLabels: string[] = [];
   for (const part of parts) {
     if (part.kind === "tool") {
-      tools.set(part.toolName, (tools.get(part.toolName) ?? 0) + 1);
+      if (shouldHideTool(part)) continue;
+      const label = narrateTool(part).primary;
+      if (label) toolLabels.push(label);
       if (part.status === "error" || part.isError) errorCount += 1;
     } else if (part.kind === "thinking") {
       thinking += 1;
@@ -766,14 +769,12 @@ function summarizeProcessParts(parts: MessagePart[]): {
       approvals += 1;
     }
   }
-  const toolSummary = [...tools.entries()]
-    .slice(0, 3)
-    .map(([name, count]) => (count > 1 ? `${name}×${count}` : name));
+  const toolSummary = toolLabels.slice(0, 3);
   const fallback = [
     thinking > 0 ? `思考×${thinking}` : "",
     approvals > 0 ? `确认×${approvals}` : "",
   ].filter(Boolean);
-  const stepCount = parts.length;
+  const stepCount = Math.max(1, toolLabels.length + thinking + approvals);
   return {
     title:
       errorCount > 0
