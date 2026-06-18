@@ -28,6 +28,7 @@ import type { ForkableUserMessage, ThinkingLevel, SessionInfoLite } from "@/lib/
 import type { SubagentBatch } from "@/lib/subagents/types";
 import {
   appendRestoredSubagentBatches,
+  applyEvent,
   createInitialState,
   ctxToMessages,
 } from "@/lib/chat-reducer";
@@ -44,6 +45,7 @@ export interface UseForkableParams {
   agentId: string | null;
   agentSessionId: string | null;
   selectedId: string | null;
+  forkingIndex: number | null;
   forkText: string;
 
   // ── 全局会话上下文 ─────────────────────────────────────────────────
@@ -113,6 +115,7 @@ export function useForkable(params: UseForkableParams): UseForkableReturn {
     agentId,
     agentSessionId,
     selectedId,
+    forkingIndex,
     forkText,
     providerId,
     modelId,
@@ -250,21 +253,35 @@ export function useForkable(params: UseForkableParams): UseForkableReturn {
         }
         const newAid = ad.id as string;
         const newKey: RunnerKey = ad.sessionFile ?? fd.path;
-        // 3. 为 fork 出来的 session 建一个全新 runner,放进 Map（setRunner 会触发 LRU 检查）
+        const newSessionId = ad.sessionId as string | undefined;
+        // S5: navigate_tree 之前先不切换/不挂 SSE，避免一旦截断失败却已经把 UI 切到
+        // 一个半初始化的孤儿 session。先在“后台”完成截断，成功后再切换。
+        // 3. 把 leaf 截到 fork 点（在新 session 上操作，失败则清理新建资源）
+        try {
+          await agentAction(newAid, {
+            type: "navigate_tree",
+            targetId: entryId,
+            summarize: false,
+          });
+        } catch (navErr) {
+          // 回滚：删掉刚创建的新 session 文件（DELETE 路由会一并 dispose 绑定的
+          // agent record），避免留下半初始化的孤儿 session。此时尚未 setRunner /
+          // attachSseFor，无需额外清理前端 runner / SSE。
+          if (newSessionId) {
+            await fetch(`/api/sessions/${newSessionId}`, {
+              method: "DELETE",
+            }).catch(() => {});
+          }
+          throw navErr;
+        }
+        // 4. 截断成功后再建 runner / 切换 / 挂 SSE
         const forkRunner = emptyRunner();
         forkRunner.agentId = newAid;
         forkRunner.agentSessionId = ad.sessionId;
         forkRunner.sessionFile = ad.sessionFile ?? fd.path;
         setRunner(newKey, forkRunner);
-        // 4. 切到新 runner(父 runner 仍保留在 Map 里,SSE 也不动)
         switchTo(newKey);
         attachSseFor(newKey, newAid);
-        // 5. 把 leaf 截到 fork 点
-        await agentAction(newAid, {
-          type: "navigate_tree",
-          targetId: entryId,
-          summarize: false,
-        });
         // 6. 重新拉 context 渲染到新 runner
         try {
           const ctx = await fetch(`/api/sessions/${ad.sessionId}/context`).then(
@@ -329,6 +346,10 @@ export function useForkable(params: UseForkableParams): UseForkableReturn {
         setError("fork 文本不能为空");
         return;
       }
+      if (forkingIndex == null) {
+        setError("无法定位要编辑的消息");
+        return;
+      }
       const ownerKey = activeKeyRef.current;
       // 没 agent 就基于当前 session 现起一个(用户可能直接打开历史 session 就 hover Edit)
       let aid = agentId;
@@ -370,6 +391,28 @@ export function useForkable(params: UseForkableParams): UseForkableReturn {
       }
       updateRunner(ownerKey, { forkBusy: true });
       setError(null);
+      const clientRequestId = makeForkClientRequestId();
+      updateRunner(ownerKey, (state) => ({
+        chatState: applyEvent(state.chatState, {
+          type: "__fork_replace_user",
+          index: forkingIndex,
+          text,
+          clientRequestId,
+        }),
+      }));
+      // S5: 记录 fork 前的 leaf，便于 navigate_tree 成功但 prompt 失败时回滚，
+      // 否则 leaf 会被偷偷截断到 fork 点，用户却看到“什么都没发生”（隐性数据丢失）。
+      let preForkLeafId: string | null = null;
+      try {
+        const treeRes = await fetch(`/api/agent/${aid}?action=tree`);
+        const treeData = await treeRes.json().catch(() => null);
+        if (treeData && typeof treeData.leafId === "string") {
+          preForkLeafId = treeData.leafId;
+        }
+      } catch {
+        // 拿不到 leaf 就降级为“不回滚”，不阻断主流程。
+      }
+      let navigated = false;
       try {
         // 1. 切到该 entry(不 summarize,直接截断)
         await agentAction(aid, {
@@ -377,45 +420,44 @@ export function useForkable(params: UseForkableParams): UseForkableReturn {
           targetId: entryId,
           summarize: false,
         });
-        // 2. 重新拉 session context(reducer 从头来)
-        if (selectedId || agentSessionId) {
-          // session 文件可能没立刻 flush;优先用 sessionId
-          const sid = agentSessionId ?? selectedId;
-          try {
-            const ctx = await fetch(`/api/sessions/${sid}/context`).then((r) =>
-              r.json()
-            );
-            if (!ctx.error) {
-              updateRunner(ownerKey, {
-                chatState: createInitialState(
-                  appendRestoredSubagentBatches(
-                    ctxToMessages(ctx.messages ?? []),
-                    Array.isArray(ctx.subagentBatches)
-                      ? (ctx.subagentBatches as SubagentBatch[])
-                      : undefined
-                  )
-                ),
-              });
-            }
-          } catch {
-            /* 忽略:发完 prompt 后 SSE 也会重建 messages */
-          }
-        }
-        // 3. 用新文本发 prompt
-        await agentAction(aid, { type: "prompt", text });
-        // 4. 关编辑器、刷 fork 列表
+        navigated = true;
+        // 2. 用新文本发 prompt。UI 已经就地覆盖 fork 点，后端 ack / message_start
+        // 会按 clientRequestId 把 pending 气泡衰变成正式消息。
+        await agentAction(aid, { type: "prompt", text, clientRequestId });
+        // 3. 关编辑器、刷 fork 列表
         updateRunner(ownerKey, { forkingIndex: null, forkText: "" });
         await refreshForkList(aid, ownerKey);
       } catch (e) {
         setError(userFacingMessage(e));
+        // S5: 若已经截断了 leaf 但后续 prompt 失败，把 leaf 回滚到 fork 前的位置，
+        // 让会话树恢复原状，而不是停在被偷偷截断的中间态。
+        if (navigated && preForkLeafId) {
+          try {
+            await agentAction(aid, {
+              type: "navigate_tree",
+              targetId: preForkLeafId,
+              summarize: false,
+            });
+            await refreshForkList(aid, ownerKey);
+          } catch (rollbackErr) {
+            console.error("fork rollback (navigate back) failed", rollbackErr);
+          }
+        }
+        updateRunner(ownerKey, (state) => ({
+          chatState: applyEvent(state.chatState, {
+            type: "__optimistic_user_failed",
+            clientRequestId,
+            reason: "failed",
+          }),
+        }));
       } finally {
         updateRunner(ownerKey, { forkBusy: false });
       }
     },
     [
       agentId,
-      agentSessionId,
       selectedId,
+      forkingIndex,
       sessions,
       providerId,
       modelId,
@@ -442,4 +484,11 @@ export function useForkable(params: UseForkableParams): UseForkableReturn {
     setForkText,
     setForkableUserMessages,
   };
+}
+
+function makeForkClientRequestId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `fork-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
