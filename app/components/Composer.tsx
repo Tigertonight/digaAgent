@@ -76,6 +76,7 @@ import { approxBase64Bytes, formatBytes } from "@/lib/image-utils";
 import { extractModeFromInput } from "@/lib/composer/mode-chip";
 import type { ComposerMode } from "@/lib/composer/mode-chip";
 import { ModeChip } from "./ModeChip";
+import { ProfileChip } from "./ProfileChip";
 import { computeDisambigByPath } from "@/lib/composer/disambig";
 import { extractStructuredInput } from "@/lib/composer/structured-input";
 import { InputAutocomplete } from "./InputAutocomplete";
@@ -919,6 +920,9 @@ export function Composer(props: ComposerProps) {
               ))}
             </PillSelect>
           )}
+
+          {/* 4.5 Profile（只读预览，Phase B） */}
+          <ProfileChip />
 
           {/* 5. Tools（Wrench 图标 + 启用计数） */}
           {agentId && (
