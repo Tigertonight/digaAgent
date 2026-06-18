@@ -45,4 +45,28 @@ describe("communication settings", () => {
     expect(env.budget.action).toBe("pause");
     expect(env.communication).toEqual({ workMode: "daily" });
   });
+
+  // C-1: communication is now derived from the active agent profile's
+  // communication axis (single source of truth), not the standalone field.
+  it("derives workMode from the active profile's communication axis", async () => {
+    // default profile (code-review) -> coding
+    expect(await getCommunicationSettings()).toEqual({ workMode: "coding" });
+
+    // switch default profile to a daily-communication one -> daily
+    writeFileSync(
+      settingsFile,
+      JSON.stringify({ agentProfiles: { defaultProfileId: "daily-research" } })
+    );
+    expect(await getCommunicationSettings()).toEqual({ workMode: "daily" });
+
+    // a coding profile -> coding, regardless of any legacy communication field
+    writeFileSync(
+      settingsFile,
+      JSON.stringify({
+        communication: { workMode: "daily" }, // legacy field must be ignored
+        agentProfiles: { defaultProfileId: "code-edit" },
+      })
+    );
+    expect(await getCommunicationSettings()).toEqual({ workMode: "coding" });
+  });
 });

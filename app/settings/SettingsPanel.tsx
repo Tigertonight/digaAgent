@@ -11,7 +11,6 @@ import {
   FileSliders,
   Globe2,
   Hammer,
-  MessageCircle,
   MonitorCog,
   Paperclip,
   Plus,
@@ -33,7 +32,6 @@ import { Badge, Button, FieldInput } from "@/app/components/DesignPrimitives";
 import SkillsPanel from "@/app/components/SkillsPanel";
 import { BudgetSettingsSection } from "./BudgetSettingsSection";
 import { CollabSettingsSection } from "./CollabSettingsSection";
-import { CommunicationSettingsSection } from "./CommunicationSettingsSection";
 import { AgentProfilesSettingsSection } from "./AgentProfilesSettingsSection";
 import { NarrationSettingsSection } from "./NarrationSettingsSection";
 import { WorkflowNetworkPolicySection } from "./WorkflowNetworkPolicySection";
@@ -70,7 +68,6 @@ type SettingsSectionId =
   | "models"
   | "safety"
   | "usage"
-  | "communication"
   | "agent-profiles"
   | "narration"
   | "skills"
@@ -110,16 +107,10 @@ const SETTINGS_SECTIONS: Array<{
   },
   {
     group: "核心",
-    id: "communication",
-    label: "工作模式",
-    description: "选择 Diga Agent 默认显示多少技术细节。",
-    icon: MessageCircle,
-  },
-  {
-    group: "核心",
     id: "agent-profiles",
     label: "Agent Profiles",
-    description: "查看每个 profile 背后的配置轴并选择默认 profile（推理强度、审批、权限边界等）。",
+    description:
+      "选择工作 profile：沟通风格、推理强度、审批、权限边界、过程展示、工具族的打包配置。",
     icon: Sparkles,
   },
   {
@@ -930,9 +921,6 @@ function WebSettingsPanel() {
 
       {activeSection === "safety" ? <CollabSettingsSection /> : null}
       {activeSection === "usage" ? <BudgetSettingsSection /> : null}
-      {activeSection === "communication" ? (
-        <CommunicationSettingsSection />
-      ) : null}
       {activeSection === "agent-profiles" ? (
         <AgentProfilesSettingsSection />
       ) : null}
@@ -2072,9 +2060,6 @@ export default function SettingsPanel() {
 
       {activeSection === "safety" ? <CollabSettingsSection /> : null}
       {activeSection === "usage" ? <BudgetSettingsSection /> : null}
-      {activeSection === "communication" ? (
-        <CommunicationSettingsSection />
-      ) : null}
       {activeSection === "agent-profiles" ? (
         <AgentProfilesSettingsSection />
       ) : null}

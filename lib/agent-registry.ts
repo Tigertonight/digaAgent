@@ -1831,10 +1831,32 @@ export async function createAgent(opts: CreateOptions): Promise<{
         ];
   const allCustomTools = [...baseCustomTools, ...mcpTools];
 
+  // C-2: profile 的 reasoning 轴作为主 agent thinkingLevel 的「初始值」。
+  // 优先级：调用方显式传入（用户在 Composer 选的）> profile.reasoning > "medium"。
+  // 用户手动选择经 per-runner 更新生效，不走创建路径，因此不会被 profile 覆盖。
+  // 子 agent（有 parentAgentId）保持各自 role 默认，不套用主 profile。
+  let profileReasoning: import("./types").ThinkingLevel | undefined;
+  if (!opts.thinkingLevel && !opts.parentAgentId) {
+    try {
+      const [{ getAgentProfilesSettings }, { resolveProfile }] =
+        await Promise.all([
+          import("./agent-profiles/settings"),
+          import("./agent-profiles/resolve"),
+        ]);
+      const settings = await getAgentProfilesSettings();
+      profileReasoning = resolveProfile(
+        settings.defaultProfileId,
+        settings
+      ).defaults.reasoning;
+    } catch {
+      profileReasoning = undefined;
+    }
+  }
+
   const { session } = await createAgentSession({
     cwd: opts.cwd,
     model,
-    thinkingLevel: opts.thinkingLevel ?? "medium",
+    thinkingLevel: opts.thinkingLevel ?? profileReasoning ?? "medium",
     tools: opts.tools,
     excludeTools: opts.excludeTools,
     sessionManager,

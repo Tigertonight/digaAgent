@@ -411,16 +411,25 @@ fork（含 edit-from-here）从某条历史 turn 截断后继续时，**新分�
 
 **目标**：先落低风险轴。
 
-**工作**
+**工作（实际落地范围，2026-06-18）**
 
-- `communication` 驱动 prompt aside。
-- `reasoning` 驱动模型请求参数。
-- `display` 驱动过程分组和折叠。
+- ✅ `communication` 驱动 prompt aside。落地方式：`getCommunicationSettings()` 改为
+  **派生自生效 profile 的 communication 轴**（不再读独立全局字段），所有注入点不变；
+  并**移除旧「工作模式」settings UI**，communication 归入 Agent Profiles，彻底消除双轨。
+- ✅ `reasoning` 驱动模型推理预算。落地方式：profile 的 `reasoning` 作为主 agent
+  `thinkingLevel` 的**初始值**；优先级 = 调用方显式传入（用户在 Composer 选的）>
+  profile.reasoning > "medium"。用户手动选择经 per-runner 更新生效，不被 profile 覆盖。
+  子 agent（有 parentAgentId）保持各自 role 默认，不套用主 profile。
+- ⏸️ `display` 驱动过程分组/折叠 —— **本轮推迟**。原因：现有过程折叠没有统一的
+  `full/grouped/compact` 旋钮，逻辑分散在 MessagesScrollArea / process-summary，
+  需要新建该旋钮并接入渲染，改动面大且易回归。单列为独立一轮（Phase C-display）。
 
-**验收**
+**验收（本轮）**
 
-- `Daily Research` 的工具过程会分组折叠并显示数量。
-- `Code Review` 会保留全量过程展示。
+- 切换默认 profile 后，新对话的 communication 风格随 profile 的 communication 轴变化。
+- 新建主 agent 的 thinkingLevel 默认取生效 profile 的 reasoning（用户未手动指定时）。
+- 移除旧「工作模式」UI 后，communication 只能经 Agent Profiles 调整，无双轨。
+- `display` 行为暂不变（推迟项）。
 
 ### Phase D: Profile 驱动 Toolset 与 Approval
 
