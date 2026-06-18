@@ -29,6 +29,8 @@ import {
   CONTEXT_ASIDE_CLOSE,
   CONTEXT_ASIDE_OPEN,
 } from "./context-aside";
+import { withCommunicationInstructions } from "./communication/instructions";
+import { getCommunicationSettings } from "./communication/settings";
 import { createClarificationExtension } from "./clarification/extension";
 import { createBrowserExtension } from "./browser/extension";
 import { disposeBrowser } from "./browser/runtime";
@@ -45,6 +47,10 @@ import {
 import {
   createDynamicWorkflowTool,
   createWorkflowScriptTool,
+  createListWorkflowTemplatesTool,
+  createListWorkflowSkillsTool,
+  createReadWorkflowResourceTool,
+  createSaveWorkflowSkillTool,
 } from "./workflows/extension";
 import { runDynamicWorkflow } from "./workflows/orchestrator";
 import { runWorkflowScript } from "./workflows/script-runtime";
@@ -503,9 +509,16 @@ function maybeContinueGoal(rec: AgentRecord): void {
     const latest = getGoal(rec.id);
     if (!latest || latest.status !== "active" || rec.isStreaming) return;
     const recap = buildGoalRecap(rec.id);
-    void rec.session.prompt(buildGoalContinuationPrompt(latest, recap)).catch((e) => {
+    void (async () => {
+      const prompt = withCommunicationInstructions(
+        buildGoalContinuationPrompt(latest, recap),
+        await getCommunicationSettings()
+      );
+      await rec.session.prompt(prompt);
+    })().catch((e) => {
       const paused = setGoalStatus(rec.id, "paused", {
-        pauseReason: e instanceof Error ? e.message : "Goal continuation failed.",
+        pauseReason:
+          e instanceof Error ? e.message : "Goal continuation failed.",
       });
       pushGoalEvent(rec, paused);
     });
@@ -1809,6 +1822,12 @@ export async function createAgent(opts: CreateOptions): Promise<{
           delegateSubagentsTool as unknown as ToolDefinition,
           dynamicWorkflowTool as unknown as ToolDefinition,
           workflowScriptTool as unknown as ToolDefinition,
+          // Progressive disclosure + reuse (Claude Code style): discover and
+          // reuse saved templates/skills instead of regenerating large scripts.
+          createListWorkflowTemplatesTool() as unknown as ToolDefinition,
+          createListWorkflowSkillsTool() as unknown as ToolDefinition,
+          createReadWorkflowResourceTool() as unknown as ToolDefinition,
+          createSaveWorkflowSkillTool() as unknown as ToolDefinition,
         ];
   const allCustomTools = [...baseCustomTools, ...mcpTools];
 

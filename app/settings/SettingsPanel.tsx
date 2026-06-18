@@ -11,6 +11,8 @@ import {
   FileSliders,
   Globe2,
   Hammer,
+  MessageCircle,
+  MonitorCog,
   Paperclip,
   Plus,
   RefreshCw,
@@ -31,6 +33,7 @@ import { Badge, Button, FieldInput } from "@/app/components/DesignPrimitives";
 import SkillsPanel from "@/app/components/SkillsPanel";
 import { BudgetSettingsSection } from "./BudgetSettingsSection";
 import { CollabSettingsSection } from "./CollabSettingsSection";
+import { CommunicationSettingsSection } from "./CommunicationSettingsSection";
 import { NarrationSettingsSection } from "./NarrationSettingsSection";
 import { WorkflowNetworkPolicySection } from "./WorkflowNetworkPolicySection";
 import { McpServersSection } from "./McpServersSection";
@@ -66,11 +69,13 @@ type SettingsSectionId =
   | "models"
   | "safety"
   | "usage"
+  | "communication"
   | "narration"
   | "skills"
   | "mcp"
   | "browser"
   | "workflows"
+  | "desktop"
   | "mobile";
 
 const SETTINGS_SECTIONS: Array<{
@@ -100,6 +105,13 @@ const SETTINGS_SECTIONS: Array<{
     label: "用量保护",
     description: "限制单次任务的费用、轮数和运行时间。",
     icon: CreditCard,
+  },
+  {
+    group: "核心",
+    id: "communication",
+    label: "工作模式",
+    description: "选择 Diga Agent 默认显示多少技术细节。",
+    icon: MessageCircle,
   },
   {
     group: "核心",
@@ -135,6 +147,13 @@ const SETTINGS_SECTIONS: Array<{
     label: "工作流网络",
     description: "管理动态工作流的网络访问规则、模板和运行记录。",
     icon: Globe2,
+  },
+  {
+    group: "桌面与访问",
+    id: "desktop",
+    label: "桌面运行",
+    description: "控制 Diga Agent 在屏保、锁屏和熄屏时的本机运行行为。",
+    icon: MonitorCog,
   },
   {
     group: "桌面与访问",
@@ -312,6 +331,118 @@ function SkillsSettingsSection() {
 
   return (
     <SkillsPanel cwd={cwd} embedded />
+  );
+}
+
+function DesktopRuntimeSection({
+  electronApi,
+  disabled,
+}: {
+  electronApi: ElectronApi | null;
+  disabled: boolean;
+}) {
+  const [enabled, setEnabled] = useState(false);
+  const [actualEnabled, setActualEnabled] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!electronApi) return;
+    setLoading(true);
+    setStatus(null);
+    try {
+      const [settings, powerStatus] = await Promise.all([
+        electronApi.settings.load(),
+        electronApi.power?.getKeepAwakeStatus(),
+      ]);
+      setEnabled(Boolean(settings.keepAwake?.enabled));
+      setActualEnabled(Boolean(powerStatus?.enabled));
+    } catch (e) {
+      setStatus(`加载失败：${userFacingMessage(e, { context: "settings" })}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [electronApi]);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void load();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [load]);
+
+  const toggle = async () => {
+    if (!electronApi || saving || disabled) return;
+    const nextEnabled = !enabled;
+    setSaving(true);
+    setStatus(null);
+    setEnabled(nextEnabled);
+    try {
+      await electronApi.settings.save({
+        keepAwake: { enabled: nextEnabled },
+      });
+      const powerStatus = await electronApi.power?.getKeepAwakeStatus();
+      setActualEnabled(Boolean(powerStatus?.enabled));
+      setStatus(
+        nextEnabled
+          ? "已开启，屏幕可关闭，Agent 会继续运行。"
+          : "已关闭，系统将按原有节能设置进入睡眠。"
+      );
+    } catch (e) {
+      setEnabled(!nextEnabled);
+      setStatus(`保存失败：${userFacingMessage(e, { context: "settings" })}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section className="rounded-md border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-5">
+      <div className="flex items-start justify-between gap-5">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-sm font-semibold">熄屏/屏保期间继续工作</h2>
+            <Badge tone={actualEnabled ? "success" : "default"} variant={actualEnabled ? "soft" : "outline"}>
+              {actualEnabled ? "运行中" : "未启用"}
+            </Badge>
+          </div>
+          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[color:var(--text-muted)]">
+            开启后，Diga Agent 会阻止系统自动睡眠，但仍允许显示器关闭。适合让本地任务在锁屏、屏保或熄屏期间继续执行。
+          </p>
+          <p className="mt-2 text-token-sm leading-relaxed text-[color:var(--text-dim)]">
+            手动睡眠、退出应用或 MacBook 合盖仍可能中断任务。
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          aria-label="熄屏/屏保期间继续工作"
+          onClick={() => void toggle()}
+          disabled={loading || saving || disabled || !electronApi}
+          className={`relative h-7 w-12 shrink-0 rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+            enabled
+              ? "border-[color:var(--color-success)] bg-[color:var(--color-success-bg)]"
+              : "border-[color:var(--border)] bg-[color:var(--bg)]"
+          }`}
+        >
+          <span
+            className={`absolute left-0 top-1 h-5 w-5 rounded-full bg-[color:var(--text)] shadow-sm transition-transform ${
+              enabled ? "translate-x-5" : "translate-x-1"
+            }`}
+          />
+        </button>
+      </div>
+      {status ? (
+        <div className="mt-4 rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-3 py-2 text-token-sm text-[color:var(--text-muted)]">
+          {status}
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -790,8 +921,19 @@ function WebSettingsPanel() {
 
       {activeSection === "safety" ? <CollabSettingsSection /> : null}
       {activeSection === "usage" ? <BudgetSettingsSection /> : null}
+      {activeSection === "communication" ? (
+        <CommunicationSettingsSection />
+      ) : null}
       {activeSection === "narration" ? <NarrationSettingsSection /> : null}
       {activeSection === "skills" ? <SkillsSettingsSection /> : null}
+      {activeSection === "desktop" ? (
+        <section className="rounded-md border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-5">
+          <h2 className="text-sm font-semibold">桌面版可用</h2>
+          <p className="mt-1 text-sm leading-relaxed text-[color:var(--text-muted)]">
+            熄屏/屏保期间继续工作需要 Diga Agent 桌面版的系统级能力。
+          </p>
+        </section>
+      ) : null}
       {activeSection === "mobile" ? (
         <RemoteAccessSection
           electronApi={null}
@@ -1918,8 +2060,17 @@ export default function SettingsPanel() {
 
       {activeSection === "safety" ? <CollabSettingsSection /> : null}
       {activeSection === "usage" ? <BudgetSettingsSection /> : null}
+      {activeSection === "communication" ? (
+        <CommunicationSettingsSection />
+      ) : null}
       {activeSection === "narration" ? <NarrationSettingsSection /> : null}
       {activeSection === "skills" ? <SkillsSettingsSection /> : null}
+      {activeSection === "desktop" ? (
+        <DesktopRuntimeSection
+          electronApi={electronApi}
+          disabled={busy !== null}
+        />
+      ) : null}
       {activeSection === "mobile" && electronApi ? (
         <RemoteAccessSection
           electronApi={electronApi}

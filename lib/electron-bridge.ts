@@ -145,6 +145,12 @@ export interface AppSettings {
   defaultModelId?: string;
   lastCwd?: string;
   fromEnvMigrated?: boolean;
+  keepAwake?: {
+    enabled?: boolean;
+  };
+  communication?: {
+    workMode?: "coding" | "daily";
+  };
   remoteAccess?: {
     mode?: "off" | "vpn" | "lan";
     port?: number;
@@ -195,12 +201,20 @@ export interface DependenciesApi {
   installCloudflared(): Promise<DependencyInstallResult>;
 }
 
+export interface PowerApi {
+  getKeepAwakeStatus(): Promise<{
+    enabled: boolean;
+    id: number | null;
+  }>;
+}
+
 export interface ElectronApi {
   getAppInfo(): Promise<AppInfo>;
   getApiBase(): Promise<string>;
   // 移除：getLocalSecret。renderer 不应该能读取 secret。
   // same-origin fetch 由主进程 onBeforeSendHeaders 自动注入。
   dependencies?: DependenciesApi;
+  power?: PowerApi;
   updater: UpdaterApi;
   selectDirectory(opts?: SelectDirectoryOptions): Promise<string | null>;
   revealInFinder(path: string): Promise<boolean>;
