@@ -39,6 +39,7 @@ import type {
   WorkflowTraceEvent,
 } from "./workflows/types";
 import { stripContextAside } from "./context-aside";
+import { isFalseGrepNoMatch } from "./narration/false-error";
 
 /* SDK 事件的最小化类型（用 any-ish 但 narrow 到必要字段） */
 interface AnyEvent {
@@ -92,6 +93,8 @@ interface AnyEvent {
   partialResult?: unknown;
   result?: unknown;
   isError?: boolean;
+  // local UI events
+  index?: number;
   // approval_request (RFC-2 Phase B3 自定义事件)
   request?: {
     id: string;
@@ -246,6 +249,37 @@ function textFromParts(parts: MessagePart[]) {
     .filter((p): p is Extract<MessagePart, { kind: "text" }> => p.kind === "text")
     .map((p) => p.text)
     .join("");
+}
+
+function reconcileFinalTextParts(
+  parts: MessagePart[],
+  finalContent?: NonNullable<AnyEvent["message"]>["content"]
+): MessagePart[] {
+  const finalParts = partsFromContent(finalContent);
+  const finalText = textFromParts(finalParts);
+  if (!finalText) return parts;
+  const currentText = textFromParts(parts);
+  if (currentText === finalText) return parts;
+  const next = parts.slice();
+  if (!currentText) {
+    return [...finalParts, ...next.filter((part) => part.kind !== "text")];
+  }
+  if (finalText.startsWith(currentText)) {
+    appendToLastTextPart(next, finalText.slice(currentText.length));
+    return next;
+  }
+  if (finalText.length <= currentText.length) return parts;
+  const firstTextIndex = next.findIndex((part) => part.kind === "text");
+  if (firstTextIndex < 0) return [{ kind: "text", text: finalText }, ...next];
+  let replaced = false;
+  return next.flatMap((part, index): MessagePart[] => {
+    if (part.kind !== "text") return [part];
+    if (index === firstTextIndex && !replaced) {
+      replaced = true;
+      return [{ kind: "text", text: finalText }];
+    }
+    return [];
+  });
 }
 
 function toNumber(v: unknown): number {
@@ -740,7 +774,9 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
       const images = ev.images ?? [];
       const attachments = ev.attachments ?? [];
       const parts: MessagePart[] = [];
-      const visibleText = stripContextAside(text);
+      // 与 message_start 里的 stripContextAside 保持同步 normalize：trim 末尾空白，
+      // 避免衰变时 lastText 带 \n、textJoined 不带 \n 造成双气泡。
+      const visibleText = stripContextAside(text).replace(/\s+$/u, "");
       if (visibleText) parts.push({ kind: "text", text: visibleText });
       for (const img of images) {
         if (img.data && img.mimeType) {
@@ -777,8 +813,10 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
     case "optimistic_user_ack": {
       const requestId = (ev as unknown as { clientRequestId?: string })
         .clientRequestId;
-      const finalText = (ev as unknown as { displayText?: string }).displayText
-        ?? "";
+      // 同上：ack 写入的 displayText 也 trim 末尾，保证后续 message_start 衰变能命中。
+      const finalText = (
+        (ev as unknown as { displayText?: string }).displayText ?? ""
+      ).replace(/\s+$/u, "");
       if (!requestId) return state;
       for (let i = state.messages.length - 1; i >= 0; i -= 1) {
         const msg = state.messages[i];
@@ -824,6 +862,30 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
       return state;
     }
 
+    case "__fork_replace_user": {
+      const index = typeof ev.index === "number" ? ev.index : -1;
+      if (index < 0 || index >= state.messages.length) return state;
+      const current = state.messages[index];
+      if (!current || current.role !== "user") return state;
+      const text = stripContextAside(ev.text ?? "");
+      const parts: MessagePart[] = text ? [{ kind: "text", text }] : [];
+      state.messages = state.messages.slice(0, index + 1);
+      state.messages[index] = {
+        ...current,
+        role: "user",
+        parts,
+        text,
+        timestamp: Date.now(),
+        pending: true,
+        clientRequestId: ev.clientRequestId,
+      };
+      state.activeAssistantIndex = -1;
+      state.activeAssistantResponseId = undefined;
+      state.activeAssistantReplayText = undefined;
+      state.activeAssistantReplayOffset = undefined;
+      return state;
+    }
+
     case "message_start": {
       const m = ev.message;
       if (!m) return state;
@@ -848,9 +910,20 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         //      textJoined 相等。这里允许带 clientRequestId 的 pending user 被衰变。
         //   2. ack 已到 → pending=false、text 已被换为 displayText，与 textJoined 一致，
         //      同样衰变为正式条。
+        //   3. 【兼容兑底】last 是 pending optimistic、没带 clientRequestId（老客户端 /
+        //      未重发路径），但 visible 文本与 textJoined 完全一致，同样衰变。
+        //      仅在 last.pending === true 且文本完全相等时生效，安全。
         const lastIdx = state.messages.length - 1;
         const last = lastIdx >= 0 ? state.messages[lastIdx] : null;
         const lastText = last?.text ?? "";
+        // 文本对比用 trim 后的 normalized 形式：
+        //   - server displayText（来自 composePromptWithAside）保留用户原文末尾空白；
+        //   - SDK 写进 jsonl 的 finalText 一定带 CONTEXT_ASIDE（withCommunicationInstructions
+        //     总会包一层），message_start 走 stripContextAside 慢路径会 trim 掉末尾换行。
+        //   - 不 normalize 时 lastText="hello\n"、textJoined="hello" → 衰变 miss → 双气泡。
+        const lastTextNorm = lastText.trim();
+        const textJoinedNorm = textJoined.trim();
+        const textsMatch = lastTextNorm === textJoinedNorm;
         const isPendingOptimistic =
           !!last &&
           last.role === "user" &&
@@ -861,8 +934,18 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
           last.role === "user" &&
           last.pending !== true &&
           typeof last.clientRequestId === "string" &&
-          lastText === textJoined;
-        if (last && (isPendingOptimistic || isAckedOptimistic)) {
+          textsMatch;
+        const isPendingNoCriTextMatch =
+          !!last &&
+          last.role === "user" &&
+          last.pending === true &&
+          last.clientRequestId === undefined &&
+          textJoinedNorm.length > 0 &&
+          textsMatch;
+        if (
+          last &&
+          (isPendingOptimistic || isAckedOptimistic || isPendingNoCriTextMatch)
+        ) {
           state.messages[lastIdx] = {
             role: "user",
             parts,
@@ -1016,6 +1099,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         } else {
           parts = cur.parts.slice();
         }
+        parts = reconcileFinalTextParts(parts, m.content);
         parts = appendAssistantErrorFallback(parts, m);
         // 不管哪种来源，最后一个未结束的 thinking 在结束时间打个 endedAt
         sealLastThinkingIfOpen(parts);
@@ -1023,6 +1107,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
           ...cur,
           parts,
           timestamp: finalTs,
+          stopReason: m.stopReason,
           meta: mergeMeta(cur.meta, metaFromMessage(m)),
         };
       }
@@ -1473,11 +1558,15 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         const idx = findToolPartIndex(parts, ev.toolCallId!);
         if (idx >= 0) {
           const tp = parts[idx] as Extract<MessagePart, { kind: "tool" }>;
+          // grep/rg no-match 会让 bash exit code = 1，被 SDK 标 isError；
+          // 这里识别出来作为成功处理，避免后续 UI 走 recovered 路径。
+          const falseError = isFalseGrepNoMatch(tp.toolName, tp.args, ev.result);
+          const realIsError = !falseError && (ev.isError ?? false);
           parts[idx] = {
             ...tp,
             result: ev.result,
-            isError: ev.isError ?? false,
-            status: ev.isError ? "error" : "done",
+            isError: realIsError,
+            status: realIsError ? "error" : "done",
           };
         }
         return { ...msg, parts };
@@ -1602,15 +1691,23 @@ export function ctxToMessages(
           const tr = toolResults.get(c.id);
           const args = c.input ?? c.arguments;
           const missingResultIsError = !tr && unfinishedToolStatus === "error";
+          // 同上：resume 加载历史会话时，历史里的 grep no-match tool_result 也
+          // 带着 isError=true，这里同样 normalize 一次。
+          const trIsErrorRaw = tr?.isError ?? missingResultIsError;
+          const trFalseError =
+            trIsErrorRaw && tr
+              ? isFalseGrepNoMatch(c.name, args, tr.result)
+              : false;
+          const trIsError = trIsErrorRaw && !trFalseError;
           parts.push({
             kind: "tool",
             toolCallId: c.id,
             toolName: c.name,
             args,
             result: tr?.result ?? (missingResultIsError ? opts.unfinishedToolResult : undefined),
-            isError: tr?.isError ?? missingResultIsError,
+            isError: trIsError,
             status: tr
-              ? tr.isError
+              ? trIsError
                 ? "error"
                 : "done"
               : unfinishedToolStatus,
@@ -1639,6 +1736,7 @@ export function ctxToMessages(
         role: "assistant",
         parts: finalParts,
         timestamp: m.timestamp,
+        stopReason: m.stopReason,
         meta: metaFromMessage({ ...m, role: "assistant" }),
       });
     }

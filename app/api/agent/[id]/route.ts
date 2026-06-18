@@ -49,9 +49,11 @@ import {
 import { applyGoalUpdate } from "@/lib/goal/update";
 import { listDefinitions } from "@/lib/subagents/registry";
 import {
-  buildAgentMentionDirective,
-  stripAgentMentions,
-} from "@/lib/subagents/router";
+  composePromptWithAside,
+  parseAttachments,
+} from "@/lib/composer/aside-prompt";
+import { withCommunicationInstructions } from "@/lib/communication/instructions";
+import { getCommunicationSettings } from "@/lib/communication/settings";
 import {
   clearProgress,
   failOpenProgress,
@@ -69,6 +71,10 @@ import type {
   RuntimeEventSource,
   RuntimeEventStatus,
 } from "@/lib/runtime/events";
+import {
+  listPendingClarifications,
+  resolveClarification,
+} from "@/lib/clarification/server-store";
 import {
   CONTEXT_ASIDE_OPEN,
   CONTEXT_ASIDE_CLOSE,
@@ -395,7 +401,7 @@ export async function POST(
         ) {
           return NextResponse.json({ ok: true, deduped: true });
         }
-        const images = parseImages(body.images);
+        const images = parseImages(body.images) ?? [];
         // 附件引用（@path）：前端单独传 attachments，不再拼进展示文本。
         const attachments = Array.isArray(body.attachments)
           ? (body.attachments as unknown[]).filter(
@@ -408,40 +414,15 @@ export async function POST(
         // （见 lib/browser/extension.ts），每步会通过 SSE 推 browser_state，
         // 因此这里不再做基于正则的意图预跑（避免同一句话被执行两次）。
 
-        // 1) 解析显式 @agent 提及。展示给用户的气泡用「剥离 @ 后的干净原话」，
-        //    而把「委托专家」的指令放进独立上下文（aside），不污染 user 气泡。
+        // 1) 提取 @agent 提及 + 包装 attachments aside，统一走 composePromptWithAside。
+        //    同样的函数也被 steer / follow_up 复用于 attachments（但不启用 mention 路由）。
         const specialistIds = listDefinitions(rec.cwd).map((d) => d.id);
-        const mentionDirective = buildAgentMentionDirective(text, specialistIds);
-        const displayText = mentionDirective
-          ? stripAgentMentions(text, specialistIds) || text
-          : text;
-
-        // 2) 汇总所有「优化用」的上下文片段。这些只喂给模型，不进 user 气泡：
-        //    - 文件附件引用（@path）
-        //    - @agent 委托指令（directive）
-        const asideSections: string[] = [];
-        if (attachments.length > 0) {
-          asideSections.push(
-            `Referenced files/folders (read or list as needed):\n${attachments
-              .map((p) => `@${p}`)
-              .join(" ")}`
-          );
-        }
-        if (mentionDirective) {
-          asideSections.push(mentionDirective.directive);
-        }
-        const asideContext = asideSections.join("\n\n");
-
-        // 3) 组装发给模型的文本：用户原话 + 用分隔标记包裹的上下文。
-        //    为什么不用 sendCustomMessage(role:"custom") 注入？
-        //    —— 本项目用的 local shim 是非标准 OpenAI 兼容端，不认识 role:"custom"
-        //    的旁注消息，注入后模型会吐空（空气泡）。因此把上下文作为标准 user
-        //    message 文本的一部分发送，shim 完全认识。
-        //    前端渲染 user 气泡时会用同样的标记把这段上下文剥离，只显示原话，
-        //    从而做到「展示=原文，发送=带上下文」。
-        const finalText = asideContext
-          ? `${displayText}\n\n${CONTEXT_ASIDE_OPEN}\n${asideContext}\n${CONTEXT_ASIDE_CLOSE}`
-          : displayText;
+        const { displayText, finalText, mentionDirective } =
+          composePromptWithAside(text, attachments, { specialistIds });
+        const finalTextWithMode = withCommunicationInstructions(
+          finalText,
+          await getCommunicationSettings()
+        );
 
         // F-A5 双气泡修复：prompt 进 SDK 之前先 push 一条 optimistic_user_ack，
         // 让前端 reducer 按 clientRequestId 把 pending user 气泡的 text 衰变为 displayText
@@ -456,8 +437,26 @@ export async function POST(
         }
 
         try {
+          const pendingClarifications = listPendingClarifications(id);
+          if (
+            pendingClarifications.length > 0 &&
+            displayText.trim() &&
+            images.length === 0 &&
+            attachments.length === 0
+          ) {
+            const pending = pendingClarifications.at(-1)!;
+            const ok = resolveClarification(pending.id, {
+              customText: displayText.trim(),
+            });
+            if (ok) {
+              return NextResponse.json({
+                ok: true,
+                resolvedClarification: pending.requestId,
+              });
+            }
+          }
           if (isLocalCodingAssistantAgent(rec)) {
-            await promptLocalCodingAssistantAgent(rec, finalText);
+            await promptLocalCodingAssistantAgent(rec, finalTextWithMode);
             return NextResponse.json({
               ok: true,
               ...(mentionDirective
@@ -466,13 +465,17 @@ export async function POST(
             });
           }
           // 如果当前在 streaming，默认按 followUp 处理；否则正常 prompt
+          // P3 修复：`images` 在上面被 `?? []` 归一为数组，虚假 truthy，
+          // 会让无图请求也传 `{ images: [] }`。该参数必须是
+          // images.length > 0 才传，避免 SDK 对空 multimodal 参数敏感。
+          const imagesOpt = images.length > 0 ? { images } : undefined;
           if (rec.isStreaming) {
-            await rec.session.prompt(finalText, {
+            await rec.session.prompt(finalTextWithMode, {
               streamingBehavior: "followUp",
-              images,
+              ...(imagesOpt ?? {}),
             });
           } else {
-            await rec.session.prompt(finalText, images ? { images } : undefined);
+            await rec.session.prompt(finalTextWithMode, imagesOpt);
           }
         } catch (e) {
           clearClientRequest(rec.id, clientRequestId);
@@ -495,13 +498,23 @@ export async function POST(
             { status: 400 }
           );
         }
+        // P2 修复：steer 也接受 attachments，复用 prompt 的 aside 起装。
+        // 不走 mention 路由（specialistIds = []）以免扩大 streaming 路径的行为面。
+        const attachments = parseAttachments(body.attachments);
+        const { finalText } = composePromptWithAside(text, attachments, {
+          specialistIds: [],
+        });
+        const finalTextWithMode = withCommunicationInstructions(
+          finalText,
+          await getCommunicationSettings()
+        );
         const images = parseImages(body.images);
         if (isLocalCodingAssistantAgent(rec)) {
           void images;
-          await promptLocalCodingAssistantAgent(rec, text);
+          await promptLocalCodingAssistantAgent(rec, finalTextWithMode);
           return NextResponse.json({ ok: true });
         }
-        await rec.session.steer(text, images);
+        await rec.session.steer(finalTextWithMode, images);
         return NextResponse.json({ ok: true });
       }
 
@@ -514,13 +527,22 @@ export async function POST(
             { status: 400 }
           );
         }
+        // P2 修复：follow_up 也接受 attachments，复用 prompt 的 aside 起装。
+        const attachments = parseAttachments(body.attachments);
+        const { finalText } = composePromptWithAside(text, attachments, {
+          specialistIds: [],
+        });
+        const finalTextWithMode = withCommunicationInstructions(
+          finalText,
+          await getCommunicationSettings()
+        );
         const images = parseImages(body.images);
         if (isLocalCodingAssistantAgent(rec)) {
           void images;
-          await promptLocalCodingAssistantAgent(rec, text);
+          await promptLocalCodingAssistantAgent(rec, finalTextWithMode);
           return NextResponse.json({ ok: true });
         }
-        await rec.session.followUp(text, images);
+        await rec.session.followUp(finalTextWithMode, images);
         return NextResponse.json({ ok: true });
       }
 
@@ -540,6 +562,20 @@ export async function POST(
             { status: 400 }
           );
         }
+        // P1 修复：goal 也接受 clientRequestId，跟 prompt 路径一致：
+        //   1. claim 去重（同一 cri 双击 / 重提交不会双调 setGoal）
+        //   2. 在调 SDK prompt 之前先 push optimistic_user_ack，让 reducer 衰变
+        //      pending optimistic 为“干净原文”，避免后续 message_start 产生双气泡。
+        const clientRequestId =
+          typeof body.clientRequestId === "string"
+            ? body.clientRequestId.trim().slice(0, 128)
+            : "";
+        if (
+          clientRequestId &&
+          !claimClientRequest(rec.id, clientRequestId)
+        ) {
+          return NextResponse.json({ ok: true, deduped: true });
+        }
         const tokenBudget =
           typeof body.tokenBudget === "number" ? body.tokenBudget : undefined;
         const goal = setGoal(id, objective, tokenBudget);
@@ -557,16 +593,34 @@ export async function POST(
           "If the full goal is achieved, call goal_update with status=complete.",
           "If you are truly blocked and cannot make meaningful progress without user input or an external change, call goal_update with status=blocked and include a short blockedReason.",
         ].join("\n");
-        const prompt = [
-          objective,
-          "",
-          CONTEXT_ASIDE_OPEN,
-          goalAside,
-          CONTEXT_ASIDE_CLOSE,
-        ].join("\n");
+        const prompt = withCommunicationInstructions(
+          [
+            objective,
+            "",
+            CONTEXT_ASIDE_OPEN,
+            goalAside,
+            CONTEXT_ASIDE_CLOSE,
+          ].join("\n"),
+          await getCommunicationSettings()
+        );
 
-        if (rec.isStreaming) await rec.session.followUp(prompt);
-        else await rec.session.prompt(prompt);
+        // F-A5 双气泡修复（goal 同补）：调 SDK 之前先 push optimistic_user_ack。
+        // displayText = objective（SDK 后续 message_start 的文本是 objective + aside，
+        // 但 reducer 会 stripContextAside）。
+        if (clientRequestId) {
+          pushExternalEvent(rec, {
+            type: "optimistic_user_ack",
+            clientRequestId,
+            displayText: objective,
+          });
+        }
+        try {
+          if (rec.isStreaming) await rec.session.followUp(prompt);
+          else await rec.session.prompt(prompt);
+        } catch (e) {
+          clearClientRequest(rec.id, clientRequestId);
+          throw e;
+        }
         return NextResponse.json({ ok: true, goal });
       }
 
@@ -589,13 +643,16 @@ export async function POST(
             "Do the next useful step. Use goal_update when the goal is complete or truly blocked.",
           ].join("\n");
           await rec.session.prompt(
-            [
-              goal.objective,
-              "",
-              CONTEXT_ASIDE_OPEN,
-              resumeAside,
-              CONTEXT_ASIDE_CLOSE,
-            ].join("\n")
+            withCommunicationInstructions(
+              [
+                goal.objective,
+                "",
+                CONTEXT_ASIDE_OPEN,
+                resumeAside,
+                CONTEXT_ASIDE_CLOSE,
+              ].join("\n"),
+              await getCommunicationSettings()
+            )
           );
         }
         return NextResponse.json({ ok: true, goal });

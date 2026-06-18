@@ -562,6 +562,94 @@ describe("applyEvent — shim duplicate completion guards", () => {
     expect(s.messages[0].parts).toEqual([{ kind: "text", text: "hello world" }]);
   });
 
+  it("reconciles incomplete streamed text from message_end final content", () => {
+    let s = createInitialState();
+    s = applyEvent(s, {
+      type: "message_start",
+      message: { role: "assistant", responseId: "msg-final-full", content: [] },
+    });
+    s = applyEvent(s, {
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "MessagesScrollArea 的统计很可疑，",
+        partial: { responseId: "msg-final-full" },
+      },
+    });
+    s = applyEvent(s, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        responseId: "msg-final-full",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "MessagesScrollArea 的统计很可疑，似乎被 oldText 末尾换行不一致影响了。验证下 ProcessSummary 错误。",
+          },
+        ],
+      },
+    });
+
+    expect(s.messages[0].parts).toEqual([
+      {
+        kind: "text",
+        text: "MessagesScrollArea 的统计很可疑，似乎被 oldText 末尾换行不一致影响了。验证下 ProcessSummary 错误。",
+      },
+    ]);
+  });
+
+  it("keeps tool parts while reconciling message_end final text", () => {
+    let s = createInitialState();
+    s = applyEvent(s, {
+      type: "message_start",
+      message: { role: "assistant", responseId: "msg-final-with-tool", content: [] },
+    });
+    s = applyEvent(s, {
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "先查一下。",
+        partial: { responseId: "msg-final-with-tool" },
+      },
+    });
+    s = applyEvent(s, {
+      type: "tool_execution_start",
+      toolCallId: "tool-1",
+      toolName: "grep",
+      args: { pattern: "MessagesScrollArea" },
+    });
+    s = applyEvent(s, {
+      type: "tool_execution_end",
+      toolCallId: "tool-1",
+      result: "match",
+      isError: false,
+    });
+    s = applyEvent(s, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        responseId: "msg-final-with-tool",
+        stopReason: "tool_use",
+        content: [
+          {
+            type: "text",
+            text: "先查一下。MessagesScrollArea 的统计很可疑。",
+          },
+        ],
+      },
+    });
+
+    const parts = s.messages[0].parts ?? [];
+    expect(parts.some((part) => part.kind === "tool")).toBe(true);
+    expect(
+      parts
+        .filter((part): part is Extract<MessagePart, { kind: "text" }> => part.kind === "text")
+        .map((part) => part.text)
+        .join("")
+    ).toBe("先查一下。MessagesScrollArea 的统计很可疑。");
+  });
+
   it("does not create a second assistant for duplicate message_start responseId", () => {
     let s = createInitialState();
     const message = {
@@ -1263,6 +1351,41 @@ describe("applyEvent — optimistic user ack + @mention reconcile", () => {
     expect(only.timestamp).toBe(100);
   });
 
+  it("ack 后 SDK 回放的 user message 带 CONTEXT_ASIDE、trim 后一致 → 不重复", () => {
+    // 这是之前 “发一次看到两条” 的主要原因：
+    //   - server displayText = "text " （末尾留了原始输入的空格/换行）
+    //   - SDK 写进 jsonl 是 "text \n\n<<<CONTEXT_ASIDE>>>\n…\n<<<END>>>"
+    //   - message_start 收到后 stripContextAside 会 trim → "text"
+    //   - 不 normalize 时 lastText !== textJoined → 衰变 miss → 双气泡。
+    let state = applyEvent(createInitialState(), {
+      type: "__optimistic_user",
+      clientRequestId: "crid-trail-ws",
+      text: "hello world  ",
+    });
+    state = applyEvent(state, {
+      type: "optimistic_user_ack",
+      clientRequestId: "crid-trail-ws",
+      displayText: "hello world  ",
+    });
+    state = applyEvent(state, {
+      type: "message_start",
+      message: {
+        role: "user",
+        timestamp: 300,
+        content: [
+          {
+            type: "text",
+            text:
+              "hello world\n\n<<<CONTEXT_ASIDE>>>\nCommunication mode: Daily\n<<<END_CONTEXT_ASIDE>>>",
+          },
+        ],
+      },
+    });
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0].text).toBe("hello world");
+    expect(state.messages[0].pending).toBeFalsy();
+  });
+
   it("ack 还没到，真实 user message_start 仍然能替换 pending optimistic（用 clientRequestId 锚点）", () => {
     const state = applyEvent(
       applyEvent(createInitialState(), {
@@ -1285,6 +1408,96 @@ describe("applyEvent — optimistic user ack + @mention reconcile", () => {
     expect(only.role).toBe("user");
     expect(only.pending).toBeFalsy();
     expect(only.text).toBe("fix this bug");
+  });
+});
+
+describe("applyEvent — fork edit replaces the selected user turn", () => {
+  it("__fork_replace_user trims later messages and overwrites the selected user", () => {
+    let state = createInitialState([
+      {
+        role: "user",
+        entryId: "u1",
+        text: "old prompt",
+        parts: [{ kind: "text", text: "old prompt" }],
+        timestamp: 100,
+      },
+      {
+        role: "assistant",
+        text: "old answer",
+        parts: [{ kind: "text", text: "old answer" }],
+        timestamp: 101,
+      },
+      {
+        role: "user",
+        entryId: "u2",
+        text: "later prompt",
+        parts: [{ kind: "text", text: "later prompt" }],
+        timestamp: 102,
+      },
+    ]);
+
+    state = applyEvent(state, {
+      type: "__fork_replace_user",
+      index: 0,
+      text: "edited prompt",
+      clientRequestId: "fork-1",
+    });
+
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0]).toMatchObject({
+      role: "user",
+      entryId: "u1",
+      text: "edited prompt",
+      pending: true,
+      clientRequestId: "fork-1",
+    });
+    expect(state.messages[0].parts).toEqual([
+      { kind: "text", text: "edited prompt" },
+    ]);
+    expect(state.activeAssistantIndex).toBe(-1);
+  });
+
+  it("message_start reconciles the edited pending fork bubble", () => {
+    let state = applyEvent(
+      createInitialState([
+        {
+          role: "user",
+          entryId: "u1",
+          text: "old prompt",
+          parts: [{ kind: "text", text: "old prompt" }],
+          timestamp: 100,
+        },
+        {
+          role: "assistant",
+          text: "old answer",
+          parts: [{ kind: "text", text: "old answer" }],
+          timestamp: 101,
+        },
+      ]),
+      {
+        type: "__fork_replace_user",
+        index: 0,
+        text: "edited prompt",
+        clientRequestId: "fork-2",
+      }
+    );
+
+    state = applyEvent(state, {
+      type: "message_start",
+      message: {
+        role: "user",
+        timestamp: 200,
+        content: [{ type: "text", text: "edited prompt" }],
+      },
+    });
+
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0]).toMatchObject({
+      role: "user",
+      text: "edited prompt",
+      timestamp: 200,
+    });
+    expect(state.messages[0].pending).toBeUndefined();
   });
 });
 
@@ -1480,5 +1693,112 @@ describe("applyEvent — composerMeta on user message (Phase A6)", () => {
     });
     const msg = s.messages.at(-1)!;
     expect(msg.composerMeta).toBeUndefined();
+  });
+});
+
+/**
+ * P1 修复：goal / workflow 路径补 clientRequestId，不应产生双气泡。
+ * 同时 reducer 增加了兑底：no-cri pending optimistic 文本完全匹配也衰变。
+ */
+describe("applyEvent — goal / workflow optimistic + message_start 不双气泡", () => {
+  it("goal optimistic 带 cri + message_start (文本含 aside) 只产生一条 user", () => {
+    let s = createInitialState();
+    s = applyEvent(s, {
+      type: "__optimistic_user",
+      clientRequestId: "goal-1",
+      text: "实现一个 release smoke",
+      composerMode: "goal",
+    });
+    s = applyEvent(s, {
+      type: "message_start",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "实现一个 release smoke\n\n<<<CONTEXT_ASIDE>>>goalAside<<<END_CONTEXT_ASIDE>>>",
+          },
+        ],
+        timestamp: 1000,
+      },
+    });
+    const userMessages = s.messages.filter((m) => m.role === "user");
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0].pending).toBeUndefined();
+    expect(userMessages[0].composerMeta?.mode).toBe("goal");
+    expect(userMessages[0].text).toBe("实现一个 release smoke");
+  });
+
+  it("workflow optimistic 带 cri + message_start (aside 包裹) 只产生一条 user", () => {
+    let s = createInitialState();
+    s = applyEvent(s, {
+      type: "__optimistic_user",
+      clientRequestId: "wf-1",
+      text: "帮我走个 workflow",
+      composerMode: "workflow",
+    });
+    s = applyEvent(s, {
+      type: "message_start",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "帮我走个 workflow\n\n<<<CONTEXT_ASIDE>>>workflowAside<<<END_CONTEXT_ASIDE>>>",
+          },
+        ],
+        timestamp: 1000,
+      },
+    });
+    const userMessages = s.messages.filter((m) => m.role === "user");
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0].composerMeta?.mode).toBe("workflow");
+  });
+
+  it("兑底：pending optimistic 没带 cri、但文本与 message_start 可见部分完全一致 → 衰变为一条", () => {
+    let s = createInitialState();
+    // 模拟老路径：optimistic 没 cri
+    s = applyEvent(s, {
+      type: "__optimistic_user",
+      // 注意：没传 clientRequestId
+      text: "实现一个 release smoke",
+      composerMode: "goal",
+    });
+    expect(s.messages.at(-1)?.pending).toBe(true);
+    s = applyEvent(s, {
+      type: "message_start",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "实现一个 release smoke\n\n<<<CONTEXT_ASIDE>>>goalAside<<<END_CONTEXT_ASIDE>>>",
+          },
+        ],
+        timestamp: 1000,
+      },
+    });
+    const userMessages = s.messages.filter((m) => m.role === "user");
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0].pending).toBeUndefined();
+    expect(userMessages[0].composerMeta?.mode).toBe("goal");
+  });
+
+  it("兑底不误伤：no-cri pending 但文本不匹配 → 仍 push 新 user", () => {
+    let s = createInitialState();
+    s = applyEvent(s, {
+      type: "__optimistic_user",
+      text: "原 optimistic 文本",
+    });
+    s = applyEvent(s, {
+      type: "message_start",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "不同文本" }],
+        timestamp: 2000,
+      },
+    });
+    const userMessages = s.messages.filter((m) => m.role === "user");
+    expect(userMessages).toHaveLength(2);
   });
 });

@@ -304,6 +304,8 @@ export interface ChatMessage {
   entryId?: string;
   /** SDK AgentMessage.timestamp（ms epoch）；流式时由 message_start/end 写入，恢复时由 ctxToMessages 写入 */
   timestamp?: number;
+  /** SDK message_end stopReason；用于区分过程文本与最终回答。 */
+  stopReason?: string;
   /** SDK message 级别元信息；用于把模型名 / token 用量固定到具体 assistant 回复上 */
   meta?: ChatMessageMeta;
   /**
