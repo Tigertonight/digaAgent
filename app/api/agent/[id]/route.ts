@@ -46,6 +46,7 @@ import {
   setGoal,
   setGoalStatus,
 } from "@/lib/goal/server-store";
+import { internalErrorResponse } from "@/lib/api/error-response";
 import { applyGoalUpdate } from "@/lib/goal/update";
 import { listDefinitions } from "@/lib/subagents/registry";
 import {
@@ -886,10 +887,10 @@ export async function POST(
         );
     }
   } catch (e) {
-    return NextResponse.json(
-      { error: (e as Error).message, stack: (e as Error).stack },
-      { status: 500 }
-    );
+    // N1: do not leak raw message + stack (abs paths, cwd, internal modules) to
+    // the client. Mirror the sessions routes' S3 sanitization: log server-side,
+    // return a generic message.
+    return internalErrorResponse(e, { scope: "POST /api/agent/[id]" });
   }
 }
 

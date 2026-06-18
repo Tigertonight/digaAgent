@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import {
+  findSessionPathById,
   getSessionContext,
   getSessionContextPageByPath,
   getSessionContextTail,
@@ -85,10 +86,16 @@ export async function GET(
     if (interrupted) {
       progress = markInterruptedProgress(progress);
     }
+    // H1: subagent batches are indexed by parentSessionPath (the session FILE
+    // path), not by sessionId. Passing `id` here matched nothing, so historical
+    // sessions always showed an empty subagent history. Resolve the real path.
+    const resolvedPath = await findSessionPathById(id);
     return NextResponse.json({
       ...ctx,
       forkableUserMessages,
-      subagentBatches: listBatchesByParentSessionPath(id),
+      subagentBatches: resolvedPath
+        ? listBatchesByParentSessionPath(resolvedPath)
+        : [],
       progress,
       interrupted,
     });

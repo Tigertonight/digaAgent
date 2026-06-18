@@ -102,10 +102,12 @@ export const DELETE = withRemoteAuth(async function (
       } catch (e) {
         const err = e as NodeJS.ErrnoException;
         if (err.code !== "ENOENT") {
-          // 真实错误写 server log，对外只暴露 errno code（如 EACCES/EPERM），
-          // 不带绝对路径，避免泄漏目录结构。
+          // N2: jsonl 没删掉（权限/被占用）时，绝不能继续清 meta/progress/batches，
+          // 否则会留下「对话还在、但重命名/进度全没了」的失忆态。记录错误后跳过本
+          // target 的后续清理。ENOENT（本就不存在）视为已删除，继续清理残留元数据。
           console.error(`[DELETE /api/sessions/${t.id}] unlink failed:`, err);
           errors.push({ id: t.id, error: err.code ?? "delete failed" });
+          continue;
         }
       }
       await deleteMeta(t.id);
