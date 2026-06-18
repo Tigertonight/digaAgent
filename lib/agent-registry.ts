@@ -1758,6 +1758,10 @@ export async function createAgent(opts: CreateOptions): Promise<{
         "Response depth guideline:",
         "Be concise, but do not be terse. When a task involves analysis, tool results, implementation details, or user-facing decisions, provide enough substance for the user to understand the result without asking a follow-up. Prefer a short complete answer over a one-line answer.",
       ].join("\n"),
+      [
+        "Large file writes guideline:",
+        "When creating a large file (e.g. a long report or document), do NOT put the entire body into a single write call's content argument — very long tool-call arguments can be truncated by the model output limit, producing an invalid call that is missing 'content'. Instead, write a short skeleton/outline first, then append each section with separate edit calls. Keep any single tool-call argument well within a few thousand characters.",
+      ].join("\n"),
     ],
     extensionFactories: [
       ...(opts.parentAgentId

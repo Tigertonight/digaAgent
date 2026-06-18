@@ -109,8 +109,37 @@ function phaseText(status: ToolPart["status"]): string {
   if (status === "error") return "执行失败：";
   return "已完成：";
 }
+/**
+ * 识别"工具调用被截断"特征：schema 校验报某个必填字段缺失（如 write 缺 content、
+ * edit 缺 edits、bash 缺 command），且这些字段正是大体量参数。模型把一大段内容
+ * （如长报告）塞进参数时，provider 输出长度上限会把后半段连同该字段一起截掉，
+ * 留下只有 path 的非法调用。命中时给出更对症的"分段重写"建议，而不是泛泛重试。
+ */
+const TRUNCATION_PRONE_FIELDS = ["content", "edits", "new_string", "command", "text"];
+export function detectTruncatedToolCall(errorText: string): string | null {
+  if (!errorText) return null;
+  // 典型文案：'Validation failed for tool "write": - content: must have required properties content'
+  if (!/validation failed/i.test(errorText)) return null;
+  if (!/required propert|must have required|is required|required field/i.test(errorText)) {
+    return null;
+  }
+  const field = TRUNCATION_PRONE_FIELDS.find((f) =>
+    new RegExp(`\\b${f}\\b`).test(errorText)
+  );
+  if (!field) return null;
+  return field;
+}
+
 function withFailure(tool: ToolPart, narration: ToolNarration, errorText: string): ToolNarration {
   if (tool.status !== "error" && !tool.isError) return narration;
+  const truncatedField = detectTruncatedToolCall(errorText);
+  if (truncatedField) {
+    const cause = `遇到的问题：工具调用疑似被截断——缺少必填字段「${truncatedField}」（${shorten(errorText, 120)}）。`;
+    return {
+      ...narration,
+      recovery: `${cause} 这通常是单次输出过长被截断造成的。建议：先写入较短的骨架/大纲，再用 edit 分多次追加内容，避免把超大内容一次性塞进同一个工具参数。`,
+    };
+  }
   const cause = errorText ? `遇到的问题：${errorText}` : "工具返回了错误状态。";
   return { ...narration, recovery: `${cause} 接下来应根据错误信息调整参数、换一条更稳的路径，或在必要时重试。` };
 }

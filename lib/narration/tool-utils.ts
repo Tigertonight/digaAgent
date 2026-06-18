@@ -103,14 +103,32 @@ export function isInternalNoiseTool(toolName: string): boolean {
   return HIDDEN_INTERNAL_TOOLS.has(toolName.toLowerCase());
 }
 
-/** SDK 偶尔把 result 给成 [{type:"text",text},{type:"image",...}]，挑文本。 */
+/**
+ * 从工具 result 里挑出文本。兼容三种常见形态：
+ *   1. 裸数组 [{type:"text",text},{type:"image",...}]
+ *   2. AgentToolResult 包装 {content:[...]}（tool_execution_end 的 result 即此形态，
+ *      校验失败 / 错误信息就藏在这里——之前只处理裸数组，导致错误透不出来）
+ *   3. {content:"string"} 或 {text:"string"}
+ */
 export function extractTextFromResult(result: unknown): string {
-  if (!Array.isArray(result)) return "";
+  if (typeof result === "string") return result;
+  // 解包 AgentToolResult 的 content；优先 content，回退 text。
+  const unwrapped =
+    result && typeof result === "object" && !Array.isArray(result)
+      ? ((result as { content?: unknown }).content ??
+        (result as { text?: unknown }).text)
+      : result;
+  if (typeof unwrapped === "string") return unwrapped;
+  if (!Array.isArray(unwrapped)) return "";
   const texts: string[] = [];
-  for (const item of result) {
+  for (const item of unwrapped) {
+    if (typeof item === "string") {
+      texts.push(item);
+      continue;
+    }
     if (item && typeof item === "object") {
       const t = (item as { type?: unknown }).type;
-      if (t === "text") {
+      if (t === "text" || t === undefined) {
         const text = (item as { text?: unknown }).text;
         if (typeof text === "string") texts.push(text);
       }

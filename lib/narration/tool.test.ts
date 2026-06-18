@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isWorthNarrating, narrateTool, shouldHideTool, type ToolPart } from "./tool";
+import {
+  detectTruncatedToolCall,
+  isWorthNarrating,
+  narrateTool,
+  shouldHideTool,
+  type ToolPart,
+} from "./tool";
 
 const mk = (over: Partial<ToolPart>): ToolPart => ({
   kind: "tool",
@@ -141,5 +147,60 @@ describe("shouldHideTool — Phase 2 降噪", () => {
     expect(
       shouldHideTool(mk({ toolName: "process", args: { status: "Process: quiet-otter" } }))
     ).toBe(true);
+  });
+});
+
+describe("工具失败错误透出 + 截断检测", () => {
+  const validationResult = (text: string) => ({ content: [{ type: "text", text }] });
+
+  it("透出 write 校验失败的真实错误（result 为 {content:[...]} 包装）", () => {
+    const n = narrateTool(
+      mk({
+        toolName: "write",
+        status: "error",
+        isError: true,
+        args: { path: "/repo/docs/session-audit-2026-06-18.md" },
+        result: validationResult(
+          'Validation failed for tool "write":\n  - content: must have required properties content'
+        ),
+      })
+    );
+    // 不再是泛泛的「工具返回了错误状态」
+    expect(n.recovery).toBeTruthy();
+    expect(n.recovery).toContain("content");
+  });
+
+  it("识别截断特征并给出分段重写建议", () => {
+    const n = narrateTool(
+      mk({
+        toolName: "write",
+        status: "error",
+        isError: true,
+        args: { path: "/repo/docs/report.md" },
+        result: validationResult(
+          'Validation failed for tool "write":\n  - content: must have required properties content'
+        ),
+      })
+    );
+    expect(n.recovery).toContain("疑似被截断");
+    expect(n.recovery).toContain("分多次追加");
+  });
+
+  it("detectTruncatedToolCall 命中缺失必填大字段，非截断返回 null", () => {
+    expect(
+      detectTruncatedToolCall(
+        'Validation failed for tool "write": - content: must have required properties content'
+      )
+    ).toBe("content");
+    expect(
+      detectTruncatedToolCall(
+        'Validation failed for tool "edit": - edits: is required'
+      )
+    ).toBe("edits");
+    // 普通运行时错误不应被误判为截断
+    expect(detectTruncatedToolCall("ENOENT: no such file or directory")).toBeNull();
+    expect(
+      detectTruncatedToolCall('Validation failed for tool "read": - path: must be string')
+    ).toBeNull();
   });
 });
