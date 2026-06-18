@@ -79,8 +79,8 @@ export interface PetSessionInfo {
   streamingStartedAt: number | null;
   /**
    * 用户是否已"读过"该 session 的最新内容（与主窗口左侧会话列表的未读标识完全一致）。
-   * 主窗口判定：isUnread = !active && !isRunning && (!seenAt || seenAt < s.modified)
-   * read 取其反，外加 active / running 视为已读。
+   * 主窗口判定：isUnread = !isRunning && !isWaitingUser &&
+   * (!seenAt || seenAt < deriveSessionUnreadAt(session))，其中 unreadAt 优先使用 lastAgentEndAt。
    * 宠物侧用它决定是否显示 attention 蓝点。
    */
   read: boolean;

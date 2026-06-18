@@ -103,6 +103,17 @@ describe("isSessionUnread", () => {
     ).toBe(false);
   });
 
+  it("compares parsed timestamps instead of relying on ISO string ordering", () => {
+    expect(
+      isSessionUnread({
+        session,
+        seenAt: "2026-06-16T13:00:00+01:00",
+        isRunning: false,
+        isWaitingUser: false,
+      })
+    ).toBe(false);
+  });
+
   it("falls back to modified when lastAgentEndAt missing — covers turn-end ≠ agent-end semantics for legacy sessions", () => {
     expect(
       isSessionUnread({

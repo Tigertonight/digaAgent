@@ -384,7 +384,9 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
           return merged;
         });
       })
-      .catch(() => {});
+      .catch((e) => {
+        console.warn("[sessions] refresh failed", e);
+      });
   }, [activeKeyRef, closeSseFor, runnersRef, switchTo]);
 
   // 首屏立即校验最新 session 列表。SSR / E2E / 移动远程入口可能先给

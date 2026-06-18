@@ -25,5 +25,11 @@ export function isSessionUnread(args: {
 }): boolean {
   if (args.isRunning || args.isWaitingUser) return false;
   const unreadAt = deriveSessionUnreadAt(args.session);
-  return !args.seenAt || args.seenAt < unreadAt;
+  if (!args.seenAt) return true;
+  const seenMs = Date.parse(args.seenAt);
+  const unreadMs = Date.parse(unreadAt);
+  if (!Number.isFinite(seenMs) || !Number.isFinite(unreadMs)) {
+    return args.seenAt < unreadAt;
+  }
+  return seenMs < unreadMs;
 }
