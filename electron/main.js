@@ -32,6 +32,7 @@ const updaterModule = require("./updater");
 const securityPolicy = require("./security-policy");
 const diagLogger = require("./diag-logger");
 const diagCollector = require("./diag-collector");
+const powerSave = require("./power-save");
 
 const DEV = process.env.ELECTRON_DEV === "1";
 const DEV_URL = process.env.ELECTRON_DEV_URL || "http://localhost:3000";
@@ -224,6 +225,16 @@ let mainWin = null;
 /** macOS menu bar / tray icon 必须保留强引用，否则会被 GC 回收。 */
 let tray = null;
 
+function applyPowerSaveFromSettings() {
+  const settings = settingsModule.loadSettings(app);
+  const enabled = Boolean(settings.keepAwake && settings.keepAwake.enabled);
+  const status = powerSave.setKeepAwakeEnabled(enabled);
+  console.log(
+    `[electron] keepAwake ${status.enabled ? "enabled" : "disabled"}${status.id ? ` id=${status.id}` : ""}`
+  );
+  return status;
+}
+
 function getPrimaryMainWindow() {
   if (mainWin && !mainWin.isDestroyed()) return mainWin;
   return BrowserWindow.getAllWindows().find(
@@ -242,6 +253,26 @@ function focusWindow(win) {
   app.focus({ steal: true });
   win.focus();
   return true;
+}
+
+async function reloadMainWindow(win, url) {
+  if (!win || win.isDestroyed()) return;
+  try {
+    win.webContents.stop();
+  } catch {
+    /* ignore */
+  }
+  win.show();
+  win.focus();
+  await win.loadURL(url);
+  if (!win.isDestroyed()) {
+    win.show();
+    win.moveTop();
+    win.focus();
+    if (typeof win.webContents.invalidate === "function") {
+      win.webContents.invalidate();
+    }
+  }
 }
 
 function installLocalSecretHeaderHook() {
@@ -824,11 +855,21 @@ function registerIpc() {
     settingsModule.deleteKey(provider)
   );
   ipcMain.handle("settings:load", () => settingsModule.loadSettings(app));
-  ipcMain.handle("settings:save", (_e, partial) =>
-    settingsModule.saveSettings(app, partial)
-  );
+  ipcMain.handle("settings:save", (_e, partial) => {
+    const next = settingsModule.saveSettings(app, partial);
+    if (
+      partial &&
+      Object.prototype.hasOwnProperty.call(partial, "keepAwake")
+    ) {
+      applyPowerSaveFromSettings();
+    }
+    return next;
+  });
   ipcMain.handle("settings:getProviderEnvMap", () =>
     settingsModule.PROVIDER_ENV_MAP
+  );
+  ipcMain.handle("power:getKeepAwakeStatus", () =>
+    powerSave.getKeepAwakeStatus()
   );
 
   /**
@@ -1066,6 +1107,24 @@ async function createWindow() {
     shell.openExternal(url);
     return { action: "deny" };
   });
+  if (DEV) {
+    win.webContents.on("before-input-event", (event, input) => {
+      const key = String(input.key || "").toLowerCase();
+      if ((input.meta || input.control) && key === "r") {
+        event.preventDefault();
+        void reloadMainWindow(win, DEV_URL).catch((e) => {
+          console.warn("[electron] controlled dev reload failed:", e.message);
+        });
+      }
+    });
+    win.webContents.on("did-finish-load", () => {
+      if (win.isDestroyed()) return;
+      win.show();
+      if (typeof win.webContents.invalidate === "function") {
+        win.webContents.invalidate();
+      }
+    });
+  }
 
   const url = DEV ? DEV_URL : apiBase || await startStandaloneServer();
   console.log(`[electron] loading ${url}`);
@@ -1495,6 +1554,7 @@ app.whenReady().then(async () => {
   installLocalSecretHeaderHook();
   buildAppMenu();
   createTray();
+  applyPowerSaveFromSettings();
 
   // 一次性 env → keytar 迁移（首次启动若 keytar 空且 env 里有 key，自动入库）
   try {
@@ -1557,10 +1617,14 @@ function killServerChild(reason) {
 
 app.on("before-quit", () => {
   app.isQuitting = true;
+  powerSave.setKeepAwakeEnabled(false);
   killServerChild("before-quit");
 });
 
-app.on("will-quit", () => killServerChild("will-quit"));
+app.on("will-quit", () => {
+  powerSave.setKeepAwakeEnabled(false);
+  killServerChild("will-quit");
+});
 
 // 同步阶段最后一次机会
 process.on("exit", () => {

@@ -56,6 +56,11 @@ contextBridge.exposeInMainWorld("digaAgent", {
     },
   },
 
+  power: {
+    getKeepAwakeStatus: () =>
+      ipcRenderer.invoke("power:getKeepAwakeStatus"),
+  },
+
   /** 弹原生目录选择器，返回绝对路径或 null */
   selectDirectory: (opts) => ipcRenderer.invoke("dialog:selectDirectory", opts),
 
