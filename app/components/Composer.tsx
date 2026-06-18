@@ -134,7 +134,7 @@ export interface ComposerProps {
   closeAutocomplete: () => void;
 
   // ===== 发送动作 =====
-  send: () => Promise<void> | void;
+  send: (textOverride?: string) => Promise<void> | void;
   onSteer: () => Promise<void> | void;
   onFollowUp: () => Promise<void> | void;
   onAbort: () => Promise<void> | void;
@@ -351,9 +351,16 @@ export function Composer(props: ComposerProps) {
   }, [localInput]);
 
   const handleSend = useCallback(() => {
-    flushLocalInput();
-    return sendRef.current();
-  }, [flushLocalInput]);
+    // 【性能】点击 Send 后的响应路径优化：
+    //   1. 立即同步清空 localInput（textarea 在下一帧显空，用户反馈快）。
+    //   2. 同步写 lastFlushedRef 避免 effect 反复重置。
+    //   3. 把原始文本传给 send(textOverride)，不再走 flushSync。
+    // 这样点击 → textarea 清空 只走最轻量的 setState，不再被上层 store 列表 commit 拖累。
+    const text = localInput;
+    setLocalInput("");
+    lastFlushedRef.current = "";
+    return sendRef.current(text);
+  }, [localInput]);
   const handleSteer = useCallback(() => {
     flushLocalInput();
     return onSteerRef.current();

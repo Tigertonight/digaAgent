@@ -122,7 +122,7 @@ function shortWorkflowJson(value: unknown, maxChars = 5000): string {
   try {
     const text =
       typeof value === "string" ? value : JSON.stringify(value, null, 2);
-    if (!text) return "(empty)";
+    if (!text) return "新会话";
     return text.length > maxChars ? `${text.slice(0, maxChars)}...` : text;
   } catch {
     return String(value);
@@ -659,6 +659,15 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     ((agentId: string, ownerKey: RunnerKey) => void) | null
   >(null);
 
+  // 性能：batchUpdates 是 useRunners 在后面的调用里才能拿到的。
+  // 这里先起一个 ref proxy，让 useSseManager 接收一个稳定的包装函数；
+  // 下面用 useEffect 把真正的 batchUpdates 装进 ref。
+  const batchUpdatesRef = useRef<(<T>(fn: () => T) => T) | null>(null);
+  const batchUpdatesProxy = useCallback(<T,>(fn: () => T): T => {
+    const impl = batchUpdatesRef.current;
+    return impl ? impl(fn) : fn();
+  }, []);
+
   const { esMapRef, attachSseFor, closeSseFor } = useSseManager({
     onEvent: (event, agentId, key) => {
       // useSseManager 的 onEvent event 类型是 unknown（hook 不知道业务结构）；
@@ -672,6 +681,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     onStatusChange: (key, patch) => {
       updateRunnerRef.current?.(key, patch);
     },
+    batchUpdates: batchUpdatesProxy,
   });
 
   const handleEvictRunner = useCallback(
@@ -693,6 +703,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     updateActive,
     switchTo,
     setRunner,
+    batchUpdates,
   } = useRunners({
     onEvict: handleEvictRunner,
   });
@@ -704,6 +715,15 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       updateRunnerRef.current = null;
     };
   }, [updateRunner]);
+
+  // 性能：把 useRunners 返回的 batchUpdates 装进上面的 proxy ref。
+  // useSseManager 的 RAF 合批会调 batchUpdatesProxy(...)，这里一推入就生效。
+  useEffect(() => {
+    batchUpdatesRef.current = batchUpdates;
+    return () => {
+      batchUpdatesRef.current = null;
+    };
+  }, [batchUpdates]);
 
   // E2E 诊断钩子:仅在 window.__E2E__=true 时挂载,把 runner 状态暴露给测试断言。
   // 不影响 prod 行为,默认 noop。
@@ -1598,13 +1618,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // streaming token delta 在用户试图往上看时调 scrollTop 抢回底。
   const lastUserScrollAtRef = useRef(0);
   const USER_SCROLL_LOCK_MS = 400;
-  // send 后锚定到刚发的 user 消息:记 send 时的 user 消息总数,
-  // 等新 user 消息从 SSE 回来后扫到对应那条,把它滚到屏顶。
-  // null = 不锚定(普通贴底跟随);number = 期望"这条 user 一出现就锚"
-  const pendingPinUserCountRef = useRef<number | null>(null);
-  // 锚定阶段:仅此期间渲染 60vh 底部占位,让最后一条 user 能被 scroll-to-top
-  // 一旦锚定完成或被取消,移除占位,避免列表底部一大片空白可滚。
-  const [pinSpacer, setPinSpacer] = useState(false);
   const [scrollToBottomState, setScrollToBottomState] = useState({
     key: "",
     visible: false,
@@ -1668,11 +1681,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         ? state
         : { key: activeKey, visible: !atBottom },
     );
-    // 用户主动滚动 = 取消锚定意图(占位也跟着移除,见 effect)
-    if (pendingPinUserCountRef.current !== null) {
-      pendingPinUserCountRef.current = null;
-      setPinSpacer(false);
-    }
   }
 
   // “问题 1”：贴底跟随只看“真正需要跟随”的信号。
@@ -1693,37 +1701,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     return `${list.length}|${tail}`;
   }, [chatState.messages]);
 
-  // 锁定用户消息锁顶（send 后的一次性言领则什，仅起始完上锁期内动作）。
-  // 这条 effect 不走“贴底”逻辑，只负责“锁到刚发的 user”，不受 lock 控制。
-  useEffect(() => {
-    if (!streaming && pendingPinUserCountRef.current !== null) {
-      pendingPinUserCountRef.current = null;
-      queueMicrotask(() => setPinSpacer(false));
-    }
-    const targetCount = pendingPinUserCountRef.current;
-    if (targetCount === null) return;
-    if (
-      messageRenderState.userMessageCount >= targetCount &&
-      messageRenderState.lastUserVisibleIndex >= 0
-    ) {
-      const el = messageRefs.current?.[messageRenderState.lastUserVisibleIndex];
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "start" });
-        pendingPinUserCountRef.current = null;
-        queueMicrotask(() => setPinSpacer(false));
-      }
-    }
-  }, [
-    messageRenderState.userMessageCount,
-    messageRenderState.lastUserVisibleIndex,
-    streaming,
-    messageRefs,
-  ]);
-
   // 贴底跟随只看 streamSignature：approval / clarification / subagent_batch / progress.updatedAt
   // 都不会作为 deps 在这里出现，从而不会抢回底。
   useEffect(() => {
-    if (pendingPinUserCountRef.current !== null) return; // 锁定中 — 交给上一个 effect
     if (!stickToBottomRef.current) return;
     scrollMessagesToBottom();
   }, [streamSignature, scrollMessagesToBottom]);
@@ -1751,8 +1731,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   useEffect(() => {
     if (!activeKey) return;
     pendingJumpToBottomKeyRef.current = activeKey;
-    // 清除其他 ref 锁定，避免跟 jump 争抢；spacer 在 jump effect 的 RAF 里退。
-    pendingPinUserCountRef.current = null;
   }, [activeKey]);
 
   // 渲染到包含该 key 的内容后，在下一帧 layout 完成时一次性 jump。
@@ -1776,8 +1754,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       setScrollToBottomState((state) =>
         state.visible ? { ...state, visible: false } : state,
       );
-      // jump 完成后那一帧一并清 spacer，避免上一个 session 遗留的 send 锁头未释。
-      setPinSpacer(false);
       pendingJumpToBottomKeyRef.current = null;
     });
   }, [activeKey, chatState.messages.length]);
@@ -2038,6 +2014,82 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     updateRunner,
   ]);
 
+  // P2 修复：state_reset 后重建指定 runner 的 chatState。
+  // 与 reloadFromCurrentSession 区别：
+  //   - 不读 activeKeyRef，而是使用传入的 ownerKey（SSE 事件携带）。
+  //   - 取 sessionId 优先从 runner.agentSessionId，避免取错 session。
+  //   - seq guard：fetch 期间 runner.lastSeq 又推进（说明有新事件追上来）且 streaming
+  //     中 → 不覆盖 chatState，只补充 forkable/progress 以免踩掉 in-flight 事件。
+  const refreshContextForRunner = useCallback(
+    async (ownerKey: RunnerKey, ownerAgentId: string) => {
+      const ownerSnapshot = runnersRef.current.get(ownerKey);
+      if (!ownerSnapshot) return;
+      const sid = ownerSnapshot.agentSessionId ?? null;
+      // fallback：某些老路径 runner 只有 sessionFile（jsonl 路径）。从 sessions 查反映。
+      const sidFromPath = (() => {
+        if (sid) return sid;
+        const path = ownerSnapshot.sessionFile;
+        if (!path) return null;
+        const found = sessions.find((s) => s.path === path);
+        return found?.id ?? null;
+      })();
+      const targetSid = sid ?? sidFromPath;
+      if (!targetSid) return;
+      const ownerSessionFile = ownerSnapshot.sessionFile ?? null;
+      const lastSeqAtStart = ownerSnapshot.lastSeq;
+      const wasStreaming = ownerSnapshot.streaming;
+      try {
+        const r = await fetch(`/api/sessions/${targetSid}/context`);
+        const ctx = await r.json();
+        if (ctx.error) {
+          // 不位到 setError 避免状态反偷。state_reset 是轻量跨会话事件。
+          console.warn("[diga-agent] refreshContextForRunner failed", ctx.error);
+          return;
+        }
+        const cur = runnersRef.current.get(ownerKey);
+        if (!cur) return;
+        if (cur.sessionFile !== ownerSessionFile) return;
+        if (cur.agentId !== ownerAgentId) return;
+        // seq guard：fetch 期间如果已有新 SSE 事件追上来且仍在 streaming，不覆盖
+        // chatState，避免拿 stale context 踩掉 in-flight token。
+        const seqAdvancedDuringFetch = cur.lastSeq > lastSeqAtStart;
+        const skipChatStateOverwrite =
+          seqAdvancedDuringFetch && (wasStreaming || cur.streaming);
+        const interruptedFlag =
+          (ctx as { interrupted?: boolean })?.interrupted === true;
+        const restoreToolOptions = interruptedFlag
+          ? {
+              unfinishedToolStatus: "error" as const,
+              unfinishedToolResult:
+                "上次运行在工具返回前被中断。可以重新发送或继续任务。",
+            }
+          : undefined;
+        const subagentBatches = Array.isArray(ctx.subagentBatches)
+          ? (ctx.subagentBatches as SubagentBatch[])
+          : undefined;
+        const forkable = Array.isArray(ctx.forkableUserMessages)
+          ? (ctx.forkableUserMessages as ForkableUserMessage[])
+          : undefined;
+        updateRunner(ownerKey, {
+          ...(skipChatStateOverwrite
+            ? {}
+            : {
+                chatState: createInitialState(
+                  appendRestoredSubagentBatches(
+                    ctxToMessages(ctx.messages ?? [], restoreToolOptions),
+                    subagentBatches
+                  )
+                ),
+              }),
+          ...(forkable ? { forkableUserMessages: forkable } : {}),
+        });
+      } catch (e) {
+        console.warn("[diga-agent] refreshContextForRunner exception", e);
+      }
+    },
+    [runnersRef, sessions, updateRunner]
+  );
+
   // 把 handleAgentEvent 绑到 ref，供 useSseManager 的 onEvent 回调使用。
   // handleAgentEvent 是函数声明（hoisted），每次 render 重建；通过 ref 转发避免
   // useSseManager 内部回调闭包捕获旧引用。
@@ -2150,6 +2202,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         setError(userFacingMessage(e))
       );
     },
+    refreshContextForRunner: (ownerKey, aid) => {
+      void refreshContextForRunner(ownerKey, aid);
+    },
   });
 
   useEffect(() => {
@@ -2242,8 +2297,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     setSessions,
     refreshStats,
     refreshToolsCount,
-    pendingPinUserCountRef,
-    setPinSpacer,
   });
 
   // RFC-2 Phase A3：Budget 触发后执行 abort/pause
@@ -2502,6 +2555,24 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const sendWithHistory = useCallback(async () => {
     // P1-E: input 不再是 ChatApp 订阅状态，在交互时点同步读一次 store 快照。
     const current = getCurrentInput();
+    // 如果用户已经有 mode chip，又在正文里输入另一个 slash mode（例如
+    // Workflow chip + "/goal"），优先尊重新的显式命令，避免把 /goal 当成
+    // workflow 目标原文发给模型。
+    if (composerMode) {
+      const parsedMode = parseSlashCommand(current, ["goal", "workflow"]);
+      if (
+        parsedMode &&
+        (parsedMode.name === "goal" || parsedMode.name === "workflow") &&
+        parsedMode.name !== composerMode
+      ) {
+        setComposerMode(parsedMode.name);
+        setInput(parsedMode.rest);
+        if (!parsedMode.rest.trim()) {
+          setError(`请输入 ${parsedMode.name} 描述`);
+        }
+        return;
+      }
+    }
     // 结构化路径：如果已选中 mode chip，直接走该能力。不再依赖“/goal ” 前缀。
     if (composerMode === "goal") {
       if (!current.trim()) {
@@ -2958,6 +3029,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     agentId,
     agentSessionId,
     selectedId,
+    forkingIndex,
     forkText,
     providerId,
     modelId,
@@ -3188,7 +3260,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             streaming={streaming}
             compacting={compacting}
             compactError={compactError}
-            pinSpacer={pinSpacer}
             forksCollapsed={forksCollapsed}
             forkingIndex={forkingIndex}
             forkText={forkText}

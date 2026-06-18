@@ -33,6 +33,27 @@ import {
 
 const DEFAULT_MAX_RUNNERS = 8;
 
+/**
+ * M3: runner 是否处于“等待用户操作”态——chatState 里存在未决的 approval 或
+ * clarification（agent 已阻塞等用户响应）。这类 runner 不应被 LRU 淘汰，否则关闭
+ * SSE 后用户回来可能看不到/收不到那条待批准请求。
+ */
+function hasPendingUserAction(r: RunnerState): boolean {
+  for (const msg of r.chatState.messages) {
+    const parts = msg.parts;
+    if (!parts) continue;
+    for (const p of parts) {
+      if (
+        (p.kind === "approval" || p.kind === "clarification") &&
+        p.status === "pending"
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 export interface UseRunnersOptions {
   /**
    * LRU 淘汰某 runner 时回调（同步，在删除 runnersRef 条目"之前"调用）。
@@ -74,6 +95,22 @@ export interface UseRunnersReturn {
    *           调用方不需要记着"add 之后调 evictIfNeeded"。
    */
   setRunner: (key: RunnerKey, runner: RunnerState) => void;
+  /**
+   * 性能批处理：在 fn 执行期间，对 active runner 的多次 updateRunner 只触发一次
+   * setActiveSnapshot（在 fn 返回后）。
+   *
+   * 用途：useSseManager 的 RAF 合批 —— 把同一帧内的 N 条 SSE 事件折叠成 1 次 React commit，
+   * 避免 streaming 文本流时每个 token 都触发整条 ChatApp 重渲染。
+   *
+   * 语义：
+   *   - fn 同步执行（不 await）；fn 内调用 updateRunner / updateActive 仍然立刻把数据
+   *     写到 runnersRef，**只是**推迟 setActiveSnapshot。
+   *   - fn 内调用 setRunner / switchTo 会 commit 自己的 setActiveSnapshot（因为这两个
+   *     是"切换/接管"动作，需要 UI 立即更新）。
+   *   - 嵌套调用安全：内层 batch 不会单独 commit，统一由最外层 commit。
+   *   - fn 抛错时仍然会尝试 commit 已写入的数据。
+   */
+  batchUpdates: <T>(fn: () => T) => T;
 }
 
 export function useRunners(opts: UseRunnersOptions = {}): UseRunnersReturn {
@@ -94,6 +131,13 @@ export function useRunners(opts: UseRunnersOptions = {}): UseRunnersReturn {
     activeKeyRef.current = activeKey;
   }, [activeKey]);
 
+  // ===== 批处理上下文 =====
+  // batchUpdates(fn) 期间，updateRunner 写入 ref 后**不**立即 setActiveSnapshot；
+  // 由最外层 batchUpdates 在 fn 返回后统一 commit。
+  // batchDepthRef > 0 表示当前在 batch 内；activeDirtyRef 记录 active 是否被修改。
+  const batchDepthRef = useRef(0);
+  const activeDirtyRef = useRef(false);
+
   // ===== 写入 =====
   const updateRunner = useCallback<UseRunnersReturn["updateRunner"]>(
     (key, patch) => {
@@ -107,11 +151,30 @@ export function useRunners(opts: UseRunnersOptions = {}): UseRunnersReturn {
       };
       runnersRef.current.set(key, next);
       if (key === activeKeyRef.current) {
-        setActiveSnapshot(next);
+        if (batchDepthRef.current > 0) {
+          // 批内：只标 dirty，等 batch 结束统一 commit
+          activeDirtyRef.current = true;
+        } else {
+          setActiveSnapshot(next);
+        }
       }
     },
     []
   );
+
+  const batchUpdates = useCallback<UseRunnersReturn["batchUpdates"]>((fn) => {
+    batchDepthRef.current += 1;
+    try {
+      return fn();
+    } finally {
+      batchDepthRef.current -= 1;
+      if (batchDepthRef.current === 0 && activeDirtyRef.current) {
+        activeDirtyRef.current = false;
+        const cur = runnersRef.current.get(activeKeyRef.current);
+        if (cur) setActiveSnapshot(cur);
+      }
+    }
+  }, []);
 
   const updateActive = useCallback<UseRunnersReturn["updateActive"]>(
     (patch) => {
@@ -165,10 +228,22 @@ export function useRunners(opts: UseRunnersOptions = {}): UseRunnersReturn {
       if (key === activeKeyRef.current) continue;
       if (r.streaming) continue;
       if (r.compacting) continue;
+      // M3：等待用户操作的 runner 不能被淘汰——否则 SSE 被关、approval 气泡可能
+      // 丢失/迟到（loadPendingApprovals 只在重启时跑）。包括：
+      //   - chatState 里有未决的 approval / clarification（agent 阻塞等输入）
+      if (hasPendingUserAction(r)) continue;
       candidates.push({ key, touched: r.lastTouched });
     }
     candidates.sort((a, b) => a.touched - b.touched);
     const need = map.size - maxRunners;
+    if (candidates.length === 0) {
+      // M3：所有 runner 都被豁免（都在 streaming / 等待 / active），无可淘汰对象。
+      // 此时 map 会突破上限——告警以便发现“连接泄漏 / 上限失效”。
+      console.warn(
+        `[runners] LRU over limit (${map.size}/${maxRunners}) but no evictable candidate; all runners are active/streaming/waiting.`
+      );
+      return;
+    }
     for (let i = 0; i < Math.min(need, candidates.length); i++) {
       const key = candidates[i].key;
       try {
@@ -208,5 +283,6 @@ export function useRunners(opts: UseRunnersOptions = {}): UseRunnersReturn {
     updateActive,
     switchTo,
     setRunner,
+    batchUpdates,
   };
 }
