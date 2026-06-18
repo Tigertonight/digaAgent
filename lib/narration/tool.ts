@@ -156,7 +156,17 @@ function browserNarration(name: string, target: string, status: ToolPart["status
 }
 function describeCliCommand(command: string): { verb: string; object?: string } | null {
   const hibo = command.trim().match(/(?:^|\s)hibo\s+(\S+)(?:\s+([\s\S]+))?/);
-  if (!hibo) return /\b(grep|rg)\b/.test(command) ? { verb: "查找", object: stripFlags(command.replace(/^.*?\b(grep|rg)\b\s*/, "")) || undefined } : null;
+  if (!hibo) {
+    if (/\b(grep|rg|egrep|fgrep|ripgrep)\b/.test(command)) {
+      // 原本是把 grep/rg 后面整个命令都填进 object——遇上多文件 / 多参数
+      // 的 grep 会脓到不可读，上层可能还会加 "执行失败：" / "已处理：" 前缀、
+      // 然后被裁到 44 字，看起来就是一条被截断的红框。这里抽出 pattern 作为 object，
+      // 其他 (path / glob / flags) 全干掉；抽不到就不给 object，使后置 text 只是 "查找"。
+      const pattern = extractGrepPattern(command);
+      return { verb: "查找", object: pattern || undefined };
+    }
+    return null;
+  }
   const sub = hibo[1] ?? "";
   const rest = stripFlags(hibo[2] ?? "");
   if (/meeting|room/i.test(sub)) return { verb: "帮你查询会议室", object: /^(rooms?|query)$/i.test(rest) ? undefined : rest || undefined };
@@ -165,6 +175,106 @@ function describeCliCommand(command: string): { verb: string; object?: string } 
 function cleanCommandForDisplay(command: string): string { return shorten(stripSecrets(command).replace(/\s+/g, " ").trim(), 120); }
 function stripSecrets(text: string): string { return text.replace(/(--cookie|--token|--secret|--password)\s+\S+/gi, "$1 ***").replace(/(cookie|token|secret|password)=\S+/gi, "$1=***"); }
 function stripFlags(text: string): string { return stripSecrets(text).replace(/--[\w-]+(?:\s+\S+)?/g, "").replace(/\s+/g, " ").trim(); }
+/**
+ * 从一条 "... grep/rg [flags] PATTERN [paths…]" 形式的命令里提取 PATTERN。
+ * 提取不出返空串，使调用方退化到 "查找" 不带 object。
+ */
+function extractGrepPattern(command: string): string {
+  const cleaned = stripSecrets(command);
+  // 先按 shell 语义切 token（会处理引号 / 转义），再在 token 层面上看是不是遇到
+  // 未引号的管道 / 逻辑运算符。避免把引号里的 "foo|bar" 误切。
+  const allTokens = splitShellTokens(cleaned);
+  const headTokens: string[] = [];
+  for (const tok of allTokens) {
+    if (tok === "|" || tok === ";" || tok === "&" || tok === "&&" || tok === "||") break;
+    headTokens.push(tok);
+  }
+  const grepIdx = headTokens.findIndex((t) => /^(grep|rg|egrep|fgrep|ripgrep)$/.test(t));
+  if (grepIdx < 0) return "";
+  const tokens = headTokens.slice(grepIdx + 1);
+  const flagsWithValue = new Set([
+    "-e", "-f", "-g", "-G", "-t", "-T", "--glob", "--iglob", "--type", "--type-not",
+    "--regexp", "--file", "--include", "--exclude", "--exclude-dir",
+    "-A", "-B", "-C", "--after-context", "--before-context", "--context",
+    "--max-count", "-m",
+  ]);
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i] ?? "";
+    if (!tok) continue;
+    if (tok === "--") continue;
+    if (tok.startsWith("-") && tok.length > 1) {
+      // -e PATTERN 这种，取下一个作为 pattern
+      if (tok === "-e" || tok === "--regexp") {
+        const next = tokens[i + 1];
+        if (next) return shorten(next, 32);
+      }
+      // -A=3 / --glob=*.ts 这种不需要多跳
+      if (tok.includes("=")) continue;
+      // 带值的 long/short flag 跳过下一个 token
+      if (flagsWithValue.has(tok)) {
+        i += 1;
+        continue;
+      }
+      continue;
+    }
+    return shorten(tok, 32);
+  }
+  return "";
+}
+function splitShellTokens(text: string): string[] {
+  // 简易 tokenizer：支持 "..." / '...' / \<space> 转义、以及将未引号的
+  // | / || / & / && / ; 作为独立 token，供上层识别“报句边界”。
+  const out: string[] = [];
+  let cur = "";
+  let quote: string | null = null;
+  const flush = () => {
+    if (cur) {
+      out.push(cur);
+      cur = "";
+    }
+  };
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i] ?? "";
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+      } else if (ch === "\\" && i + 1 < text.length) {
+        cur += text[i + 1] ?? "";
+        i += 1;
+      } else {
+        cur += ch;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "\\" && i + 1 < text.length) {
+      cur += text[i + 1] ?? "";
+      i += 1;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      flush();
+      continue;
+    }
+    if (ch === "|" || ch === "&" || ch === ";") {
+      flush();
+      const next = text[i + 1] ?? "";
+      if ((ch === "|" && next === "|") || (ch === "&" && next === "&")) {
+        out.push(ch + next);
+        i += 1;
+      } else {
+        out.push(ch);
+      }
+      continue;
+    }
+    cur += ch;
+  }
+  flush();
+  return out;
+}
 function searchQuery(tool: ToolPart): string { return sanitizeText(asString(getArg(tool.args, "query", "pattern", "text", "q"))).trim(); }
 function pathArg(tool: ToolPart): string { return asString(getArg(tool.args, "path", "file_path", "file")).trim(); }
 function commandArg(tool: ToolPart): string { return asString(getArg(tool.args, "command", "cmd")).trim(); }

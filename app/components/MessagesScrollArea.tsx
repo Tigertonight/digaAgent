@@ -1,8 +1,8 @@
 "use client";
 
 import type { RefObject } from "react";
-import { useMemo, useState } from "react";
-import { CheckCircle2, Loader2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
 import { MessageView } from "./MessageView";
 import { ChatMinimap } from "../ChatMinimap";
 import type { ChatMessage } from "@/lib/types";
@@ -10,7 +10,10 @@ import type { MessagePart } from "@/lib/types";
 import type { AgentPhase } from "@/lib/session-runner";
 import type { ProviderInfo } from "@/lib/types";
 import type { WorkflowWorktreeAction } from "./MessageView";
-import { buildProcessSummary } from "@/lib/process-summary";
+import {
+  buildProcessSummary,
+  type ProcessSummary,
+} from "@/lib/process-summary";
 import {
   deriveTurnChromeState,
   isLastAssistantOfTurn,
@@ -31,7 +34,6 @@ interface MessagesScrollAreaProps {
   streaming: boolean;
   compacting: boolean;
   compactError: string | null;
-  pinSpacer: boolean;
   // fork state
   forksCollapsed: boolean;
   forkingIndex: number | null;
@@ -87,7 +89,6 @@ export function MessagesScrollArea({
   streaming,
   compacting,
   compactError,
-  pinSpacer,
   forksCollapsed,
   forkingIndex,
   forkText,
@@ -126,6 +127,91 @@ export function MessagesScrollArea({
     () => buildVisibleOrdinalByMessageIndex(messages),
     [messages]
   );
+
+  // 性能：逐条派生数据【ref-cached】。
+  // 上一版用 useMemo + [messages]，但 reducer 每次 token 都会返回新的 messages 数组，
+  // 导致整个数组重建，未变动条的 messageMeta/questionContext 也变成新引用 →
+  // MessageView 的 memo 深度失效。
+  // 改成按条 diff：上一次 cache 里同一 index 的 message 引用未变 → 复用完整 cell（包括引用）。
+  // 这样 streaming 期间 N 条历史消息的 props 引用 100% 稳定，只有被动的 active assistant 重算。
+  type DerivedCell = {
+    msgRef: ChatMessage;
+    messageMeta: { input: number; output: number; cost: number } | undefined;
+    messageModelLabel: string | undefined;
+    questionContext: string | undefined;
+    stableKey: string;
+  };
+  const messageDerivedCacheRef = useRef<DerivedCell[]>([]);
+  // currentProvider / modelId 变了，需要全量重算（modelLabel 依赖它们）。
+  const lastProviderKeyRef = useRef<string | null>(null);
+  const providerKey = `${currentProvider?.provider ?? ""}::${modelId}`;
+  const messageDerived = useMemo(() => {
+    const providerModels = currentProvider?.models;
+    const fallbackModelLabel = providerModels?.find((mm) => mm.id === modelId)?.name;
+    const prev = messageDerivedCacheRef.current;
+    const providerChanged = lastProviderKeyRef.current !== providerKey;
+    const out: DerivedCell[] = new Array(messages.length);
+    // userTextDirty：表示"从上一个 user 到现在"期间是否发生过 user 消息变动。
+    // 一旦 dirty，该区间内的 assistant 必须重算 questionContext。遇到下一个 user 后重置。
+    let lastUserText = "";
+    let userTextDirty = false;
+    for (let i = 0; i < messages.length; i += 1) {
+      const m = messages[i];
+      if (m.role === "user") {
+        const cached = prev[i];
+        // 遇到新/变动的 user：重新计算 lastUserText，标记区间 dirty。
+        const userChanged = !cached || cached.msgRef !== m;
+        const fromParts = m.parts
+          ?.map((part) => (part.kind === "text" ? part.text : ""))
+          .join(" ")
+          .trim();
+        lastUserText = (fromParts || m.text || "").trim();
+        // user 区间重置 dirty：如果 user 本身变了才 dirty；不变则继续使用上次 cache。
+        userTextDirty = userChanged;
+      }
+      const cached = prev[i];
+      const canReuse =
+        !providerChanged &&
+        cached &&
+        cached.msgRef === m &&
+        // assistant + user 区间变动过 → questionContext 也要重算
+        !(m.role === "assistant" && userTextDirty);
+      if (canReuse) {
+        out[i] = cached;
+        continue;
+      }
+      const usage = m.meta?.usage;
+      const messageMeta =
+        usage && (usage.total > 0 || usage.cost > 0)
+          ? {
+              input: usage.input,
+              output: usage.output,
+              cost: usage.cost,
+            }
+          : undefined;
+      const messageModelLabel =
+        m.meta?.model && m.meta.provider === currentProvider?.provider
+          ? providerModels?.find((mm) => mm.id === m.meta?.model)?.name ??
+            m.meta.model
+          : m.meta?.model ?? fallbackModelLabel;
+      const stableKey =
+        m.entryId ??
+        (m.timestamp != null
+          ? `${m.role}:${m.timestamp}:${i}`
+          : `i${i}`);
+      out[i] = {
+        msgRef: m,
+        messageMeta,
+        messageModelLabel,
+        questionContext: m.role === "assistant" ? lastUserText : undefined,
+        stableKey,
+      };
+    }
+    messageDerivedCacheRef.current = out;
+    lastProviderKeyRef.current = providerKey;
+    return out;
+  }, [messages, currentProvider, modelId, providerKey]);
+
   const hiddenItemCount = Math.max(0, renderItems.length - visibleItemLimit);
   const visibleRenderItems =
     hiddenItemCount > 0 ? renderItems.slice(hiddenItemCount) : renderItems;
@@ -136,6 +222,18 @@ export function MessagesScrollArea({
         ref={messagesScrollRef}
         onScroll={onScroll}
         className="flex-1 overflow-y-auto"
+        // 【产品规则】关掉浏览器默认的 scroll anchoring。
+        //
+        // Chrome 默认的 overflow-anchor:auto 会在列表上方内容变化时
+        // 自动调 scrollTop 让“当前划错环”元素保持原位。本列表的场景下这个
+        // 启发尝是鬼：
+        //   - streaming token 流不断往底部追加内容 → 浏览器以为你在“看小接中间某条”
+        //     → 为了让那条保持原位会把你 不断往上拉，看起来就是“回弹到上一个锡点”。
+        //   - cv-auto 节点 layout 变动反复触发 anchor 调整，手感拖动。
+        //
+        // 我们自己在 ChatApp 里用 stickToBottomRef + USER_SCROLL_LOCK_MS 订制了“贴底
+        // 跟随” · “用户手动滚后 400ms 不抢”的逻辑，不需要浏览器额外 anchor。
+        style={{ overflowAnchor: "none" }}
       >
         <div className="mx-auto w-full max-w-[820px] px-4 py-5 space-y-4">
           {error && (
@@ -151,9 +249,6 @@ export function MessagesScrollArea({
             </div>
           )}
           {(() => {
-            const modelLabel = currentProvider?.models.find(
-              (mm) => mm.id === modelId
-            )?.name;
             const renderMessage = (
               m: ChatMessage,
               i: number,
@@ -175,34 +270,13 @@ export function MessagesScrollArea({
                 streaming,
                 isActiveAssistant,
               });
-              const usage = m.meta?.usage;
-              const messageMeta =
-                usage && (usage.total > 0 || usage.cost > 0)
-                  ? {
-                      input: usage.input,
-                      output: usage.output,
-                      cost: usage.cost,
-                    }
-                  : undefined;
-              const messageModelLabel =
-                m.meta?.model && m.meta.provider === currentProvider?.provider
-                  ? currentProvider?.models.find((mm) => mm.id === m.meta?.model)
-                      ?.name ?? m.meta.model
-                  : m.meta?.model ?? modelLabel;
-              // key 稳定且唯一：
-              //   1) 优先 entryId（user message 从后端拿到的稳定 id）
-              //   2) 否则用 role:timestamp:index 三元组
-              //      —— 同一 SSE 流里 user/assistant 可能毫秒级共享 timestamp，
-              //         单纯 `t${timestamp}` 会出现 key 重复（React 警告）
-              //      —— role + index 用于在同 timestamp 时 disambiguate
-              //   3) 兜底 i${index}（不应到达，timestamp 一般都有）
-              const stableKey =
-                m.entryId ??
-                (m.timestamp != null
-                  ? `${m.role}:${m.timestamp}:${i}`
-                  : `i${i}`);
-              const questionContext =
-                m.role === "assistant" ? findPreviousUserText(messages, i) : undefined;
+              // 性能：逐条派生数据上面 useMemo 完成，这里只读。
+              // 同一条消息未变 → derived 引用不变 → MessageView memo 生效。
+              const derived = messageDerived[i];
+              const messageMeta = derived?.messageMeta;
+              const messageModelLabel = derived?.messageModelLabel;
+              const stableKey = derived?.stableKey ?? `i${i}`;
+              const questionContext = derived?.questionContext;
               const view = (
                 <MessageView
                   msg={m}
@@ -296,10 +370,11 @@ export function MessagesScrollArea({
                     item.messages.at(-1)?.index ?? "x"
                   }`;
                   const groupLastIndex = item.messages.at(-1)?.index ?? -1;
-                  const hasLaterAnswerText = messages
-                    .slice(groupLastIndex + 1)
-                    .some((message) => message.role === "assistant" && hasTextAnswer(message));
-                  const forceExecuting = streaming && !hasLaterAnswerText;
+                  const forceExecuting = shouldForceProcessGroupExecuting(
+                    messages,
+                    groupLastIndex,
+                    streaming
+                  );
                   const refSlot =
                     visibleOrdinalByMessageIndex[item.messages[0]?.index ?? -1] ??
                     -1;
@@ -330,9 +405,6 @@ export function MessagesScrollArea({
               </>
             );
           })()}
-          {/* 仅在"刚发送 → 锚定那条 user 到屏顶"的窗口期塞 60vh 占位;
-              锚定完成或用户主动滚动后即移除,避免向下滚到无内容空白区。 */}
-          {pinSpacer && <div aria-hidden style={{ minHeight: "60vh" }} />}
           {/* 列表底部留一点 padding,让最后一条气泡和输入框之间不贴边 */}
           <div aria-hidden style={{ height: 24 }} />
           <div ref={messagesEndRef} />
@@ -426,21 +498,7 @@ function buildVisibleOrdinalByMessageIndex(messages: ChatMessage[]): number[] {
   return ordinals;
 }
 
-function findPreviousUserText(messages: ChatMessage[], index: number): string {
-  for (let i = index - 1; i >= 0; i -= 1) {
-    const msg = messages[i];
-    if (msg?.role !== "user") continue;
-    const fromParts = msg.parts
-      ?.map((part) => (part.kind === "text" ? part.text : ""))
-      .join(" ")
-      .trim();
-    const text = fromParts || msg.text || "";
-    return text.trim();
-  }
-  return "";
-}
-
-function buildCollapsedProcessItems({
+export function buildCollapsedProcessItems({
   messages,
 }: {
   messages: ChatMessage[];
@@ -449,11 +507,24 @@ function buildCollapsedProcessItems({
   let i = 0;
   while (i < messages.length) {
     const message = messages[i];
+    if (i > 0 && areDuplicateRestoredMessages(messages[i - 1], message)) {
+      i += 1;
+      continue;
+    }
     if (message.role !== "user") {
       const blockStart = i;
       let blockEnd = blockStart;
       while (blockEnd < messages.length && messages[blockEnd].role !== "user") {
         blockEnd += 1;
+      }
+      if (
+        blockEnd < messages.length &&
+        shouldRenderUserBeforeAssistantBlock(messages, blockStart, blockEnd, blockEnd)
+      ) {
+        items.push({ kind: "message", message: messages[blockEnd], index: blockEnd });
+        appendAssistantBlockItems(messages, blockStart, blockEnd, items);
+        i = blockEnd + 1;
+        continue;
       }
       appendAssistantBlockItems(messages, blockStart, blockEnd, items);
       i = blockEnd;
@@ -466,11 +537,127 @@ function buildCollapsedProcessItems({
     while (blockEnd < messages.length && messages[blockEnd].role !== "user") {
       blockEnd += 1;
     }
+    const splitBeforeNextUser =
+      blockEnd < messages.length
+        ? findAssistantBlockSplitBeforeUser(messages, blockStart, blockEnd, blockEnd)
+        : null;
+    if (splitBeforeNextUser !== null) {
+      appendAssistantBlockItems(messages, blockStart, splitBeforeNextUser, items);
+      items.push({
+        kind: "message",
+        message: messages[blockEnd],
+        index: blockEnd,
+      });
+      appendAssistantBlockItems(messages, splitBeforeNextUser, blockEnd, items);
+      i = blockEnd + 1;
+      continue;
+    }
 
     appendAssistantBlockItems(messages, blockStart, blockEnd, items);
     i = blockEnd;
   }
   return items;
+}
+
+export function dedupeAdjacentRestoredMessages(
+  messages: ChatMessage[]
+): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const message of messages) {
+    const prev = out[out.length - 1];
+    if (prev && areDuplicateRestoredMessages(prev, message)) continue;
+    out.push(message);
+  }
+  return out;
+}
+
+function areDuplicateRestoredMessages(a: ChatMessage, b: ChatMessage): boolean {
+  if (a.role !== b.role) return false;
+  if (a.entryId && b.entryId && a.entryId === b.entryId) return true;
+  if (a.role !== "user") return false;
+  const aText = textForDedupe(a);
+  const bText = textForDedupe(b);
+  if (!aText || aText !== bText) return false;
+  const aTs = typeof a.timestamp === "number" ? a.timestamp : null;
+  const bTs = typeof b.timestamp === "number" ? b.timestamp : null;
+  if (aTs === null || bTs === null) return true;
+  return Math.abs(aTs - bTs) <= 1000;
+}
+
+function textForDedupe(message: ChatMessage): string {
+  return messageParts(message)
+    .filter((part) => part.kind === "text")
+    .map((part) => part.text)
+    .join("\n")
+    .trim();
+}
+
+export function shouldForceProcessGroupExecuting(
+  messages: ChatMessage[],
+  groupLastIndex: number,
+  streaming: boolean
+): boolean {
+  if (!streaming) return false;
+  const laterMessages = messages.slice(groupLastIndex + 1);
+  if (laterMessages.some((message) => message.role === "user")) return false;
+  return !laterMessages.some(
+    (message) => message.role === "assistant" && hasTextAnswer(message)
+  );
+}
+
+function findAssistantBlockSplitBeforeUser(
+  messages: ChatMessage[],
+  blockStart: number,
+  blockEnd: number,
+  userIndex: number
+): number | null {
+  const userTs = messages[userIndex]?.timestamp;
+  if (typeof userTs !== "number" || !Number.isFinite(userTs)) return null;
+  for (let split = blockStart; split < blockEnd; split += 1) {
+    const suffix = messages.slice(split, blockEnd);
+    if (
+      suffix.some(
+        (message) =>
+          message.role === "assistant" &&
+          typeof message.timestamp === "number" &&
+          Number.isFinite(message.timestamp) &&
+          message.timestamp >= userTs
+      ) &&
+      suffix.every((message) => {
+        if (message.role !== "assistant") return true;
+        return (
+          typeof message.timestamp === "number" &&
+          Number.isFinite(message.timestamp) &&
+          message.timestamp >= userTs
+        );
+      })
+    ) {
+      return split;
+    }
+  }
+  return null;
+}
+
+function shouldRenderUserBeforeAssistantBlock(
+  messages: ChatMessage[],
+  blockStart: number,
+  blockEnd: number,
+  userIndex: number
+): boolean {
+  const userTs = messages[userIndex]?.timestamp;
+  if (typeof userTs !== "number" || !Number.isFinite(userTs)) return false;
+  let hasAssistant = false;
+  for (let i = blockStart; i < blockEnd; i += 1) {
+    const message = messages[i];
+    if (message.role !== "assistant") continue;
+    hasAssistant = true;
+    const assistantTs = message.timestamp;
+    if (typeof assistantTs !== "number" || !Number.isFinite(assistantTs)) {
+      return false;
+    }
+    if (assistantTs < userTs) return false;
+  }
+  return hasAssistant;
 }
 
 function appendAssistantBlockItems(
@@ -482,12 +669,11 @@ function appendAssistantBlockItems(
   let j = blockStart;
   while (j < blockEnd) {
     const current = messages[j];
-    if (current.role === "assistant" && isProcessOnlyAssistant(current)) {
+    if (isCollapsibleProcessAssistant(messages, j, blockEnd)) {
       const group: Array<{ message: ChatMessage; index: number }> = [];
       while (
         j < blockEnd &&
-        messages[j].role === "assistant" &&
-        isProcessOnlyAssistant(messages[j])
+        isCollapsibleProcessAssistant(messages, j, blockEnd)
       ) {
         group.push({ message: messages[j], index: j });
         j += 1;
@@ -506,15 +692,33 @@ function hasTextAnswer(message: ChatMessage): boolean {
   );
 }
 
-function isProcessOnlyAssistant(message: ChatMessage): boolean {
+function isCollapsibleProcessAssistant(
+  messages: ChatMessage[],
+  index: number,
+  blockEnd: number
+): boolean {
+  const message = messages[index];
   if (message.role !== "assistant") return false;
   const parts = messageParts(message);
   if (parts.some(isPendingUserBlockerPart)) return false;
+  if (message.stopReason === "tool_use") return true;
+  if (!isLastAssistantInBlock(messages, index, blockEnd)) return true;
   // Some SDK turns only carry model/usage metadata. Rendering them as standalone
   // assistant messages creates the repeated “GPT-5.5 + token row” whitespace; in
   // the conversation hierarchy they are part of the surrounding execution trace.
   if (parts.length === 0) return Boolean(message.meta?.usage || message.meta?.model);
   return !parts.some((part) => part.kind === "text" && part.text.trim().length > 0);
+}
+
+function isLastAssistantInBlock(
+  messages: ChatMessage[],
+  index: number,
+  blockEnd: number
+): boolean {
+  for (let j = index + 1; j < blockEnd; j += 1) {
+    if (messages[j].role === "assistant") return false;
+  }
+  return true;
 }
 
 function messageParts(message: ChatMessage): MessagePart[] {
@@ -550,62 +754,52 @@ function CollapsedProcessGroup({
   forceExecuting: boolean;
   renderMessage: (message: ChatMessage, index: number) => React.ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
   const summary = summarizeProcessGroup(
     items.map((item) => item.message),
     forceExecuting
   );
+  const hasActiveProcessPart = hasActiveProcessPartInItems(items);
+  // 【产品规则】live = “还在处理中”：
+  //   - hasActiveProcessPart：组内有 running tool / pending approval-clarification
+  //   - forceExecuting：streaming 且该组后还没出现最终文本（推论全闭环还没走完）
+  // 两者任一为 true → 自动展开；全部为 false → 自动折叠（除非用户手动展了）。
+  const live = forceExecuting || hasActiveProcessPart;
+  const nowMs = useSecondTick(live);
+  const [manualOpen, setManualOpen] = useState(false);
+  const open = live || manualOpen;
   return (
     <div
-      className="group rounded-md border text-xs"
-      style={{
-        borderColor: "var(--border-soft)",
-        background: "var(--tool-bg)",
-      }}
+      className="group text-token-xs"
       data-testid="assistant-process-group"
     >
       <button
         type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-[color:var(--bg-hover)]"
+        onClick={() => {
+          // live 期间不走手动切换，避免“状态中锁定”反感。
+          // live 结束后才允许用户点开/收起看细节。
+          if (!live) setManualOpen((value) => !value);
+        }}
+        className="inline-flex items-center gap-2 py-0.5 text-left"
         aria-expanded={open}
         data-testid="assistant-process-toggle"
+        style={{ color: "var(--text-muted)" }}
       >
-        {summary.running ? (
-          <Loader2
-            size={13}
-            className="shrink-0 animate-spin"
-            style={{ color: "var(--text-muted)" }}
+        {live ? (
+          <span
+            className="inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+            style={{
+              background: "var(--accent)",
+              boxShadow: "0 0 0 3px var(--color-accent-bg)",
+            }}
             aria-hidden
           />
-        ) : (
-          <CheckCircle2
-            size={13}
-            className="shrink-0"
-            style={{ color: "var(--text-dim)" }}
-            aria-hidden
-          />
-        )}
-        <span className="min-w-0 flex-1">
-          <span className="inline truncate font-medium" style={{ color: "var(--text)" }}>
-            {summary.title}
-          </span>
-          <span className="ml-2 inline truncate text-token-xs" style={{ color: "var(--text-muted)" }}>
-            {summary.detail}
-          </span>
-        </span>
-        <span
-          className="shrink-0 text-token-xs opacity-0 transition-opacity group-hover:opacity-100"
-          style={{ color: "var(--text-muted)" }}
-        >
-          {open ? "收起 ▾" : "展开细节 ▸"}
+        ) : null}
+        <span className="truncate">
+          {formatProcessSummaryTitle(summary, items, { live, nowMs })}
         </span>
       </button>
       {open ? (
-        <div
-          className="space-y-2 border-t px-2.5 py-2"
-          style={{ borderColor: "var(--border-soft)" }}
-        >
+        <div className="space-y-2 pl-4 pt-2">
           {items.map((item) => renderMessage(item.message, item.index))}
         </div>
       ) : null}
@@ -616,10 +810,90 @@ function CollapsedProcessGroup({
 function summarizeProcessGroup(
   messages: ChatMessage[],
   forceExecuting: boolean
-): {
-  title: string;
-  detail: string;
-  running: boolean;
-} {
+): ProcessSummary {
   return buildProcessSummary({ messages, forceRunning: forceExecuting });
+}
+
+function formatProcessSummaryTitle(
+  summary: ReturnType<typeof buildProcessSummary>,
+  items: Array<{ message: ChatMessage; index: number }>,
+  opts: { live?: boolean; nowMs?: number } = {}
+) {
+  const hasActiveProcessPart = hasActiveProcessPartInItems(items);
+  const issueTitle = processIssueTitle(summary, { running: hasActiveProcessPart });
+  if (issueTitle) return issueTitle;
+  if (opts.live) {
+    const elapsedLabel = formatProcessElapsed(items, { nowMs: opts.nowMs });
+    return elapsedLabel ? `处理中 ${elapsedLabel}` : "处理中";
+  }
+  const elapsedLabel = formatProcessElapsed(items);
+  return elapsedLabel ? `已处理 ${elapsedLabel}` : "已处理";
+}
+
+function useSecondTick(enabled: boolean): number {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!enabled) return;
+    const tick = () => setNowMs(Date.now());
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [enabled]);
+  return nowMs;
+}
+
+function hasActiveProcessPartInItems(
+  items: Array<{ message: ChatMessage; index: number }>
+): boolean {
+  return items.some((item) =>
+    messageParts(item.message).some((part) => {
+      if (part.kind === "tool") return part.status === "running";
+      if (part.kind === "approval" || part.kind === "clarification") {
+        return part.status === "pending";
+      }
+      return false;
+    })
+  );
+}
+
+function processIssueTitle(
+  summary: ReturnType<typeof buildProcessSummary>,
+  opts: { running?: boolean } = {}
+) {
+  if (summary.errorRecoveredCount <= 0) return null;
+  const running = opts.running ?? summary.running;
+  const markers = running ? ["执行失败"] : ["已处理："];
+  for (const marker of markers) {
+    const index = summary.title.indexOf(marker);
+    if (index >= 0) return summary.title.slice(index);
+  }
+  if (!running) {
+    return summary.errorRecoveredCount > 1
+      ? `已处理：${summary.errorRecoveredCount} 个步骤曾失败`
+      : "已处理：1 个步骤曾失败";
+  }
+  return summary.errorRecoveredCount > 1
+    ? `执行失败：${summary.errorRecoveredCount} 个步骤`
+    : "执行失败";
+}
+
+function formatProcessElapsed(
+  items: Array<{ message: ChatMessage; index: number }>,
+  opts: { nowMs?: number } = {}
+): string | null {
+  const timestamps = items
+    .map((item) => item.message.timestamp)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+    .sort((a, b) => a - b);
+  if (timestamps.length === 0) return null;
+  const startMs = timestamps[0];
+  const endMs = opts.nowMs ?? timestamps[timestamps.length - 1];
+  if (!opts.nowMs && timestamps.length < 2) return null;
+  const elapsedMs = endMs - startMs;
+  if (elapsedMs <= 0) return null;
+  const totalSeconds = Math.max(1, Math.round(elapsedMs / 1000));
+  if (totalSeconds < 60) return `${totalSeconds} 秒`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds > 0 ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分`;
 }

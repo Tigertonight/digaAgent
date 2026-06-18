@@ -134,6 +134,43 @@ describe("isWorthNarrating — Phase 3 LLM 白名单", () => {
   });
 });
 
+describe("narrateTool — grep / rg 命令 label 不拽出整条命令", () => {
+  it("bash 里的长 grep 命令只取 pattern，不拽 file 列表", () => {
+    const n = narrateTool(
+      mk({
+        toolName: "bash",
+        status: "done",
+        args: {
+          command:
+            'grep -n "deleteSession|removeSession" lib/session-runner.ts lib/meta/store.ts app/hooks/useSessions.ts app/mobile/MobileApp.ts',
+        },
+      })
+    );
+    // 以前会脓成 "已完成：查找：-n "deleteSession|removeSession" lib/..."、
+    // 依赖后续 truncate；现在只保留 pattern。
+    expect(n.primary).toContain("查找");
+    expect(n.primary).toContain("deleteSession|removeSession");
+    expect(n.primary).not.toContain("lib/session-runner.ts");
+    expect(n.primary).not.toContain("app/mobile/MobileApp.ts");
+  });
+
+  it("rg 后面跟多个 -g flag 也能到 pattern", () => {
+    const n = narrateTool(
+      mk({
+        toolName: "bash",
+        status: "done",
+        args: {
+          command:
+            "rg -n 'executeDeleteSession' -g '*.test.ts' -g '!node_modules' lib/ app/",
+        },
+      })
+    );
+    expect(n.primary).toContain("查找");
+    expect(n.primary).toContain("executeDeleteSession");
+    expect(n.primary).not.toContain("node_modules");
+  });
+});
+
 describe("shouldHideTool — Phase 2 降噪", () => {
   it("update_progress / goal_update 隐藏", () => {
     expect(shouldHideTool(mk({ toolName: "update_progress" }))).toBe(true);

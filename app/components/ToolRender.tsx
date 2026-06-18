@@ -23,14 +23,19 @@ import {
 import { requestToolNarration } from "@/app/lib/narration-client";
 
 type ToolPart = Extract<MessagePart, { kind: "tool" }>;
-type ToolRenderProps = { tool: ToolPart; questionContext?: string };
+type ToolRenderProps = {
+  tool: ToolPart;
+  questionContext?: string;
+  recovered?: boolean;
+};
 
 interface Props {
   tool: ToolPart;
   questionContext?: string;
+  recovered?: boolean;
 }
 
-export default function ToolRender({ tool, questionContext }: Props) {
+export default function ToolRender({ tool, questionContext, recovered = false }: Props) {
   // Phase 2 降噪：内部治理类 tool（update_progress / goal_update / Process: xxx 等）
   // 不在主视图里占一行。这些序列仍会被 CollapsedPartProcessGroup 计入组总数，
   // 但展开面上不会重复占位。
@@ -39,39 +44,47 @@ export default function ToolRender({ tool, questionContext }: Props) {
   switch (name) {
     case "read":
     case "read_file":
-      return <ReadTool tool={tool} questionContext={questionContext} />;
+      return <ReadTool tool={tool} questionContext={questionContext} recovered={recovered} />;
     case "edit":
     case "edit_file":
     case "str_replace":
-      return <EditTool tool={tool} questionContext={questionContext} />;
+      return <EditTool tool={tool} questionContext={questionContext} recovered={recovered} />;
     case "write":
     case "write_file":
     case "create_file":
-      return <WriteTool tool={tool} questionContext={questionContext} />;
+      return <WriteTool tool={tool} questionContext={questionContext} recovered={recovered} />;
     case "bash":
     case "shell":
     case "exec":
-      return <BashTool tool={tool} questionContext={questionContext} />;
+      return <BashTool tool={tool} questionContext={questionContext} recovered={recovered} />;
     case "grep":
     case "search":
-      return <GrepTool tool={tool} questionContext={questionContext} />;
+      return <GrepTool tool={tool} questionContext={questionContext} recovered={recovered} />;
     case "find":
     case "glob":
-      return <FindTool tool={tool} questionContext={questionContext} />;
+      return <FindTool tool={tool} questionContext={questionContext} recovered={recovered} />;
     case "ls":
     case "list":
     case "list_directory":
-      return <LsTool tool={tool} questionContext={questionContext} />;
+      return <LsTool tool={tool} questionContext={questionContext} recovered={recovered} />;
     default:
-      return <GenericTool tool={tool} questionContext={questionContext} />;
+      return <GenericTool tool={tool} questionContext={questionContext} recovered={recovered} />;
   }
 }
 
 /* ---------- 共用 ---------- */
 
-function StatusDot({ status }: { status: ToolPart["status"] }) {
+function StatusDot({
+  status,
+  recovered,
+}: {
+  status: ToolPart["status"];
+  recovered?: boolean;
+}) {
   const color =
-    status === "running"
+    recovered
+      ? "var(--text-dim)"
+      : status === "running"
       ? "var(--text-muted)"
       : status === "error"
         ? "var(--color-danger)"
@@ -91,6 +104,7 @@ function ToolFrame({
   defaultOpen = false,
   children,
   questionContext,
+  recovered = false,
 }: {
   tool: ToolPart;
   title: string;
@@ -98,6 +112,7 @@ function ToolFrame({
   defaultOpen?: boolean;
   children?: React.ReactNode;
   questionContext?: string;
+  recovered?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const narration = useMemo(() => narrateTool(tool), [tool]);
@@ -141,6 +156,11 @@ function ToolFrame({
     };
   }, [narration.hidden, narration.primary, narrationKey, questionContext, tool]);
   if (narration.hidden) return null;
+  const basePrimary =
+    enhancedPrimary?.key === narrationKey
+      ? enhancedPrimary.text
+      : narration.primary;
+  const displayPrimary = recovered ? recoveredNarration(basePrimary) : basePrimary;
   return (
     <div
       className="group/tool rounded-md border text-xs transition-colors"
@@ -156,12 +176,10 @@ function ToolFrame({
         className="flex w-full items-start gap-2 rounded-md px-1.5 py-1.5 text-left hover:bg-[color:var(--bg-hover)]"
         aria-expanded={open}
       >
-        <StatusDot status={tool.status} />
+        <StatusDot status={tool.status} recovered={recovered} />
         <span className="min-w-0 flex-1">
           <div className="text-token-sm leading-5" style={{ color: "var(--fg)" }}>
-            {enhancedPrimary?.key === narrationKey
-              ? enhancedPrimary.text
-              : narration.primary}
+            {displayPrimary}
           </div>
           {narration.secondary ? (
             <div
@@ -182,6 +200,17 @@ function ToolFrame({
             </div>
           ) : null}
         </span>
+        {recovered ? (
+          <span
+            className="mt-0.5 shrink-0 rounded-token-sm border px-1.5 py-0.5 text-token-xs"
+            style={{
+              borderColor: "var(--border-soft)",
+              color: "var(--text-muted)",
+            }}
+          >
+            已处理
+          </span>
+        ) : null}
         <span
           className="mt-0.5 flex shrink-0 items-center gap-1 text-token-xs opacity-0 transition-opacity group-hover/tool:opacity-100"
           style={{ color: "var(--text-muted)" }}
@@ -207,6 +236,11 @@ function ToolFrame({
       )}
     </div>
   );
+}
+
+function recoveredNarration(primary: string): string {
+  const label = primary.replace(/^执行失败：/, "").trim();
+  return label ? `已处理失败：${label}` : "已处理失败";
 }
 
 function CodeBlock({
@@ -396,7 +430,7 @@ function resultToText(result: unknown, fallback: string): string {
 
 /* ---------- 具体渲染器 ---------- */
 
-function ReadTool({ tool, questionContext }: ToolRenderProps) {
+function ReadTool({ tool, questionContext, recovered }: ToolRenderProps) {
   const path = asString(getArg(tool.args, "path", "file_path", "file"));
   const offset = getArg(tool.args, "offset");
   const limit = getArg(tool.args, "limit");
@@ -411,6 +445,7 @@ function ReadTool({ tool, questionContext }: ToolRenderProps) {
     <ToolFrame
       tool={tool}
       questionContext={questionContext}
+      recovered={recovered}
       title={path || "(no path)"}
       subtitle={
         offset != null || limit != null ? `lines ${offset ?? 0}+${limit ?? "?"}` : undefined
@@ -423,14 +458,20 @@ function ReadTool({ tool, questionContext }: ToolRenderProps) {
   );
 }
 
-function EditTool({ tool, questionContext }: ToolRenderProps) {
+function EditTool({ tool, questionContext, recovered }: ToolRenderProps) {
   const path = asString(getArg(tool.args, "path", "file_path", "file"));
   const oldStr = asString(getArg(tool.args, "oldString", "old_string", "old"));
   const newStr = asString(getArg(tool.args, "newString", "new_string", "new"));
   const [mode, setMode] = useState<"diff" | "code" | "raw">("diff");
   const noChange = isNoChange(oldStr, newStr);
   return (
-    <ToolFrame tool={tool} questionContext={questionContext} title={path || "(no path)"} subtitle="edit">
+    <ToolFrame
+      tool={tool}
+      questionContext={questionContext}
+      recovered={recovered}
+      title={path || "(no path)"}
+      subtitle="edit"
+    >
       {errorBanner(tool)}
       <ToolImages tool={tool} />
       <ViewModeSwitch
@@ -488,7 +529,7 @@ function EditTool({ tool, questionContext }: ToolRenderProps) {
   );
 }
 
-function WriteTool({ tool, questionContext }: ToolRenderProps) {
+function WriteTool({ tool, questionContext, recovered }: ToolRenderProps) {
   const path = asString(getArg(tool.args, "path", "file_path", "file"));
   const content = asString(getArg(tool.args, "content", "text"));
   const isHtml = /\.(html?|xhtml)$/i.test(path);
@@ -507,6 +548,7 @@ function WriteTool({ tool, questionContext }: ToolRenderProps) {
     <ToolFrame
       tool={tool}
       questionContext={questionContext}
+      recovered={recovered}
       title={path || "(no path)"}
       subtitle="write"
     >
@@ -539,7 +581,7 @@ function WriteTool({ tool, questionContext }: ToolRenderProps) {
   );
 }
 
-function BashTool({ tool, questionContext }: ToolRenderProps) {
+function BashTool({ tool, questionContext, recovered }: ToolRenderProps) {
   const cmd = asString(getArg(tool.args, "command", "cmd"));
   const desc = asString(getArg(tool.args, "description", "desc"));
   const result = tool.result ?? tool.partialResult;
@@ -553,6 +595,7 @@ function BashTool({ tool, questionContext }: ToolRenderProps) {
     <ToolFrame
       tool={tool}
       questionContext={questionContext}
+      recovered={recovered}
       title={cmd ? `$ ${cmd}` : "(no command)"}
       subtitle={desc || undefined}
     >
@@ -563,7 +606,7 @@ function BashTool({ tool, questionContext }: ToolRenderProps) {
   );
 }
 
-function GrepTool({ tool, questionContext }: ToolRenderProps) {
+function GrepTool({ tool, questionContext, recovered }: ToolRenderProps) {
   const pattern = asString(getArg(tool.args, "pattern", "query"));
   const path = asString(getArg(tool.args, "path", "dir"));
   const include = asString(getArg(tool.args, "include", "glob"));
@@ -578,6 +621,7 @@ function GrepTool({ tool, questionContext }: ToolRenderProps) {
     <ToolFrame
       tool={tool}
       questionContext={questionContext}
+      recovered={recovered}
       title={pattern ? `/${pattern}/` : "(no pattern)"}
       subtitle={[path, include].filter(Boolean).join(" · ") || undefined}
     >
@@ -588,13 +632,19 @@ function GrepTool({ tool, questionContext }: ToolRenderProps) {
   );
 }
 
-function FindTool({ tool, questionContext }: ToolRenderProps) {
+function FindTool({ tool, questionContext, recovered }: ToolRenderProps) {
   const pattern = asString(getArg(tool.args, "pattern", "glob"));
   const path = asString(getArg(tool.args, "path", "dir"));
   const result = tool.result ?? tool.partialResult;
   const text = resultToText(result, asString(result));
   return (
-    <ToolFrame tool={tool} questionContext={questionContext} title={pattern || "(no pattern)"} subtitle={path || undefined}>
+    <ToolFrame
+      tool={tool}
+      questionContext={questionContext}
+      recovered={recovered}
+      title={pattern || "(no pattern)"}
+      subtitle={path || undefined}
+    >
       {errorBanner(tool)}
       <ToolImages tool={tool} />
       <CodeBlock text={text || "(none)"} />
@@ -602,12 +652,18 @@ function FindTool({ tool, questionContext }: ToolRenderProps) {
   );
 }
 
-function LsTool({ tool, questionContext }: ToolRenderProps) {
+function LsTool({ tool, questionContext, recovered }: ToolRenderProps) {
   const path = asString(getArg(tool.args, "path", "dir"));
   const result = tool.result ?? tool.partialResult;
   const text = resultToText(result, asString(result));
   return (
-    <ToolFrame tool={tool} questionContext={questionContext} title={path || "."} subtitle="ls">
+    <ToolFrame
+      tool={tool}
+      questionContext={questionContext}
+      recovered={recovered}
+      title={path || "."}
+      subtitle="ls"
+    >
       {errorBanner(tool)}
       <ToolImages tool={tool} />
       <CodeBlock text={text || "(empty)"} />
@@ -615,7 +671,7 @@ function LsTool({ tool, questionContext }: ToolRenderProps) {
   );
 }
 
-function GenericTool({ tool, questionContext }: ToolRenderProps) {
+function GenericTool({ tool, questionContext, recovered }: ToolRenderProps) {
   const argsStr = asString(tool.args);
   const result = tool.result ?? tool.partialResult;
   const hasImages = extractImages(result).length > 0;
@@ -626,7 +682,13 @@ function GenericTool({ tool, questionContext }: ToolRenderProps) {
     ? textFromBlocks
     : asString(result);
   return (
-    <ToolFrame tool={tool} questionContext={questionContext} title={tool.toolName} subtitle={tool.status}>
+    <ToolFrame
+      tool={tool}
+      questionContext={questionContext}
+      recovered={recovered}
+      title={tool.toolName}
+      subtitle={tool.status}
+    >
       {errorBanner(tool)}
       <ToolImages tool={tool} />
       {argsStr && argsStr !== "{}" && (

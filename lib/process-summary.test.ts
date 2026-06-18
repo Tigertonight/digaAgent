@@ -41,8 +41,9 @@ describe("buildProcessSummary", () => {
 
     const summary = buildProcessSummary({ messages });
     expect(summary.title).toContain("GPT-5.5");
-    expect(summary.title).toContain("3 个步骤");
-    expect(summary.title).toContain("1 个问题已恢复");
+    expect(summary.title).toContain("已处理");
+    expect(summary.title).toContain("曾失败");
+    expect(summary.title).toContain("查看");
     // detail 现在走 narrateTool 人话叙事，不再是原始 toolName
     expect(summary.detail).toContain("运行终端命令");
     expect(summary.detail).toContain("查看");
@@ -56,5 +57,23 @@ describe("buildProcessSummary", () => {
     });
     expect(summary.running).toBe(true);
     expect(summary.title).toContain("执行中");
+  });
+
+  it("keeps active failures urgent while a turn is still running", () => {
+    const summary = buildProcessSummary({
+      parts: [
+        {
+          kind: "tool",
+          toolCallId: "t1",
+          toolName: "read",
+          status: "error",
+          isError: true,
+          result: "missing",
+        },
+      ],
+      forceRunning: true,
+    });
+    expect(summary.title).toContain("执行失败");
+    expect(summary.title).not.toContain("已处理");
   });
 });

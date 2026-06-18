@@ -40,9 +40,14 @@ import type {
   MessagePart,
 } from "@/lib/types";
 import type { AgentPhase } from "@/lib/session-runner";
-import { formatMessageTime, formatTokens } from "@/lib/format";
+import { formatMessageTime } from "@/lib/format";
 import { previewStore } from "@/lib/preview-store";
-import { narrateTool, shouldHideTool } from "@/lib/narration/tool";
+import { stripContextAside } from "@/lib/context-aside";
+import {
+  narrateTool,
+  shouldHideTool,
+  summarizeToolTarget,
+} from "@/lib/narration/tool";
 import { dedupeToolLabels } from "@/lib/narration/summary";
 import Markdown from "./Markdown";
 import ToolRender from "./ToolRender";
@@ -136,7 +141,7 @@ export interface WorkflowWorktreeAction {
   createdAt?: number;
 }
 
-export const MessageView = memo(function MessageView({
+function MessageViewInner({
   msg,
   index,
   canFork,
@@ -151,7 +156,6 @@ export const MessageView = memo(function MessageView({
   modelLabel,
   assistantChrome = "full",
   turnState = "final",
-  meta,
   streamingPhase,
   isStreaming,
   cwd,
@@ -169,12 +173,19 @@ export const MessageView = memo(function MessageView({
 }: MessageViewProps) {
   // user：右侧气泡（支持 text + image parts 混合）
   if (msg.role === "user") {
-    const parts: MessagePart[] =
+    const rawParts: MessagePart[] =
       msg.parts && msg.parts.length > 0
         ? msg.parts
         : msg.text
         ? [{ kind: "text", text: msg.text }]
         : [];
+    const parts = rawParts
+      .map((part): MessagePart | null => {
+        if (part.kind !== "text") return part;
+        const text = stripContextAside(part.text);
+        return text ? { ...part, text } : null;
+      })
+      .filter((part): part is MessagePart => Boolean(part));
 
     // 拼出当前 user message 的"纯文本"作为 fork 编辑器初值
     const joinedText = parts
@@ -305,7 +316,7 @@ export const MessageView = memo(function MessageView({
                 className="text-token-xs"
                 style={{ color: "var(--fg-faint)" }}
               >
-                Fork from entry {msg.entryId.slice(0, 8)} · 提交后此后所有消息将被丢弃
+                Edit entry {msg.entryId.slice(0, 8)} · 提交后覆盖这条消息并丢弃后续内容
               </div>
               <textarea
                 value={forkText}
@@ -339,7 +350,7 @@ export const MessageView = memo(function MessageView({
                   className="px-2 py-1 rounded text-white disabled:opacity-50"
                   style={{ background: "var(--accent)" }}
                 >
-                  {forkBusy ? "Forking…" : "Fork"}
+                  {forkBusy ? "Sending…" : "Send edit"}
                 </button>
               </div>
             </div>
@@ -371,6 +382,8 @@ export const MessageView = memo(function MessageView({
   const showFullChrome = showAssistantChrome && turnState === "final";
   const showCompactRow = showAssistantChrome && turnState === "compact";
   const showLiveDot = showAssistantChrome && turnState === "live";
+  const renderTextAsCommentary =
+    assistantChrome === "content" || turnState === "compact";
   if (!showAssistantChrome && parts.length === 0) return null;
 
   const plainText = extractPlainText(parts);
@@ -381,7 +394,6 @@ export const MessageView = memo(function MessageView({
           className="text-token-xs mb-1 flex items-center gap-2"
           style={{ color: "var(--text-muted)" }}
         >
-          <TurnDot state="final" />
           <span>{captionText}</span>
           {isStreaming && (
             <AssistantStreamMeta phase={streamingPhase ?? null} parts={parts} />
@@ -400,7 +412,7 @@ export const MessageView = memo(function MessageView({
       ) : null}
       {showLiveDot && (
         <div className="text-token-xs mb-1 flex items-center gap-1.5">
-          <TurnDot state="live" />
+          <TurnDot />
           <AssistantStreamMeta phase={streamingPhase ?? null} parts={parts} />
         </div>
       )}
@@ -427,7 +439,15 @@ export const MessageView = memo(function MessageView({
           }
           if (p.kind === "text") {
             return (
-              <div key={i} style={{ color: "var(--text)" }}>
+              <div
+                key={i}
+                className={renderTextAsCommentary ? "italic" : undefined}
+                style={{
+                  color: renderTextAsCommentary
+                    ? "var(--text-dim)"
+                    : "var(--text)",
+                }}
+              >
                 <Markdown
                   text={p.text}
                   streaming={i === tailTextIdx}
@@ -438,7 +458,14 @@ export const MessageView = memo(function MessageView({
             );
           }
           if (p.kind === "tool") {
-            return <ToolRender key={i} tool={p} questionContext={questionContext} />;
+            return (
+              <ToolRender
+                key={i}
+                tool={p}
+                questionContext={questionContext}
+                recovered={isRecoveredToolPart(parts, i)}
+              />
+            );
           }
           if (p.kind === "approval") {
             return (
@@ -515,11 +542,25 @@ export const MessageView = memo(function MessageView({
                 group.push(parts[i]);
                 i += 1;
               }
+              const recovered =
+                hasErroredProcessPart(group) && hasAnyTextPart(parts);
+              // 【产品规则】streaming 中的 process 组“还在处理中”的定义：
+              //   - parts 里有 running tool / pending approval/clarification（hasRunningProcessPart）
+              //   - 或者 isStreaming 且该 group 之后还没有任何有效 text part。
+              // 为“还在处理中” → 自动展开；出现 text 后 → 自动折叠。
+              const hasTextAfter = parts
+                .slice(i)
+                .some(
+                  (p) => p.kind === "text" && p.text.trim().length > 0
+                );
               rendered.push(
                 <CollapsedPartProcessGroup
                   key={`process-${start}`}
                   parts={group}
                   questionContext={questionContext}
+                  recovered={recovered}
+                  // streaming 且该组之后还没 text → 视为仍在生成 → 强制展开。
+                  forceLive={Boolean(isStreaming) && !hasTextAfter}
                 />
               );
               continue;
@@ -532,35 +573,10 @@ export const MessageView = memo(function MessageView({
       </div>
       {showFullChrome && (
         <div
-          className="text-token-xs mt-2 flex items-center gap-2"
+          className="text-token-xs mt-1.5 flex items-center justify-end"
           style={{ color: "var(--text-muted)" }}
         >
-          {meta && (
-            <>
-              <span>{formatTokens(meta.input)} in</span>
-              <span aria-hidden="true">·</span>
-              <span>{formatTokens(meta.output)} out</span>
-              {meta.cost > 0 && (
-                <>
-                  <span aria-hidden="true">·</span>
-                  <span>
-                    {meta.cost < 0.0001
-                      ? "<$0.0001"
-                      : `$${meta.cost.toFixed(4)}`}
-                  </span>
-                </>
-              )}
-            </>
-          )}
           <CopyButton text={plainText} />
-          {msg.timestamp && (
-            <span
-              className="ml-auto text-token-xs"
-              style={{ color: "var(--fg-faint)" }}
-            >
-              {formatMessageTime(msg.timestamp)}
-            </span>
-          )}
         </div>
       )}
       {showCompactRow && (
@@ -573,7 +589,85 @@ export const MessageView = memo(function MessageView({
       )}
     </div>
   );
-});
+}
+
+/**
+ * 【性能】MessageView 自定义 props 比较。
+ *
+ * 默认 React.memo 的 shallow compare 在本仓 streaming 场景下几乎完全失效：
+ *   - meta（{input, output, cost}）、streamingPhase 这类对象在 MessagesScrollArea
+ *     里 inline 生成，每次 render 都是新引用，shallow 总是不等 → 列表里所有
+ *     消息都重渲染。
+ *
+ * 改进后：所有按条 "derived" 在 useMemo 里预计算（同一条消息未变 → 引用不变），
+ * 再配上这里的 deep compare。此后 streaming 时只有 active assistant 重渲染，
+ * 其他 N-1 条消息直接跳过。
+ */
+function areMessageViewPropsEqual(
+  prev: MessageViewProps,
+  next: MessageViewProps
+): boolean {
+  if (prev.msg !== next.msg) return false;
+  if (prev.index !== next.index) return false;
+  if (prev.canFork !== next.canFork) return false;
+  if (prev.isForking !== next.isForking) return false;
+  if (prev.forkText !== next.forkText) return false;
+  if (prev.forkBusy !== next.forkBusy) return false;
+  if (prev.modelLabel !== next.modelLabel) return false;
+  if (prev.assistantChrome !== next.assistantChrome) return false;
+  if (prev.turnState !== next.turnState) return false;
+  if (prev.cwd !== next.cwd) return false;
+  if (prev.questionContext !== next.questionContext) return false;
+  if (prev.isStreaming !== next.isStreaming) return false;
+  if (!isPhaseEqual(prev.streamingPhase, next.streamingPhase)) return false;
+  if (!isMetaEqual(prev.meta, next.meta)) return false;
+  // callbacks: 均走 useCallback，默认稳定。shallow compare 一下兑底，
+  // 避免调用方传入不稳定引用时静默 fail。
+  if (prev.onStartFork !== next.onStartFork) return false;
+  if (prev.onCancelFork !== next.onCancelFork) return false;
+  if (prev.onChangeForkText !== next.onChangeForkText) return false;
+  if (prev.onSubmitFork !== next.onSubmitFork) return false;
+  if (prev.onForkToNewSession !== next.onForkToNewSession) return false;
+  if (prev.onOpenUrl !== next.onOpenUrl) return false;
+  if (prev.onApproveCall !== next.onApproveCall) return false;
+  if (prev.onDenyCall !== next.onDenyCall) return false;
+  if (prev.onChooseClarification !== next.onChooseClarification) return false;
+  if (prev.onRespondClarification !== next.onRespondClarification) return false;
+  if (prev.onResumeWorkflow !== next.onResumeWorkflow) return false;
+  if (prev.onWorkflowWorktreeAction !== next.onWorkflowWorktreeAction) return false;
+  if (prev.onRetrySubagentTask !== next.onRetrySubagentTask) return false;
+  if (prev.onResumeSubagentBatch !== next.onResumeSubagentBatch) return false;
+  if (prev.onOpenSubagentSession !== next.onOpenSubagentSession) return false;
+  return true;
+}
+
+function isPhaseEqual(
+  a: MessageViewProps["streamingPhase"],
+  b: MessageViewProps["streamingPhase"]
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "running_tools" && b.kind === "running_tools") {
+    if (a.tools.length !== b.tools.length) return false;
+    for (let i = 0; i < a.tools.length; i += 1) {
+      if (a.tools[i].id !== b.tools[i].id) return false;
+      if (a.tools[i].name !== b.tools[i].name) return false;
+    }
+  }
+  return true;
+}
+
+function isMetaEqual(
+  a: MessageViewProps["meta"],
+  b: MessageViewProps["meta"]
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.input === b.input && a.output === b.output && a.cost === b.cost;
+}
+
+export const MessageView = memo(MessageViewInner, areMessageViewPropsEqual);
 
 // ───────────────────────────────────────────────────────────────────────────
 // 同文件配套子组件 / helper
@@ -675,25 +769,19 @@ function phaseLabel(phase: AgentPhase): string {
 }
 
 /**
- * Q3：Claude Code 风格的状态点，用颜色 + 脉冲表达 turn 状态。
- *   - final：绿色稳定——该轮完整结束
- *   - compact：灰色稳定——已封盘但整轮还在跑
- *   - live：灰色脉冲——该轮正在写这条
+ * Codex-style live marker：只在当前 turn 正在写时出现。
  */
-function TurnDot({ state }: { state: "final" | "compact" | "live" }) {
-  const color =
-    state === "final" ? "var(--color-success)" : "var(--text-dim)";
-  const animated = state === "live";
+function TurnDot() {
   return (
     <span
       aria-hidden="true"
-      className={animated ? "animate-pulse" : undefined}
+      className="animate-pulse"
       style={{
         display: "inline-block",
         width: 6,
         height: 6,
         borderRadius: 9999,
-        backgroundColor: color,
+        backgroundColor: "var(--accent)",
         flexShrink: 0,
       }}
     />
@@ -728,58 +816,61 @@ function CopyButton({ text }: { text: string }) {
 function CollapsedPartProcessGroup({
   parts,
   questionContext,
+  recovered = false,
+  forceLive = false,
 }: {
   parts: MessagePart[];
   questionContext?: string;
+  recovered?: boolean;
+  /**
+   * 【产品规则】“仍在处理中”的外部信号：
+   *   - 父级在该 message 仍 streaming 且该组之后还没有 text 时传 true。
+   *   - 会让组保持展开；处理完毕（text 出来或 streaming 结束）后为 false → 自动收起。
+   *   - 与 parts 内部的 running tool / pending approval 作 "or" 联动。
+   */
+  forceLive?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  const summary = summarizeProcessParts(parts);
+  const summary = summarizeProcessParts(parts, { recovered });
+  const running = hasRunningProcessPart(parts);
+  // live = “还在处理中”：内部 running 或外部 forceLive。
+  const live = running || forceLive;
+  // manualOpen 语义：不是 live 时，用户手工展/收。live 期间不走手动路径，
+  // 避免“streaming 中被锁住”的反产品。补充：live 结束后才让用户手动控制。
+  const [manualOpen, setManualOpen] = useState(false);
+  const open = live || manualOpen;
   return (
     <div
-      className="group rounded-lg border text-xs"
-      style={{
-        borderColor: "var(--border-soft)",
-        background: "var(--bg)",
-      }}
+      className="group text-token-xs"
       data-testid="assistant-process-group"
     >
       <button
         type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-[color:var(--bg-hover)]"
+        onClick={() => {
+          if (!live) setManualOpen((value) => !value);
+        }}
+        className="inline-flex items-center gap-2 py-0.5 text-left"
         aria-expanded={open}
         data-testid="assistant-process-toggle"
+        style={{ color: "var(--text-muted)" }}
       >
-        <CheckCircle2
-          size={13}
-          className="shrink-0"
-          style={{ color: "var(--text-dim)" }}
-          aria-hidden
-        />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate font-medium" style={{ color: "var(--text)" }}>
-            {summary.title}
-          </span>
-          <span className="block truncate text-token-xs" style={{ color: "var(--text-muted)" }}>
-            {summary.detail}
-          </span>
-        </span>
-        <span
-          className="shrink-0 text-token-xs opacity-0 transition-opacity group-hover:opacity-100"
-          style={{ color: "var(--text-muted)" }}
-        >
-          {open ? "收起 ▾" : "展开细节 ▸"}
-        </span>
+        {live ? (
+          <span
+            className="inline-block h-1.5 w-1.5 shrink-0 rounded-full animate-pulse"
+            style={{
+              background: "var(--accent)",
+              boxShadow: "0 0 0 3px var(--color-accent-bg)",
+            }}
+            aria-hidden
+          />
+        ) : null}
+        <span className="truncate">{summary.title}</span>
       </button>
       {open ? (
-        <div
-          className="space-y-2 border-t px-3 py-3"
-          style={{ borderColor: "var(--border-soft)" }}
-        >
-          {parts.map((part, index) => (
-            <ProcessPartDetail
-              key={index}
-              part={part}
+        <div className="space-y-2 pl-4 pt-2">
+          {buildProcessPartGroups(parts, { recovered }).map((group) => (
+            <ProcessPartGroupRow
+              key={group.key}
+              group={group}
               questionContext={questionContext}
             />
           ))}
@@ -789,15 +880,386 @@ function CollapsedPartProcessGroup({
   );
 }
 
+type ProcessPartGroupKind =
+  | "thinking"
+  | "approval"
+  | "read"
+  | "write"
+  | "exec"
+  | "search"
+  | "list"
+  | "browser"
+  | "verify"
+  | "tool";
+
+type ProcessPartGroupStatus = "running" | "error" | "done";
+
+interface ProcessPartGroup {
+  key: string;
+  kind: ProcessPartGroupKind;
+  parts: MessagePart[];
+  status: ProcessPartGroupStatus;
+  title: string;
+  recovered?: boolean;
+}
+
+function ProcessPartGroupRow({
+  group,
+  questionContext,
+}: {
+  group: ProcessPartGroup;
+  questionContext?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  // 同类工具调用聚合：record/exec/search/… 且 ≥2 条 → 走 list view，
+  // 避免列表里摆 N 张独立 ToolFrame。其它（thinking/approval/tool unknown、或单条）仍走单卡。
+  const aggregable =
+    group.parts.length >= 2 &&
+    AGGREGATABLE_GROUP_KINDS.has(group.kind) &&
+    group.parts.every((p) => p.kind === "tool");
+  return (
+    <div className="text-token-xs">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="inline-flex items-center gap-2 py-0.5 text-left"
+        aria-expanded={open}
+        title={open ? "收起细节" : "展开细节"}
+        style={{ color: "var(--text-muted)" }}
+      >
+        <ProcessPartGroupIcon kind={group.kind} status={group.status} />
+        <span>{group.title}</span>
+      </button>
+      {open ? (
+        <div className="space-y-1 pl-5 pt-2">
+          {aggregable ? (
+            <ToolAggregateList
+              parts={group.parts as Extract<MessagePart, { kind: "tool" }>[]}
+              questionContext={questionContext}
+              recovered={Boolean(group.recovered)}
+            />
+          ) : (
+            <div className="space-y-2">
+              {group.parts.map((part, index) => (
+                <ProcessPartDetail
+                  key={index}
+                  part={part}
+                  questionContext={questionContext}
+                  recovered={Boolean(group.recovered)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * 同类工具调用聚合列表。每行一个 tool part：
+ *   状态点 · 目标简要（path / command / query / …） · 展开按钮
+ * 点行末“详情”才嵌入完整 ToolRender（复用现有 sub-renderer，不重写 diff/高亮）。
+ * 这样默认状态下 list 很紧凑，只有用户主动展开某行才付出重渲染代价。
+ */
+function ToolAggregateList({
+  parts,
+  questionContext,
+  recovered,
+}: {
+  parts: Extract<MessagePart, { kind: "tool" }>[];
+  questionContext?: string;
+  recovered: boolean;
+}) {
+  return (
+    <div
+      className="divide-y rounded border"
+      style={{ borderColor: "var(--border-soft)" }}
+      data-testid="tool-aggregate-list"
+    >
+      {parts.map((part, index) => (
+        <ToolAggregateRow
+          key={part.toolCallId ?? index}
+          part={part}
+          questionContext={questionContext}
+          recovered={recovered}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ToolAggregateRow({
+  part,
+  questionContext,
+  recovered,
+}: {
+  part: Extract<MessagePart, { kind: "tool" }>;
+  questionContext?: string;
+  recovered: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const summary = summarizeToolTarget(part) || part.toolName;
+  const isError =
+    part.status === "error" || Boolean(part.isError);
+  const showAsRecovered = recovered && isError;
+  const dotColor =
+    part.status === "running"
+      ? "var(--text-muted)"
+      : showAsRecovered
+        ? "var(--text-dim)"
+        : isError
+          ? "var(--color-danger)"
+          : "var(--text-dim)";
+  return (
+    <div className="text-token-xs">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-2 py-1.5 text-left hover:bg-[color:var(--bg-hover)]"
+        aria-expanded={open}
+      >
+        <span
+          aria-hidden
+          className={
+            part.status === "running"
+              ? "inline-block h-1.5 w-1.5 shrink-0 rounded-full animate-pulse"
+              : "inline-block h-1.5 w-1.5 shrink-0 rounded-full"
+          }
+          style={{ background: dotColor }}
+        />
+        <span
+          className="min-w-0 flex-1 truncate font-mono"
+          style={{ color: "var(--fg)" }}
+          title={summary}
+        >
+          {summary}
+        </span>
+        {showAsRecovered ? (
+          <span
+            className="shrink-0 rounded-token-sm border px-1.5 py-0.5"
+            style={{
+              borderColor: "var(--border-soft)",
+              color: "var(--text-muted)",
+            }}
+          >
+            已处理
+          </span>
+        ) : null}
+        <span
+          className="shrink-0"
+          style={{ color: "var(--text-muted)" }}
+          aria-hidden
+        >
+          {open ? "⋄" : "›"}
+        </span>
+      </button>
+      {open ? (
+        <div
+          className="px-2 pb-2 pt-0"
+          style={{ background: "var(--bg-app)" }}
+        >
+          <ToolRender
+            tool={part}
+            questionContext={questionContext}
+            recovered={showAsRecovered}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const AGGREGATABLE_GROUP_KINDS = new Set<ProcessPartGroupKind>([
+  "read",
+  "write",
+  "exec",
+  "search",
+  "list",
+  "browser",
+  "verify",
+]);
+
+function ProcessPartGroupIcon({
+  kind,
+  status,
+}: {
+  kind: ProcessPartGroupKind;
+  status: ProcessPartGroupStatus;
+}) {
+  const color =
+    status === "running"
+      ? "var(--accent)"
+      : status === "error"
+        ? "var(--color-danger)"
+        : "var(--text-dim)";
+  const props = {
+    size: 13,
+    className: status === "running" ? "shrink-0 animate-pulse" : "shrink-0",
+    style: { color },
+    "aria-hidden": true,
+  };
+  if (kind === "thinking") return <Lightbulb {...props} />;
+  if (kind === "approval") return <ShieldCheck {...props} />;
+  if (kind === "exec") return <Play {...props} />;
+  if (kind === "browser" || kind === "tool") return <Bot {...props} />;
+  return <FileText {...props} />;
+}
+
+function buildProcessPartGroups(
+  parts: MessagePart[],
+  opts: { recovered?: boolean } = {}
+): ProcessPartGroup[] {
+  const groups: ProcessPartGroup[] = [];
+  const groupByKind = new Map<ProcessPartGroupKind, ProcessPartGroup>();
+  for (const part of parts) {
+    if (part.kind === "tool" && shouldHideTool(part)) continue;
+    const kind = processPartGroupKind(part);
+    let group = groupByKind.get(kind);
+    if (!group) {
+      group = {
+        key: `${kind}-${groups.length}`,
+        kind,
+        parts: [],
+        status: "done",
+        title: "",
+        recovered: opts.recovered,
+      };
+      groupByKind.set(kind, group);
+      groups.push(group);
+    }
+    group.parts.push(part);
+    group.status = mergeProcessPartStatus(
+      group.status,
+      processPartStatus(part, opts)
+    );
+  }
+  return groups.map((group) => ({
+    ...group,
+    title: processPartGroupTitle(group),
+  }));
+}
+
+function processPartGroupKind(part: MessagePart): ProcessPartGroupKind {
+  if (part.kind === "thinking") return "thinking";
+  if (part.kind === "approval") return "approval";
+  if (part.kind !== "tool") return "tool";
+  const name = normalizeProcessToolName(part.toolName);
+  if (READ_TOOL_NAMES.has(name)) return "read";
+  if (WRITE_TOOL_NAMES.has(name) || EDIT_TOOL_NAMES.has(name)) return "write";
+  if (EXEC_TOOL_NAMES.has(name)) return "exec";
+  if (SEARCH_TOOL_NAMES.has(name)) return "search";
+  if (LIST_TOOL_NAMES.has(name)) return "list";
+  if (name.includes("test") || name.includes("verify")) return "verify";
+  if (name.startsWith("browser_") || name.startsWith("browser:")) return "browser";
+  return "tool";
+}
+
+function processPartStatus(
+  part: MessagePart,
+  opts: { recovered?: boolean } = {}
+): ProcessPartGroupStatus {
+  if (part.kind === "tool") {
+    if (part.status === "running") return "running";
+    if (opts.recovered && (part.status === "error" || part.isError)) return "done";
+    if (part.status === "error" || part.isError) return "error";
+    return "done";
+  }
+  if (part.kind === "approval") {
+    if (part.status === "pending") return "running";
+    if (part.status === "denied") return "error";
+  }
+  return "done";
+}
+
+function isRecoveredToolPart(parts: MessagePart[], index: number): boolean {
+  const part = parts[index];
+  if (!part || part.kind !== "tool") return false;
+  if (part.status !== "error" && !part.isError) return false;
+  return hasLaterTextPart(parts, index + 1);
+}
+
+function hasLaterTextPart(parts: MessagePart[], start: number): boolean {
+  return parts
+    .slice(start)
+    .some((next) => next.kind === "text" && next.text.trim().length > 0);
+}
+
+function hasAnyTextPart(parts: MessagePart[]): boolean {
+  return parts.some((part) => part.kind === "text" && part.text.trim().length > 0);
+}
+
+function hasErroredProcessPart(parts: MessagePart[]): boolean {
+  return parts.some((part) => {
+    if (part.kind === "tool") return part.status === "error" || Boolean(part.isError);
+    if (part.kind === "approval") return part.status === "denied";
+    return false;
+  });
+}
+
+function mergeProcessPartStatus(
+  current: ProcessPartGroupStatus,
+  next: ProcessPartGroupStatus
+): ProcessPartGroupStatus {
+  if (current === "error" || next === "error") return "error";
+  if (current === "running" || next === "running") return "running";
+  return "done";
+}
+
+function processPartGroupTitle(group: ProcessPartGroup): string {
+  const count = group.parts.length;
+  const failedPrefix = group.status === "error" ? "执行失败：" : "";
+  const recoveredPrefix =
+    group.recovered && hasErroredProcessPart(group.parts) ? "已处理：" : "";
+  const prefix = recoveredPrefix || failedPrefix;
+  const active = group.status === "running";
+  if (group.kind === "thinking") return `${active ? "正在" : "已"}整理思路`;
+  if (group.kind === "approval") return `${prefix}已处理工具确认`;
+  if (group.kind === "read") return `${prefix}${active ? "正在读取" : "已读取"} ${count} 个文件`;
+  if (group.kind === "write") return `${prefix}${active ? "正在编辑" : "已编辑"} ${count} 个文件`;
+  if (group.kind === "exec") return `${prefix}${active ? "正在运行" : "已运行"} ${count} 条命令`;
+  if (group.kind === "search") return `${prefix}${active ? "正在查找" : "已查找"} ${count} 次`;
+  if (group.kind === "list") return `${prefix}${active ? "正在查看" : "已查看"} ${count} 个目录`;
+  if (group.kind === "browser") return `${prefix}${active ? "正在操作" : "已操作"}浏览器 ${count} 次`;
+  if (group.kind === "verify") return `${prefix}${active ? "正在验证" : "已验证"} ${count} 步`;
+  return `${prefix}${active ? "正在调用" : "已调用"} ${count} 个工具`;
+}
+
+const READ_TOOL_NAMES = new Set(["read", "read_file"]);
+const WRITE_TOOL_NAMES = new Set(["write", "write_file", "create_file"]);
+const EDIT_TOOL_NAMES = new Set(["edit", "edit_file", "str_replace"]);
+const EXEC_TOOL_NAMES = new Set(["bash", "shell", "exec"]);
+const SEARCH_TOOL_NAMES = new Set([
+  "grep",
+  "search",
+  "find",
+  "glob",
+  "web_search",
+  "browser_search",
+]);
+const LIST_TOOL_NAMES = new Set(["ls", "list", "list_directory"]);
+
+function normalizeProcessToolName(name: string): string {
+  return (name || "").toLowerCase().replace(/[:\s]+/g, "_");
+}
+
 function ProcessPartDetail({
   part,
   questionContext,
+  recovered = false,
 }: {
   part: MessagePart;
   questionContext?: string;
+  recovered?: boolean;
 }) {
   if (part.kind === "tool") {
-    return <ToolRender tool={part} questionContext={questionContext} />;
+    return (
+      <ToolRender
+        tool={part}
+        questionContext={questionContext}
+        recovered={recovered && (part.status === "error" || Boolean(part.isError))}
+      />
+    );
   }
   if (part.kind === "thinking") {
     return (
@@ -832,7 +1294,20 @@ function isProcessPart(part: MessagePart): boolean {
   return part.kind === "tool" || part.kind === "thinking" || part.kind === "approval";
 }
 
-function summarizeProcessParts(parts: MessagePart[]): {
+function hasRunningProcessPart(parts: MessagePart[]): boolean {
+  return parts.some((part) => {
+    if (part.kind === "tool") return part.status === "running";
+    if (part.kind === "approval" || part.kind === "clarification") {
+      return part.status === "pending";
+    }
+    return false;
+  });
+}
+
+function summarizeProcessParts(
+  parts: MessagePart[],
+  opts: { recovered?: boolean } = {}
+): {
   title: string;
   detail: string;
 } {
@@ -840,16 +1315,24 @@ function summarizeProcessParts(parts: MessagePart[]): {
   let thinking = 0;
   let approvals = 0;
   const toolLabels: string[] = [];
+  const errorLabels: string[] = [];
   for (const part of parts) {
     if (part.kind === "tool") {
       if (shouldHideTool(part)) continue;
       const label = narrateTool(part).primary;
       if (label) toolLabels.push(label);
-      if (part.status === "error" || part.isError) errorCount += 1;
+      if (part.status === "error" || part.isError) {
+        errorCount += 1;
+        errorLabels.push(label || `调用 ${part.toolName}`);
+      }
     } else if (part.kind === "thinking") {
       thinking += 1;
     } else if (part.kind === "approval") {
       approvals += 1;
+      if (part.status === "denied") {
+        errorCount += 1;
+        errorLabels.push(`工具确认被拒绝：${part.toolName}`);
+      }
     }
   }
   const dedupedLabels = dedupeToolLabels(toolLabels);
@@ -858,14 +1341,60 @@ function summarizeProcessParts(parts: MessagePart[]): {
     thinking > 0 ? `思考×${thinking}` : "",
     approvals > 0 ? `确认×${approvals}` : "",
   ].filter(Boolean);
-  const stepCount = Math.max(1, toolLabels.length + thinking + approvals);
+  const issueTitle = summarizeProcessIssue(errorLabels, errorCount, opts);
+  const actionTitle = summarizeProcessAction(toolSummary, fallback);
   return {
-    title:
-      errorCount > 0
-        ? `已处理 ${stepCount} 个步骤，期间遇到 ${errorCount} 个问题并已恢复`
-        : `已处理 ${stepCount} 个步骤`,
+    title: issueTitle ?? actionTitle ?? "已处理",
     detail: toolSummary.join(" / ") || fallback.join(" / ") || "过程记录",
   };
+}
+
+function summarizeProcessAction(
+  toolSummary: string[],
+  fallback: string[]
+): string | null {
+  if (toolSummary.length > 0) {
+    const text =
+      toolSummary.length > 1
+        ? `${toolSummary[0]} 等 ${toolSummary.length} 个步骤`
+        : toolSummary[0];
+    return text.length > 44 ? `${text.slice(0, 41)}...` : text;
+  }
+  if (fallback.length === 0) return null;
+  if (fallback.some((item) => item.startsWith("确认"))) return "已处理工具确认";
+  if (fallback.some((item) => item.startsWith("思考"))) return "已整理思路";
+  return fallback[0] ?? null;
+}
+
+function summarizeProcessIssue(
+  labels: string[],
+  count: number,
+  opts: { recovered?: boolean } = {}
+): string | null {
+  if (count <= 0) return null;
+  const rawLabel = dedupeToolLabels(labels)[0]?.replace(/^执行失败：/, "").trim();
+  // label 里可能包含完整命令（例如 grep -n "..." file1 file2 ...），
+  // 拼到 issue title 上后会被后面 truncate 成一条面目全非的被截断字符串。
+  // 这里先限制为 24 字，超过则取冲决 “” 后复用裁减尾部。
+
+  const label = rawLabel
+    ? rawLabel.length > 24
+      ? `${rawLabel.slice(0, 23)}…`
+      : rawLabel
+    : rawLabel;
+  const prefix = opts.recovered ? "已处理：" : "执行失败：";
+  const suffix = opts.recovered ? " 曾失败" : "";
+  if (!label) {
+    if (opts.recovered) {
+      return count > 1 ? `${prefix}${count} 个步骤${suffix}` : `${prefix}1 个步骤${suffix}`;
+    }
+    return count > 1 ? `${prefix}${count} 个步骤` : prefix.slice(0, -1);
+  }
+  const text =
+    count > 1
+      ? `${prefix}${label} 等 ${count} 个步骤${suffix}`
+      : `${prefix}${label}${suffix}`;
+  return text.length > 44 ? `${text.slice(0, 41)}...` : text;
 }
 
 function extractPlainText(parts: MessagePart[]): string {
@@ -1029,6 +1558,8 @@ function WorkflowRunCard({
   } | null>(null);
   const running = part.status === "running" || part.status === "pending";
   const failed = part.status === "failed" || part.status === "aborted";
+  const warned = part.status === "completed_with_warnings";
+  const warnings = part.warnings ?? [];
   const duration =
     part.endedAt && part.createdAt && part.endedAt > part.createdAt
       ? Math.max(1, Math.round((part.endedAt - part.createdAt) / 1000))
@@ -1114,6 +1645,25 @@ function WorkflowRunCard({
       {part.rationale && (
         <div className="text-xs" style={{ color: "var(--text-muted)" }}>
           {part.rationale}
+        </div>
+      )}
+      {warned && warnings.length > 0 && (
+        <div
+          className="rounded-md border px-3 py-2 text-xs"
+          style={{
+            borderColor: "var(--warning, #b8860b)",
+            background: "var(--bg-subtle)",
+            color: "var(--warning, #b8860b)",
+          }}
+        >
+          <div className="mb-1 font-semibold">
+            Completed with warnings — substantively incomplete
+          </div>
+          <ul className="ml-4 list-disc space-y-0.5">
+            {warnings.map((warning, index) => (
+              <li key={index}>{warning}</li>
+            ))}
+          </ul>
         </div>
       )}
       {part.manifest && (
@@ -1768,21 +2318,20 @@ function ThinkingBlock({
       : null;
   return (
     <details
-      className="rounded-md text-xs"
+      className="text-xs"
       style={{
-        background: "var(--bg-panel-2)",
         color: "var(--text-muted)",
       }}
     >
       <summary
-        className="cursor-pointer px-3 py-2 select-none flex items-center gap-1.5"
+        className="cursor-pointer select-none inline-flex items-center gap-1.5 py-0.5"
         style={{ color: "var(--text-muted)" }}
       >
         <Lightbulb size={12} />
-        <span>Thinking</span>
+        <span>思考</span>
         {duration !== null && (
           <span
-            className="ml-auto tabular-nums"
+            className="tabular-nums"
             style={{ fontSize: 11, color: "var(--fg-faint)" }}
           >
             {duration}s
@@ -1790,7 +2339,7 @@ function ThinkingBlock({
         )}
       </summary>
       <div
-        className="px-3 pb-2 thinking-md"
+        className="pl-4 pt-1 thinking-md"
         style={{ color: "var(--text-dim)", fontSize: 12 }}
       >
         <Markdown text={text} size="small" />
