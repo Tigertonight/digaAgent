@@ -28,16 +28,20 @@ vi.mock("./meta/store", () => ({
   batchReadMeta: vi.fn(async () => new Map()),
 }));
 
-import { collectSessionDescendants } from "./sessions";
+import {
+  __clearSessionListCacheForTests,
+  collectSessionDescendants,
+} from "./sessions";
 
 afterEach(() => {
+  __clearSessionListCacheForTests();
   listAll.mockReset();
 });
 
 function makeSession(
   id: string,
   path: string,
-  parentSessionPath?: string
+  parentSessionPath?: string,
 ): {
   id: string;
   path: string;

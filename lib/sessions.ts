@@ -35,6 +35,37 @@ export type SessionInfoWithStatus = SessionInfo & {
   meta?: SessionMeta;
 };
 
+const LIST_ALL_CACHE_MS = 200;
+let listAllCache: {
+  at: number;
+  value?: SessionInfo[];
+  inflight?: Promise<SessionInfo[]>;
+} | null = null;
+
+async function listAllSdkSessions(): Promise<SessionInfo[]> {
+  const now = Date.now();
+  if (listAllCache?.value && now - listAllCache.at < LIST_ALL_CACHE_MS) {
+    return listAllCache.value;
+  }
+  if (listAllCache?.inflight) return listAllCache.inflight;
+  const inflight = SessionManager.listAll()
+    .then((value) => {
+      listAllCache = { at: Date.now(), value };
+      return value;
+    })
+    .catch((e) => {
+      if (listAllCache?.inflight === inflight) listAllCache = null;
+      throw e;
+    });
+  listAllCache = { at: now, inflight };
+  return inflight;
+}
+
+export function __clearSessionListCacheForTests(): void {
+  if (process.env.NODE_ENV !== "test") return;
+  listAllCache = null;
+}
+
 /**
  * 列出所有 session，按 "pinned → isRunning → modified 倒序" 排序。
  *
@@ -46,19 +77,20 @@ export async function listAllSessions(): Promise<SessionInfoWithStatus[]> {
   // 拉进来 —— 这个文件本身有 "server-only" 守门,但 import 顺序还是显式更清楚。
   const { listAgentSummaries } = await import("./agent-registry");
   const summaries = listAgentSummaries().filter(
-    (agent) => !agent.hidden && agent.sessionFile
+    (agent) => !agent.hidden && agent.sessionFile,
   );
   const runtimeByPath = new Map(
-    summaries.map((agent) => [agent.sessionFile!, agent])
+    summaries.map((agent) => [agent.sessionFile!, agent]),
   );
-  const list = await SessionManager.listAll();
+  const list = await listAllSdkSessions();
   const onDiskPaths = new Set(list.map((s) => s.path));
   const metas = await batchReadMeta(list.map((s) => s.id));
   const enriched: SessionInfoWithStatus[] = list.map((s) => {
     const runtime = runtimeByPath.get(s.path);
     return {
       ...s,
-      isRunning: runtime?.runtimeState === "streaming" || runtime?.isStreaming === true,
+      isRunning:
+        runtime?.runtimeState === "streaming" || runtime?.isStreaming === true,
       runtimeState: runtime?.runtimeState,
       waitingApprovalCount: runtime?.waitingApprovalCount,
       waitingClarificationCount: runtime?.waitingClarificationCount,
@@ -77,7 +109,7 @@ export async function listAllSessions(): Promise<SessionInfoWithStatus[]> {
     summaries
       .filter((s) => !onDiskPaths.has(s.sessionFile!))
       .map((s) => s.sessionId)
-      .filter((sid): sid is string => Boolean(sid))
+      .filter((sid): sid is string => Boolean(sid)),
   );
   for (const summary of summaries) {
     if (!summary.sessionFile) continue;
@@ -120,7 +152,7 @@ export async function listAllSessions(): Promise<SessionInfoWithStatus[]> {
 
 /** 通过 session id 找到对应文件路径 */
 export async function findSessionPathById(id: string): Promise<string | null> {
-  const all = await SessionManager.listAll();
+  const all = await listAllSdkSessions();
   const hit = all.find((s) => s.id === id);
   return hit?.path ?? null;
 }
@@ -136,10 +168,10 @@ export async function findSessionPathById(id: string): Promise<string | null> {
  */
 export async function resolveTrustedSessionPath(
   sessionPath: string,
-  expectedId: string
+  expectedId: string,
 ): Promise<string | null> {
   if (!sessionPath || !expectedId) return null;
-  const all = await SessionManager.listAll();
+  const all = await listAllSdkSessions();
   const hit = all.find((s) => s.id === expectedId && s.path === sessionPath);
   return hit?.path ?? null;
 }
@@ -152,9 +184,9 @@ export async function resolveTrustedSessionPath(
  * child）必须一起清理，否则会变成游离的孤儿文件，UI 里又找不到入口。
  */
 export async function collectSessionDescendants(
-  rootId: string
+  rootId: string,
 ): Promise<Array<{ id: string; path: string }> | null> {
-  const all = await SessionManager.listAll();
+  const all = await listAllSdkSessions();
   const root = all.find((s) => s.id === rootId);
   if (!root) return null;
 
@@ -202,7 +234,7 @@ export async function getSessionDetail(id: string): Promise<{
 
 /** 拿当前 leaf 路径上的对话上下文（喂给 LLM 的那一份） */
 export async function getSessionContext(
-  id: string
+  id: string,
 ): Promise<SessionContext | null> {
   const path = await findSessionPathById(id);
   if (!path) return null;
@@ -213,7 +245,7 @@ export async function getSessionContext(
 /** 拿当前 leaf 路径尾部的轻量上下文，给移动端快速切换历史会话使用。 */
 export async function getSessionContextTail(
   id: string,
-  limit: number
+  limit: number,
 ): Promise<(SessionContext & { truncatedBefore?: number }) | null> {
   const path = await findSessionPathById(id);
   if (!path) return null;
@@ -223,13 +255,14 @@ export async function getSessionContextTail(
 export async function getSessionContextTailByPath(
   sessionPath: string,
   expectedId: string,
-  limit: number
+  limit: number,
 ): Promise<
-  (SessionContext & {
-    truncatedBefore?: number;
-    beforeCursor?: number | null;
-    hasMoreBefore?: boolean;
-  }) | null
+  | (SessionContext & {
+      truncatedBefore?: number;
+      beforeCursor?: number | null;
+      hasMoreBefore?: boolean;
+    })
+  | null
 > {
   // S4: 先用可信清单校验 path 归属，避免打开任意文件。
   const trusted = await resolveTrustedSessionPath(sessionPath, expectedId);
@@ -249,13 +282,14 @@ export async function getSessionContextPageByPath(
   sessionPath: string,
   expectedId: string,
   beforeCursor: number,
-  limit: number
+  limit: number,
 ): Promise<
-  (SessionContext & {
-    beforeCursor?: number | null;
-    hasMoreBefore?: boolean;
-    truncatedBefore?: number;
-  }) | null
+  | (SessionContext & {
+      beforeCursor?: number | null;
+      hasMoreBefore?: boolean;
+      truncatedBefore?: number;
+    })
+  | null
 > {
   // S4: 先用可信清单校验 path 归属，避免打开任意文件。
   const trusted = await resolveTrustedSessionPath(sessionPath, expectedId);
@@ -266,7 +300,7 @@ export async function getSessionContextPageByPath(
   const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
   const safeEnd = Math.max(
     0,
-    Math.min(branch.length, Math.floor(beforeCursor))
+    Math.min(branch.length, Math.floor(beforeCursor)),
   );
   return buildSessionContextSlice(branch, sm.getLeafId(), {
     start: Math.max(0, safeEnd - safeLimit),
@@ -277,7 +311,7 @@ export async function getSessionContextPageByPath(
 function buildSessionContextSlice(
   branch: SessionEntry[],
   leafId: string | null,
-  range: { start: number; end: number }
+  range: { start: number; end: number },
 ): SessionContext & {
   truncatedBefore?: number;
   beforeCursor?: number | null;
@@ -325,7 +359,7 @@ function buildSessionContextSlice(
  * 不需要 AgentSession 实例，可在选中 session 后立即调用。
  */
 export async function getForkableUserMessages(
-  id: string
+  id: string,
 ): Promise<Array<{ entryId: string; text: string }> | null> {
   const path = await findSessionPathById(id);
   if (!path) return null;

@@ -16,10 +16,11 @@ import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-  META_KNOWN_FIELDS,
-  type SessionMeta,
-} from "./types";
+import { META_KNOWN_FIELDS, type SessionMeta } from "./types";
+
+const META_LOCK_STALE_MS = 30_000;
+const META_LOCK_TIMEOUT_MS = 5_000;
+const META_LOCK_POLL_MS = 25;
 
 /**
  * 默认根目录：~/.diga-agent/
@@ -58,6 +59,10 @@ function metaFilePath(sessionId: string): string {
   return path.join(getRoot(), "sessions", `${sessionId}.meta.json`);
 }
 
+function metaLockPath(sessionId: string): string {
+  return `${metaFilePath(sessionId)}.lock`;
+}
+
 async function ensureSessionsDir(): Promise<void> {
   await fs.mkdir(path.join(getRoot(), "sessions"), { recursive: true });
 }
@@ -74,6 +79,46 @@ async function fsyncDir(dir: string): Promise<void> {
     }
   } finally {
     await handle?.close().catch(() => {});
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function acquireMetaFileLock(
+  sessionId: string,
+): Promise<() => Promise<void>> {
+  await ensureSessionsDir();
+  const lockDir = metaLockPath(sessionId);
+  const started = Date.now();
+
+  while (true) {
+    try {
+      await fs.mkdir(lockDir);
+      return async () => {
+        await fs.rm(lockDir, { recursive: true, force: true });
+      };
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") throw e;
+    }
+
+    try {
+      const st = await fs.stat(lockDir);
+      if (Date.now() - st.mtimeMs > META_LOCK_STALE_MS) {
+        await fs.rm(lockDir, { recursive: true, force: true });
+        continue;
+      }
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+      continue;
+    }
+
+    if (Date.now() - started > META_LOCK_TIMEOUT_MS) {
+      throw new Error(`timed out acquiring meta lock for session ${sessionId}`);
+    }
+    await sleep(META_LOCK_POLL_MS);
   }
 }
 
@@ -155,7 +200,7 @@ export async function writeMeta(meta: SessionMeta): Promise<void> {
  * 性能：100 session 大约 50ms（macOS APFS）；500 session 才需要考虑分块。
  */
 export async function batchReadMeta(
-  ids: readonly string[]
+  ids: readonly string[],
 ): Promise<Map<string, SessionMeta>> {
   const out = new Map<string, SessionMeta>();
   if (ids.length === 0) return out;
@@ -173,8 +218,9 @@ export async function batchReadMeta(
  * 覆盖前写者、静默丢字段。用 per-id 的 Promise chain 把同一 session 的更新串起来：
  * 同一 id 的 updateMeta 严格排队执行，read 一定看到上一个 write 的结果。
  *
- * 注意：这是单进程内的互斥。多进程并发写同一 meta 仍需文件锁/乐观锁——但当前
- * 架构下所有 meta 写入都经过这一个 server 进程，单进程锁已覆盖真实场景。
+ * 文件锁：桌面多窗口、开发热重载或将来多 worker 场景下，另一个进程也可能同时
+ * read-merge-write 同一 meta。updateMeta 内部会再拿 `<id>.meta.json.lock` 目录锁，
+ * 让跨进程写入也保持同一互斥语义；过期锁会自动清理。
  */
 const metaUpdateChains = new Map<string, Promise<unknown>>();
 
@@ -186,17 +232,22 @@ const metaUpdateChains = new Map<string, Promise<unknown>>();
  */
 export async function updateMeta(
   sessionId: string,
-  patch: Partial<SessionMeta>
+  patch: Partial<SessionMeta>,
 ): Promise<SessionMeta> {
   // 排在上一个同 id 操作之后；用 .catch(()=>{}) 让前一个失败不阻断后续排队者。
   const prev = (metaUpdateChains.get(sessionId) ?? Promise.resolve()).catch(
-    () => undefined
+    () => undefined,
   );
   const run = prev.then(async () => {
-    const existing = (await readMeta(sessionId)) ?? { id: sessionId };
-    const merged: SessionMeta = { ...existing, ...patch, id: sessionId };
-    await writeMeta(merged);
-    return merged;
+    const release = await acquireMetaFileLock(sessionId);
+    try {
+      const existing = (await readMeta(sessionId)) ?? { id: sessionId };
+      const merged: SessionMeta = { ...existing, ...patch, id: sessionId };
+      await writeMeta(merged);
+      return merged;
+    } finally {
+      await release();
+    }
   });
   // 用 run 本身作为链尾占位；结算后若链尾仍是自己（无后继排队）则清理 map，防泄漏。
   metaUpdateChains.set(sessionId, run);

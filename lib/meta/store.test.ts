@@ -43,13 +43,13 @@ describe("readMeta", () => {
     await fs.writeFile(
       path.join(tmpRoot, "sessions", "bad.meta.json"),
       "{not valid json",
-      "utf8"
+      "utf8",
     );
     const m = await readMeta("bad");
     expect(m).toBeNull();
     expect(warn).toHaveBeenCalledWith(
       "[meta] failed to parse session meta",
-      expect.objectContaining({ sessionId: "bad" })
+      expect.objectContaining({ sessionId: "bad" }),
     );
     warn.mockRestore();
   });
@@ -64,7 +64,7 @@ describe("readMeta", () => {
         evilField: "should be dropped",
         __proto__: { polluted: true },
       }),
-      "utf8"
+      "utf8",
     );
     const m = await readMeta("abc");
     expect(m).not.toBeNull();
@@ -140,7 +140,11 @@ describe("updateMeta (S1: atomic partial merge under per-id lock)", () => {
     await writeMeta({ id: "u1", title: "orig", pinned: false });
     const merged = await updateMeta("u1", { pinned: true });
     expect(merged).toEqual({ id: "u1", title: "orig", pinned: true });
-    expect(await readMeta("u1")).toEqual({ id: "u1", title: "orig", pinned: true });
+    expect(await readMeta("u1")).toEqual({
+      id: "u1",
+      title: "orig",
+      pinned: true,
+    });
   });
 
   it("creates meta when none exists", async () => {
@@ -165,13 +169,26 @@ describe("updateMeta (S1: atomic partial merge under per-id lock)", () => {
     await writeMeta({ id: "many", title: "base" });
     await Promise.all(
       Array.from({ length: 20 }, (_, i) =>
-        updateMeta("many", { lastSeenAt: 1_700_000_000_000 + i })
-      )
+        updateMeta("many", { lastSeenAt: 1_700_000_000_000 + i }),
+      ),
     );
     const got = await readMeta("many");
     // title 始终保留；lastSeenAt 是某次合法写入（不丢、不损坏）。
     expect(got?.title).toBe("base");
     expect(typeof got?.lastSeenAt).toBe("number");
+  });
+
+  it("clears a stale file lock before updating", async () => {
+    await fs.mkdir(path.join(tmpRoot, "sessions"), { recursive: true });
+    const lockDir = path.join(tmpRoot, "sessions", "stale.meta.json.lock");
+    await fs.mkdir(lockDir);
+    const old = new Date(Date.now() - 60_000);
+    await fs.utimes(lockDir, old, old);
+
+    const merged = await updateMeta("stale", { title: "recovered" });
+
+    expect(merged).toEqual({ id: "stale", title: "recovered" });
+    await expect(fs.stat(lockDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 
