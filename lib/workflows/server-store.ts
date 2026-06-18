@@ -318,6 +318,7 @@ export function finishWorkflowRun(
     traceEvents?: WorkflowTraceEvent[];
     returnValue?: unknown;
     error?: string;
+    warnings?: string[];
   }
 ): void {
   loadPersistedRuns();
@@ -333,6 +334,7 @@ export function finishWorkflowRun(
     traceEvents: patch.traceEvents ?? run.traceEvents ?? [],
     returnValue: patch.returnValue,
     error: patch.error,
+    warnings: patch.warnings,
   };
   store.runs.set(workflowId, next);
   persistRun(next);

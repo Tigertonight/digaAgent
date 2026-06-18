@@ -3,6 +3,7 @@ import { spawn as spawnProcess } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import type {
@@ -12,6 +13,7 @@ import type {
   WorkflowCheckpoint,
   WorkflowCapability,
   WorkflowManifest,
+  WorkflowRunStatus,
   WorkflowScriptLog,
   WorkflowScriptResult,
   WorkflowCreateWorktreeInput,
@@ -26,6 +28,7 @@ import type {
   WorkflowFetchUrlResult,
   WorkflowNetworkPolicy,
   WorkflowMcpToolDescriptor,
+  WorkflowSearchToolsInput,
   WorkflowCallToolInput,
   WorkflowCallToolResult,
   WorkflowAgentInput,
@@ -110,6 +113,7 @@ type WorkflowSdk = {
   askUser(input: WorkflowAskUserInput): Promise<WorkflowAskUserResult>;
   fetchUrl(input: WorkflowFetchUrlInput): Promise<WorkflowFetchUrlResult>;
   listTools(serverId?: string): Promise<WorkflowMcpToolDescriptor[]>;
+  searchTools(input?: WorkflowSearchToolsInput): Promise<WorkflowMcpToolDescriptor[]>;
   callTool(input: WorkflowCallToolInput): Promise<WorkflowCallToolResult>;
   agent<T = unknown>(
     prompt: string,
@@ -117,6 +121,7 @@ type WorkflowSdk = {
   ): Promise<WorkflowAgentResult<T>>;
   spawnAgent(input: WorkflowSpawnAgentInput): Promise<unknown>;
   parallel<T>(items: Array<Promise<T> | (() => Promise<T> | T)>): Promise<T[]>;
+  requireSuccess<T>(results: T[], options?: { minSuccess?: number; label?: string }): T[];
   stage<T>(title: string, fn: () => Promise<T> | T): Promise<T>;
   sleep(ms: number): Promise<void>;
 };
@@ -195,7 +200,94 @@ function normalizeManifest(input: RunWorkflowScriptInput): WorkflowManifest {
       Math.min(input.timeoutMs ?? DEFAULT_SCRIPT_TIMEOUT_MS, DEFAULT_SCRIPT_TIMEOUT_MS)
     ),
     runtime: "process",
+    successCriteria: normalizeSuccessCriteria(input.successCriteria),
   };
+}
+
+function normalizeSuccessCriteria(
+  raw: WorkflowManifest["successCriteria"]
+): WorkflowManifest["successCriteria"] {
+  if (!raw || typeof raw !== "object") return undefined;
+  const out: NonNullable<WorkflowManifest["successCriteria"]> = {};
+  if (Array.isArray(raw.requiredArtifacts)) {
+    out.requiredArtifacts = raw.requiredArtifacts
+      .map((name) => cleanText(name, 200))
+      .filter(Boolean);
+  }
+  if (typeof raw.minNonEmptyArtifacts === "number" && Number.isFinite(raw.minNonEmptyArtifacts)) {
+    out.minNonEmptyArtifacts = Math.max(0, Math.floor(raw.minNonEmptyArtifacts));
+  }
+  if (typeof raw.minReportChars === "number" && Number.isFinite(raw.minReportChars)) {
+    out.minReportChars = Math.max(0, Math.floor(raw.minReportChars));
+  }
+  if (typeof raw.reportArtifact === "string") {
+    out.reportArtifact = cleanText(raw.reportArtifact, 200) || undefined;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * Returns a stringified, trimmed form of an artifact value for emptiness/length
+ * checks. Objects are JSON-stringified; null/undefined become "".
+ */
+function artifactStringValue(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value.trim();
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+/**
+ * End-state quality gate (Claude "end-state evaluation"): given the criteria and
+ * the produced artifacts, return human-readable warnings for anything unmet.
+ * Empty array means the run substantively succeeded.
+ */
+function evaluateSuccessCriteria(
+  criteria: WorkflowManifest["successCriteria"],
+  artifacts: WorkflowArtifact[]
+): string[] {
+  if (!criteria) return [];
+  const warnings: string[] = [];
+  const byName = new Map<string, WorkflowArtifact>();
+  for (const artifact of artifacts) byName.set(artifact.name, artifact);
+
+  for (const name of criteria.requiredArtifacts ?? []) {
+    const artifact = byName.get(name);
+    if (!artifact) {
+      warnings.push(`required artifact "${name}" is missing`);
+    } else if (artifactStringValue(artifact.value).length === 0) {
+      warnings.push(`required artifact "${name}" is empty`);
+    }
+  }
+
+  if (typeof criteria.minNonEmptyArtifacts === "number") {
+    const nonEmpty = artifacts.filter(
+      (a) => artifactStringValue(a.value).length > 0
+    ).length;
+    if (nonEmpty < criteria.minNonEmptyArtifacts) {
+      warnings.push(
+        `only ${nonEmpty} non-empty artifact(s); expected at least ${criteria.minNonEmptyArtifacts}`
+      );
+    }
+  }
+
+  if (typeof criteria.minReportChars === "number") {
+    const target = criteria.reportArtifact
+      ? byName.get(criteria.reportArtifact)
+      : artifacts[artifacts.length - 1];
+    const len = artifactStringValue(target?.value).length;
+    if (len < criteria.minReportChars) {
+      const label = criteria.reportArtifact ?? target?.name ?? "report";
+      warnings.push(
+        `report artifact "${label}" is ${len} chars; expected at least ${criteria.minReportChars}`
+      );
+    }
+  }
+
+  return warnings;
 }
 
 async function approveManifestCapabilities(
@@ -337,6 +429,214 @@ function safeAllowedTools(
     );
   }
   return cleaned;
+}
+
+/**
+ * Map an agent tool name to the workflow capability it implies, or null if the
+ * tool needs no extra capability beyond the safe default.
+ */
+function capabilityForAgentTool(tool: string): WorkflowCapability | null {
+  if (WRITE_WORKFLOW_AGENT_TOOLS.has(tool)) return "write_files";
+  if (SHELL_WORKFLOW_AGENT_TOOLS.has(tool)) return "shell";
+  if (BROWSER_WORKFLOW_AGENT_TOOLS.has(tool)) return "browser";
+  // SAFE_WORKFLOW_AGENT_TOOLS only need read_files, which is in DEFAULT.
+  return null;
+}
+
+/**
+ * Statically scan a workflow script for agent tool names and SDK calls that
+ * imply a capability, so we can request approval BEFORE the workflow starts
+ * spawning agents — instead of failing each child agent at runtime with
+ * "workflow capability required: shell".
+ *
+ * This is a best-effort heuristic (the script is dynamic JS), so the runtime
+ * safeAllowedTools check still backstops anything assembled at runtime. But for
+ * the overwhelmingly common case — literal allowedTools arrays — it lets the
+ * manifest auto-declare the right capabilities and route through one approval.
+ */
+function inferCapabilitiesFromScript(script: string): WorkflowCapability[] {
+  const inferred = new Set<WorkflowCapability>();
+  // Tool names referenced as string literals anywhere in the script.
+  const tokens = script.match(/["'`]([a-z_]+)["'`]/g) ?? [];
+  for (const raw of tokens) {
+    const tool = raw.slice(1, -1);
+    const capability = capabilityForAgentTool(tool);
+    if (capability) inferred.add(capability);
+  }
+  // SDK calls that intrinsically need a capability regardless of allowedTools.
+  if (/workflow\s*\.\s*(createWorktree|diffWorktree|mergeWorktree|removeWorktree)\s*\(/.test(script)) {
+    inferred.add("worktree");
+  }
+  if (/workflow\s*\.\s*fetchUrl\s*\(/.test(script)) inferred.add("network");
+  if (/workflow\s*\.\s*askUser\s*\(/.test(script)) inferred.add("ask_user");
+  if (/workflow\s*\.\s*(callTool|listTools|searchTools)\s*\(/.test(script)) inferred.add("mcp");
+  return Array.from(inferred);
+}
+
+export interface WorkflowScriptIssue {
+  code: string;
+  message: string;
+  fix: string;
+}
+
+/**
+ * Filter + detail-trim MCP tool descriptors for progressive disclosure. Shared
+ * by the in-process and worker SDKs so search semantics stay identical.
+ */
+function filterMcpToolsForSearch(
+  tools: WorkflowMcpToolDescriptor[],
+  input: WorkflowSearchToolsInput | undefined
+): WorkflowMcpToolDescriptor[] {
+  const query = (input?.query ?? "").trim().toLowerCase();
+  const detail = input?.detailLevel ?? "summary";
+  const limit = Math.max(1, Math.min(Math.floor(input?.limit ?? 20), 100));
+  const matched = tools.filter((tool) => {
+    if (!query) return true;
+    const haystack = `${tool.name} ${tool.description ?? ""}`.toLowerCase();
+    return haystack.includes(query);
+  });
+  return matched.slice(0, limit).map((tool) => {
+    if (detail === "name") {
+      return { serverId: tool.serverId, name: tool.name };
+    }
+    if (detail === "summary") {
+      return {
+        serverId: tool.serverId,
+        name: tool.name,
+        description: tool.description,
+      };
+    }
+    return tool; // "full" includes inputSchema
+  });
+}
+
+/**
+ * Static "validate-then-run" pre-flight on a workflow harness, run BEFORE the
+ * worker executes it. The goal is to fail fast with structured, actionable
+ * guidance the model can act on (Claude 4 is a strong self-debugger when given a
+ * clear reason) instead of producing an opaque runtime crash deep in a run.
+ *
+ * Heuristic, not a sandbox: the vm worker is still the real security boundary.
+ * We only flag patterns that are almost always mistakes in this environment.
+ */
+export function validateWorkflowScript(
+  script: string,
+  options?: { maxChars?: number }
+): WorkflowScriptIssue[] {
+  const issues: WorkflowScriptIssue[] = [];
+  const text = script ?? "";
+
+  if (!text.trim()) {
+    issues.push({
+      code: "empty_script",
+      message: "The workflow script is empty.",
+      fix: "Provide an async harness body, or pass skillRef to run a saved skill.",
+    });
+    return issues;
+  }
+
+  const maxChars = options?.maxChars ?? MAX_SCRIPT_CHARS;
+  if (text.length > maxChars) {
+    issues.push({
+      code: "too_long",
+      message: `Script is ${text.length} chars, over the ${maxChars} limit.`,
+      fix: "Split into a saved skill/template and reuse via skillRef/templateId, or move large prompts/data into spawnAgent calls instead of inlining them.",
+    });
+  } else if (text.length > maxChars * 0.85) {
+    issues.push({
+      code: "near_length_limit",
+      message: `Script is ${text.length} chars, close to the ${maxChars} limit and at risk of truncation.`,
+      fix: "Shorten the harness: reuse a saved skill/template, factor repeated logic, and keep large content inside spawnAgent prompts rather than the harness body.",
+    });
+  }
+
+  // Forbidden host APIs. The worker has no module system / fs / network, so these
+  // are guaranteed runtime failures; flag them early with the right alternative.
+  const forbidden: Array<{ re: RegExp; name: string; fix: string }> = [
+    { re: /\brequire\s*\(/, name: "require()", fix: "Modules are unavailable. Use the workflow SDK; do external work via workflow.spawnAgent." },
+    { re: /\bimport\s+[^;]*from\b|\bimport\s*\(/, name: "import", fix: "Modules are unavailable. Use the workflow SDK only." },
+    { re: /\bprocess\s*\./, name: "process", fix: "process is unavailable in the workflow sandbox. Remove it." },
+    { re: /\b(require\s*\(\s*["']fs["']\)|\bfs\s*\.\s*(readFile|writeFile|readdir|mkdir))/, name: "fs", fix: "Filesystem APIs are unavailable. Have a spawnAgent write files via its tools, then read artifacts." },
+    { re: /\bfetch\s*\(/, name: "fetch()", fix: "Global fetch is unavailable. Request the network capability and call workflow.fetchUrl instead." },
+    { re: /\beval\s*\(/, name: "eval()", fix: "eval is forbidden. Express logic directly in the harness." },
+    { re: /\bnew\s+Function\s*\(/, name: "new Function()", fix: "Dynamic code generation is forbidden. Express logic directly." },
+    { re: /\bchild_process\b/, name: "child_process", fix: "Spawning processes is forbidden. Request the shell capability and pass bash to a spawnAgent." },
+  ];
+  for (const { re, name, fix } of forbidden) {
+    if (re.test(text)) {
+      issues.push({
+        code: "forbidden_api",
+        message: `Script uses forbidden host API: ${name}.`,
+        fix,
+      });
+    }
+  }
+
+  // Unbalanced braces/parens are a strong, low-false-positive signal that a
+  // large tool call was truncated mid-script (the classic stopReason:length
+  // failure mode). Only flag a clear deficit, never a surplus.
+  const opens = (text.match(/[{([]/g) ?? []).length;
+  const closes = (text.match(/[)\]}]/g) ?? []).length;
+  if (opens - closes >= 2) {
+    issues.push({
+      code: "likely_truncated",
+      message: `Script has ${opens} opening vs ${closes} closing brackets — it looks truncated mid-statement.`,
+      fix: "The harness was likely cut off (output length limit). Shorten it, or save it as a skill and run via skillRef so you don't re-emit a large script.",
+    });
+  }
+
+  return issues;
+}
+
+type RequireSuccessOptions = {
+  minSuccess?: number;
+  label?: string;
+};
+
+/**
+ * Quality gate for spawnAgent result batches. A workflow that fans out N agents
+ * and then synthesizes their output should not silently proceed when most of
+ * those agents failed (the classic "5/5 review failed but synthesis continues"
+ * trap). requireSuccess throws with a readable summary when fewer than
+ * `minSuccess` results have status === "completed". Defaults to requiring all.
+ *
+ * Shared shape so the in-process SDK and the worker-child SDK stay in lockstep.
+ */
+function evaluateRequireSuccess(
+  results: unknown,
+  options: RequireSuccessOptions | undefined
+): unknown[] {
+  if (!Array.isArray(results)) {
+    throw new Error("workflow.requireSuccess requires an array of results");
+  }
+  const label = options?.label ? `${options.label}: ` : "";
+  const total = results.length;
+  const minSuccess = Math.max(
+    0,
+    Math.min(Math.floor(options?.minSuccess ?? total), total)
+  );
+  const succeeded: unknown[] = [];
+  const failures: string[] = [];
+  for (let i = 0; i < total; i += 1) {
+    const entry = results[i] as
+      | { status?: string; title?: string; taskId?: string; answer?: string }
+      | null
+      | undefined;
+    const status = entry?.status;
+    if (status === "completed") {
+      succeeded.push(entry);
+      continue;
+    }
+    const who = entry?.title || entry?.taskId || `#${i}`;
+    failures.push(`${who} (${status ?? "unknown"})`);
+  }
+  if (succeeded.length < minSuccess) {
+    throw new Error(
+      `${label}workflow.requireSuccess gate failed: ${succeeded.length}/${total} succeeded, ` +
+        `need at least ${minSuccess}. Failed: ${failures.join(", ") || "n/a"}`
+    );
+  }
+  return succeeded;
 }
 
 function makeTimeout(controller: AbortController, timeoutMs: number): Promise<never> {
@@ -628,7 +928,15 @@ function createSdk(
     );
     const result = results[0];
     if (!result) throw new Error(`No subagent result returned for ${title}`);
-    return result;
+    return {
+      ...result,
+      // Workflow scripts are often written against workflow.agent(), whose
+      // result exposes `text`. Keep spawnAgent ergonomic without changing the
+      // canonical SubagentResult.answer field.
+      text: result.answer ?? "",
+      output: result.answer ?? "",
+      summary: result.answer ?? "",
+    };
   }
 
   return Object.freeze({
@@ -973,6 +1281,26 @@ function createSdk(
       );
     },
 
+    async searchTools(
+      searchInput?: WorkflowSearchToolsInput
+    ): Promise<WorkflowMcpToolDescriptor[]> {
+      if (signal.aborted) throw new Error("Workflow script aborted");
+      requireCapability(manifest, "mcp");
+      if (!deps.listMcpTools) {
+        throw new Error("workflow.searchTools requires an MCP runtime");
+      }
+      const requested = cleanText(searchInput?.serverId, 120) || undefined;
+      if (requested && !isServerInScope(deps.allowedMcpServers, requested)) {
+        throw new Error(
+          `workflow.searchTools: MCP server "${requested}" is not in this workflow's scope`
+        );
+      }
+      const tools = (await deps.listMcpTools(requested)).filter((tool) =>
+        isServerInScope(deps.allowedMcpServers, tool.serverId)
+      );
+      return filterMcpToolsForSearch(tools, searchInput);
+    },
+
     async callTool(toolInput: WorkflowCallToolInput): Promise<WorkflowCallToolResult> {
       if (signal.aborted) throw new Error("Workflow script aborted");
       requireCapability(manifest, "mcp");
@@ -1148,14 +1476,36 @@ function createSdk(
       if (!Array.isArray(items)) {
         throw new Error("workflow.parallel requires an array");
       }
-      if (items.length > manifest.maxConcurrency) {
-        throw new Error(
-          `workflow.parallel supports at most ${manifest.maxConcurrency} item(s) for this manifest`
-        );
-      }
-      return Promise.all(
-        items.map((item) => (typeof item === "function" ? item() : item))
-      );
+      // maxConcurrency is a concurrency budget, not an array-length cap. Any
+      // number of items may be scheduled; at most `maxConcurrency` run at once
+      // and the rest queue. Results preserve input order (Promise.all semantics).
+      const limit = Math.max(1, manifest.maxConcurrency);
+      const total = items.length;
+      if (total === 0) return [];
+
+      const results = new Array<T>(total);
+      let nextIndex = 0;
+
+      const runWorker = async (): Promise<void> => {
+        for (;;) {
+          if (signal.aborted) throw new Error("Workflow script aborted");
+          const current = nextIndex;
+          if (current >= total) return;
+          nextIndex += 1;
+          const item = items[current];
+          results[current] = await (typeof item === "function"
+            ? (item as () => Promise<T> | T)()
+            : item);
+        }
+      };
+
+      const workerCount = Math.min(limit, total);
+      await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+      return results;
+    },
+
+    requireSuccess<T>(results: T[], options?: { minSuccess?: number; label?: string }) {
+      return evaluateRequireSuccess(results, options) as T[];
     },
 
     async stage<T>(title: string, fn: () => Promise<T> | T) {
@@ -1186,7 +1536,20 @@ function sendWorkerMessage(
 }
 
 function workerScriptPath(): string {
-  return path.join(process.cwd(), "lib/workflows/script-worker-child.cjs");
+  const rel = path.join("lib", "workflows", "script-worker-child.cjs");
+  const proc = process as NodeJS.Process & { resourcesPath?: string };
+  const resourcesPath =
+    typeof proc.resourcesPath === "string" ? proc.resourcesPath : undefined;
+  const candidates = [
+    path.join(process.cwd(), rel),
+    path.join(process.cwd(), ".next", "standalone", rel),
+    resourcesPath
+      ? path.join(resourcesPath, "app.asar.unpacked", ".next", "standalone", rel)
+      : "",
+    resourcesPath ? path.join(resourcesPath, "app.asar.unpacked", rel) : "",
+    resourcesPath ? path.join(resourcesPath, "app.asar", rel) : "",
+  ].filter(Boolean);
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
 }
 
 export function buildWorkflowWorkerSpawnConfig(options: {
@@ -1511,11 +1874,28 @@ export async function runWorkflowScript(
     maxAgents: rawInput.maxAgents,
     maxConcurrency: rawInput.maxConcurrency,
     timeoutMs: rawInput.timeoutMs,
+    successCriteria: rawInput.successCriteria,
   };
   if (!input.objective) throw new Error("run_workflow_script requires an objective");
   if (!input.rationale) throw new Error("run_workflow_script requires a rationale");
   if (!input.script) throw new Error("run_workflow_script requires a script");
-  const manifest = normalizeManifest(input);
+
+  // P0-4(a): auto-derive capabilities implied by the script BEFORE startup, so
+  // they route through the normal approval flow instead of failing each spawned
+  // agent at runtime. The declared set is the union of what the model asked for
+  // and what the script demonstrably needs.
+  const declaredCapabilities = normalizeCapabilities(input.capabilities);
+  const inferredCapabilities = inferCapabilitiesFromScript(input.script).filter(
+    (capability) => !declaredCapabilities.includes(capability)
+  );
+  const effectiveCapabilities =
+    inferredCapabilities.length > 0
+      ? normalizeCapabilities([...declaredCapabilities, ...inferredCapabilities])
+      : input.capabilities;
+  const manifest = normalizeManifest({
+    ...input,
+    capabilities: effectiveCapabilities,
+  });
 
   const parentAgentId = deps.parentAgentId ?? "unknown";
   const { run: resumeRun, state: resumeState } = loadResumeRun(input, parentAgentId);
@@ -1524,6 +1904,13 @@ export async function runWorkflowScript(
   const artifacts = new Map<string, WorkflowArtifact>(
     (resumeRun?.artifacts ?? []).map((artifact) => [artifact.name, artifact])
   );
+  // When resuming, surface empty upstream artifacts instead of silently feeding
+  // them downstream (the "empty recon.md carried forward" trap).
+  const emptyResumedArtifacts = resumeRun
+    ? (resumeRun.artifacts ?? [])
+        .filter((artifact) => artifactStringValue(artifact.value).length === 0)
+        .map((artifact) => artifact.name)
+    : [];
   const checkpoints: WorkflowCheckpoint[] = resumeRun?.checkpoints.slice() ?? [];
   const logs: WorkflowScriptLog[] = [];
   const traceEvents: WorkflowTraceEvent[] = [];
@@ -1574,6 +1961,49 @@ export async function runWorkflowScript(
   };
 
   try {
+    // Validate-then-run: fail fast with structured, actionable guidance before
+    // spending a worker run on a script that cannot succeed.
+    const issues = validateWorkflowScript(input.script, {
+      maxChars: MAX_SCRIPT_CHARS,
+    });
+    if (issues.length > 0) {
+      for (const issue of issues) {
+        const log = {
+          level: "error" as const,
+          message: `validation [${issue.code}]: ${issue.message} Fix: ${issue.fix}`,
+          createdAt: now(),
+        };
+        logs.push(log);
+        appendWorkflowLog(workflowId, log);
+        deps.onEvent?.({ type: "workflow_log", workflowId, log });
+      }
+      const summary = issues
+        .map((issue) => `- [${issue.code}] ${issue.message} Fix: ${issue.fix}`)
+        .join("\n");
+      throw new Error(
+        `Workflow script validation failed before execution:\n${summary}`
+      );
+    }
+    if (inferredCapabilities.length > 0) {
+      const log = {
+        level: "info" as const,
+        message: `auto-declared capabilities inferred from script: ${inferredCapabilities.join(", ")}`,
+        createdAt: now(),
+      };
+      logs.push(log);
+      appendWorkflowLog(workflowId, log);
+      deps.onEvent?.({ type: "workflow_log", workflowId, log });
+    }
+    if (emptyResumedArtifacts.length > 0) {
+      const log = {
+        level: "warn" as const,
+        message: `resume warning: upstream artifact(s) are empty: ${emptyResumedArtifacts.join(", ")}. Consider re-running the producing stage rather than building on empty inputs.`,
+        createdAt: now(),
+      };
+      logs.push(log);
+      appendWorkflowLog(workflowId, log);
+      deps.onEvent?.({ type: "workflow_log", workflowId, log });
+    }
     await approveManifestCapabilities(
       deps,
       input,
@@ -1606,15 +2036,36 @@ export async function runWorkflowScript(
       makeTimeout(abortController, manifest.timeoutMs),
     ]);
     const endedAt = now();
-    const status = abortController.signal.aborted ? "aborted" : "completed";
+    const finalArtifacts = Array.from(artifacts.values());
+    // End-state quality gate: a harness that returns normally but fails its
+    // declared success criteria is "completed_with_warnings", not "completed".
+    const warnings = abortController.signal.aborted
+      ? []
+      : evaluateSuccessCriteria(manifest.successCriteria, finalArtifacts);
+    const status: WorkflowRunStatus = abortController.signal.aborted
+      ? "aborted"
+      : warnings.length > 0
+        ? "completed_with_warnings"
+        : "completed";
+    for (const warning of warnings) {
+      const log = {
+        level: "warn" as const,
+        message: `end-state check: ${warning}`,
+        createdAt: now(),
+      };
+      logs.push(log);
+      appendWorkflowLog(workflowId, log);
+      deps.onEvent?.({ type: "workflow_log", workflowId, log });
+    }
     finishWorkflowRun(workflowId, {
       status,
       endedAt,
       returnValue: value,
-      artifacts: Array.from(artifacts.values()),
+      artifacts: finalArtifacts,
       checkpoints,
       logs,
       traceEvents,
+      warnings: warnings.length > 0 ? warnings : undefined,
     });
     deps.onEvent?.({
       type: "workflow_end",
@@ -1622,10 +2073,11 @@ export async function runWorkflowScript(
       status,
       endedAt,
       returnValue: value,
-      artifacts: Array.from(artifacts.values()),
+      artifacts: finalArtifacts,
       checkpoints,
       logs,
       traceEvents,
+      warnings: warnings.length > 0 ? warnings : undefined,
     });
     return {
       workflowId,
@@ -1634,12 +2086,13 @@ export async function runWorkflowScript(
       manifest,
       resumedFromWorkflowId: input.resumeFromWorkflowId,
       returnValue: value,
-      artifacts: Array.from(artifacts.values()),
+      artifacts: finalArtifacts,
       checkpoints,
       logs,
       traceEvents,
       startedAt,
       endedAt,
+      warnings: warnings.length > 0 ? warnings : undefined,
     };
   } catch (err) {
     const endedAt = now();

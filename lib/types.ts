@@ -277,6 +277,7 @@ export type MessagePart =
       endedAt?: number;
       returnValue?: unknown;
       error?: string;
+      warnings?: string[];
     };
 
 /** SDK ImageContent 形态 —— 给 /api/agent/[id] 发图用 */

@@ -153,6 +153,7 @@ interface AnyEvent {
   trace?: WorkflowTraceEvent;
   traceEvents?: WorkflowTraceEvent[];
   returnValue?: unknown;
+  warnings?: string[];
   // F3 optimistic user message。仅前端内部派发，不会出现在 SSE。
   clientRequestId?: string;
   text?: string;
@@ -653,6 +654,7 @@ function workflowStatus(value: unknown): WorkflowRunStatus | undefined {
   return value === "pending" ||
     value === "running" ||
     value === "completed" ||
+    value === "completed_with_warnings" ||
     value === "failed" ||
     value === "aborted"
     ? value
@@ -702,6 +704,11 @@ function workflowRunPartFromToolResult(params: {
     endedAt: typeof details.endedAt === "number" ? details.endedAt : undefined,
     returnValue: details.returnValue,
     error: typeof details.error === "string" ? details.error : undefined,
+    warnings: Array.isArray(details.warnings)
+      ? (details.warnings as unknown[]).filter(
+          (w): w is string => typeof w === "string"
+        )
+      : undefined,
   };
 }
 
@@ -1451,6 +1458,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
           traceEvents: ev.traceEvents ?? cur.traceEvents,
           returnValue: ev.returnValue,
           error: ev.error,
+          warnings: ev.warnings ?? cur.warnings,
         };
         state.messages[mi] = { ...m, parts };
         break;

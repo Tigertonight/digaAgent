@@ -15,7 +15,13 @@ import type {
 export type GoalVerifyDecision = "accept" | "reject";
 
 export interface GoalWorkflowStatus {
-  status: "pending" | "running" | "completed" | "failed" | "aborted";
+  status:
+    | "pending"
+    | "running"
+    | "completed"
+    | "completed_with_warnings"
+    | "failed"
+    | "aborted";
   createdAt?: number;
   id?: string;
   objective?: string;
@@ -29,7 +35,14 @@ export interface GoalVerifyInput {
    * Status of workflow runs launched under this goal's agent. The verifier only
    * cares whether any of them failed/aborted, so callers can pass a simple list.
    */
-  workflowStatuses?: Array<"pending" | "running" | "completed" | "failed" | "aborted">;
+  workflowStatuses?: Array<
+    | "pending"
+    | "running"
+    | "completed"
+    | "completed_with_warnings"
+    | "failed"
+    | "aborted"
+  >;
   /**
    * Rich workflow status records, preferably scoped by the caller to the active
    * goal's lifecycle. When provided, failed/aborted runs are considered

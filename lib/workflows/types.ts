@@ -73,6 +73,7 @@ export interface RunWorkflowScriptInput {
   maxAgents?: number;
   maxConcurrency?: number;
   timeoutMs?: number;
+  successCriteria?: WorkflowSuccessCriteria;
 }
 
 export interface RunWorkflowTemplateInput {
@@ -117,7 +118,7 @@ export interface WorkflowScriptLog {
 export interface WorkflowScriptResult {
   workflowId: string;
   objective: string;
-  status: "completed" | "failed" | "aborted";
+  status: "completed" | "completed_with_warnings" | "failed" | "aborted";
   manifest: WorkflowManifest;
   resumedFromWorkflowId?: string;
   returnValue?: unknown;
@@ -128,6 +129,8 @@ export interface WorkflowScriptResult {
   startedAt: number;
   endedAt: number;
   error?: string;
+  /** End-state quality warnings (set when status is completed_with_warnings). */
+  warnings?: string[];
 }
 
 export interface WorkflowResumeEntrySummary {
@@ -264,6 +267,24 @@ export interface WorkflowMcpToolDescriptor {
   inputSchema?: Record<string, unknown>;
 }
 
+/**
+ * Progressive disclosure for MCP (Claude "code execution with MCP"): instead of
+ * loading every tool definition up front, the harness searches for relevant
+ * tools and chooses how much detail to pull, conserving context.
+ */
+export type WorkflowMcpDetailLevel = "name" | "summary" | "full";
+
+export interface WorkflowSearchToolsInput {
+  /** Case-insensitive substring matched against tool name + description. */
+  query?: string;
+  /** Restrict to a single MCP server (must be in scope). */
+  serverId?: string;
+  /** How much of each descriptor to return. Defaults to "summary". */
+  detailLevel?: WorkflowMcpDetailLevel;
+  /** Max results returned. Defaults to 20. */
+  limit?: number;
+}
+
 export interface WorkflowCallToolInput {
   server: string;
   tool: string;
@@ -348,7 +369,33 @@ export interface RunWorkflowScriptDeps {
   allowedMcpServers?: string[];
 }
 
-export type WorkflowRunStatus = "pending" | "running" | "completed" | "failed" | "aborted";
+export type WorkflowRunStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  // The harness returned normally but failed an end-state quality check
+  // (e.g. required artifacts empty/missing). Distinguished from "completed" so
+  // the UI and any consuming goal loop can see "formally done, substantively
+  // incomplete" instead of a false success.
+  | "completed_with_warnings"
+  | "failed"
+  | "aborted";
+
+/**
+ * End-state quality gate for a workflow run. Evaluated when the harness returns
+ * normally. If unmet, the run is downgraded to "completed_with_warnings" with
+ * human-readable warnings, instead of silently reporting success.
+ */
+export interface WorkflowSuccessCriteria {
+  /** Artifact names that must exist and be non-empty. */
+  requiredArtifacts?: string[];
+  /** Minimum number of non-empty artifacts overall. */
+  minNonEmptyArtifacts?: number;
+  /** If set, the named artifact's string form must be at least this long. */
+  minReportChars?: number;
+  /** Artifact name to measure for minReportChars (defaults to the last one). */
+  reportArtifact?: string;
+}
 
 export type WorkflowCapability =
   | "spawn_agent"
@@ -367,6 +414,8 @@ export interface WorkflowManifest {
   maxConcurrency: number;
   timeoutMs: number;
   runtime: "process";
+  /** Optional end-state quality gate evaluated when the harness returns. */
+  successCriteria?: WorkflowSuccessCriteria;
 }
 
 export interface WorkflowCapabilityApprovalRequest {
@@ -427,6 +476,8 @@ export interface WorkflowRun {
   endedAt?: number;
   returnValue?: unknown;
   error?: string;
+  /** End-state quality warnings (set when status is completed_with_warnings). */
+  warnings?: string[];
 }
 
 export interface WorkflowTemplate {
@@ -451,6 +502,38 @@ export interface WorkflowTemplateSummary {
   name: string;
   description?: string;
   version: string;
+  tags: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * A reusable workflow harness saved as a "skill" (Claude Code style). Unlike a
+ * template (which is parameterized + versioned for repeated structured runs), a
+ * skill is a lighter-weight, named harness body that an orchestrator can read
+ * on demand (progressive disclosure) and run via run_workflow_script({ skillRef }).
+ * Persisted as ~/.diga-agent/workflows/skills/<name>/{SKILL.md, harness.js}.
+ */
+export interface WorkflowSkill {
+  /** Stable slug; also the folder name. */
+  name: string;
+  /** One-line human/agent-facing description (the SKILL.md front line). */
+  description: string;
+  /** Longer markdown body (usage notes, when-to-use, inputs). */
+  instructions?: string;
+  /** The async workflow harness body executed by the script runtime. */
+  harness: string;
+  /** Capabilities the harness needs (auto-inferred at run time if omitted). */
+  capabilities?: WorkflowCapability[];
+  tags?: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Lightweight skill descriptor for progressive disclosure (no harness body). */
+export interface WorkflowSkillSummary {
+  name: string;
+  description: string;
   tags: string[];
   createdAt: number;
   updatedAt: number;
@@ -556,6 +639,7 @@ export interface WorkflowEndEvent {
   traceEvents?: WorkflowTraceEvent[];
   returnValue?: unknown;
   error?: string;
+  warnings?: string[];
 }
 
 export interface WorkflowTraceRuntimeEvent {

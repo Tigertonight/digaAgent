@@ -2,7 +2,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildWorkflowWorkerSpawnConfig, runWorkflowScript } from "./script-runtime";
+import {
+  buildWorkflowWorkerSpawnConfig,
+  runWorkflowScript,
+  validateWorkflowScript,
+} from "./script-runtime";
 import { __setWorkflowNetworkPolicyRootForTest } from "./network-policy";
 import {
   __clearWorkflowMemoryForTest,
@@ -123,7 +127,12 @@ describe("runWorkflowScript", () => {
           ]);
           workflow.checkpoint("reviews", results.map((result) => result.answer));
           workflow.artifact("summary", { count: results.length });
-          return { answers: results.map((result) => result.answer) };
+          return {
+            answers: results.map((result) => result.answer),
+            texts: results.map((result) => result.text),
+            outputs: results.map((result) => result.output),
+            summaries: results.map((result) => result.summary),
+          };
         `,
       }
     );
@@ -132,7 +141,12 @@ describe("runWorkflowScript", () => {
     expect(prompts).toHaveLength(2);
     expect(result.checkpoints[0]?.name).toBe("reviews");
     expect(result.artifacts[0]?.name).toBe("summary");
-    expect(result.returnValue).toEqual({ answers: ["answer-1", "answer-2"] });
+    expect(result.returnValue).toEqual({
+      answers: ["answer-1", "answer-2"],
+      texts: ["answer-1", "answer-2"],
+      outputs: ["answer-1", "answer-2"],
+      summaries: ["answer-1", "answer-2"],
+    });
     expect(result.manifest.capabilities).toEqual(["spawn_agent", "read_files"]);
     expect(result.manifest.maxAgents).toBe(8);
     expect(result.manifest.maxConcurrency).toBe(4);
@@ -144,6 +158,52 @@ describe("runWorkflowScript", () => {
     ]);
     expect(getWorkflowRun(result.workflowId)?.status).toBe("completed");
     expect(listRunningWorkflowRuns("parent-1")).toHaveLength(0);
+  });
+
+  it("keeps subagent answers available to scripts that write text artifacts", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-recon",
+        runSubagents: async (input) => ({
+          batchId: "batch-recon",
+          results: [
+            {
+              taskId: input.tasks[0]?.id ?? "recon",
+              agentId: "agent-recon",
+              status: "completed",
+              answer: "RECON: workflow and goal session routes inspected.",
+              startedAt: Date.now(),
+              endedAt: Date.now(),
+            },
+          ],
+        }),
+      },
+      {
+        objective: "Audit session workflow behavior.",
+        rationale: "Reproduce the latest-session recon artifact path.",
+        script: `
+          const recon = await workflow.spawnAgent({
+            id: "recon",
+            title: "Recon latest session logs",
+            prompt: "Inspect workflow/goal session behavior."
+          });
+          workflow.checkpoint("recon-done", { length: recon.text.length });
+          workflow.artifact("recon.md", recon.text || "");
+          return { answer: recon.answer, text: recon.text };
+        `,
+      }
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.returnValue).toEqual({
+      answer: "RECON: workflow and goal session routes inspected.",
+      text: "RECON: workflow and goal session routes inspected.",
+    });
+    expect(result.checkpoints[0]?.value).toEqual({ length: 50 });
+    expect(result.artifacts[0]).toMatchObject({
+      name: "recon.md",
+      value: "RECON: workflow and goal session routes inspected.",
+    });
   });
 
   it("runs workflow.agent with schema validation and structured data", async () => {
@@ -509,7 +569,10 @@ describe("runWorkflowScript", () => {
     expect(getWorkflowRun(result.workflowId)?.status).toBe("aborted");
   });
 
-  it("blocks unsafe child-agent tools until the capability is declared", async () => {
+  it("blocks unsafe child-agent tools when no approval broker exists", async () => {
+    // P0-4(a): bash in allowedTools is now inferred to the shell capability at
+    // startup, so an undeclared/unapproved shell tool fails BEFORE spawning the
+    // agent (via the approval broker) rather than failing the child at runtime.
     const result = await runWorkflowScript(
       {
         parentAgentId: "parent-3",
@@ -529,7 +592,50 @@ describe("runWorkflowScript", () => {
     );
 
     expect(result.status).toBe("failed");
-    expect(result.error).toContain("workflow capability required: shell");
+    // Inferred shell capability requires approval; with no broker it fails early.
+    expect(result.error).toContain("approval broker is not implemented for: shell");
+    expect(result.manifest.capabilities).toContain("shell");
+  });
+
+  it("allows inferred shell capability through the approval broker", async () => {
+    const approvals: string[] = [];
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-3b",
+        approveCapability: async (request) => {
+          approvals.push(request.capability);
+          return { decision: "allow" };
+        },
+        runSubagents: async (input) => ({
+          batchId: "batch",
+          results: [
+            {
+              taskId: input.tasks[0]?.id ?? "missing",
+              agentId: "agent",
+              status: "completed",
+              answer: "ok",
+              startedAt: Date.now(),
+              endedAt: Date.now(),
+            },
+          ],
+        }),
+      },
+      {
+        objective: "Try unsafe tool with approval.",
+        rationale: "Verify capability boundary.",
+        script: `
+          await workflow.spawnAgent({
+            title: "Unsafe",
+            prompt: "Run a command",
+            allowedTools: ["read", "bash"]
+          });
+          return "done";
+        `,
+      }
+    );
+
+    expect(approvals).toContain("shell");
+    expect(result.status).toBe("completed");
   });
 
   it("fails early when manifest capabilities need approval but no broker exists", async () => {
@@ -789,7 +895,10 @@ describe("runWorkflowScript", () => {
     );
 
     expect(result.status).toBe("failed");
-    expect(result.error).toContain("workflow capability required: ask_user");
+    // P0-4(a): workflow.askUser is inferred -> ask_user requires approval; with
+    // no broker the workflow fails before reaching the call.
+    expect(result.error).toContain("ask_user");
+    expect(result.manifest.capabilities).toContain("ask_user");
   });
 
   it("fetches URLs through the host network runtime after approval", async () => {
@@ -874,7 +983,9 @@ describe("runWorkflowScript", () => {
     );
 
     expect(result.status).toBe("failed");
-    expect(result.error).toContain("workflow capability required: network");
+    // P0-4(a): workflow.fetchUrl is inferred -> network requires approval.
+    expect(result.error).toContain("network");
+    expect(result.manifest.capabilities).toContain("network");
   });
 
   it("blocks private-network URLs in the default network runtime", async () => {
@@ -1402,20 +1513,309 @@ describe("runWorkflowScript", () => {
     expect(tooManyAgents.status).toBe("failed");
     expect(tooManyAgents.error).toContain("maxAgents=1");
 
-    const tooMuchParallel = await runWorkflowScript(
+  });
+
+  it("treats maxConcurrency as a budget and queues extra parallel items", async () => {
+    // Previously workflow.parallel threw when items.length > maxConcurrency.
+    // Now it schedules all items with at most `maxConcurrency` running at once,
+    // preserving input order in the results.
+    const result = await runWorkflowScript(
       {
         parentAgentId: "parent-6",
         runSubagents: async () => ({ batchId: "unused", results: [] }),
       },
       {
-        objective: "Limit concurrency.",
-        rationale: "Verify maxConcurrency.",
-        maxConcurrency: 1,
-        script: "await workflow.parallel([() => 1, () => 2]);",
+        objective: "Schedule more items than the concurrency budget.",
+        rationale: "Verify maxConcurrency is a budget, not a hard cap.",
+        maxConcurrency: 2,
+        script: `
+          let active = 0;
+          let peak = 0;
+          const slow = (value) => async () => {
+            active += 1;
+            peak = Math.max(peak, active);
+            await workflow.sleep(5);
+            active -= 1;
+            return value;
+          };
+          // 5 items with a budget of 2 must not fail.
+          const out = await workflow.parallel([
+            slow(1), slow(2), slow(3), slow(4), slow(5),
+          ]);
+          workflow.artifact("order", out);
+          workflow.artifact("peak", peak);
+          return { out, peak };
+        `,
       }
     );
-    expect(tooMuchParallel.status).toBe("failed");
-    expect(tooMuchParallel.error).toContain("at most 1 item");
+
+    if (result.status !== "completed") {
+      throw new Error(`workflow failed: ${result.error}`);
+    }
+    expect(result.status).toBe("completed");
+    expect(result.returnValue).toEqual({ out: [1, 2, 3, 4, 5], peak: 2 });
+  });
+
+  it("requireSuccess halts the workflow when too many spawned agents fail", async () => {
+    // Reproduces the "5/5 review failed but synthesis continues" trap: the gate
+    // must throw so the workflow fails instead of feeding failure text downstream.
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-gate",
+        runSubagents: async (input) => {
+          const task = input.tasks[0];
+          // Only the task titled "ok" completes; the rest fail.
+          const completed = task?.title === "ok";
+          return {
+            batchId: "batch-gate",
+            results: [
+              {
+                taskId: task?.id ?? "missing",
+                agentId: "agent",
+                status: completed ? "completed" : "failed",
+                answer: completed ? "good" : "boom",
+                startedAt: Date.now(),
+                endedAt: Date.now(),
+              },
+            ],
+          };
+        },
+      },
+      {
+        objective: "Gate on review success.",
+        rationale: "Verify requireSuccess fails closed.",
+        maxAgents: 8,
+        script: `
+          const reviews = await workflow.parallel([
+            () => workflow.spawnAgent({ id: "a", title: "ok", prompt: "p" }),
+            () => workflow.spawnAgent({ id: "b", title: "bad1", prompt: "p" }),
+            () => workflow.spawnAgent({ id: "c", title: "bad2", prompt: "p" }),
+          ]);
+          // 1/3 succeeded but we need at least 2 -> must throw.
+          workflow.requireSuccess(reviews, { minSuccess: 2, label: "module-reviews" });
+          return "should-not-reach";
+        `,
+      }
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("module-reviews");
+    expect(result.error).toContain("requireSuccess gate failed");
+    expect(result.error).toContain("1/3 succeeded");
+  });
+
+  it("requireSuccess passes through and returns only successful results", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-gate-pass",
+        runSubagents: async (input) => {
+          const task = input.tasks[0];
+          const completed = task?.title !== "bad";
+          return {
+            batchId: "batch-gate-pass",
+            results: [
+              {
+                taskId: task?.id ?? "missing",
+                agentId: "agent",
+                status: completed ? "completed" : "failed",
+                answer: task?.title ?? "",
+                startedAt: Date.now(),
+                endedAt: Date.now(),
+              },
+            ],
+          };
+        },
+      },
+      {
+        objective: "Gate passes.",
+        rationale: "Verify requireSuccess returns survivors.",
+        script: `
+          const reviews = await workflow.parallel([
+            () => workflow.spawnAgent({ id: "a", title: "good1", prompt: "p" }),
+            () => workflow.spawnAgent({ id: "b", title: "bad", prompt: "p" }),
+            () => workflow.spawnAgent({ id: "c", title: "good2", prompt: "p" }),
+          ]);
+          const ok = workflow.requireSuccess(reviews, { minSuccess: 2 });
+          return { survivors: ok.map((r) => r.answer) };
+        `,
+      }
+    );
+
+    if (result.status !== "completed") {
+      throw new Error(`workflow failed: ${result.error}`);
+    }
+    expect(result.returnValue).toEqual({ survivors: ["good1", "good2"] });
+  });
+
+  it("validateWorkflowScript flags forbidden APIs, length, emptiness, and truncation", () => {
+    expect(validateWorkflowScript("")).toEqual([
+      expect.objectContaining({ code: "empty_script" }),
+    ]);
+
+    const forbidden = validateWorkflowScript(
+      "const x = require('fs'); fetch('http://x'); return x;"
+    );
+    expect(forbidden.map((i) => i.code)).toContain("forbidden_api");
+
+    const tooLong = validateWorkflowScript("return 1;" + "//x".repeat(60_000), {
+      maxChars: 50_000,
+    });
+    expect(tooLong.map((i) => i.code)).toContain("too_long");
+
+    const truncated = validateWorkflowScript(
+      "const r = await workflow.parallel([() => workflow.spawnAgent({ title: 't', prompt: 'p'"
+    );
+    expect(truncated.map((i) => i.code)).toContain("likely_truncated");
+
+    // A normal harness that only spawns agents (no return) is valid.
+    expect(
+      validateWorkflowScript("await workflow.spawnAgent({ title: 't', prompt: 'p' });")
+    ).toEqual([]);
+  });
+
+  it("fails fast with structured guidance when the script uses a forbidden API", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-validate",
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Try a forbidden API.",
+        rationale: "Verify validate-then-run.",
+        script: "const fs = require('fs'); return fs;",
+      }
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("validation failed before execution");
+    expect(result.error).toContain("require()");
+    expect(
+      result.logs.some(
+        (log) => log.level === "error" && log.message.includes("validation [forbidden_api]")
+      )
+    ).toBe(true);
+  });
+
+  it("marks the run completed_with_warnings when end-state successCriteria are unmet", async () => {
+    const events: WorkflowEvent[] = [];
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-criteria-warn",
+        onEvent: (event) => events.push(event),
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Produce a report.",
+        rationale: "Verify end-state gate.",
+        successCriteria: { requiredArtifacts: ["final-report"], minReportChars: 100 },
+        script: `
+          // Writes an empty report -> should trip the end-state gate.
+          workflow.artifact("final-report", "");
+          return "done";
+        `,
+      }
+    );
+
+    expect(result.status).toBe("completed_with_warnings");
+    expect(result.warnings?.join(" ")).toContain("final-report");
+    const endEvent = events.find((e) => e.type === "workflow_end");
+    expect(endEvent && endEvent.type === "workflow_end" && endEvent.status).toBe(
+      "completed_with_warnings"
+    );
+  });
+
+  it("keeps status completed when successCriteria are met", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-criteria-ok",
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Produce a report.",
+        rationale: "Verify end-state gate passes.",
+        successCriteria: { requiredArtifacts: ["final-report"], minReportChars: 5 },
+        script: `
+          workflow.artifact("final-report", "This is a sufficiently long report body.");
+          return "done";
+        `,
+      }
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.warnings).toBeUndefined();
+  });
+
+  it("auto-derives shell capability from script allowedTools and requests approval before start", async () => {
+    const approvals: string[] = [];
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-infer",
+        approveCapability: async (request) => {
+          approvals.push(request.capability);
+          return { decision: "allow" };
+        },
+        runSubagents: async (input) => ({
+          batchId: "batch-infer",
+          results: [
+            {
+              taskId: input.tasks[0]?.id ?? "missing",
+              agentId: "agent",
+              status: "completed",
+              answer: "ok",
+              startedAt: Date.now(),
+              endedAt: Date.now(),
+            },
+          ],
+        }),
+      },
+      {
+        objective: "Run a shell-using agent.",
+        rationale: "Verify capability inference.",
+        // Note: capabilities NOT declared -> safe default (spawn_agent, read_files).
+        script: `
+          await workflow.spawnAgent({
+            title: "scan",
+            prompt: "scan repo",
+            allowedTools: ["read", "bash"],
+          });
+          return "done";
+        `,
+      }
+    );
+
+    // The bash tool must have been inferred -> shell approval requested -> workflow
+    // completes instead of failing each child with "capability required: shell".
+    expect(approvals).toContain("shell");
+    expect(result.status).toBe("completed");
+    expect(result.manifest.capabilities).toContain("shell");
+    expect(
+      result.logs.some((log) => log.message.includes("auto-declared capabilities"))
+    ).toBe(true);
+  });
+
+  it("fails the workflow when an auto-derived capability is denied", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-infer-deny",
+        approveCapability: async () => ({ decision: "deny", denyReason: "no shell" }),
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Run a shell-using agent.",
+        rationale: "Verify denial blocks startup.",
+        script: `
+          await workflow.spawnAgent({
+            title: "scan",
+            prompt: "scan repo",
+            allowedTools: ["bash"],
+          });
+          return "done";
+        `,
+      }
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("no shell");
   });
 
   it("persists completed runs and exposes resume snapshots after reload", async () => {
@@ -1506,6 +1906,48 @@ describe("runWorkflowScript", () => {
     expect(getWorkflowRun(resumed.workflowId)?.resumedFromWorkflowId).toBe(
       first.workflowId
     );
+  });
+
+  it("warns at resume when an upstream artifact is empty", async () => {
+    const first = await runWorkflowScript(
+      {
+        parentAgentId: "parent-resume-empty",
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Produce recon.",
+        rationale: "Create resumable state with an empty artifact.",
+        script: `
+          workflow.checkpoint("recon-done", { ok: true });
+          workflow.artifact("recon", "");
+          return "first";
+        `,
+      }
+    );
+
+    __clearWorkflowMemoryForTest();
+
+    const resumed = await runWorkflowScript(
+      {
+        parentAgentId: "parent-resume-empty",
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Continue from recon.",
+        rationale: "Verify empty-artifact resume warning.",
+        resumeFromWorkflowId: first.workflowId,
+        script: `return "second";`,
+      }
+    );
+
+    expect(
+      resumed.logs.some(
+        (log) =>
+          log.level === "warn" &&
+          log.message.includes("resume warning") &&
+          log.message.includes("recon")
+      )
+    ).toBe(true);
   });
 
   it("resumes from a selected prior checkpoint when requested", async () => {
@@ -1656,6 +2098,46 @@ describe("runWorkflowScript", () => {
     ).toBe(true);
   });
 
+  it("searchTools filters by query and trims detail (progressive disclosure)", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-mcp-search",
+        approveCapability: async () => ({ decision: "allow" }),
+        listMcpTools: async () => [
+          { serverId: "fs", name: "read_file", description: "read a file", inputSchema: { type: "object" } },
+          { serverId: "fs", name: "write_file", description: "write a file", inputSchema: { type: "object" } },
+          { serverId: "gh", name: "create_issue", description: "open a GitHub issue", inputSchema: { type: "object" } },
+        ],
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Discover only the MCP tools needed.",
+        rationale: "Verify searchTools.",
+        capabilities: ["spawn_agent", "read_files", "mcp"],
+        script: `
+          const summary = await workflow.searchTools({ query: "file", detailLevel: "summary" });
+          const namesOnly = await workflow.searchTools({ query: "issue", detailLevel: "name" });
+          return {
+            summaryCount: summary.length,
+            summaryHasSchema: summary.some((t) => t.inputSchema !== undefined),
+            summaryHasDescription: summary.every((t) => typeof t.description === "string"),
+            issueName: namesOnly[0] && namesOnly[0].name,
+            issueHasDescription: namesOnly[0] && namesOnly[0].description !== undefined,
+          };
+        `,
+      }
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.returnValue).toEqual({
+      summaryCount: 2, // read_file + write_file match "file"
+      summaryHasSchema: false, // summary detail drops inputSchema
+      summaryHasDescription: true,
+      issueName: "create_issue",
+      issueHasDescription: false, // name detail drops description
+    });
+  });
+
   it("blocks workflow.callTool until mcp is declared", async () => {
     const result = await runWorkflowScript(
       {
@@ -1679,7 +2161,9 @@ describe("runWorkflowScript", () => {
     );
 
     expect(result.status).toBe("failed");
-    expect(result.error).toContain("workflow capability required: mcp");
+    // P0-4(a): workflow.callTool/listTools is inferred -> mcp requires approval.
+    expect(result.error).toContain("mcp");
+    expect(result.manifest.capabilities).toContain("mcp");
   });
 
   it("rejects a denied workflow.callTool approval", async () => {
