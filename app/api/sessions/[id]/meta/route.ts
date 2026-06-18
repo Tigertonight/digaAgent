@@ -12,7 +12,8 @@
  */
 
 import { NextResponse } from "next/server";
-import { readMeta, writeMeta } from "@/lib/meta/store";
+import { readMeta, updateMeta } from "@/lib/meta/store";
+import { internalErrorResponse } from "@/lib/api/error-response";
 import {
   META_WRITABLE_FIELDS_V0,
   type MetaWritableFieldV0,
@@ -66,10 +67,7 @@ export const GET = withRemoteAuth(async function (
     const meta = await readMeta(id);
     return NextResponse.json({ meta });
   } catch (e) {
-    return NextResponse.json(
-      { error: (e as Error).message },
-      { status: 500 }
-    );
+    return internalErrorResponse(e, { scope: "GET /api/sessions/[id]/meta" });
   }
 });
 
@@ -87,16 +85,12 @@ export const PATCH = withRemoteAuth(async function (
         { status: 400 }
       );
     }
-    const existing = (await readMeta(id)) ?? { id };
-    const merged: SessionMeta = { ...existing, ...patch, id };
-    // patch.title === undefined 表示清除：spread 会保留 undefined 占位，writeMeta
+    // S1: 用 store 的 per-id 锁做原子 read-merge-write，避免并发 PATCH 丢字段。
+    // patch.title === undefined 表示清除：merge 保留 undefined 占位，writeMeta
     // sanitize 时 JSON.stringify 会自动剔除 undefined。OK。
-    await writeMeta(merged);
+    const merged = await updateMeta(id, patch);
     return NextResponse.json({ meta: merged });
   } catch (e) {
-    return NextResponse.json(
-      { error: (e as Error).message },
-      { status: 500 }
-    );
+    return internalErrorResponse(e, { scope: "PATCH /api/sessions/[id]/meta" });
   }
 });

@@ -1574,6 +1574,11 @@ export function ctxToMessages(
           parts.push({ kind: "image", data: c.data, mimeType: c.mimeType });
         }
       }
+      // S6: 与 getForkableUserMessages 保持一致——纯 control-aside（无可见原文、
+      // 无图片）的 user entry 不产出气泡。否则 chatState 的 user message 数量会比
+      // forkableUserMessages 多一条，导致 ChatApp 按出现顺序对齐 entryId 时整体
+      // 错位一格，fork 锚点指向错误节点、永久破坏对话树。
+      if (parts.length === 0) continue;
       out.push({
         role: "user",
         parts,

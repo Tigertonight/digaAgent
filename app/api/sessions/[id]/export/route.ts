@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { findSessionPathById } from "@/lib/sessions";
 import { withRemoteAuth } from "@/lib/remote/with-auth";
+import { internalErrorBody } from "@/lib/api/error-response";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,7 +83,7 @@ export const GET = withRemoteAuth(async function (
     }
   } catch (e) {
     return new Response(
-      JSON.stringify({ error: (e as Error).message }),
+      internalErrorBody(e, { scope: "GET /api/sessions/[id]/export" }),
       {
         status: 500,
         headers: { "Content-Type": "application/json" },

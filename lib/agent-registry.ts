@@ -213,6 +213,11 @@ export interface AgentRecord {
   nextSeq: number;
   /** notify all SSE listeners */
   listeners: Set<() => void>;
+  /**
+   * M5：是否已 dispose。dispose 时置 true 并唤醒 listeners，让仍挂着的 SSE 流
+   * 能主动结束（否则要等浏览器 close 才触发 req.signal.abort）。
+   */
+  disposed?: boolean;
   /** 用来在 dispose 时取消订阅 */
   unsubscribe: () => void;
   /** 当前是否在跑(agent_start/end 之间为 true);给 sidebar 标"运行中"用 */
@@ -2033,6 +2038,16 @@ export function disposeAgent(id: string) {
     void abortWorkflowsForParent(id).catch(() => undefined);
   }
   clearFinishWatchdog(rec);
+  // M5：标记已 dispose 并唤醒仍挂着的 SSE listeners，让它们立即结束流，而不是
+  // 等浏览器 close 才触发 abort。listener 回调里会看到 rec.disposed 为 true。
+  rec.disposed = true;
+  for (const l of rec.listeners) {
+    try {
+      l();
+    } catch {
+      // 单个 listener 抛错不影响其余
+    }
+  }
   rec.unsubscribe();
   rec.session.dispose();
   reg.agents.delete(id);
@@ -2046,6 +2061,15 @@ export function disposeAgent(id: string) {
   disposeRuntimeEventsForAgent(id);
   disposeEvidenceForAgent(id);
   void disposeBrowser(agentBrowserId(id));
+}
+
+/**
+ * M5：给 SSE 路由用——agent 是否已被 dispose（或根本不存在）。
+ * 已 dispose 的流应主动结束，避免连接泄漏到浏览器 close 才回收。
+ */
+export function isAgentDisposed(agentId: string): boolean {
+  const rec = reg.agents.get(agentId);
+  return !rec || rec.disposed === true;
 }
 
 /** 给 SSE 用：拿从某个 seq 之后的所有事件（按 seq 升序） */

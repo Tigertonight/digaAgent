@@ -1,10 +1,17 @@
 import { promises as fs } from "node:fs";
 import { NextResponse } from "next/server";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { findSessionPathById, getSessionDetail } from "@/lib/sessions";
+import {
+  collectSessionDescendants,
+  findSessionPathById,
+  getSessionDetail,
+} from "@/lib/sessions";
 import { deleteMeta } from "@/lib/meta/store";
 import { deletePersistedProgress } from "@/lib/progress/file-store";
+import { removeBatchesByParentSessionPath } from "@/lib/subagents/server-store";
+import { disposeAgent, listAgentSummaries } from "@/lib/agent-registry";
 import { withRemoteAuth } from "@/lib/remote/with-auth";
+import { internalErrorResponse } from "@/lib/api/error-response";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,10 +28,7 @@ export const GET = withRemoteAuth(async function (
     }
     return NextResponse.json(detail);
   } catch (e) {
-    return NextResponse.json(
-      { error: (e as Error).message },
-      { status: 500 }
-    );
+    return internalErrorResponse(e, { scope: "GET /api/sessions/[id]" });
   }
 });
 
@@ -51,34 +55,89 @@ export const PATCH = withRemoteAuth(async function (
     sm.appendSessionInfo(name);
     return NextResponse.json({ ok: true, id, name });
   } catch (e) {
-    return NextResponse.json(
-      { error: (e as Error).message },
-      { status: 500 }
-    );
+    return internalErrorResponse(e, { scope: "PATCH /api/sessions/[id]" });
   }
 });
 
-/** DELETE: 删除 session 文件 */
+/**
+ * DELETE: 删除 session 文件。
+ *
+ * 级联语义：这条 session 的所有后代（通过 parentSessionPath 链接的 fork 子
+ * session，含多层）一并删掉。之前只删自己，会留下一堆 “父不在列表但又
+ * 不是独立根” 的孤儿 session 文件（UI 会被 listAllSessions 当作独立 root 勒出
+ * 来，但实际上是 “删除遗留”）。现在一并清。
+ */
 export const DELETE = withRemoteAuth(async function (
   _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
   try {
-    const path = await findSessionPathById(id);
-    if (!path) {
+    const targets = await collectSessionDescendants(id);
+    if (!targets || targets.length === 0) {
       return NextResponse.json({ error: "session not found" }, { status: 404 });
     }
-    await fs.unlink(path);
-    // RFC-3 Phase A2：联删 diga-agent 的元数据文件；runtime progress 同步清理。
-    // 二者都是幂等操作，不存在即跳过。
-    await deleteMeta(id);
-    await deletePersistedProgress(id);
-    return NextResponse.json({ ok: true, id });
+
+    // 先 dispose 还跑在内存里的 agent record（包括 child agents），否则
+    // SSE / streaming 会继续往已删的文件写入。同一 sessionFile 可能被多个
+    // hidden child agent 占着，dispose 需按 sessionFile 全量扫描。
+    const targetPaths = new Set(targets.map((t) => t.path));
+    const summaries = listAgentSummaries();
+    for (const summary of summaries) {
+      if (!summary.sessionFile) continue;
+      if (targetPaths.has(summary.sessionFile)) {
+        try {
+          disposeAgent(summary.agentId);
+        } catch {
+          // dispose 是 best-effort，删除本身不应被这里阻断
+        }
+      }
+    }
+
+    // 删 jsonl + meta + progress；三者都是幂等，任何一个不存在都忽略。
+    const errors: Array<{ id: string; error: string }> = [];
+    for (const t of targets) {
+      try {
+        await fs.unlink(t.path);
+      } catch (e) {
+        const err = e as NodeJS.ErrnoException;
+        if (err.code !== "ENOENT") {
+          // 真实错误写 server log，对外只暴露 errno code（如 EACCES/EPERM），
+          // 不带绝对路径，避免泄漏目录结构。
+          console.error(`[DELETE /api/sessions/${t.id}] unlink failed:`, err);
+          errors.push({ id: t.id, error: err.code ?? "delete failed" });
+        }
+      }
+      await deleteMeta(t.id);
+      await deletePersistedProgress(t.id);
+      // M1：清掉以该 session 为父的 subagent batches，避免孤儿记录。
+      // 索引按 parentSessionPath（= session 文件路径），用 t.path。
+      try {
+        removeBatchesByParentSessionPath(t.path);
+      } catch (e) {
+        console.error(`[DELETE /api/sessions/${t.id}] remove batches failed:`, e);
+      }
+    }
+
+    if (errors.length > 0) {
+      return NextResponse.json(
+        {
+          error: "some sessions failed to delete",
+          details: errors,
+          deleted: targets
+            .filter((t) => !errors.find((e) => e.id === t.id))
+            .map((t) => t.id),
+        },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({
+      ok: true,
+      id,
+      deleted: targets.map((t) => t.id),
+    });
   } catch (e) {
-    return NextResponse.json(
-      { error: (e as Error).message },
-      { status: 500 }
-    );
+    return internalErrorResponse(e, { scope: "DELETE /api/sessions/[id]" });
   }
 });

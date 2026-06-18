@@ -47,6 +47,41 @@ describe("ctxToMessages", () => {
     ]);
   });
 
+  it("S6: 纯 context-aside 的 user entry 被跳过（与 forkable 对齐，避免锚点错位）", () => {
+    const out = ctxToMessages([
+      { role: "user", content: [{ type: "text", text: "first" }] },
+      {
+        // 仅含 control aside、无可见原文 —— goal continuation 这类系统推进
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "<<<CONTEXT_ASIDE>>>continue the goal<<<END_CONTEXT_ASIDE>>>",
+          },
+        ],
+      },
+      { role: "user", content: [{ type: "text", text: "second" }] },
+    ]);
+    // 只应产出两条可见 user message；中间纯 aside 的那条被跳过。
+    expect(out.filter((m) => m.role === "user").map((m) => m.text)).toEqual([
+      "first",
+      "second",
+    ]);
+  });
+
+  it("S6: 仅含图片（无文本）的 user entry 仍保留", () => {
+    const out = ctxToMessages([
+      {
+        role: "user",
+        content: [{ type: "image", data: "IMG", mimeType: "image/png" }],
+      },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].parts).toEqual([
+      { kind: "image", data: "IMG", mimeType: "image/png" },
+    ]);
+  });
+
   it("user 含 text + image → parts 顺序保留，text 字段只拼 text", () => {
     const out = ctxToMessages([
       {

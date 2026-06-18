@@ -202,6 +202,35 @@ export function listBatchesByParentSessionPath(
   );
 }
 
+/**
+ * M1：删除某父 session 下的所有 subagent batch（内存 + 索引 + 磁盘文件）。
+ * 父 session 被删除时调用，避免遗留孤儿 batch——否则 context 路由仍会按
+ * parentSessionPath 把它们返回，UI 上出现“父没了、子还在”的幽灵记录。
+ * 返回删除的 batch 数。
+ */
+export function removeBatchesByParentSessionPath(
+  parentSessionPath: string
+): number {
+  hydrateFromDisk();
+  let removed = 0;
+  for (const batch of Array.from(store.batches.values())) {
+    if (batch.parentSessionPath !== parentSessionPath) continue;
+    store.batches.delete(batch.id);
+    const ids = store.byParentAgentId.get(batch.parentAgentId);
+    if (ids) {
+      ids.delete(batch.id);
+      if (ids.size === 0) store.byParentAgentId.delete(batch.parentAgentId);
+    }
+    try {
+      unlinkSync(batchFilePath(batch.id));
+    } catch {
+      // 文件不存在 / IO 错误忽略——内存已清，磁盘清理是 best-effort。
+    }
+    removed += 1;
+  }
+  return removed;
+}
+
 export function updateBatchStatus(
   batchId: string,
   status: SubagentBatchStatus,

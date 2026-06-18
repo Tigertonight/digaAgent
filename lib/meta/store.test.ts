@@ -14,6 +14,7 @@ import {
   batchReadMeta,
   deleteMeta,
   readMeta,
+  updateMeta,
   writeMeta,
 } from "./store";
 import type { SessionMeta } from "./types";
@@ -125,6 +126,46 @@ describe("batchReadMeta", () => {
     expect(m.get("has-1")?.title).toBe("a");
     expect(m.get("has-2")?.title).toBe("b");
     expect(m.has("missing")).toBe(false);
+  });
+});
+
+describe("updateMeta (S1: atomic partial merge under per-id lock)", () => {
+  it("merges patch into existing meta without dropping other fields", async () => {
+    await writeMeta({ id: "u1", title: "orig", pinned: false });
+    const merged = await updateMeta("u1", { pinned: true });
+    expect(merged).toEqual({ id: "u1", title: "orig", pinned: true });
+    expect(await readMeta("u1")).toEqual({ id: "u1", title: "orig", pinned: true });
+  });
+
+  it("creates meta when none exists", async () => {
+    const merged = await updateMeta("u2", { title: "new" });
+    expect(merged).toEqual({ id: "u2", title: "new" });
+  });
+
+  it("does not lose fields under concurrent updates of different fields", async () => {
+    await writeMeta({ id: "race", title: "t0", pinned: false });
+    // 两个并发更新不同字段：无锁的 read-merge-write 会让后写者覆盖前写者、丢字段。
+    // 有锁后两者串行，最终既有 pinned 又有新 title。
+    await Promise.all([
+      updateMeta("race", { pinned: true }),
+      updateMeta("race", { title: "t1" }),
+    ]);
+    const got = await readMeta("race");
+    expect(got?.pinned).toBe(true);
+    expect(got?.title).toBe("t1");
+  });
+
+  it("serializes many concurrent updates (last writer of each field wins, none lost)", async () => {
+    await writeMeta({ id: "many", title: "base" });
+    await Promise.all(
+      Array.from({ length: 20 }, (_, i) =>
+        updateMeta("many", { lastSeenAt: 1_700_000_000_000 + i })
+      )
+    );
+    const got = await readMeta("many");
+    // title 始终保留；lastSeenAt 是某次合法写入（不丢、不损坏）。
+    expect(got?.title).toBe("base");
+    expect(typeof got?.lastSeenAt).toBe("number");
   });
 });
 

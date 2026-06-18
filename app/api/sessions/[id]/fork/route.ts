@@ -15,6 +15,7 @@ import { NextResponse } from "next/server";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { findSessionPathById, getSessionDetail } from "@/lib/sessions";
 import { withRemoteAuth } from "@/lib/remote/with-auth";
+import { internalErrorResponse } from "@/lib/api/error-response";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -75,9 +76,6 @@ export const POST = withRemoteAuth(async function (
       targetEntryId,
     });
   } catch (e) {
-    return NextResponse.json(
-      { error: (e as Error).message },
-      { status: 500 }
-    );
+    return internalErrorResponse(e, { scope: "POST /api/sessions/[id]/fork" });
   }
 });

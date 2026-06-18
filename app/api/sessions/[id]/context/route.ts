@@ -7,6 +7,7 @@ import {
   getForkableUserMessages,
 } from "@/lib/sessions";
 import { assertRemoteAuth } from "@/lib/remote/auth";
+import { internalErrorResponse } from "@/lib/api/error-response";
 import { listAgentSummaries } from "@/lib/agent-registry";
 import { listBatchesByParentSessionPath } from "@/lib/subagents/server-store";
 import { readPersistedProgress } from "@/lib/progress/file-store";
@@ -67,16 +68,19 @@ export async function GET(
     // error 保持一致。同时在返回体上补一个 interrupted 信号，让前端
     // ctxToMessages 走 unfinishedToolStatus="error" 分支。
     const messages = (ctx as { messages?: unknown }).messages;
+    // M2: 只要该 session 还有任何活着的 agent record，就不要标 interrupted。
+    // 旧逻辑只豁免 streaming / waiting_user 两个 runtime 态，会误伤 waiting_model、
+    // 工具刚 dispatch 未 return 等短暂态——此时打开 session 会被错误判定为中断，
+    // 把进行中的 progress 节点强行收口成 failed。真正的“异常中断”只发生在进程已
+    // 不存在任何活 agent record 的情况下。
+    const hasLiveAgent = listAgentSummaries().some(
+      (agent) => agent.sessionId === id
+    );
     const interrupted =
+      !hasLiveAgent &&
       Array.isArray(messages) &&
       hasUnpairedToolCalls(
         messages as Parameters<typeof hasUnpairedToolCalls>[0]
-      ) &&
-      !listAgentSummaries().some(
-        (agent) =>
-          agent.sessionId === id &&
-          (agent.runtimeState === "streaming" ||
-            agent.runtimeState === "waiting_user")
       );
     if (interrupted) {
       progress = markInterruptedProgress(progress);
@@ -89,9 +93,6 @@ export async function GET(
       interrupted,
     });
   } catch (e) {
-    return NextResponse.json(
-      { error: (e as Error).message },
-      { status: 500 }
-    );
+    return internalErrorResponse(e, { scope: "GET /api/sessions/[id]/context" });
   }
 }

@@ -135,6 +135,49 @@ export async function batchReadMeta(
 }
 
 /**
+ * S1: per-id 串行化锁。Node 单线程，但 read → merge → write 之间有 await 让出点，
+ * 两个并发 PATCH（如桌面改 pin、移动端改 title）可能各自读到旧值再写回，后写者
+ * 覆盖前写者、静默丢字段。用 per-id 的 Promise chain 把同一 session 的更新串起来：
+ * 同一 id 的 updateMeta 严格排队执行，read 一定看到上一个 write 的结果。
+ *
+ * 注意：这是单进程内的互斥。多进程并发写同一 meta 仍需文件锁/乐观锁——但当前
+ * 架构下所有 meta 写入都经过这一个 server 进程，单进程锁已覆盖真实场景。
+ */
+const metaUpdateChains = new Map<string, Promise<unknown>>();
+
+/**
+ * 原子地对单个 session 的 meta 做 partial merge（read-merge-write 全程持锁）。
+ * patch 中的字段覆盖现有值；其余字段保留。返回合并后的 meta。
+ *
+ * 路由层应改用本函数，而不是自己 read→spread→write（那样无锁，会丢字段）。
+ */
+export async function updateMeta(
+  sessionId: string,
+  patch: Partial<SessionMeta>
+): Promise<SessionMeta> {
+  // 排在上一个同 id 操作之后；用 .catch(()=>{}) 让前一个失败不阻断后续排队者。
+  const prev = (metaUpdateChains.get(sessionId) ?? Promise.resolve()).catch(
+    () => undefined
+  );
+  const run = prev.then(async () => {
+    const existing = (await readMeta(sessionId)) ?? { id: sessionId };
+    const merged: SessionMeta = { ...existing, ...patch, id: sessionId };
+    await writeMeta(merged);
+    return merged;
+  });
+  // 用 run 本身作为链尾占位；结算后若链尾仍是自己（无后继排队）则清理 map，防泄漏。
+  metaUpdateChains.set(sessionId, run);
+  void run
+    .catch(() => undefined)
+    .finally(() => {
+      if (metaUpdateChains.get(sessionId) === run) {
+        metaUpdateChains.delete(sessionId);
+      }
+    });
+  return run;
+}
+
+/**
  * 删除单个 session 的 meta 文件。幂等（不存在直接成功）。
  * 应在 DELETE /api/sessions/[id] 路由里联调。
  */

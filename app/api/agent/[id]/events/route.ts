@@ -16,6 +16,7 @@ import {
   getEarliestEventSeq,
   getEventsSince,
   getLatestEventSeq,
+  isAgentDisposed,
   onNewEvent,
 } from "@/lib/agent-registry";
 import { assertRemoteAuth } from "@/lib/remote/auth";
@@ -99,11 +100,30 @@ export async function GET(
       //    SDK 一个 text_delta 事件可能 5-20ms 一发,纯文本流式 50-100 events/s。
       //    每个 event 都立即 flush + 立即 SSE write 会让前端 React commit 也变成 50-100/s。
       //    把同一 16ms 窗内的事件累积一次 enqueue,前端最多 60fps 触发,刚好对齐 RAF。
+      const closeStream = () => {
+        closed = true;
+        if (unsub) unsub();
+        if (heartbeat) clearInterval(heartbeat);
+        if (flushTimer) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
+        }
+        try {
+          controller.close();
+        } catch {
+          // already closed
+        }
+      };
       const flushNow = () => {
         flushTimer = null;
         for (const { seq, event } of getEventsSince(id, lastSentSeq)) {
           safeEnqueue(sseEncode(seq, event));
           lastSentSeq = seq;
+        }
+        // M5：agent 已被 dispose（删除 session 等）——主动结束这条 SSE 流，
+        // 不再等浏览器 close 才回收。客户端会按 S2 尝试重连，得到 404 后自然停止。
+        if (isAgentDisposed(id)) {
+          closeStream();
         }
       };
       const scheduleFlush = () => {

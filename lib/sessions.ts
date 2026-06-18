@@ -125,6 +125,62 @@ export async function findSessionPathById(id: string): Promise<string | null> {
   return hit?.path ?? null;
 }
 
+/**
+ * S4: 校验客户端传入的 sessionPath 确实属于 expectedId 的已知 session 文件，
+ * 再返回该 path；否则返回 null。
+ *
+ * 防止 `?path=` 被用来读任意文件：旧实现先 SessionManager.open(任意 path) 再比对
+ * sessionId，等于在校验前就已经打开/解析了攻击者指定的文件（可探测存在性 / 触发
+ * 带路径的解析错误）。这里改为先用 listAll() 的可信清单做精确匹配，匹配上才返回
+ * 那条**清单里登记的 path**（而非客户端原样回传的字符串），从根上杜绝越权读。
+ */
+export async function resolveTrustedSessionPath(
+  sessionPath: string,
+  expectedId: string
+): Promise<string | null> {
+  if (!sessionPath || !expectedId) return null;
+  const all = await SessionManager.listAll();
+  const hit = all.find((s) => s.id === expectedId && s.path === sessionPath);
+  return hit?.path ?? null;
+}
+
+/**
+ * 收集 root 这条 session 的所有后代（含自身），通过 parentSessionPath 链接，
+ * BFS 找到所有以 root.path 为祖先的子 session。返回顺序：root 在前，后代在后。
+ *
+ * 用于级联删除——父 session 删掉后，从它 fork 出来的所有 child（含 child 的
+ * child）必须一起清理，否则会变成游离的孤儿文件，UI 里又找不到入口。
+ */
+export async function collectSessionDescendants(
+  rootId: string
+): Promise<Array<{ id: string; path: string }> | null> {
+  const all = await SessionManager.listAll();
+  const root = all.find((s) => s.id === rootId);
+  if (!root) return null;
+
+  // 按 parent path 建索引：parentPath -> children[]
+  const childrenByParent = new Map<string, SessionInfo[]>();
+  for (const s of all) {
+    if (!s.parentSessionPath) continue;
+    const arr = childrenByParent.get(s.parentSessionPath) ?? [];
+    arr.push(s);
+    childrenByParent.set(s.parentSessionPath, arr);
+  }
+
+  const out: Array<{ id: string; path: string }> = [];
+  const seen = new Set<string>();
+  const queue: SessionInfo[] = [root];
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    if (seen.has(cur.id)) continue;
+    seen.add(cur.id);
+    out.push({ id: cur.id, path: cur.path });
+    const kids = childrenByParent.get(cur.path);
+    if (kids) queue.push(...kids);
+  }
+  return out;
+}
+
 /** 拿 session 详情：header + 全部 entries + 当前上下文 */
 export async function getSessionDetail(id: string): Promise<{
   info: SessionInfo;
@@ -175,7 +231,10 @@ export async function getSessionContextTailByPath(
     hasMoreBefore?: boolean;
   }) | null
 > {
-  const sm = SessionManager.open(sessionPath);
+  // S4: 先用可信清单校验 path 归属，避免打开任意文件。
+  const trusted = await resolveTrustedSessionPath(sessionPath, expectedId);
+  if (!trusted) return null;
+  const sm = SessionManager.open(trusted);
   if (sm.getSessionId() !== expectedId) return null;
   const branch = sm.getBranch();
   const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
@@ -198,7 +257,10 @@ export async function getSessionContextPageByPath(
     truncatedBefore?: number;
   }) | null
 > {
-  const sm = SessionManager.open(sessionPath);
+  // S4: 先用可信清单校验 path 归属，避免打开任意文件。
+  const trusted = await resolveTrustedSessionPath(sessionPath, expectedId);
+  if (!trusted) return null;
+  const sm = SessionManager.open(trusted);
   if (sm.getSessionId() !== expectedId) return null;
   const branch = sm.getBranch();
   const safeLimit = Math.max(1, Math.min(200, Math.floor(limit)));
