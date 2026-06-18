@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Diga Agent Phase Preview</title>
+  <link rel="preload" href="https://at.alicdn.com/t/font_3335483_zuulolvhsh8.woff2" as="font" type="font/woff2" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://at.alicdn.com/t/font_3335483_zuulolvhsh8.css">
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #ffffff;
+      --bg-panel: #f5f5f5;
+      --bg-hover: #eeeeee;
+      --bg-selected: #e8e8e8;
+      --bg-subtle: rgba(0, 0, 0, 0.03);
+      --border: #e0e0e0;
+      --border-soft: #ececec;
+      --text: #1a1a1a;
+      --text-muted: #6b7280;
+      --text-dim: #9ca3af;
+      --accent: #2563eb;
+      --accent-bg: rgba(37, 99, 235, 0.12);
+      --tool-bg: #f9fafb;
+      --success: #16a34a;
+      --success-bg: rgba(22, 163, 74, 0.12);
+      --warning: #d97706;
+      --warning-bg: rgba(217, 119, 6, 0.12);
+      --shadow-popover: 0 12px 30px rgba(15, 23, 42, 0.12);
+      --font-sans: -apple-system, system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --font-mono: "SFMono-Regular", "JetBrains Mono", Consolas, ui-monospace, monospace;
+      --motion: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #1a1a1a;
+      --bg-panel: #242424;
+      --bg-hover: #2e2e2e;
+      --bg-selected: #383838;
+      --bg-subtle: rgba(255, 255, 255, 0.04);
+      --border: #3a3a3a;
+      --border-soft: #323232;
+      --text: #e8e8e8;
+      --text-muted: #9ca3af;
+      --text-dim: #6b7280;
+      --accent: #60a5fa;
+      --accent-bg: rgba(96, 165, 250, 0.14);
+      --tool-bg: #1f2937;
+      --success: #4ade80;
+      --success-bg: rgba(74, 222, 128, 0.12);
+      --warning: #fbbf24;
+      --warning-bg: rgba(251, 191, 36, 0.14);
+      --shadow-popover: 0 14px 34px rgba(0, 0, 0, 0.36);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.5 var(--font-sans);
+      letter-spacing: 0;
+      text-wrap: pretty;
+    }
+
+    button,
+    select {
+      font: inherit;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 286px;
+      min-height: 100vh;
+    }
+
+    .main {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      min-width: 0;
+      border-right: 1px solid var(--border);
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 52px;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--border);
+      background: color-mix(in srgb, var(--bg) 92%, var(--bg-panel));
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      gap: 10px;
+      font-weight: 600;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--accent);
+      background: var(--accent-bg);
+      font: 700 12px/1 var(--font-mono);
+    }
+
+    .topbar-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .messages {
+      overflow: auto;
+      padding: 24px 18px 32px;
+    }
+
+    .thread {
+      width: min(820px, 100%);
+      margin: 0 auto;
+      display: grid;
+      gap: 18px;
+    }
+
+    .message {
+      min-width: 0;
+    }
+
+    .user {
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .user .bubble {
+      max-width: min(620px, 82%);
+      padding: 9px 11px;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--accent-bg) 65%, var(--bg));
+      border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+      line-height: 1.55;
+    }
+
+    .assistant {
+      display: grid;
+      gap: 8px;
+    }
+
+    .meta-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 18px;
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
+    .meta-row.compact {
+      color: var(--text-dim);
+      font-style: italic;
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      flex: 0 0 auto;
+      border-radius: 999px;
+      background: var(--text-dim);
+    }
+
+    .dot.active {
+      background: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-bg);
+    }
+
+    .dot.live {
+      background: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-bg);
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      50% { opacity: 0.42; transform: scale(0.82); }
+    }
+
+    .parts {
+      display: grid;
+      gap: 8px;
+    }
+
+    .process-summary {
+      width: min(760px, 100%);
+    }
+
+    .process-summary summary {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 22px;
+      padding: 0;
+      color: var(--text-muted);
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+      font-size: 12px;
+    }
+
+    .process-summary summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .process-title {
+      min-width: 0;
+    }
+
+    .process-title strong {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 400;
+    }
+
+    .process-toggle {
+      color: var(--text-dim);
+      font-size: 12px;
+    }
+
+    .process-toggle::before {
+      content: "展开";
+    }
+
+    .process-summary[open] .process-toggle {
+      color: var(--text-muted);
+    }
+
+    .process-summary[open] .process-toggle::before {
+      content: "收起";
+    }
+
+    .process-details {
+      display: grid;
+      gap: 12px;
+      padding: 8px 0 0 16px;
+    }
+
+    .process-summary:not([open]) .process-details {
+      display: none;
+    }
+
+    .process-turn {
+      display: grid;
+      gap: 8px;
+    }
+
+    .part {
+      max-width: 760px;
+    }
+
+    .process-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      flex: 0 0 auto;
+      color: var(--text-muted);
+      font-size: 15px;
+      line-height: 1;
+    }
+
+    .thinking,
+    .commentary {
+      color: var(--text-dim);
+      font-style: italic;
+    }
+
+    .thinking {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .commentary {
+      line-height: 1.62;
+    }
+
+    .final-text {
+      color: var(--text);
+      line-height: 1.68;
+    }
+
+    .tool {
+      width: min(680px, 100%);
+      border: 1px solid var(--border-soft);
+      border-radius: 8px;
+      background: var(--tool-bg);
+      overflow: hidden;
+    }
+
+    .tool-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border-soft);
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+
+    .tool-name {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .tool-body {
+      margin: 0;
+      padding: 9px 10px 10px;
+      overflow-x: auto;
+      color: var(--text-muted);
+      font: 12px/1.55 var(--font-mono);
+    }
+
+    .prompt {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 56px;
+      padding: 0 18px;
+      border-top: 1px solid var(--border);
+      color: var(--text-muted);
+      background: var(--bg);
+      font-size: 13px;
+    }
+
+    .prompt-caret {
+      width: 8px;
+      height: 18px;
+      border-radius: 2px;
+      background: var(--accent);
+      animation: blink 1.1s steps(2, jump-none) infinite;
+    }
+
+    @keyframes blink {
+      50% { opacity: 0; }
+    }
+
+    .panel {
+      min-width: 0;
+      padding: 18px;
+      background: var(--bg-panel);
+      overflow: auto;
+    }
+
+    .panel-section {
+      padding: 14px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .panel-section:first-child {
+      padding-top: 0;
+    }
+
+    .panel h2,
+    .panel h3 {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .panel h2 {
+      font-size: 15px;
+    }
+
+    .panel p {
+      margin: 7px 0 0;
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .controls {
+      display: grid;
+      gap: 10px;
+      margin-top: 11px;
+    }
+
+    .control-row {
+      display: grid;
+      gap: 5px;
+    }
+
+    .control-row label {
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
+    select,
+    .toggle {
+      height: 32px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    select {
+      width: 100%;
+      padding: 0 8px;
+    }
+
+    .toggle {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      cursor: pointer;
+      transition: background var(--motion), border-color var(--motion);
+    }
+
+    .toggle:hover,
+    select:hover {
+      background: var(--bg-hover);
+    }
+
+    .legend {
+      display: grid;
+      gap: 9px;
+      margin-top: 10px;
+    }
+
+    .legend-item {
+      display: grid;
+      grid-template-columns: 74px 1fr;
+      gap: 10px;
+      align-items: baseline;
+      font-size: 12px;
+    }
+
+    .legend code {
+      color: var(--text);
+      font: 11px/1.4 var(--font-mono);
+    }
+
+    .legend span {
+      color: var(--text-muted);
+    }
+
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      padding: 0 8px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      background: var(--bg);
+      font-size: 11px;
+    }
+
+    .chip.active {
+      color: var(--accent);
+      border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+      background: var(--accent-bg);
+    }
+
+    @media (max-width: 860px) {
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .main {
+        border-right: 0;
+      }
+
+      .panel {
+        border-top: 1px solid var(--border);
+      }
+    }
+
+    @media (max-width: 560px) {
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+        padding: 12px 14px;
+      }
+
+      .topbar-meta {
+        white-space: normal;
+      }
+
+      .messages {
+        padding: 18px 14px 26px;
+      }
+
+      .user .bubble {
+        max-width: 92%;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation: none !important;
+        transition: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <main class="main" aria-label="Diga agent conversation preview">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">D</span>
+          <span>Diga Agent · process text preview</span>
+        </div>
+        <div class="topbar-meta">
+          <span>Chrome appears at round completion</span>
+          <span aria-hidden="true">/</span>
+          <span>final text stays visually dominant</span>
+        </div>
+      </header>
+
+      <section class="messages">
+        <div class="thread" id="thread"></div>
+      </section>
+
+      <footer class="prompt">
+        <span class="prompt-caret" aria-hidden="true"></span>
+        <span>› Ask Diga to implement the visual demotion rule</span>
+      </footer>
+    </main>
+
+    <aside class="panel" aria-label="Preview controls">
+      <section class="panel-section">
+        <h2>Preview Controls</h2>
+        <p>切换中间文本的判定方式，观察“过程旁白”和“最终回答”的明度差距。</p>
+        <div class="controls">
+          <div class="control-row">
+            <label for="scenario">Scenario</label>
+            <select id="scenario">
+              <option value="full">完整工具循环</option>
+              <option value="stop-middle">中间停顿后继续</option>
+              <option value="live">流式处理中</option>
+            </select>
+          </div>
+          <button class="toggle" id="themeToggle" type="button">Toggle theme</button>
+        </div>
+      </section>
+
+      <section class="panel-section">
+        <h3>Rendering Rule</h3>
+        <div class="legend">
+          <div class="legend-item">
+            <code>工具循环</code>
+            <span>中间过程降权显示，不抢最终回答的视觉权重。</span>
+          </div>
+          <div class="legend-item">
+            <code>中间停顿</code>
+            <span>整轮未结束时，先收进过程摘要。</span>
+          </div>
+          <div class="legend-item">
+            <code>最终回答</code>
+            <span>整轮结束后，最后一条回答恢复正常正文。</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel-section">
+        <h3>Current Turn State</h3>
+        <div class="chip-row" id="chips"></div>
+      </section>
+    </aside>
+  </div>
+
+  <script>
+    const scenarios = {
+      full: {
+        chips: ["查看代码", "整理过程", "输出结论"],
+        items: [
+          {
+            role: "user",
+            text: "把 Codex 的 commentary / final_answer 视觉分级搬到 Diga Agent 里，先做一个可预览的效果。"
+          },
+          {
+            role: "assistant",
+            turnState: "compact",
+            stopReason: "tool_use",
+            phase: "commentary",
+            meta: "查看消息渲染路径",
+            duration: "38 秒",
+            parts: [
+              { kind: "thinking", text: "先确认现有 token、message chrome 和 turnState 判定。" },
+              { kind: "text", text: "我先读一下 Diga 的消息渲染路径，确认 chrome 现在是不是已经只绑在 final turn 上。" },
+              { kind: "tool", name: "rg", label: "搜索消息渲染相关代码", status: "完成", body: "rg -n \"turnState|stopReason|MessageView\" diga-agent/app diga-agent/lib" }
+            ]
+          },
+          {
+            role: "assistant",
+            turnState: "compact",
+            stopReason: "tool_use",
+            phase: "commentary",
+            meta: "确认 chrome 的收敛规则",
+            duration: "38 秒",
+            parts: [
+              { kind: "text", text: "看起来消息头已经收敛到最终、折叠、流式三种状态。下一步只需要让中间文本自动退到过程层级。" },
+              { kind: "tool", name: "sed", label: "查看消息组件片段", status: "完成", body: "MessageView: showFullChrome 只在 turnState === \"final\" 时出现" }
+            ]
+          },
+          {
+            role: "assistant",
+            turnState: "final",
+            stopReason: "stop",
+            phase: "final",
+            meta: "final_answer + agent_end",
+            parts: [
+              { kind: "text", text: "效果上建议这样落地：非最终 assistant 的 text part 使用 commentary 样式，颜色走 var(--text-dim)，字体 italic；最终 assistant 的 text part 继续使用 var(--text)。这样过程文本会像 Codex 一样退到背景里，真正结论会自然浮出来。" }
+            ]
+          }
+        ]
+      },
+      "stop-middle": {
+        chips: ["中间停顿", "继续处理", "最终回答"],
+        items: [
+          {
+            role: "user",
+            text: "如果 SDK 给了 stop，但后面又继续跑工具循环，text 应该怎么显示？"
+          },
+          {
+            role: "assistant",
+            turnState: "compact",
+            stopReason: "stop",
+            phase: "commentary",
+            meta: "把中间停顿保留为过程",
+            duration: "13 秒",
+            indicator: "active",
+            parts: [
+              { kind: "thinking", text: "这一条不是本轮最后 assistant，不能给它最终回答权重。" },
+              { kind: "text", text: "先把这个 stop 当成中间态处理：只要 agent_end 还没到，或者它不是本轮最后 assistant，就保持 commentary 色阶。" }
+            ]
+          },
+          {
+            role: "assistant",
+            turnState: "final",
+            stopReason: "stop",
+            phase: "final",
+            meta: "最终回答",
+            parts: [
+              { kind: "text", text: "等 agent_end 到达后，只有最后一条 assistant 才切到 final_answer 视觉。这个规则能覆盖“stop 不是终点”的边缘情况。" }
+            ]
+          }
+        ]
+      },
+      live: {
+        chips: ["正在写入", "工具运行中", "等待完成"],
+        items: [
+          {
+            role: "user",
+            text: "流式写作时呢？"
+          },
+          {
+            role: "assistant",
+            turnState: "live",
+            stopReason: null,
+            phase: "commentary",
+            meta: "正在处理",
+            parts: [
+              { kind: "thinking", text: "当前 active assistant 还没 message_end。" },
+              { kind: "text", text: "流式中保持 live dot 和过程色阶。等 message_end + agent_end 抵达后，再把最后一条 text 提升为 final。" },
+              { kind: "tool", name: "apply_patch", label: "更新消息组件", status: "运行中", body: "*** Update File: app/components/MessageView.tsx\n@@\n+ const textTone = turnState === \"final\" ? \"final\" : \"commentary\";" }
+            ]
+          }
+        ]
+      }
+    };
+
+    const thread = document.querySelector("#thread");
+    const chips = document.querySelector("#chips");
+    const scenarioSelect = document.querySelector("#scenario");
+    const themeToggle = document.querySelector("#themeToggle");
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function partHtml(part, phase) {
+      if (part.kind === "thinking") {
+        return `
+          <div class="part thinking">
+            <span class="iconfont icon-optimization process-icon" aria-label="思考"></span>
+            <span>${escapeHtml(part.text)}</span>
+          </div>
+        `;
+      }
+      if (part.kind === "tool") {
+        return `
+          <div class="tool">
+            <div class="tool-head">
+              <span class="tool-name">
+                <span class="iconfont icon-tool process-icon" aria-hidden="true"></span>
+                <span>${escapeHtml(part.label || part.name)}</span>
+              </span>
+              <span>${escapeHtml(part.status)}</span>
+            </div>
+            <pre class="tool-body">${escapeHtml(part.body)}</pre>
+          </div>
+        `;
+      }
+      const className = phase === "final" ? "final-text" : "commentary";
+      return `<div class="part ${className}">${escapeHtml(part.text)}</div>`;
+    }
+
+    function summarizeProcessItems(items) {
+      const duration = items.find((item) => item.duration)?.duration || "几秒";
+      return {
+        title: `已处理 ${duration}`,
+      };
+    }
+
+    function processGroupHtml(items) {
+      const summary = summarizeProcessItems(items);
+      return `
+        <details class="process-summary">
+          <summary>
+            <span class="process-title">
+              <strong>${escapeHtml(summary.title)}</strong>
+            </span>
+            <span class="process-toggle" aria-hidden="true"></span>
+          </summary>
+          <div class="process-details">
+            ${items.map((item) => `
+              <section class="process-turn" data-stop-reason="${escapeHtml(item.stopReason || "streaming")}">
+                <div class="meta-row compact">
+                  ${item.indicator === "active" ? '<span class="dot active" aria-hidden="true"></span>' : ""}
+                  <span>${escapeHtml(item.meta)}</span>
+                </div>
+                <div class="parts">
+                  ${item.parts.map((part) => partHtml(part, item.phase)).join("")}
+                </div>
+              </section>
+            `).join("")}
+          </div>
+        </details>
+      `;
+    }
+
+    function assistantHtml(item) {
+      const metaClass = item.turnState === "compact" ? "meta-row compact" : "meta-row";
+      const dotClass = item.turnState === "live" ? "dot live" : item.indicator === "active" ? "dot active" : "";
+      const label = item.turnState === "final" ? "Diga Agent" : item.meta;
+      return `
+        <article class="message assistant" data-stop-reason="${escapeHtml(item.stopReason || "streaming")}">
+          <div class="${metaClass}">
+            ${dotClass ? `<span class="${dotClass}" aria-hidden="true"></span>` : ""}
+            <span>${escapeHtml(label)}</span>
+          </div>
+          <div class="parts">
+            ${item.parts.map((part) => partHtml(part, item.phase)).join("")}
+          </div>
+        </article>
+      `;
+    }
+
+    function isCollapsibleProcess(item) {
+      return (
+        item.role === "assistant" &&
+        item.phase === "commentary" &&
+        item.turnState !== "live" &&
+        item.indicator !== "active"
+      );
+    }
+
+    function render() {
+      const scenario = scenarios[scenarioSelect.value];
+      chips.innerHTML = scenario.chips
+        .map((chip, index) => `<span class="chip ${index === scenario.chips.length - 1 ? "active" : ""}">${escapeHtml(chip)}</span>`)
+        .join("");
+      const rendered = [];
+      for (let index = 0; index < scenario.items.length; index += 1) {
+        const item = scenario.items[index];
+        if (isCollapsibleProcess(item)) {
+          const group = [];
+          while (index < scenario.items.length && isCollapsibleProcess(scenario.items[index])) {
+            group.push(scenario.items[index]);
+            index += 1;
+          }
+          index -= 1;
+          rendered.push(processGroupHtml(group));
+        } else {
+          if (item.role === "user") {
+            rendered.push(`<article class="message user"><div class="bubble">${escapeHtml(item.text)}</div></article>`);
+          } else {
+            rendered.push(assistantHtml(item));
+          }
+        }
+      }
+      thread.innerHTML = rendered.join("");
+    }
+
+    scenarioSelect.addEventListener("change", render);
+    themeToggle.addEventListener("click", () => {
+      const root = document.documentElement;
+      root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+    });
+
+    render();
+  </script>
+</body>
+</html>
