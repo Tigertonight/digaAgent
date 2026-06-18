@@ -1213,6 +1213,17 @@ function processPartGroupTitle(group: ProcessPartGroup): string {
     group.recovered && hasErroredProcessPart(group.parts) ? "已处理：" : "";
   const prefix = recoveredPrefix || failedPrefix;
   const active = group.status === "running";
+  const singleToolTitle =
+    count === 1 && group.parts[0]?.kind === "tool"
+      ? narrateTool(group.parts[0]).primary
+      : "";
+  if (singleToolTitle) {
+    if (!prefix) return singleToolTitle;
+    return singleToolTitle.startsWith("执行失败：") ||
+      singleToolTitle.startsWith("已处理：")
+      ? singleToolTitle
+      : `${prefix}${singleToolTitle.replace(/^(正在|已完成：)/, "")}`;
+  }
   if (group.kind === "thinking") return `${active ? "正在" : "已"}整理思路`;
   if (group.kind === "approval") return `${prefix}已处理工具确认`;
   if (group.kind === "read") return `${prefix}${active ? "正在读取" : "已读取"} ${count} 个文件`;
