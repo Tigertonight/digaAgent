@@ -43,6 +43,12 @@ export function upsertOptimisticSession(
       // 路径 / cwd 一般不变；服务端写过就以它为准。
       path: cur.path || input.path,
       cwd: cur.cwd || input.cwd,
+      name:
+        cur.name && cur.name !== "(empty)"
+          ? cur.name
+          : cur.firstMessage && cur.firstMessage.length > 0
+          ? cur.name
+          : trimmedFirst || cur.name,
       firstMessage:
         cur.firstMessage && cur.firstMessage.length > 0
           ? cur.firstMessage
@@ -55,6 +61,7 @@ export function upsertOptimisticSession(
     };
     if (
       merged.firstMessage === cur.firstMessage &&
+      merged.name === cur.name &&
       merged.runtimeState === cur.runtimeState &&
       merged.isRunning === cur.isRunning &&
       merged.parentSessionPath === cur.parentSessionPath
@@ -74,6 +81,7 @@ export function upsertOptimisticSession(
     parentSessionPath: input.parentSessionPath,
     created: nowIso,
     modified: nowIso,
+    name: trimmedFirst || "新会话",
     messageCount: trimmedFirst ? 1 : 0,
     firstMessage: trimmedFirst,
     isRunning: true,

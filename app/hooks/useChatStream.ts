@@ -25,7 +25,7 @@
  * - runSlashCommand：依赖太散（5 个 modal 开关 + setInput）
  * - 图片附件 4 个 callback：B2-b useComposerAttachments
  */
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import type {
   ChatMessage,
   ImageContentLite,
@@ -125,7 +125,9 @@ export interface UseChatStreamParams {
   thinkingLevel: ThinkingLevel;
   selectedId: string | null;
   sessions: SessionInfoLite[];
-  messages: ChatMessage[]; // send 用来算 currentUserCount
+  /** 仅供外部调用方读取该 ChatApp 当前渲染的 messages；send / startGoal /
+   *  startWorkflow 内部现在不再读它，但保留在 params 上不动，避免调用方修改。 */
+  messages: ChatMessage[];
 
   // ===== runner store（useRunners 提供） =====
   runnersRef: React.RefObject<Map<RunnerKey, RunnerState>>;
@@ -156,9 +158,6 @@ export interface UseChatStreamParams {
   refreshStats: (aid: string, ownerKey?: RunnerKey) => void | Promise<void>;
   refreshToolsCount: (aid: string, ownerKey?: RunnerKey) => void | Promise<void>;
 
-  // ===== UI 滚动锚定（hook 不知道细节，只触发） =====
-  pendingPinUserCountRef: React.MutableRefObject<number | null>;
-  setPinSpacer: (v: boolean) => void;
 }
 
 export interface UseChatStreamReturn {
@@ -170,7 +169,7 @@ export interface UseChatStreamReturn {
     aid: string;
     ownerKey: RunnerKey;
   } | null>;
-  send: () => Promise<void>;
+  send: (textOverride?: string) => Promise<void>;
   onAbort: () => Promise<void>;
   onCompact: () => Promise<void>;
   onAbortCompaction: () => Promise<void>;
@@ -196,7 +195,6 @@ export function useChatStream(
     thinkingLevel,
     selectedId,
     sessions,
-    messages,
     runnersRef,
     activeKeyRef,
     updateRunner,
@@ -212,8 +210,6 @@ export function useChatStream(
     setSessions,
     refreshStats,
     refreshToolsCount,
-    pendingPinUserCountRef,
-    setPinSpacer,
   } = params;
 
   // 通用 agent action POST：失败时 setError 并 throw（让调用方决定吞或继续抛）
@@ -239,33 +235,51 @@ export function useChatStream(
    * F7/F8：草稿 → 正式 session 升级。
    *   - 接收明确的 sessionId（从 /api/agent/new 返回），不再依赖路径正则。
    *   - 只负责 runner key 迁移 + selectedId 联动；SSE attach 由调用方唯一负责。
+   *
+   * P1 修复（新建 Agent 归属竞态）：明确接收 “发起者的 ownerKey”，不再从
+   *   activeKeyRef.current 实时读。await 期间用户可能已切 session，该函数会根
+   *   据 ownerAtStart 判定是否仍需要迁移、是否需要 switchTo / setSelectedId：
+   *     - 只有仍是当前 active 且仍在 DRAFT 上 → switchTo + setSelectedId（不抢 UI）。
+   *     - 如果 active 已变 → 仅迁移 runner 到 newKey，不 switchTo / setSelectedId。
    */
   const upgradeDraftIfNeeded = useCallback(
     (
       sessionFilePath: string | null,
-      sessionId?: string | null
+      sessionId?: string | null,
+      ownerKeyAtStart?: RunnerKey
     ): RunnerKey => {
-      const currentKey = activeKeyRef.current ?? DRAFT_KEY;
-      if (currentKey !== DRAFT_KEY || !sessionFilePath) return currentKey;
+      const currentActive = activeKeyRef.current ?? DRAFT_KEY;
+      // P1：“创建请求属于谁，响应就写回谁”。传入明确的 ownerKey 为准；
+      // 未传（老调用点）则退化为 current active，保持背后兼容。
+      const ownerAtStart = ownerKeyAtStart ?? currentActive;
+      if (ownerAtStart !== DRAFT_KEY || !sessionFilePath) return ownerAtStart;
       const newKey: RunnerKey = sessionFilePath;
       const idFromBackend =
         sessionId && sessionId.length > 0 ? sessionId : null;
       const idFromPath = idFromBackend ?? extractSessionIdFromPath(sessionFilePath);
+      const ownerStillActive = currentActive === ownerAtStart;
+
       if (runnersRef.current?.has(newKey)) {
-        switchTo(newKey);
-        if (idFromPath) setSelectedId(idFromPath);
+        if (ownerStillActive) {
+          switchTo(newKey);
+          if (idFromPath) setSelectedId(idFromPath);
+        }
         return newKey;
       }
       const upgraded = runnersRef.current?.get(DRAFT_KEY);
-      if (!upgraded) return currentKey;
+      if (!upgraded) return ownerAtStart;
       const draftInput = getStoreInput(DRAFT_KEY);
       runnersRef.current?.set(newKey, upgraded);
       runnersRef.current?.delete(DRAFT_KEY);
       if (draftInput) setStoreInput(newKey, draftInput);
       deleteStoreInput(DRAFT_KEY);
       closeSseFor(DRAFT_KEY);
-      switchTo(newKey);
-      if (idFromPath) setSelectedId(idFromPath);
+      // P1：仅在 owner 仍是当前 active 时才 switchTo / setSelectedId。
+      // 用户已手动切到其它 session 时，不抢他的 UI 焦点。
+      if (ownerStillActive) {
+        switchTo(newKey);
+        if (idFromPath) setSelectedId(idFromPath);
+      }
       setRunner(DRAFT_KEY, emptyRunner());
       // F8：草稿升级本身不 attach SSE。调用方（首次 ensureAgent）会 attach。
       // 如果未来需要从其它入口调这个函数迁移运行中的 agent，从那处 attach 即可。
@@ -281,22 +295,52 @@ export function useChatStream(
     ]
   );
 
+  // M4：同一 ownerKey 的 agent 创建去重。第一次 POST /agent/new 还没返回时
+  // （render 闭包里 agentId 仍为 null），用户再按 Enter 会再发一次创建，导致
+  // 同一 DRAFT runner 上挂出两个 agent。这里用 in-flight Promise 把同 owner 的
+  // 创建串起来：第二次直接 await 第一次的结果。
+  const inflightEnsureRef = useRef<
+    Map<RunnerKey, Promise<{ aid: string; ownerKey: RunnerKey } | null>>
+  >(new Map());
+
   const ensureAgent = useCallback(async (): Promise<{
     aid: string;
     ownerKey: RunnerKey;
   } | null> => {
     if (agentId) {
+      // 已有 agent：同步返回，不会 await，不存在竞态。
+      const ownerKeyAtStart = activeKeyRef.current ?? DRAFT_KEY;
       return {
         aid: agentId,
-        ownerKey: upgradeDraftIfNeeded(currentSessionFile),
+        ownerKey: upgradeDraftIfNeeded(
+          currentSessionFile,
+          undefined,
+          ownerKeyAtStart
+        ),
       };
     }
     if (!providerId || !modelId) {
       setError("请先选择 provider 和 model");
       return null;
     }
+    // M4：若同一 owner 已有创建在途，复用之，避免重复 POST /agent/new。
+    const ownerKeyForInflight = activeKeyRef.current ?? DRAFT_KEY;
+    const existingInflight = inflightEnsureRef.current.get(ownerKeyForInflight);
+    if (existingInflight) return existingInflight;
+    // P1：“创建请求属于谁，响应就写回谁”。发起时固定 ownerKey，
+    // await 之后一律以 ownerKeyAtStart 为准写 runner / 升级 / attach SSE。
     // F1：优先 runner.cwd，避免使用老 agent 环境下用户修改 cwd 但未作用。
     const ownerKeyAtStart = activeKeyRef.current ?? DRAFT_KEY;
+    // M4：把真正的创建逻辑包进一个可追踪的 promise，登记到 in-flight map，
+    // 同 owner 的并发调用复用它；结算后清理。
+    const createPromise = (async (): Promise<{
+      aid: string;
+      ownerKey: RunnerKey;
+    } | null> => {
+    const selectedIdAtStart = selectedId;
+    const sessionPathAtStart = selectedIdAtStart
+      ? sessions.find((s) => s.id === selectedIdAtStart)?.path
+      : undefined;
     const runnerCwd =
       runnersRef.current?.get(ownerKeyAtStart)?.cwd ?? null;
     const effectiveCwd = runnerCwd ?? cwd;
@@ -308,9 +352,7 @@ export function useChatStream(
         modelId,
         cwd: effectiveCwd,
         thinkingLevel,
-        sessionPath: selectedId
-          ? sessions.find((s) => s.id === selectedId)?.path
-          : undefined,
+        sessionPath: sessionPathAtStart,
       }),
     });
     const data = await r.json();
@@ -318,8 +360,9 @@ export function useChatStream(
       setError(userFacingMessage(data.error));
       return null;
     }
-    const ownerKey = activeKeyRef.current ?? DRAFT_KEY;
-    updateRunner(ownerKey, {
+    // P1：不再读 activeKeyRef.current。await 期间用户可能已切 session，
+    // 留在 ownerKeyAtStart 写是“whose request, whose response”原则。
+    updateRunner(ownerKeyAtStart, {
       agentId: data.id,
       agentSessionId: data.sessionId,
       sessionFile: data.sessionFile ?? null,
@@ -340,9 +383,10 @@ export function useChatStream(
     });
     const upgradedKey = upgradeDraftIfNeeded(
       data.sessionFile ?? null,
-      data.sessionId ?? null
+      data.sessionId ?? null,
+      ownerKeyAtStart
     );
-    // F8：SSE 只在这个唯一入口 attach。
+    // F8：SSE 只在这个唯一入口 attach，绑 owner 迁移后的 key。
     attachSseFor(upgradedKey, data.id);
     void refreshStats(data.id, upgradedKey);
     void refreshToolsCount(data.id, upgradedKey);
@@ -357,20 +401,28 @@ export function useChatStream(
           return "";
         }
       })();
-      const parentSessionPath = selectedId
-        ? sessions.find((s) => s.id === selectedId)?.path
-        : undefined;
+      // P1：parentSessionPath 也用发起时的 capture，避免 await 期间用户切到
+      // 其它 session 后，optimistic sidebar 以“新表”作为 parent。
       setSessions((prev) =>
         upsertOptimisticSession(prev, {
           id: data.sessionId,
           path: data.sessionFile,
           cwd: effectiveCwd,
           firstMessage: firstHint,
-          parentSessionPath,
+          parentSessionPath: sessionPathAtStart,
         })
       );
     }
     return { aid: data.id, ownerKey: upgradedKey };
+    })();
+    inflightEnsureRef.current.set(ownerKeyForInflight, createPromise);
+    try {
+      return await createPromise;
+    } finally {
+      if (inflightEnsureRef.current.get(ownerKeyForInflight) === createPromise) {
+        inflightEnsureRef.current.delete(ownerKeyForInflight);
+      }
+    }
   }, [
     agentId,
     currentSessionFile,
@@ -409,8 +461,11 @@ export function useChatStream(
   // 发送一条新 prompt。fix-S4.b：不再重复写 ensureAgent 冷启动逻辑，
   // 直接复用。ensureAgent 已经处理了：冷启动 → fetch new → 升级草稿
   // → attachSSE → 拉 stats / tools。fast path 只走草稿升级。
-  const send = useCallback(async () => {
-    const input = getInput();
+  const send = useCallback(async (textOverride?: string) => {
+    // 【性能】接收可选的 textOverride 是为了让 Composer 可以直接传本地 localInput，
+    // 不再需要 flushSync 同步写回上层 store 后才发送。flushSync 在 800 条消息的会话
+    // 里只点击 Send 的这一下会同步阻塞 UI 几十毫秒，是点击到气泡出现延迟的最大项。
+    const input = textOverride ?? getInput();
     if (
       !input.trim() &&
       pendingImages.length === 0 &&
@@ -433,6 +488,9 @@ export function useChatStream(
     const clientRequestId = makeClientRequestId();
     const promptText =
       userText || (attachmentPaths.length > 0 ? "(see attachments)" : "(image)");
+    // 【性能】一次 commit 完成所有 RunnerState 变动：optimistic user + 清 pending images/files。
+    // await ensureAgent() 后的多次 setState 在 React 18 不再自动批处理，手工合并可
+    // 把这段的整树 commit 从 3 次降到 1 次。
     updateRunner(ownerKey, (state) => ({
       chatState: applyEvent(state.chatState, {
         type: "__optimistic_user",
@@ -441,16 +499,14 @@ export function useChatStream(
         images: images.map((img) => ({ data: img.data, mimeType: img.mimeType })),
         attachments: attachmentPaths,
       }),
+      pendingImages: [],
+      pendingFiles: [],
     }));
+    // setInput 走外部 store，只通知 Composer 订阅者，不进 React 树 commit。不进 batch。
     setInput("");
-    setPendingImages([]);
-    setPendingFiles([]);
     setError(null);
-    // 锚定：期望"现有 user 数 + 1"那条新消息一出现就滚到屏顶
-    // 同时启用底部 60vh 占位，确保最后一条 user 能被滚到屏顶；锚定完成后会自动移除。
-    const currentUserCount = messages.filter((m) => m.role === "user").length;
-    pendingPinUserCountRef.current = currentUserCount + 1;
-    setPinSpacer(true);
+    // 滚动行为：发送后保持贴底跟随（不锚顶）。stickToBottomRef 由滚动监听维护，
+    // streamSignature effect 会在 user 气泡 + 后续 token 流入时持续 snap 到底。
     try {
       await agentAction(aid, {
         type: "prompt",
@@ -474,17 +530,12 @@ export function useChatStream(
     ensureAgent,
     getInput,
     guardActiveKeyMatchesSelected,
-    messages,
     pendingImages,
     pendingFiles,
     agentAction,
     updateRunner,
     setInput,
-    setPendingImages,
-    setPendingFiles,
     setError,
-    pendingPinUserCountRef,
-    setPinSpacer,
   ]);
 
   const startGoal = useCallback(
@@ -496,26 +547,38 @@ export function useChatStream(
       const ensured = await ensureAgent();
       if (!ensured) return;
       setError(null);
+      // P1 修复：goal 路径也生成 clientRequestId。不这样的话 reducer 的
+      // “optimistic user 衰变”逻辑在 SDK message_start 回来时不会命中，
+      // 会让 UI 出现两条重复的 user 气泡。
+      const clientRequestId = makeClientRequestId();
       // 结构化 Composer A6：在本地先插一条 optimistic user 气泡，携带 mode=goal。
       // 然后 SSE message_start reconcile 路径会保留 composerMeta（reducer 已实现）。
       const ownerKey = ensured.ownerKey;
       updateRunner(ownerKey, (state) => ({
         chatState: applyEvent(state.chatState, {
           type: "__optimistic_user",
+          clientRequestId,
           text,
           composerMode: "goal",
         }),
       }));
-      const currentUserCount = messages.filter((m) => m.role === "user").length;
-      pendingPinUserCountRef.current = currentUserCount + 1;
-      setPinSpacer(true);
+      // 滚动行为：保持贴底跟随，不再锚顶 user 气泡。
       try {
         await agentAction(ensured.aid, {
           type: "goal_set",
           objective: text,
+          clientRequestId,
         });
       } catch {
         /* error 已被 agentAction 设置 */
+        // 发失败同样要标记，让 UI 可见 / 可重发。
+        updateRunner(ownerKey, (state) => ({
+          chatState: applyEvent(state.chatState, {
+            type: "__optimistic_user_failed",
+            clientRequestId,
+            reason: "failed",
+          }),
+        }));
       }
     },
     [
@@ -524,9 +587,6 @@ export function useChatStream(
       agentAction,
       setError,
       updateRunner,
-      messages,
-      pendingPinUserCountRef,
-      setPinSpacer,
     ]
   );
 
@@ -548,11 +608,16 @@ export function useChatStream(
       // 设计：UI 可见部分 = 用户原话；控制指令走 CONTEXT_ASIDE。
       // session jsonl 存的是拼接后的全文 —— 重启后加载仍然能 stripContextAside
       // 仅看到用户原话，不会出现“系统把我的表达改写”的体感。
+      // Soft guidance (Claude Code style): steer toward the workflow harness and
+      // good orchestration habits, but DO NOT forbid brief read-only recon —
+      // grounding a plan in the actual repo/state is healthy agent behavior.
       const aside = [
-        "请使用 dynamic workflow（run_workflow_script 工具）来完成上面这个目标，",
-        "不要直接在对话里手动一步步执行。",
-        "请规划出一个 workflow script：先拆解步骤，在关键节点写 checkpoint 和 artifact，",
-        "执行完后综合给出最终结果。",
+        "请用 dynamic workflow 来完成上面这个目标。建议流程：",
+        "1) 复用优先：先调用 list_workflow_skills / list_workflow_templates，若已有可复用的，用 run_workflow_script({ skillRef }) 或 run_workflow_template 执行，不要从头重写大脚本。",
+        "2) 允许少量只读探查（如读文件/检索）来把计划落到真实代码/状态上，但不要在对话里手动一步步把整件事做完——真正的执行应放进 workflow harness。",
+        "3) 规划 workflow script：拆解步骤，在关键节点写 checkpoint 和 artifact；按复杂度配置 agent 数量（简单任务 1 个、对比类 2-4 个、复杂任务更多且分工明确），不要为简单任务过度并发。",
+        "4) 质量门槛：扇出的子任务在进入综合前用 workflow.requireSuccess 把关；产出报告/产物时声明 successCriteria，避免“形式完成、实质为空”。",
+        "5) 执行完综合给出最终结果；若可复用，用 save_workflow_skill 沉淀。",
       ].join("\n");
       const prompt = [
         text,
@@ -562,17 +627,18 @@ export function useChatStream(
         CONTEXT_ASIDE_CLOSE,
       ].join("\n");
 
-      // 滚动锚定：让新出现的这条 user 消息滚到屏顶（与 send 一致）。
-      const currentUserCount = messages.filter((m) => m.role === "user").length;
-      pendingPinUserCountRef.current = currentUserCount + 1;
-      setPinSpacer(true);
+      // 滚动行为：保持贴底跟随，不再锚顶 user 气泡。
 
+      // P1 修复：workflow 路径也生成 clientRequestId；workflow 下发靠的是
+      // type:"prompt"，后端 prompt 分支本身支持 cri 去重 + ack，不需要动后端。
+      const clientRequestId = makeClientRequestId();
       // 结构化 Composer A6：optimistic user 气泡携 mode=workflow。
       // text 只带用户原话；SSE message_start 收到的 finalText 含 aside，reducer 会 strip 后衰变。
       const ownerKeyW = ensured.ownerKey;
       updateRunner(ownerKeyW, (state) => ({
         chatState: applyEvent(state.chatState, {
           type: "__optimistic_user",
+          clientRequestId,
           text,
           composerMode: "workflow",
         }),
@@ -582,9 +648,17 @@ export function useChatStream(
         await agentAction(ensured.aid, {
           type: "prompt",
           text: prompt,
+          clientRequestId,
         });
       } catch {
         /* error 已被 agentAction 设置 */
+        updateRunner(ownerKeyW, (state) => ({
+          chatState: applyEvent(state.chatState, {
+            type: "__optimistic_user_failed",
+            clientRequestId,
+            reason: "failed",
+          }),
+        }));
       }
     },
     [
@@ -593,9 +667,6 @@ export function useChatStream(
       agentAction,
       setError,
       updateRunner,
-      messages,
-      pendingPinUserCountRef,
-      setPinSpacer,
     ]
   );
 
@@ -655,17 +726,17 @@ export function useChatStream(
         pendingFiles.length === 0
       )
         return;
-      const refLine = pendingFiles.map((a) => `@${a.path}`).join(" ");
-      const finalText = refLine
-        ? text
-          ? `${refLine}\n${text}`
-          : refLine
-        : text;
+      // P2 修复：不再把 @path 拼进可见文本（会让历史 user 气泡里出玄路径）。
+      // 附件以独立字段 attachments 下发，后端复用与 prompt 一致的 aside 起装。
+      const attachmentPaths = pendingFiles.map((a) => a.path);
       try {
         await agentAction(agentId, {
           type,
-          text: finalText,
+          text,
           ...(pendingImages.length ? { images: pendingImages } : {}),
+          ...(attachmentPaths.length
+            ? { attachments: attachmentPaths }
+            : {}),
         });
         setInput("");
         setPendingImages([]);

@@ -17,6 +17,8 @@ import type {
   LongTaskDefinition,
   LongTaskRun,
 } from "@/lib/tasks/types";
+import { withCommunicationInstructions } from "@/lib/communication/instructions";
+import { getCommunicationSettings } from "@/lib/communication/settings";
 
 const g = globalThis as unknown as { __digaAgentLongTaskRunner?: { starting: Set<string> } };
 if (!g.__digaAgentLongTaskRunner) {
@@ -74,7 +76,12 @@ async function startLongTaskRunUnsafe(
     });
 
     attachRunLifecycle(agent.id, run.id, task.id);
-    await rec.session.prompt(buildLongTaskPrompt(task));
+    await rec.session.prompt(
+      withCommunicationInstructions(
+        buildLongTaskPrompt(task),
+        await getCommunicationSettings()
+      )
+    );
 
     return {
       task: getLongTask(task.id) ?? task,

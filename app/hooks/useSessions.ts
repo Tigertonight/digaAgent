@@ -44,6 +44,7 @@ import {
   type RunnerKey,
   type RunnerState,
 } from "@/lib/session-runner";
+import { deleteInput } from "@/lib/composer/input-store";
 import { userFacingMessage } from "@/lib/user-facing-error";
 
 const STORAGE_KEY = "sessionLastSeen";
@@ -431,25 +432,37 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
     async (id: string) => {
       try {
         const r = await fetch(`/api/sessions/${id}`, { method: "DELETE" });
-        const data = (await r.json()) as { error?: string };
+        const data = (await r.json()) as {
+          error?: string;
+          deleted?: string[];
+        };
         if (data.error) {
           onError(userFacingMessage(data.error));
           return;
         }
+        // 后端会级联删父+所有 fork 子 session，返回 deleted 列表；老接口没返就退化到只清自己
+        const deletedIds = new Set<string>(
+          data.deleted && data.deleted.length > 0 ? data.deleted : [id]
+        );
         // 把对应 runner 从 Map 里删掉（如果有），关其 SSE
-        const sel = sessionsRef.current.find((s) => s.id === id);
-        if (sel) {
+        let activeWasDeleted = false;
+        for (const did of deletedIds) {
+          const sel = sessionsRef.current.find((s) => s.id === did);
+          if (!sel) continue;
           const key: RunnerKey = sel.path;
           closeSseFor(key);
-          const wasActive = activeKeyRef.current === key;
+          // M1：删 runner 的同时清掉它在 input-store 里残留的草稿文本，
+          // 否则该 key 的输入框内容会变成无主死键，长期泄漏。
+          deleteInput(key);
+          if (activeKeyRef.current === key) activeWasDeleted = true;
           runnersRef.current.delete(key);
-          // 删的是当前活跃的 → 切回 draft（switchTo 在 draft 不存在时兜底建空 runner）
-          if (wasActive) {
-            setSelectedId(null);
-            switchTo(DRAFT_KEY);
-          }
-        } else if (selectedId === id) {
-          // 兜底：列表没找到但 selectedId 匹配，清掉显示
+        }
+        if (activeWasDeleted) {
+          // active 被级联删了 → 切回 draft（switchTo 在 draft 不存在时兜底建空 runner）
+          setSelectedId(null);
+          switchTo(DRAFT_KEY);
+        } else if (selectedId && deletedIds.has(selectedId)) {
+          // 兜底：列表没找到但 selectedId 在删除集合里，清掉显示
           setSelectedId(null);
         }
         refreshSessions();

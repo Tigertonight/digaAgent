@@ -28,7 +28,18 @@ describe("upsertOptimisticSession (sidebar 即时显示)", () => {
     expect(next[0].isRunning).toBe(true);
     expect(next[0].messageCount).toBe(1);
     expect(next[0].firstMessage).toBe("做一件事");
+    expect(next[0].name).toBe("做一件事");
     expect(next[1].id).toBe("old-1");
+  });
+
+  it("新 session 没有首问时显示新会话", () => {
+    const next = upsertOptimisticSession(baseList(), {
+      id: "new-empty",
+      path: "/p/new-empty.jsonl",
+      cwd: "/p",
+    });
+    expect(next[0].name).toBe("新会话");
+    expect(next[0].firstMessage).toBe("");
   });
 
   it("空 id / 空 path → 不修改", () => {
@@ -74,6 +85,7 @@ describe("upsertOptimisticSession (sidebar 即时显示)", () => {
       firstMessage: "刚发的",
     });
     expect(next[0].firstMessage).toBe("刚发的");
+    expect(next[0].name).toBe("刚发的");
   });
 
   it("已存在但已经有 runtime（streaming）→ 不被打回 loading", () => {

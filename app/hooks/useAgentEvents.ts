@@ -122,6 +122,18 @@ export interface UseAgentEventsOptions {
     agentId: string,
     ownerKey: RunnerKey
   ) => void;
+  /**
+   * P2 修复：SSE ring buffer overrun 后重建指定 runner 的 chatState。
+   * 服务端会下发 type=state_reset，表示 since 越过已覆盖区间；客户端必须
+   * 从 /api/sessions/:id/context 重拉上下文，否则当前会话会缺事件。
+   *
+   * 不传为 noop（背后兼容）。实现者需自行根据 ownerKey 查出 runner.sessionId/path
+   * 发请求、用 ctxToMessages 重建 chatState 并 updateRunner(ownerKey, ...)。
+   */
+  refreshContextForRunner?: (
+    ownerKey: RunnerKey,
+    agentId: string
+  ) => void;
 }
 
 export interface UseAgentEventsReturn {
@@ -225,6 +237,7 @@ export function useAgentEvents(
     isCollabEnabled,
     autoApprove,
     onBrowserState,
+    refreshContextForRunner,
   } = opts;
 
   // 问题 2 修复：approval/clarification 事件到达后需要让左侧 sidebar
@@ -268,6 +281,9 @@ export function useAgentEvents(
           refreshSessions();
           if (aidForEvents) {
             void refreshStats(aidForEvents, ownerKey);
+            // P2 修复：重建该 runner 的 chatState。ChatApp 里实现 fetch /api/sessions/:id/context
+            // 并用 ctxToMessages 定向写回 runnersRef，不取决于当前 activeKey。
+            refreshContextForRunner?.(ownerKey, aidForEvents);
           }
           if (typeof console !== "undefined") {
             console.warn(
@@ -499,6 +515,7 @@ export function useAgentEvents(
       isCollabEnabled,
       autoApprove,
       onBrowserState,
+      refreshContextForRunner,
       scheduleRefreshSessions,
     ]
   );
