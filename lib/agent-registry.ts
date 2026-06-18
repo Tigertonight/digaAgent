@@ -244,6 +244,15 @@ export interface AgentRecord {
   /** local shim 可能给完整 assistant 内容但漏掉 done/end，用 watchdog 兜底收尾 */
   finishWatchdog: ReturnType<typeof setTimeout> | null;
   pendingFinishMessage: unknown | null;
+  /** Tool start 后若 SDK/transport 断流且没有后续事件，用 watchdog 兜底收尾 */
+  toolWatchdog: ReturnType<typeof setTimeout> | null;
+  pendingToolCall:
+    | {
+        toolCallId: string;
+        toolName?: string;
+        startedAt: number;
+      }
+    | null;
   external?: {
     kind: "local-coding-assistant";
     child: ChildProcessWithoutNullStreams | null;
@@ -253,6 +262,14 @@ export interface AgentRecord {
 
 const MAX_EVENTS_PER_AGENT = 5000;
 const FINISH_WATCHDOG_MS = 1500;
+const DEFAULT_TOOL_WATCHDOG_MS = 30 * 60 * 1000;
+
+function toolWatchdogMs(): number {
+  const raw = process.env.DIGA_AGENT_TOOL_WATCHDOG_MS;
+  if (!raw) return DEFAULT_TOOL_WATCHDOG_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_TOOL_WATCHDOG_MS;
+}
 const DEFAULT_BROWSER_TOOL_NAMES = [
   "browser_open",
   "browser_screenshot",
@@ -412,6 +429,14 @@ export function getPackageManager(cwd?: string): DefaultPackageManager {
     reg.packageManagers.set(useCwd, pm);
   }
   return pm;
+}
+
+function releaseManagersForCwdIfUnused(cwd: string): void {
+  for (const rec of reg.agents.values()) {
+    if (rec.cwd === cwd) return;
+  }
+  reg.settingsManagers?.delete(cwd);
+  reg.packageManagers?.delete(cwd);
 }
 
 /**
@@ -610,8 +635,17 @@ function clearFinishWatchdog(rec: AgentRecord) {
   rec.pendingFinishMessage = null;
 }
 
+function clearToolWatchdog(rec: AgentRecord) {
+  if (rec.toolWatchdog) {
+    clearTimeout(rec.toolWatchdog);
+    rec.toolWatchdog = null;
+  }
+  rec.pendingToolCall = null;
+}
+
 function finishStreamingRun(rec: AgentRecord): void {
   if (!rec.isStreaming) return;
+  clearToolWatchdog(rec);
   rec.isStreaming = false;
   rec.lastAgentEndAt = Date.now();
   // Close the open goal turn before deciding whether to auto-continue. The
@@ -642,6 +676,50 @@ function scheduleFinishWatchdog(rec: AgentRecord, message: unknown): void {
     rec.pendingFinishMessage = null;
     finishStreamingRun(rec);
   }, FINISH_WATCHDOG_MS);
+}
+
+function scheduleToolWatchdog(
+  rec: AgentRecord,
+  event: AgentSessionEvent
+): void {
+  if (event.type !== "tool_execution_start" && event.type !== "tool_execution_update") {
+    return;
+  }
+  const toolCallId = (event as { toolCallId?: unknown }).toolCallId;
+  if (typeof toolCallId !== "string" || !toolCallId) return;
+  const existing = rec.pendingToolCall;
+  rec.pendingToolCall = {
+    toolCallId,
+    toolName:
+      typeof (event as { toolName?: unknown }).toolName === "string"
+        ? (event as { toolName: string }).toolName
+        : existing?.toolCallId === toolCallId
+          ? existing.toolName
+          : undefined,
+    startedAt:
+      existing?.toolCallId === toolCallId ? existing.startedAt : Date.now(),
+  };
+  if (rec.toolWatchdog) clearTimeout(rec.toolWatchdog);
+  rec.toolWatchdog = setTimeout(() => {
+    rec.toolWatchdog = null;
+    const pending = rec.pendingToolCall;
+    rec.pendingToolCall = null;
+    if (!pending || pending.toolCallId !== toolCallId) return;
+    if (!rec.isStreaming || rec.disposed) return;
+    const elapsedSeconds = Math.max(
+      1,
+      Math.round((Date.now() - pending.startedAt) / 1000)
+    );
+    pushAgentEvent(rec, {
+      type: "tool_execution_end",
+      toolCallId,
+      result: `Tool execution timed out after ${elapsedSeconds}s without a terminal event.`,
+      isError: true,
+    } as RingBufferEvent);
+    finishStreamingRun(rec);
+    rec.updatedAt = Date.now();
+    pushAgentEvent(rec, { type: "agent_end" } as RingBufferEvent);
+  }, toolWatchdogMs());
 }
 
 export interface CreateOptions {
@@ -945,6 +1023,7 @@ export async function promptLocalCodingAssistantAgent(
 }
 
 export async function abortLocalCodingAssistantAgent(rec: AgentRecord): Promise<void> {
+  clearToolWatchdog(rec);
   if (rec.external?.child) {
     rec.external.child.kill("SIGTERM");
     rec.external.child = null;
@@ -982,6 +1061,8 @@ async function createLocalCodingAssistantAgent(opts: CreateOptions): Promise<{
     recentClientRequests: new Map(),
     finishWatchdog: null,
     pendingFinishMessage: null,
+    toolWatchdog: null,
+    pendingToolCall: null,
     external: {
       kind: "local-coding-assistant",
       child: null,
@@ -1901,6 +1982,8 @@ export async function createAgent(opts: CreateOptions): Promise<{
     recentClientRequests: new Map(),
     finishWatchdog: null,
     pendingFinishMessage: null,
+    toolWatchdog: null,
+    pendingToolCall: null,
   };
   // 让 CollabExtension 的闭包能 push 自定义事件（approval_request/resolved）
   recordHolder.current = record;
@@ -1910,6 +1993,7 @@ export async function createAgent(opts: CreateOptions): Promise<{
     // 维护"是否正在跑"flag —— sidebar 状态点直接读它
     if (event.type === "agent_start") {
       clearFinishWatchdog(record);
+      clearToolWatchdog(record);
       record.isStreaming = true;
       record.updatedAt = Date.now();
       // Open a goal turn when this run is driving an active goal. Records turn
@@ -1920,10 +2004,17 @@ export async function createAgent(opts: CreateOptions): Promise<{
       }
     } else if (event.type === "tool_execution_start") {
       clearFinishWatchdog(record);
+      scheduleToolWatchdog(record, event);
+    } else if (event.type === "tool_execution_update") {
+      scheduleToolWatchdog(record, event);
+    } else if (event.type === "tool_execution_end") {
+      clearToolWatchdog(record);
     } else if (event.type === "message_end") {
+      clearToolWatchdog(record);
       scheduleFinishWatchdog(record, event.message);
     } else if (event.type === "agent_end") {
       clearFinishWatchdog(record);
+      clearToolWatchdog(record);
       finishStreamingRun(record);
       record.updatedAt = Date.now();
     }
@@ -2135,6 +2226,7 @@ export function finishStreamingAfterPromptError(agentId: string): void {
   const rec = reg.agents.get(agentId);
   if (!rec) return;
   clearFinishWatchdog(rec);
+  clearToolWatchdog(rec);
   if (rec.isStreaming) {
     rec.isStreaming = false;
     rec.lastAgentEndAt = Date.now();
@@ -2244,6 +2336,7 @@ export function disposeAgent(id: string) {
     void abortWorkflowsForParent(id).catch(() => undefined);
   }
   clearFinishWatchdog(rec);
+  clearToolWatchdog(rec);
   // M5：标记已 dispose 并唤醒仍挂着的 SSE listeners，让它们立即结束流，而不是
   // 等浏览器 close 才触发 abort。listener 回调里会看到 rec.disposed 为 true。
   rec.disposed = true;
@@ -2257,6 +2350,7 @@ export function disposeAgent(id: string) {
   rec.unsubscribe();
   rec.session.dispose();
   reg.agents.delete(id);
+  releaseManagersForCwdIfUnused(rec.cwd);
   // 清理 per-agent 的全局 store，避免长期运行进程内存越爷越大。
   clearSessionRemember(id);
   clearAgentClarifications(id);

@@ -232,6 +232,7 @@ export function useRunners(opts: UseRunnersOptions = {}): UseRunnersReturn {
       if (key === activeKeyRef.current) continue;
       if (r.streaming) continue;
       if (r.compacting) continue;
+      if (r.pendingImages.length > 0 || r.pendingFiles.length > 0) continue;
       // M3：等待用户操作的 runner 不能被淘汰——否则 SSE 被关、approval 气泡可能
       // 丢失/迟到（loadPendingApprovals 只在重启时跑）。包括：
       //   - chatState 里有未决的 approval / clarification（agent 阻塞等输入）

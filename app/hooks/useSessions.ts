@@ -366,6 +366,14 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
           setSelectedId(null);
         }
         if (currentActiveKey !== DRAFT_KEY && !nextPaths.has(currentActiveKey)) {
+          const orphaned = runnersRef.current.get(currentActiveKey);
+          if (orphaned?.agentId && orphaned.streaming) {
+            void fetch(`/api/agent/${orphaned.agentId}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ type: "abort" }),
+            }).catch(() => {});
+          }
           closeSseFor(currentActiveKey);
           runnersRef.current.delete(currentActiveKey);
           switchTo(DRAFT_KEY);

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  __MAX_EVENTS_PER_AGENT_FOR_TEST,
   __resetRuntimeEventStoreForTest,
   appendRuntimeEvent,
   getRuntimeEvent,
@@ -66,5 +67,34 @@ describe("runtime event store", () => {
       status: "done",
       updatedAt: 2,
     });
+  });
+
+  it("caps events per agent without evicting unrelated agents", () => {
+    for (let i = 0; i < __MAX_EVENTS_PER_AGENT_FOR_TEST + 1; i++) {
+      appendRuntimeEvent({
+        id: `agent-1-${i}`,
+        source: "progress",
+        type: "progress.update",
+        status: "running",
+        agentId: "agent-1",
+        payload: { i },
+        createdAt: i,
+      });
+    }
+    appendRuntimeEvent({
+      id: "agent-2-keeper",
+      source: "progress",
+      type: "progress.update",
+      status: "running",
+      agentId: "agent-2",
+      payload: {},
+      createdAt: 99_999,
+    });
+
+    expect(getRuntimeEvent("agent-1-0")).toBeNull();
+    expect(listRuntimeEvents({ agentId: "agent-1" })).toHaveLength(
+      __MAX_EVENTS_PER_AGENT_FOR_TEST
+    );
+    expect(getRuntimeEvent("agent-2-keeper")).not.toBeNull();
   });
 });

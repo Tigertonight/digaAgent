@@ -8,16 +8,31 @@ const sessionsMock = vi.hoisted(() => ({
   getSessionDetail: vi.fn(),
 }));
 
+const fsMock = vi.hoisted(() => ({
+  unlink: vi.fn(),
+}));
+
 const sessionManagerMock = vi.hoisted(() => ({
   open: vi.fn(),
 }));
 
-vi.mock("@/lib/sessions", () => sessionsMock);
-vi.mock("@/lib/meta/store", () => ({ deleteMeta: vi.fn() }));
-vi.mock("@/lib/progress/file-store", () => ({ deletePersistedProgress: vi.fn() }));
-vi.mock("@/lib/subagents/server-store", () => ({
+const metaStoreMock = vi.hoisted(() => ({
+  deleteMeta: vi.fn(),
+}));
+
+const progressStoreMock = vi.hoisted(() => ({
+  deletePersistedProgress: vi.fn(),
+}));
+
+const subagentStoreMock = vi.hoisted(() => ({
   removeBatchesByParentSessionPath: vi.fn(),
 }));
+
+vi.mock("@/lib/sessions", () => sessionsMock);
+vi.mock("node:fs", () => ({ promises: fsMock }));
+vi.mock("@/lib/meta/store", () => metaStoreMock);
+vi.mock("@/lib/progress/file-store", () => progressStoreMock);
+vi.mock("@/lib/subagents/server-store", () => subagentStoreMock);
 vi.mock("@/lib/agent-registry", () => ({
   disposeAgent: vi.fn(),
   listAgentSummaries: vi.fn(() => []),
@@ -55,9 +70,15 @@ describe("/api/sessions/[id]", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sessionsMock.findSessionPathById.mockResolvedValue("/tmp/session-1.jsonl");
+    sessionsMock.collectSessionDescendants.mockResolvedValue([
+      { id: "session-1", path: "/tmp/session-1.jsonl" },
+    ]);
     sessionManagerMock.open.mockReturnValue({
       appendSessionInfo: vi.fn(),
     });
+    fsMock.unlink.mockResolvedValue(undefined);
+    metaStoreMock.deleteMeta.mockResolvedValue(undefined);
+    progressStoreMock.deletePersistedProgress.mockResolvedValue(undefined);
   });
 
   it("rejects overlong rename requests before opening the session", async () => {
@@ -71,5 +92,40 @@ describe("/api/sessions/[id]", () => {
       error: "name must be at most 200 characters",
     });
     expect(sessionManagerMock.open).not.toHaveBeenCalled();
+  });
+
+  it("returns partial delete success without clearing metadata for failed targets", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    sessionsMock.collectSessionDescendants.mockResolvedValue([
+      { id: "ok", path: "/tmp/ok.jsonl" },
+      { id: "busy", path: "/tmp/busy.jsonl" },
+    ]);
+    fsMock.unlink.mockImplementation(async (path: string) => {
+      if (path.includes("busy")) {
+        const err = new Error("busy") as NodeJS.ErrnoException;
+        err.code = "EBUSY";
+        throw err;
+      }
+    });
+
+    const { DELETE } = await import("./route");
+    const res = await DELETE(localReq("DELETE"), {
+      params: Promise.resolve({ id: "session-1" }),
+    });
+
+    expect(res.status).toBe(207);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: true,
+      partial: true,
+      deleted: ["ok"],
+      failed: [{ id: "busy", error: "EBUSY" }],
+    });
+    expect(metaStoreMock.deleteMeta).toHaveBeenCalledWith("ok");
+    expect(metaStoreMock.deleteMeta).not.toHaveBeenCalledWith("busy");
+    expect(progressStoreMock.deletePersistedProgress).toHaveBeenCalledWith("ok");
+    expect(progressStoreMock.deletePersistedProgress).not.toHaveBeenCalledWith(
+      "busy"
+    );
+    errorSpy.mockRestore();
   });
 });

@@ -129,13 +129,25 @@ export const DELETE = withRemoteAuth(async function (
     }
 
     if (errors.length > 0) {
+      const deleted = targets
+        .filter((t) => !errors.find((e) => e.id === t.id))
+        .map((t) => t.id);
+      if (deleted.length > 0) {
+        return NextResponse.json(
+          {
+            ok: true,
+            partial: true,
+            deleted,
+            failed: errors,
+          },
+          { status: 207 }
+        );
+      }
       return NextResponse.json(
         {
           error: "some sessions failed to delete",
-          details: errors,
-          deleted: targets
-            .filter((t) => !errors.find((e) => e.id === t.id))
-            .map((t) => t.id),
+          failed: errors,
+          deleted,
         },
         { status: 500 }
       );

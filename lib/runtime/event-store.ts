@@ -7,6 +7,11 @@ const MAX_EVENTS = (() => {
   const n = raw ? Number(raw) : NaN;
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 50_000;
 })();
+const MAX_EVENTS_PER_AGENT = (() => {
+  const raw = process.env.DIGA_AGENT_RUNTIME_EVENT_STORE_MAX_PER_AGENT;
+  const n = raw ? Number(raw) : NaN;
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 5_000;
+})();
 
 interface RuntimeEventStore {
   byId: Map<string, RuntimeEvent>;
@@ -48,12 +53,29 @@ function enforceCapacity(): void {
   }
 }
 
+function enforceAgentCapacity(agentId: string | null | undefined): void {
+  if (!agentId) return;
+  let count = 0;
+  for (const event of store.byId.values()) {
+    if (event.agentId === agentId) count += 1;
+  }
+  let excess = count - MAX_EVENTS_PER_AGENT;
+  if (excess <= 0) return;
+  for (const [id, event] of store.byId) {
+    if (event.agentId !== agentId) continue;
+    store.byId.delete(id);
+    excess -= 1;
+    if (excess <= 0) return;
+  }
+}
+
 export function appendRuntimeEvent<TPayload>(
   event: RuntimeEvent<TPayload>
 ): RuntimeEvent<TPayload> {
   const current = store.byId.get(event.id);
   const next = current ? { ...current, ...event } : event;
   store.byId.set(event.id, next as RuntimeEvent);
+  enforceAgentCapacity(next.agentId);
   enforceCapacity();
   return next;
 }
@@ -109,3 +131,4 @@ export function __resetRuntimeEventStoreForTest(): void {
 }
 
 export const __MAX_EVENTS_FOR_TEST = MAX_EVENTS;
+export const __MAX_EVENTS_PER_AGENT_FOR_TEST = MAX_EVENTS_PER_AGENT;
