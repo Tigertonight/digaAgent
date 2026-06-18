@@ -506,9 +506,9 @@ export function Sidebar(props: SidebarProps) {
                   <span
                     className="flex-1 truncate"
                     style={{ color: "var(--text)" }}
-                    title={s.name || s.firstMessage}
+                    title={s.name || s.firstMessage || "新会话"}
                   >
-                    删除「{s.name || s.firstMessage || s.id.slice(0, 8)}」？
+                    删除「{s.name || s.firstMessage || "新会话"}」？
                   </span>
                   <Button
                     type="button"
@@ -661,7 +661,7 @@ export function Sidebar(props: SidebarProps) {
                           {s.meta?.title ||
                             s.name ||
                             s.firstMessage ||
-                            "(empty)"}
+                            "新会话"}
                         </span>
                       </div>
                     )}
