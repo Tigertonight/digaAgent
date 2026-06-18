@@ -9,7 +9,7 @@
  * 3. 派生 currentToolTarget（文件名/命令前缀）供气泡副文案使用
  * 4. 维护 streamingStartedAt（每个 session 第一次 streaming=true 时记录）
  * 5. 透传 retryInfo / compacting / sseStatus / compactError 给宠物
- * 6. 已读判定（v2 修复）：isUnread = !isRunning && (!seenAt || seenAt < s.modified)
+ * 6. 已读判定（v2 修复）：与 sidebar 共用 isSessionUnread，优先使用 lastAgentEndAt
  *    不再因为 active 就自动算已读——active 也可能"用户根本没看"（宠物前置、主窗被遮）
  * 7. 兜底：当前 selectedId 对应的 session 若没被 runner 路径加入（刚切到历史 session、
  *    agentId 还没建立），也推一个最小化条目，保证宠物侧 displaySession.find() 能命中
@@ -28,6 +28,7 @@ import type { PetState, PetSessionInfo } from "@/lib/electron-bridge";
 import type { BudgetStatus } from "@/lib/budget/types";
 import type { RunnerKey, RunnerState } from "@/lib/session-runner";
 import type { ChatMessage, SessionInfoLite } from "@/lib/types";
+import { isSessionUnread } from "@/lib/sessions/unread";
 import type { BudgetTrigger } from "./useBudgetEnforcer";
 
 /**
@@ -343,19 +344,19 @@ export function usePetPusher(params: UsePetPusherParams): void {
         // agent 级错误：以 compactError 为代表（v1 仅有这一个 runner 级错误源）
         const error = runner.compactError;
 
-        // 已读判定（v2 宠物 attention 修复）：
-        //   isUnread = !isRunning && (!seenAt || seenAt < s.modified)
-        //   read     = !isUnread
-        // 不再因为 active 就自动算已读——active 也可能"用户根本没看"
-        // （宠物窗口前置、主窗口被遮挡）。已读由 markSessionSeen 在用户
-        // 切换 / 主窗口聚焦时主动写入，宠物 attention 才有意义。
+        // 已读判定与 sidebar 共用 helper，避免 pet 和主窗口对
+        // lastAgentEndAt / modified 的理解漂移。
         // 没有 sess（找不到 SessionInfoLite）→ 没有 modified 可比，视为已读
         let read = true;
         if (sess) {
           const isRunning = !!sess.isRunning;
           const seenAt = lastSeenMapRef.current[sess.id];
-          const isUnread =
-            !isRunning && (!seenAt || seenAt < sess.modified);
+          const isUnread = isSessionUnread({
+            session: sess,
+            seenAt,
+            isRunning,
+            isWaitingUser: sess.runtimeState === "waiting_user",
+          });
           read = !isUnread;
         }
 
@@ -406,8 +407,12 @@ export function usePetPusher(params: UsePetPusherParams): void {
           // 与 runner 路径同一套已读公式（v2：不再硬编码 active=已读）
           const seenAt = lastSeenMapRef.current[sess.id];
           const isRunning = !!sess.isRunning;
-          const isUnread =
-            !isRunning && (!seenAt || seenAt < sess.modified);
+          const isUnread = isSessionUnread({
+            session: sess,
+            seenAt,
+            isRunning,
+            isWaitingUser: sess.runtimeState === "waiting_user",
+          });
           const read = !isUnread;
           petSessions.push({
             id: sess.id,

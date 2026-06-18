@@ -7,7 +7,7 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   __setMetaRootForTests,
@@ -38,6 +38,7 @@ describe("readMeta", () => {
   });
 
   it("returns null when file is corrupted (invalid JSON)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await fs.mkdir(path.join(tmpRoot, "sessions"), { recursive: true });
     await fs.writeFile(
       path.join(tmpRoot, "sessions", "bad.meta.json"),
@@ -46,6 +47,11 @@ describe("readMeta", () => {
     );
     const m = await readMeta("bad");
     expect(m).toBeNull();
+    expect(warn).toHaveBeenCalledWith(
+      "[meta] failed to parse session meta",
+      expect.objectContaining({ sessionId: "bad" })
+    );
+    warn.mockRestore();
   });
 
   it("ignores unknown fields (forward compat)", async () => {

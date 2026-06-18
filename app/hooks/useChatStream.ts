@@ -360,6 +360,17 @@ export function useChatStream(
       setError(userFacingMessage(data.error));
       return null;
     }
+    if (!runnersRef.current?.has(ownerKeyAtStart)) {
+      // The owning runner may have been deleted while /api/agent/new was in
+      // flight. Do not attach an orphan SSE connection; dispose the fresh
+      // backend agent best-effort and drop the response.
+      void fetch(`/api/agent/${data.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "abort" }),
+      }).catch(() => {});
+      return null;
+    }
     // P1：不再读 activeKeyRef.current。await 期间用户可能已切 session，
     // 留在 ownerKeyAtStart 写是“whose request, whose response”原则。
     updateRunner(ownerKeyAtStart, {

@@ -15,6 +15,7 @@ import { internalErrorResponse } from "@/lib/api/error-response";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+const MAX_SESSION_NAME_LENGTH = 200;
 
 export const GET = withRemoteAuth(async function (
   _req: Request,
@@ -44,6 +45,12 @@ export const PATCH = withRemoteAuth(async function (
     if (!name) {
       return NextResponse.json(
         { error: "name is required" },
+        { status: 400 }
+      );
+    }
+    if (name.length > MAX_SESSION_NAME_LENGTH) {
+      return NextResponse.json(
+        { error: `name must be at most ${MAX_SESSION_NAME_LENGTH} characters` },
         { status: 400 }
       );
     }

@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type RefObject,
 } from "react";
 import {
   // P1-E：input 全局 store helpers。详见 lib/composer/input-store.ts。
@@ -52,6 +53,7 @@ import {
   emptyRunner,
   DRAFT_KEY,
   type RunnerKey,
+  type RunnerState,
   type PendingAttachment,
 } from "@/lib/session-runner";
 import { useRunners } from "./hooks/useRunners";
@@ -667,6 +669,13 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     const impl = batchUpdatesRef.current;
     return impl ? impl(fn) : fn();
   }, []);
+  const runnersStoreRef = useRef<RefObject<Map<RunnerKey, RunnerState>> | null>(
+    null
+  );
+  const canAttachSseForRunner = useCallback((key: RunnerKey): boolean => {
+    const store = runnersStoreRef.current?.current;
+    return store ? store.has(key) : key === DRAFT_KEY;
+  }, []);
 
   const { esMapRef, attachSseFor, closeSseFor } = useSseManager({
     onEvent: (event, agentId, key) => {
@@ -682,6 +691,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       updateRunnerRef.current?.(key, patch);
     },
     batchUpdates: batchUpdatesProxy,
+    canAttach: canAttachSseForRunner,
   });
 
   const handleEvictRunner = useCallback(
@@ -707,6 +717,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   } = useRunners({
     onEvict: handleEvictRunner,
   });
+  runnersStoreRef.current = runnersRef;
 
   // 把 updateRunner 绑到 ref，供 useSseManager 的 onStatusChange 回调使用
   useEffect(() => {
@@ -1566,10 +1577,14 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     if (!api?.pet?.onSwitchSession) return;
     const unsub = api.pet.onSwitchSession((sessionId) => {
       const target = sessions.find((s) => s.id === sessionId);
-      if (target) setSelectedId(sessionId);
+      if (!target) return;
+      if (runnersRef.current.has(target.path)) {
+        switchTo(target.path);
+      }
+      setSelectedId(sessionId);
     });
     return unsub;
-  }, [sessions, setSelectedId]);
+  }, [runnersRef, sessions, setSelectedId, switchTo]);
 
   const messageRenderState = useMemo(() => {
     const shouldAttachForkIds = forkableUserMessages.length > 0;

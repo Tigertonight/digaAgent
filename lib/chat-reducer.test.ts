@@ -1235,6 +1235,90 @@ describe("applyEvent — subagent batch events (RFC-6)", () => {
       answer: "new answer",
     });
   });
+
+  it("marks a detached background subagent batch without waiting for batch_end", () => {
+    let s = createInitialState();
+    s = applyEvent(s, { type: "message_start", message: { role: "assistant" } });
+    s = applyEvent(s, {
+      type: "subagent_batch_start",
+      batch: {
+        id: "batch-bg",
+        parentAgentId: "agent-1",
+        status: "running",
+        reason: "long background audit",
+        createdAt: 100,
+        tasks: [
+          {
+            id: "q1",
+            title: "Question 1",
+            prompt: "Answer Q1",
+            role: "general",
+            status: "pending",
+          },
+        ],
+      },
+    });
+
+    s = applyEvent(s, {
+      type: "subagent_batch_detached",
+      batchId: "batch-bg",
+      status: "running",
+      endedAt: 150,
+    });
+
+    const part = (s.messages[s.activeAssistantIndex].parts as MessagePart[])[0];
+    expect(part.kind).toBe("subagent_batch");
+    if (part.kind !== "subagent_batch") throw new Error("type narrow");
+    expect(part.status).toBe("running");
+    expect(part.endedAt).toBe(150);
+  });
+});
+
+describe("applyEvent — stale tool events", () => {
+  it("does not create an empty assistant bubble for late tool update/end events", () => {
+    let s = createInitialState([
+      {
+        role: "assistant",
+        parts: [
+          {
+            kind: "tool",
+            toolCallId: "tool-1",
+            toolName: "bash",
+            args: { command: "echo hi" },
+            status: "running",
+          },
+        ],
+      },
+    ]);
+    expect(s.activeAssistantIndex).toBe(-1);
+
+    s = applyEvent(s, {
+      type: "tool_execution_update",
+      toolCallId: "tool-1",
+      partialResult: "hi",
+    });
+    s = applyEvent(s, {
+      type: "tool_execution_end",
+      toolCallId: "tool-1",
+      result: { content: [{ type: "text", text: "hi" }] },
+      isError: false,
+    });
+
+    expect(s.messages).toHaveLength(1);
+    const part = s.messages[0].parts?.[0];
+    expect(part?.kind).toBe("tool");
+    if (part?.kind !== "tool") throw new Error("type narrow");
+    expect(part.partialResult).toBe("hi");
+    expect(part.status).toBe("done");
+
+    const unchanged = applyEvent(s, {
+      type: "tool_execution_end",
+      toolCallId: "missing-tool",
+      result: "late",
+      isError: true,
+    });
+    expect(unchanged.messages).toHaveLength(1);
+  });
 });
 
 describe("applyEvent — workflow script events", () => {

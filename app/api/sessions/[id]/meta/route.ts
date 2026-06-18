@@ -3,7 +3,7 @@
  *
  * 与 `/api/sessions/[id]` PATCH（写 SDK 的 SessionInfo entry / name）严格分离：
  *   - 本路由只动 `~/.diga-agent/sessions/{id}.meta.json`
- *   - 不动 SDK 数据；不需要 session 文件存在（允许预先写 meta）
+ *   - 不动 SDK 数据；PATCH 要求 session 文件存在，避免预先污染 meta
  *
  * 设计：
  *   - GET：返回当前 meta（不存在返回 { meta: null }）
@@ -13,6 +13,7 @@
 
 import { NextResponse } from "next/server";
 import { readMeta, updateMeta } from "@/lib/meta/store";
+import { findSessionPathById } from "@/lib/sessions";
 import { internalErrorResponse } from "@/lib/api/error-response";
 import {
   META_WRITABLE_FIELDS_V0,
@@ -23,6 +24,7 @@ import { withRemoteAuth } from "@/lib/remote/with-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+const LAST_SEEN_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 /** 提取 body 中的 v0 白名单字段，做最小校验。 */
 function pickWritable(body: unknown): Partial<SessionMeta> {
@@ -49,7 +51,10 @@ function pickWritable(body: unknown): Partial<SessionMeta> {
       }
       case "lastSeenAt": {
         if (typeof v === "number" && Number.isFinite(v) && v > 0) {
-          out.lastSeenAt = Math.floor(v);
+          const next = Math.floor(v);
+          if (next <= Date.now() + LAST_SEEN_FUTURE_SKEW_MS) {
+            out.lastSeenAt = next;
+          }
         }
         break;
       }
@@ -77,6 +82,10 @@ export const PATCH = withRemoteAuth(async function (
 ) {
   const { id } = await params;
   try {
+    const path = await findSessionPathById(id);
+    if (!path) {
+      return NextResponse.json({ error: "session not found" }, { status: 404 });
+    }
     const body = await req.json().catch(() => ({}));
     const patch = pickWritable(body);
     if (Object.keys(patch).length === 0) {

@@ -13,7 +13,12 @@
  */
 import { NextResponse } from "next/server";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { findSessionPathById, getSessionDetail } from "@/lib/sessions";
+import { unlink } from "node:fs/promises";
+import {
+  findSessionPathById,
+  getForkableUserMessages,
+  getSessionDetail,
+} from "@/lib/sessions";
 import { withRemoteAuth } from "@/lib/remote/with-auth";
 import { internalErrorResponse } from "@/lib/api/error-response";
 
@@ -46,12 +51,20 @@ export const POST = withRemoteAuth(async function (
       );
     }
 
+    const forkable = await getForkableUserMessages(id);
+    if (!forkable?.some((entry) => entry.entryId === targetEntryId)) {
+      return NextResponse.json(
+        { error: "targetEntryId does not belong to this session branch" },
+        { status: 400 }
+      );
+    }
+
     // 找到源 session 的 cwd（forkFrom 需要）
     const detail = await getSessionDetail(id);
     if (!detail) {
       return NextResponse.json(
-        { error: "source session not readable" },
-        { status: 500 }
+        { error: "source session not found" },
+        { status: 404 }
       );
     }
     const sourceCwd = detail.info.cwd;
@@ -62,11 +75,19 @@ export const POST = withRemoteAuth(async function (
       );
     }
 
-    // 拷贝成新 session 文件（同 cwd），SDK 自动写 parentSessionPath。
-    // 注意：SessionManager 没有公开 setLeafId 接口，所以新文件的 leaf 还在末尾。
-    // 前端在为这个新 session 创建 agent 后，需要再调一次 navigate_tree(targetEntryId)
-    // 把 leaf 截到 fork 点。这里只负责造文件 + 返回元信息。
+    // 拷贝成新 session 文件（同 cwd），SDK 自动写 parentSessionPath），并把
+    // SessionManager 当前 leaf 定到目标 user entry。前端仍会带 targetEntryId
+    // 创建 agent 做二次定位；服务端先校验并设置一次，避免回显无效 anchor。
     const newSm = SessionManager.forkFrom(sourcePath, sourceCwd);
+    try {
+      newSm.branch(targetEntryId);
+    } catch (e) {
+      const createdPath = newSm.getSessionFile();
+      if (createdPath) {
+        await unlink(createdPath).catch(() => {});
+      }
+      throw e;
+    }
 
     return NextResponse.json({
       ok: true,

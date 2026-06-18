@@ -46,6 +46,7 @@ import {
 } from "@/lib/session-runner";
 import { deleteInput } from "@/lib/composer/input-store";
 import { userFacingMessage } from "@/lib/user-facing-error";
+import { deriveSessionUnreadAt } from "@/lib/sessions/unread";
 
 const STORAGE_KEY = "sessionLastSeen";
 const POLL_INTERVAL_MS = 15_000;
@@ -261,17 +262,18 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
     lastSeenMapRef.current = lastSeenMap;
   }, [lastSeenMap]);
 
-  /** 把指定 session 在当前 modified 上标记为已读（幂等） */
+  /** 把指定 session 在当前 unreadAt 上标记为已读（幂等） */
   const markSessionSeen = useCallback(
     (sessionId: string, sessionsSnapshot: SessionInfoLite[]) => {
       const cur = sessionsSnapshot.find((s) => s.id === sessionId);
       if (!cur) return;
-      const lastSeenAt = Date.parse(cur.modified);
+      const seenIso = deriveSessionUnreadAt(cur);
+      const lastSeenAt = Date.parse(seenIso);
       setLastSeenMap((prev) => {
-        if (prev[sessionId] === cur.modified) return prev;
-        const next = { ...prev, [sessionId]: cur.modified };
+        if (prev[sessionId] === seenIso) return prev;
+        const next = { ...prev, [sessionId]: seenIso };
         writeLastSeenToStorage(next);
-        persistServerLastSeen(sessionId, cur.modified);
+        persistServerLastSeen(sessionId, seenIso);
         return next;
       });
       if (Number.isFinite(lastSeenAt)) {
@@ -461,9 +463,18 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
           // active 被级联删了 → 切回 draft（switchTo 在 draft 不存在时兜底建空 runner）
           setSelectedId(null);
           switchTo(DRAFT_KEY);
-        } else if (selectedId && deletedIds.has(selectedId)) {
-          // 兜底：列表没找到但 selectedId 在删除集合里，清掉显示
+        } else if (
+          selectedIdRef.current &&
+          deletedIds.has(selectedIdRef.current)
+        ) {
+          // 兜底：列表没找到但 selectedId 在删除集合里，也要回到 draft。
+          // 否则 activeKey 可能停在已删除会话上，下一次发送只会被 guard 阻断。
           setSelectedId(null);
+          if (activeKeyRef.current !== DRAFT_KEY) {
+            closeSseFor(activeKeyRef.current);
+            runnersRef.current.delete(activeKeyRef.current);
+            switchTo(DRAFT_KEY);
+          }
         }
         refreshSessions();
       } catch (e) {
@@ -472,7 +483,6 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
     },
     [
       refreshSessions,
-      selectedId,
       switchTo,
       runnersRef,
       activeKeyRef,

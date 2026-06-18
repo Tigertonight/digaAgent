@@ -13,6 +13,7 @@
  */
 
 import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -61,6 +62,21 @@ async function ensureSessionsDir(): Promise<void> {
   await fs.mkdir(path.join(getRoot(), "sessions"), { recursive: true });
 }
 
+async function fsyncDir(dir: string): Promise<void> {
+  let handle: fs.FileHandle | null = null;
+  try {
+    handle = await fs.open(dir, "r");
+    await handle.sync();
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== "EINVAL" && code !== "ENOTSUP" && code !== "EISDIR") {
+      throw e;
+    }
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
 /** 过滤未知字段 + 强制 id 一致 */
 function sanitize(raw: unknown, expectedId: string): SessionMeta | null {
   if (!raw || typeof raw !== "object") return null;
@@ -89,7 +105,11 @@ export async function readMeta(sessionId: string): Promise<SessionMeta | null> {
   try {
     const parsed = JSON.parse(text);
     return sanitize(parsed, sessionId);
-  } catch {
+  } catch (e) {
+    console.warn("[meta] failed to parse session meta", {
+      sessionId,
+      error: e instanceof Error ? e.message : String(e),
+    });
     return null;
   }
 }
@@ -109,9 +129,22 @@ export async function writeMeta(meta: SessionMeta): Promise<void> {
 
   await ensureSessionsDir();
   const fp = metaFilePath(meta.id);
-  const tmp = `${fp}.tmp.${process.pid}.${Date.now()}`;
-  await fs.writeFile(tmp, JSON.stringify(sanitized, null, 2), "utf8");
-  await fs.rename(tmp, fp);
+  const dir = path.dirname(fp);
+  const tmp = `${fp}.tmp.${process.pid}.${Date.now()}.${randomUUID()}`;
+  const handle = await fs.open(tmp, "wx");
+  try {
+    await handle.writeFile(JSON.stringify(sanitized, null, 2), "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    await fs.rename(tmp, fp);
+    await fsyncDir(dir);
+  } catch (e) {
+    await fs.unlink(tmp).catch(() => {});
+    throw e;
+  }
 }
 
 /**

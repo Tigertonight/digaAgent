@@ -134,18 +134,16 @@ export async function GET(
 
       // 3. 心跳，避免代理/浏览器断流
       heartbeat = setInterval(() => {
+        if (isAgentDisposed(id)) {
+          closeStream();
+          return;
+        }
         safeEnqueue(`: ping ${Date.now()}\n\n`);
       }, 15000);
 
       // 4. client 断开
       req.signal.addEventListener("abort", () => {
-        closed = true;
-        if (unsub) unsub();
-        if (heartbeat) clearInterval(heartbeat);
-        if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-        try {
-          controller.close();
-        } catch {}
+        closeStream();
       });
     },
     cancel() {

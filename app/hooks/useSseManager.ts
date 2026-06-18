@@ -71,6 +71,12 @@ export interface UseSseManagerOptions {
    * 后统一 commit 一次。不传也能运行（退化为逐事件 commit）。
    */
   batchUpdates?: <T>(fn: () => T) => T;
+  /**
+   * Optional lifecycle guard. ChatApp uses this to prevent late async work
+   * from attaching an SSE connection for a runner that has already been
+   * deleted or evicted.
+   */
+  canAttach?: (key: RunnerKey) => boolean;
 }
 
 export interface UseSseManagerReturn {
@@ -96,7 +102,7 @@ export interface UseSseManagerReturn {
 export function useSseManager(
   opts: UseSseManagerOptions
 ): UseSseManagerReturn {
-  const { onEvent, onStatusChange, batchUpdates } = opts;
+  const { onEvent, onStatusChange, batchUpdates, canAttach } = opts;
 
   // ===== 连接池 =====
   const esMapRef = useRef<Map<RunnerKey, EventSource>>(new Map());
@@ -143,12 +149,16 @@ export function useSseManager(
   //  把回调放 ref 里转发，attachSseFor 的 useCallback 依赖才能为空）
   const onEventRef = useRef(onEvent);
   const onStatusChangeRef = useRef(onStatusChange);
+  const canAttachRef = useRef(canAttach);
   useEffect(() => {
     onEventRef.current = onEvent;
   }, [onEvent]);
   useEffect(() => {
     onStatusChangeRef.current = onStatusChange;
   }, [onStatusChange]);
+  useEffect(() => {
+    canAttachRef.current = canAttach;
+  }, [canAttach]);
 
   // RAF flush：一口气 dispatch 当前帧内所有累积事件，包在 batchUpdates 里
   // 让 useRunners 只触发 1 次 setActiveSnapshot。
@@ -231,6 +241,7 @@ export function useSseManager(
   // ===== 打开 =====
   const attachSseFor = useCallback<UseSseManagerReturn["attachSseFor"]>(
     (key, agentId) => {
+      if (canAttachRef.current && !canAttachRef.current(key)) return;
       // S2：本次 attach 取消任何待执行的重连定时器（手动 attach 优先），并记下
       // 当前 agentId 供重连复用。注意不清 lastSeqRef，保证重连能按 since 续传。
       clearReconnect(key);
@@ -324,13 +335,17 @@ export function useSseManager(
           reconnectTimerRef.current.delete(key);
           // 仅当这条连接仍是“当前”且未被主动关闭时才重连。
           if (esMapRef.current.get(key) !== es) return;
+          if (canAttachRef.current && !canAttachRef.current(key)) {
+            closeSseFor(key);
+            return;
+          }
           const aid = keyAgentRef.current.get(key) ?? agentId;
           attachSseForRef.current(key, aid);
         }, delay);
         reconnectTimerRef.current.set(key, timer);
       };
     },
-    [clearReconnect]
+    [clearReconnect, closeSseFor]
   );
 
   // 自引用：让 onerror 闭包能重新 attach（指数退避重连）。

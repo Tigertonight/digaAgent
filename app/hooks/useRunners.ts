@@ -7,7 +7,8 @@
  *   - 唯一持有 runnersRef（Map<RunnerKey, RunnerState>）—— 所有会话工作面的"权威存储"
  *   - 暴露 updateRunner / updateActive / switchTo 三个写入入口
  *   - 暴露 activeKey / activeSnapshot 用于触发渲染（UI 从 activeSnapshot 读当前会话）
- *   - LRU 淘汰：runners > MAX_RUNNERS 时踢掉最久未触达的非活跃/非流式/非压缩 runner
+ *   - LRU 淘汰：runners > MAX_RUNNERS 时优先踢掉最久未触达的非活跃/非流式/非压缩 runner；
+ *     若全部被保护，也会释放最久未触达的后台 runner，避免连接池无上限增长
  *
  * 设计要点：
  *   - 通过 onEvict 回调通知外部（用于关 SSE 等外部副作用），不在 hook 内直接操作 SSE
@@ -211,7 +212,10 @@ export function useRunners(opts: UseRunnersOptions = {}): UseRunnersReturn {
   }, []);
 
   /**
-   * LRU 淘汰：runners > maxRunners 时，挑出"最久未触达"的非活跃/非流式/非压缩 runner 踢掉。
+   * LRU 淘汰：runners > maxRunners 时，优先挑出"最久未触达"的
+   * 非活跃/非流式/非压缩 runner 踢掉。若所有后台 runner 都被豁免，
+   * 仍释放最久未触达的后台 runner 来维持硬上限；后端 agent 不会被 abort，
+   * 用户切回该 session 时会走历史加载/续连。
    *
    * 踢的语义：
    *   - 先调 onEvict(key) 通知外部清理（如关 SSE）
@@ -237,11 +241,26 @@ export function useRunners(opts: UseRunnersOptions = {}): UseRunnersReturn {
     candidates.sort((a, b) => a.touched - b.touched);
     const need = map.size - maxRunners;
     if (candidates.length === 0) {
-      // M3：所有 runner 都被豁免（都在 streaming / 等待 / active），无可淘汰对象。
-      // 此时 map 会突破上限——告警以便发现“连接泄漏 / 上限失效”。
+      const fallback: { key: RunnerKey; touched: number }[] = [];
+      for (const [key, r] of map) {
+        if (key === DRAFT_KEY) continue;
+        if (key === activeKeyRef.current) continue;
+        fallback.push({ key, touched: r.lastTouched });
+      }
+      fallback.sort((a, b) => a.touched - b.touched);
+      if (fallback.length === 0) return;
       console.warn(
-        `[runners] LRU over limit (${map.size}/${maxRunners}) but no evictable candidate; all runners are active/streaming/waiting.`
+        `[runners] LRU hard limit reached (${map.size}/${maxRunners}); releasing the coldest protected background runner.`
       );
+      for (let i = 0; i < Math.min(need, fallback.length); i++) {
+        const key = fallback[i].key;
+        try {
+          onEvict?.(key);
+        } catch {
+          // 外部清理失败不影响 runner 淘汰
+        }
+        map.delete(key);
+      }
       return;
     }
     for (let i = 0; i < Math.min(need, candidates.length); i++) {

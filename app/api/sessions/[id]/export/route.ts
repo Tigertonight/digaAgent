@@ -8,6 +8,7 @@ import { internalErrorBody } from "@/lib/api/error-response";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+const SAFE_SESSION_ID_RE = /^[A-Za-z0-9._-]+$/;
 
 /**
  * SDK 的 export-html 子路径不在 package.json exports map 里，
@@ -55,6 +56,12 @@ export const GET = withRemoteAuth(async function (
 ) {
   const { id } = await params;
   try {
+    if (!SAFE_SESSION_ID_RE.test(id)) {
+      return new Response(JSON.stringify({ error: "invalid session id" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
     const path = await findSessionPathById(id);
     if (!path) {
       return new Response(JSON.stringify({ error: "session not found" }), {
@@ -63,9 +70,10 @@ export const GET = withRemoteAuth(async function (
       });
     }
     const exportFromFile = await loadExportFromFile();
+    const safeId = encodeURIComponent(id);
     const outPath = join(
       tmpdir(),
-      `diga-agent-export-${id}-${Date.now()}.html`
+      `diga-agent-export-${safeId}-${Date.now()}.html`
     );
     try {
       await exportFromFile(path, { outputPath: outPath });
@@ -74,7 +82,7 @@ export const GET = withRemoteAuth(async function (
         status: 200,
         headers: {
           "Content-Type": "text/html; charset=utf-8",
-          "Content-Disposition": `attachment; filename="pi-session-${id}.html"`,
+          "Content-Disposition": `attachment; filename="pi-session-${safeId}.html"`,
           "Cache-Control": "no-store",
         },
       });

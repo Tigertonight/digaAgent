@@ -766,6 +766,27 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
     state.messages[idx] = mutator(msg);
   };
 
+  const replaceExistingTool = (
+    toolCallId: string,
+    mutator: (
+      tool: Extract<MessagePart, { kind: "tool" }>
+    ) => Extract<MessagePart, { kind: "tool" }>
+  ): boolean => {
+    for (let mi = state.messages.length - 1; mi >= 0; mi--) {
+      const m = state.messages[mi];
+      if (m.role !== "assistant" || !m.parts) continue;
+      const pi = findToolPartIndex(m.parts, toolCallId);
+      if (pi < 0) continue;
+      const parts = m.parts.slice();
+      const cur = parts[pi];
+      if (cur.kind !== "tool") return false;
+      parts[pi] = mutator(cur);
+      state.messages[mi] = { ...m, parts };
+      return true;
+    }
+    return false;
+  };
+
   switch (ev.type) {
     // F3：optimistic user message。send 后本地先插 user message，SSE message_start 到达
     // 后衰变为正常消息。如果 SSE 未到，这条仍以 pending 状态留在 UI。
@@ -1146,18 +1167,13 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
 
     case "tool_execution_update": {
       if (!ev.toolCallId) return state;
-      replaceActive((msg) => {
-        const parts = (msg.parts ?? []).slice();
-        const idx = findToolPartIndex(parts, ev.toolCallId!);
-        if (idx >= 0) {
-          const tp = parts[idx] as Extract<MessagePart, { kind: "tool" }>;
-          parts[idx] = {
-            ...tp,
-            partialResult: ev.partialResult ?? tp.partialResult,
-          };
-        }
-        return { ...msg, parts };
-      });
+      // M13: update can arrive after message_end closed the active assistant.
+      // Do not call replaceActive here: it would create an empty assistant
+      // bubble. Patch the existing tool part wherever it lives, or ignore.
+      replaceExistingTool(ev.toolCallId, (tp) => ({
+        ...tp,
+        partialResult: ev.partialResult ?? tp.partialResult,
+      }));
       return state;
     }
 
@@ -1404,6 +1420,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
       return state;
     }
 
+    case "subagent_batch_detached":
     case "subagent_batch_end": {
       const batchId = ev.batchId;
       if (!batchId) return state;
@@ -1415,6 +1432,21 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         const parts = m.parts.slice();
         const cur = parts[pi];
         if (cur.kind !== "subagent_batch") break;
+        if (ev.type === "subagent_batch_detached") {
+          parts[pi] = {
+            ...cur,
+            status:
+              ev.status === "running" ||
+              ev.status === "completed" ||
+              ev.status === "failed" ||
+              ev.status === "aborted"
+                ? ev.status
+                : cur.status,
+            endedAt: ev.endedAt ?? cur.endedAt,
+          };
+          state.messages[mi] = { ...m, parts };
+          break;
+        }
         const results = resultsByTaskId(ev.results);
         parts[pi] = {
           ...cur,
@@ -1553,23 +1585,20 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
 
     case "tool_execution_end": {
       if (!ev.toolCallId) return state;
-      replaceActive((msg) => {
-        const parts = (msg.parts ?? []).slice();
-        const idx = findToolPartIndex(parts, ev.toolCallId!);
-        if (idx >= 0) {
-          const tp = parts[idx] as Extract<MessagePart, { kind: "tool" }>;
-          // grep/rg no-match 会让 bash exit code = 1，被 SDK 标 isError；
-          // 这里识别出来作为成功处理，避免后续 UI 走 recovered 路径。
-          const falseError = isFalseGrepNoMatch(tp.toolName, tp.args, ev.result);
-          const realIsError = !falseError && (ev.isError ?? false);
-          parts[idx] = {
-            ...tp,
-            result: ev.result,
-            isError: realIsError,
-            status: realIsError ? "error" : "done",
-          };
-        }
-        return { ...msg, parts };
+      // M13: end can arrive after message_end closed the active assistant.
+      // Patch the already-rendered tool part instead of creating a new empty
+      // assistant message.
+      replaceExistingTool(ev.toolCallId, (tp) => {
+        // grep/rg no-match 会让 bash exit code = 1，被 SDK 标 isError；
+        // 这里识别出来作为成功处理，避免后续 UI 走 recovered 路径。
+        const falseError = isFalseGrepNoMatch(tp.toolName, tp.args, ev.result);
+        const realIsError = !falseError && (ev.isError ?? false);
+        return {
+          ...tp,
+          result: ev.result,
+          isError: realIsError,
+          status: realIsError ? "error" : "done",
+        };
       });
       return state;
     }

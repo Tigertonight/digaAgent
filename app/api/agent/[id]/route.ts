@@ -35,6 +35,7 @@ import {
   abortLocalCodingAssistantAgent,
   LOCAL_CODING_ASSISTANT_MODELS,
   LOCAL_CODING_ASSISTANT_PROVIDER_ID,
+  finishStreamingAfterPromptError,
 } from "@/lib/agent-registry";
 import {
   clearGoal,
@@ -479,6 +480,7 @@ export async function POST(
             await rec.session.prompt(finalTextWithMode, imagesOpt);
           }
         } catch (e) {
+          finishStreamingAfterPromptError(rec.id);
           clearClientRequest(rec.id, clientRequestId);
           throw e;
         }
@@ -619,6 +621,7 @@ export async function POST(
           if (rec.isStreaming) await rec.session.followUp(prompt);
           else await rec.session.prompt(prompt);
         } catch (e) {
+          finishStreamingAfterPromptError(rec.id);
           clearClientRequest(rec.id, clientRequestId);
           throw e;
         }
@@ -643,18 +646,23 @@ export async function POST(
             "Resume working toward this active goal. Treat the visible text above as the goal.",
             "Do the next useful step. Use goal_update when the goal is complete or truly blocked.",
           ].join("\n");
-          await rec.session.prompt(
-            withCommunicationInstructions(
-              [
-                goal.objective,
-                "",
-                CONTEXT_ASIDE_OPEN,
-                resumeAside,
-                CONTEXT_ASIDE_CLOSE,
-              ].join("\n"),
-              await getCommunicationSettings()
-            )
-          );
+          try {
+            await rec.session.prompt(
+              withCommunicationInstructions(
+                [
+                  goal.objective,
+                  "",
+                  CONTEXT_ASIDE_OPEN,
+                  resumeAside,
+                  CONTEXT_ASIDE_CLOSE,
+                ].join("\n"),
+                await getCommunicationSettings()
+              )
+            );
+          } catch (e) {
+            finishStreamingAfterPromptError(rec.id);
+            throw e;
+          }
         }
         return NextResponse.json({ ok: true, goal });
       }

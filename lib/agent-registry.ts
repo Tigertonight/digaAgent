@@ -520,6 +520,7 @@ function maybeContinueGoal(rec: AgentRecord): void {
       );
       await rec.session.prompt(prompt);
     })().catch((e) => {
+      finishStreamingAfterPromptError(rec.id);
       const paused = setGoalStatus(rec.id, "paused", {
         pauseReason:
           e instanceof Error ? e.message : "Goal continuation failed.",
@@ -2128,6 +2129,24 @@ export async function abortSubagentsForParent(parentAgentId: string): Promise<vo
 
 export async function abortWorkflowsForParent(parentAgentId: string): Promise<void> {
   await abortRunningWorkflows(parentAgentId);
+}
+
+export function finishStreamingAfterPromptError(agentId: string): void {
+  const rec = reg.agents.get(agentId);
+  if (!rec) return;
+  clearFinishWatchdog(rec);
+  if (rec.isStreaming) {
+    rec.isStreaming = false;
+    rec.lastAgentEndAt = Date.now();
+    const goal = getGoal(rec.id);
+    if (goal) {
+      finishGoalTurn(rec.id, {
+        status: "failed",
+        blockedReason: "Prompt failed before the agent produced a terminal event.",
+      });
+    }
+  }
+  rec.updatedAt = Date.now();
 }
 
 export async function retryWorkflowScriptForParent(
