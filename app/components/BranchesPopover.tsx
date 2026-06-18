@@ -60,6 +60,7 @@ export default function BranchesPopover({
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [navigating, setNavigating] = useState<string | null>(null);
+  const [showFullTree, setShowFullTree] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -132,7 +133,9 @@ export default function BranchesPopover({
       }>;
     }> = [];
 
-    const walk = (node: TreeNode) => {
+    const stack = [...tree].reverse();
+    while (stack.length > 0) {
+      const node = stack.pop()!;
       if (node.children.length > 1) {
         const paths = node.children.map((child) => {
           // 沿着 child 走到叶子（取第一个孩子，遇到第二次分叉就停在那里）
@@ -158,11 +161,27 @@ export default function BranchesPopover({
           paths,
         });
       }
-      node.children.forEach(walk);
-    };
-    tree.forEach(walk);
+      for (let i = node.children.length - 1; i >= 0; i--) {
+        stack.push(node.children[i]);
+      }
+    }
     return out;
   }, [tree, leafId]);
+
+  const treeStats = useMemo(() => {
+    let nodeCount = 0;
+    let maxDepth = 0;
+    const stack = tree.map((node) => ({ node, depth: 0 }));
+    while (stack.length > 0) {
+      const item = stack.pop()!;
+      nodeCount++;
+      maxDepth = Math.max(maxDepth, item.depth);
+      for (const child of item.node.children) {
+        stack.push({ node: child, depth: item.depth + 1 });
+      }
+    }
+    return { nodeCount, maxDepth };
+  }, [tree]);
 
   return (
     <div
@@ -294,25 +313,31 @@ export default function BranchesPopover({
 
           {/* 完整树视图（折叠） */}
           {tree.length > 0 && (
-            <details>
+            <details
+              open={showFullTree}
+              onToggle={(e) => setShowFullTree(e.currentTarget.open)}
+            >
               <summary
                 className="cursor-pointer select-none px-2 py-1 text-token-xs"
                 style={{ color: "var(--text-muted)" }}
               >
-                显示完整树
+                显示完整树 · {treeStats.nodeCount} 个节点 · 深度{" "}
+                {treeStats.maxDepth}
               </summary>
-              <div className="pl-1 pt-1">
-                {tree.map((root) => (
-                  <TreeRow
-                    key={root.entry.id}
-                    node={root}
-                    depth={0}
-                    leafId={leafId}
-                    onNavigate={navigate}
-                    navigating={navigating}
-                  />
-                ))}
-              </div>
+              {showFullTree && (
+                <div className="pl-1 pt-1">
+                  {tree.map((root) => (
+                    <TreeRow
+                      key={root.entry.id}
+                      node={root}
+                      depth={0}
+                      leafId={leafId}
+                      onNavigate={navigate}
+                      navigating={navigating}
+                    />
+                  ))}
+                </div>
+              )}
             </details>
           )}
         </div>
@@ -334,7 +359,7 @@ function TreeRow({
   onNavigate: (id: string) => void;
   navigating: string | null;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const isCurrent = node.entry.id === leafId;
   const hasChildren = node.children.length > 0;
   const showable = node.entry.type === "message";

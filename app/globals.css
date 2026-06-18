@@ -416,6 +416,10 @@ body {
 .cv-auto {
   content-visibility: auto;
   contain-intrinsic-size: 0 220px;
+  /* 【产品规则】不让这些列表项被选为浏览器 scroll anchor。本项目自己接管
+     了贴底跟随 / 用户手动滚动保护；Chrome 的 anchor 会在高 token 率追写时
+     抢走贴底位，在 dev 上表现为“回弹到上一锡点”。 */
+  overflow-anchor: none;
 }
 
 .sidebar-container.sidebar-closed {

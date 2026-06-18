@@ -114,16 +114,17 @@ export function ChatMinimap({
     const scrollEl = scrollContainer.current;
     if (!scrollEl) return;
     const all = visibleMessagesRef.current;
-    if (all.length > MAX_MEASURED_MESSAGES) {
-      setVisible(false);
-      setNodes([]);
-      return;
-    }
 
     const totalH = scrollEl.scrollHeight;
     const clientH = scrollEl.clientHeight;
     const scrollable = totalH - clientH;
 
+    // 【产品规则】只要有可滚动内容就显示 minimap。
+    // 老逻辑在 messages.length > 240 时直接隐藏整个 minimap，
+    // 但长会话恰息是最需要锡点跳转的场景 —— 那里反而看不到 minimap。
+    // 现在改成：viewport 指示框始终显示；性能保护仅作用于
+    // “测量 DOM 圈”这个昂贵动作 —— 在列表剧长时只拾最后 240 条画锡点，
+    // 其余老消息没独立锡点但整体 minimap 仍可点击 / 拖动。
     setVisible(scrollable > 20);
     if (scrollable <= 0) {
       setScrollRatio(0);
@@ -135,7 +136,12 @@ export function ChatMinimap({
 
     const refs = messageRefs.current;
     const newNodes: NodeInfo[] = [];
-    for (let i = 0; i < all.length; i++) {
+    // 性能保护：超过 MAX_MEASURED_MESSAGES 只量尾部 240 条。
+    const startIdx =
+      all.length > MAX_MEASURED_MESSAGES
+        ? all.length - MAX_MEASURED_MESSAGES
+        : 0;
+    for (let i = startIdx; i < all.length; i++) {
       const msg = all[i];
       const el = refs?.[i];
       if (!hasRenderableContent(msg)) continue;
