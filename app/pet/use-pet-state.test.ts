@@ -51,6 +51,19 @@ describe("pet state matrix", () => {
     );
   });
 
+  it("degraded connection does not show offline before the lost delay elapses", () => {
+    const s = session({
+      sseStatus: "degraded",
+      streaming: true,
+      agentPhase: { kind: "waiting_model" },
+    });
+
+    expect(derivePetAnimState(s)).toBe("thinking");
+    expect(derivePetBubbleText(s, "thinking", Date.now()).priority).toBe(
+      "normal"
+    );
+  });
+
   it("approval outranks budget warning and running state", () => {
     const s = session({
       streaming: true,

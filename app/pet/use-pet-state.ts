@@ -43,7 +43,8 @@ export function derivePetAnimState(
 ): PetAnimState {
   if (!session || !session.agentId) return "idle";
 
-  // 高优先级状态按 Pet State Matrix 排序
+  // 高优先级状态按 Pet State Matrix 排序。degraded 是短暂重连态，
+  // 不按 offline 处理，避免网络瞬断时宠物误报离线。
   if (session.sseStatus === "lost") return "offline";
   if (session.error) return "error";
   if (session.pendingApproval) return "approval";

@@ -11,7 +11,7 @@
  */
 
 /** 宠物窗口能感知到的 SSE 连接状态 */
-export type PetSseStatus = "idle" | "active" | "lost";
+export type PetSseStatus = "idle" | "active" | "degraded" | "lost";
 
 /** 宠物窗口能感知到的"临时事件"，用于驱动临时气泡 */
 export interface PetRetryInfo {

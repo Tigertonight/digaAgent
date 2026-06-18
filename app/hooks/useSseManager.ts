@@ -45,6 +45,7 @@ interface PendingSseEvent {
 
 /** S2：断线重连的指数退避间隔（ms）。模块级常量，避免每次 render 重建。 */
 const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000];
+const LOST_STATUS_DELAY_MS = 2000;
 
 /** SSE 状态变更 patch；ChatApp 把它写到对应 runner */
 export interface SseStatusPatch {
@@ -130,6 +131,9 @@ export function useSseManager(
   const reconnectTimerRef = useRef<Map<RunnerKey, ReturnType<typeof setTimeout>>>(
     new Map()
   );
+  const lostStatusTimerRef = useRef<Map<RunnerKey, ReturnType<typeof setTimeout>>>(
+    new Map()
+  );
   const reconnectAttemptRef = useRef<Map<RunnerKey, number>>(new Map());
   // 记住每个 key 当前的 agentId，重连时复用（attachSseFor 内会按 agentId 续传 lastSeq）。
   const keyAgentRef = useRef<Map<RunnerKey, string>>(new Map());
@@ -141,6 +145,13 @@ export function useSseManager(
     if (t !== undefined) {
       clearTimeout(t);
       reconnectTimerRef.current.delete(key);
+    }
+  }, []);
+  const clearLostStatusTimer = useCallback((key: RunnerKey) => {
+    const t = lostStatusTimerRef.current.get(key);
+    if (t !== undefined) {
+      clearTimeout(t);
+      lostStatusTimerRef.current.delete(key);
     }
   }, []);
 
@@ -212,6 +223,7 @@ export function useSseManager(
     // S2：主动关闭（LRU 淘汰 / 删除 session / reset）必须取消待执行的自动重连，
     // 否则定时器会把已被关闭的 key 又重新连起来。
     clearReconnect(key);
+    clearLostStatusTimer(key);
     reconnectAttemptRef.current.delete(key);
     keyAgentRef.current.delete(key);
     const es = esMapRef.current.get(key);
@@ -236,7 +248,7 @@ export function useSseManager(
         (item) => item.key !== key
       );
     }
-  }, [clearReconnect]);
+  }, [clearLostStatusTimer, clearReconnect]);
 
   // ===== 打开 =====
   const attachSseFor = useCallback<UseSseManagerReturn["attachSseFor"]>(
@@ -245,6 +257,7 @@ export function useSseManager(
       // S2：本次 attach 取消任何待执行的重连定时器（手动 attach 优先），并记下
       // 当前 agentId 供重连复用。注意不清 lastSeqRef，保证重连能按 since 续传。
       clearReconnect(key);
+      clearLostStatusTimer(key);
       keyAgentRef.current.set(key, agentId);
       // F5：老连接状态独立拆除。不能复用同一 ES 的 lastSeqRef，避免
       // 同一 key 被不同 agent 复用时 since 起点错乱。
@@ -291,6 +304,7 @@ export function useSseManager(
       es.onopen = () => {
         if (!isStillCurrent()) return;
         // S2：连接恢复，重置退避计数。
+        clearLostStatusTimer(key);
         reconnectAttemptRef.current.delete(key);
         onStatusChangeRef.current(key, { sseStatus: "active" });
       };
@@ -321,7 +335,15 @@ export function useSseManager(
       es.onerror = (e) => {
         if (!isStillCurrent()) return;
         console.warn("sse error", e);
-        onStatusChangeRef.current(key, { sseStatus: "lost" });
+        onStatusChangeRef.current(key, { sseStatus: "degraded" });
+        if (!lostStatusTimerRef.current.has(key)) {
+          const lostTimer = setTimeout(() => {
+            lostStatusTimerRef.current.delete(key);
+            if (!isStillCurrent()) return;
+            onStatusChangeRef.current(key, { sseStatus: "lost" });
+          }, LOST_STATUS_DELAY_MS);
+          lostStatusTimerRef.current.set(key, lostTimer);
+        }
         // S2：EventSource 已 CLOSED 时浏览器不会自动重试，这里做指数退避重连。
         // CONNECTING（readyState===0）说明浏览器仍在自行重试，交给它即可。
         if (es.readyState !== EventSource.CLOSED) return;
@@ -345,7 +367,7 @@ export function useSseManager(
         reconnectTimerRef.current.set(key, timer);
       };
     },
-    [clearReconnect, closeSseFor]
+    [clearLostStatusTimer, clearReconnect, closeSseFor]
   );
 
   // 自引用：让 onerror 闭包能重新 attach（指数退避重连）。
@@ -359,10 +381,13 @@ export function useSseManager(
     const lastSeq = lastSeqRef.current;
     const generations = generationRef.current;
     const reconnectTimers = reconnectTimerRef.current;
+    const lostStatusTimers = lostStatusTimerRef.current;
     return () => {
       // S2：清掉所有待执行的重连定时器，避免卸载后还触发 attach。
       for (const t of reconnectTimers.values()) clearTimeout(t);
       reconnectTimers.clear();
+      for (const t of lostStatusTimers.values()) clearTimeout(t);
+      lostStatusTimers.clear();
       for (const es of map.values()) {
         try {
           es.onmessage = null;

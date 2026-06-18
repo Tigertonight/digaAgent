@@ -530,9 +530,17 @@ export function TopHeader({
   const sseLabel =
     sseStatus === "active"
       ? "Live"
+      : sseStatus === "degraded"
+        ? "Reconnecting"
       : sseStatus === "lost"
         ? "Disconnected"
         : null;
+  const sseTone =
+    sseStatus === "active"
+      ? "success"
+      : sseStatus === "degraded"
+        ? "warning"
+        : "danger";
 
   useEffect(() => {
     let cancelled = false;
@@ -614,25 +622,41 @@ export function TopHeader({
             className="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 shrink-0"
             style={{
               borderColor:
-                sseStatus === "active"
+                sseTone === "success"
                   ? "var(--color-success)"
-                  : "var(--color-danger)",
-              color: sseStatus === "active" ? "var(--color-success)" : "var(--color-danger)",
+                  : sseTone === "warning"
+                    ? "var(--color-warning)"
+                    : "var(--color-danger)",
+              color:
+                sseTone === "success"
+                  ? "var(--color-success)"
+                  : sseTone === "warning"
+                    ? "var(--color-warning)"
+                    : "var(--color-danger)",
               background:
-                sseStatus === "active"
+                sseTone === "success"
                   ? "var(--color-success-bg)"
-                  : "var(--color-danger-bg)",
+                  : sseTone === "warning"
+                    ? "var(--color-warning-bg)"
+                    : "var(--color-danger-bg)",
             }}
             title={
               sseStatus === "active"
                 ? "Live sync active"
-                : "Connection lost. Session may still be running in background."
+                : sseStatus === "degraded"
+                  ? "Connection is recovering."
+                  : "Connection lost. Session may still be running in background."
             }
           >
             <span
               className="inline-block h-1.5 w-1.5 rounded-full"
               style={{
-                background: sseStatus === "active" ? "var(--color-success)" : "var(--color-danger)",
+                background:
+                  sseTone === "success"
+                    ? "var(--color-success)"
+                    : sseTone === "warning"
+                      ? "var(--color-warning)"
+                      : "var(--color-danger)",
               }}
             />
             <span>{sseLabel}</span>

@@ -78,7 +78,7 @@ export interface PendingAttachment {
   kind: PendingAttachmentKind;
 }
 
-export type SseStatus = "idle" | "active" | "lost";
+export type SseStatus = "idle" | "active" | "degraded" | "lost";
 
 /**
  * 一个 runner 持有的全部 per-session 状态。
