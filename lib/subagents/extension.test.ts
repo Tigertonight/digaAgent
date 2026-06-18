@@ -94,6 +94,29 @@ describe("createDelegateSubagentsTool", () => {
       ],
     });
   });
+
+  it("returns actionable truncation guidance when tasks is missing/empty", async () => {
+    const onDelegate = vi.fn();
+    const tool = createDelegateSubagentsTool({ onDelegate });
+    const exec = tool.execute as (
+      toolCallId: string,
+      params: unknown,
+      signal?: AbortSignal
+    ) => ReturnType<typeof tool.execute>;
+
+    // Simulates a truncated tool call: reason/synthesisInstructions present but
+    // the long tasks array never made it into the arguments.
+    await expect(
+      exec("call-trunc", { reason: "compare X", synthesisInstructions: "merge" }, undefined)
+    ).rejects.toThrow(/without any tasks|truncated/);
+
+    await expect(
+      exec("call-empty", { reason: "x", tasks: [] }, undefined)
+    ).rejects.toThrow(/without any tasks|truncated/);
+
+    // Must not attempt the batch when there is nothing to run.
+    expect(onDelegate).not.toHaveBeenCalled();
+  });
 });
 
 describe("createPlanSubagentsTool", () => {

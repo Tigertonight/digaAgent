@@ -243,8 +243,17 @@ async function ensurePage(browserId: string): Promise<{ rec: BrowserRecord; page
   if (rec.page && !rec.page.isClosed()) return { rec, page: rec.page };
 
   if (!allowPlaywrightFallback()) {
+    // 区分三种情况，给出对路的指引，而不是笼统的 "not connected"：
+    //   - 曾注册过但心跳过期（stale）：面板还在但连接断了 → 重新聚焦/打开面板
+    //   - 从未注册：要么打开 BrowserPanel（会注册 host），要么开 Playwright fallback
+    const hadHost = !!rec.inAppHost;
+    const staleHint = hadHost
+      ? "The in-app browser host was connected but its heartbeat expired (panel closed or backgrounded). Re-open or focus the BrowserPanel to reconnect it. "
+      : "No in-app browser host is connected. Open the BrowserPanel so the agent can drive the in-app page";
     throw new Error(
-      "In-app browser host is not connected. Open the BrowserPanel to let the agent control the in-app page, or set DIGA_AGENT_BROWSER_PLAYWRIGHT_FALLBACK=1 to allow launching Chrome for Testing."
+      `In-app browser host is not connected. ${staleHint}` +
+        (hadHost ? "" : " (the panel registers a host when shown). ") +
+        "Alternatively set DIGA_AGENT_BROWSER_PLAYWRIGHT_FALLBACK=1 to let the agent launch a separate Chrome for Testing window when no in-app panel is available."
     );
   }
 

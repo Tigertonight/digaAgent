@@ -78,10 +78,14 @@ const DelegateParams = Type.Object({
   reason: Type.String({
     description: "Why this task should be split across subagents.",
   }),
-  tasks: Type.Array(TaskSchema, {
-    description:
-      "Independent tasks. Each subagent handles exactly one task and does not solve siblings.",
-  }),
+  tasks: Type.Optional(
+    Type.Array(TaskSchema, {
+      description:
+        "Independent tasks. Each subagent handles exactly one task and does not solve siblings. " +
+        "Required in practice — declared optional only so a truncated call (missing tasks) yields an actionable error instead of a generic schema failure. " +
+        "Keep each task.prompt focused; if the overall call gets large, split into fewer tasks per call or have subagents read context from files instead of inlining it.",
+    })
+  ),
   concurrency: Type.Optional(
     Type.Number({ description: "Maximum parallel subagents. Defaults to 4." })
   ),
@@ -283,6 +287,7 @@ export function createDelegateSubagentsTool(
       "For unclear complex requests, call plan_subagents first to decide whether fan-out is justified and to draft independent tasks.",
       "Use delegate_subagents when the user explicitly asks for multiple subagents or when 4+ independent subtasks can run in parallel.",
       "Each task prompt must be standalone and scoped to exactly one subtask.",
+      "AVOID TRUNCATION: the tasks array can get large because each prompt is long. If you have many tasks, prefer 2–4 focused tasks per call (add more via follow-up calls) and keep each prompt tight — point subagents at files/paths to read instead of pasting large context inline. An oversized call can be cut off before `tasks` is emitted.",
       "Do not delegate tasks that require parallel file edits unless the user explicitly asks and the edit boundaries are isolated.",
       "After delegate_subagents returns, synthesize the results; do not merely paste them verbatim unless the user asked for per-task answers.",
       "Each task.title must be a high-signal scannable name (8–24 chars / 4–12 中文字) that pairs an object and an action, e.g. '检查 Electron 启动链路'. Do not use 'Question 1 / Task 1 / Review' or repeat 'subagent / 帮我检查'—titles drive sidebar discovery for parallel tasks.",
@@ -291,6 +296,22 @@ export function createDelegateSubagentsTool(
     executionMode: "sequential",
 
     async execute(_toolCallId, params, signal) {
+      // tasks is declared optional in the schema so a truncated tool call (very
+      // common: each task.prompt is long, so the model's output hits the length
+      // limit before `tasks` is emitted) reaches here instead of being rejected
+      // with an opaque "must have required properties tasks". Give actionable
+      // recovery guidance — the same failure mode handled for run_workflow_script.
+      if (!Array.isArray(params.tasks) || params.tasks.length === 0) {
+        throw new Error(
+          "delegate_subagents was called without any tasks. This usually means the tool " +
+            "call was truncated by the model output limit before the (often long) tasks " +
+            "array was emitted. Recover by: (1) sending fewer tasks per call (e.g. 2–3) " +
+            "and adding more in follow-up calls, (2) shortening each task.prompt and having " +
+            "subagents read large context from files instead of inlining it, or " +
+            "(3) using plan_subagents first to draft compact tasks. Do not retry the same " +
+            "oversized call unchanged."
+        );
+      }
       const input = normalizeInput(params);
       const { batchId, results, planning, synthesis, auditEvents } = await opts.onDelegate(
         input,
