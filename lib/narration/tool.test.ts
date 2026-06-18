@@ -169,6 +169,30 @@ describe("narrateTool — grep / rg 命令 label 不拽出整条命令", () => {
     expect(n.primary).toContain("executeDeleteSession");
     expect(n.primary).not.toContain("node_modules");
   });
+
+  it("rg --files 这种抽不到 pattern 时不要只显示光秃秃的查找", () => {
+    const n = narrateTool(
+      mk({
+        toolName: "bash",
+        status: "done",
+        args: { command: "rg --files app lib" },
+      })
+    );
+    expect(n.primary).toBe("已完成：查找相关内容");
+  });
+
+  it("rg 管道里后半段的 pattern 会被展示出来", () => {
+    const n = narrateTool(
+      mk({
+        toolName: "bash",
+        status: "done",
+        args: { command: "rg --files | rg 'workflow|template'" },
+      })
+    );
+    expect(n.primary).toContain("查找");
+    expect(n.primary).toContain("workflow|template");
+    expect(n.primary).not.toContain("--files");
+  });
 });
 
 describe("shouldHideTool — Phase 2 降噪", () => {

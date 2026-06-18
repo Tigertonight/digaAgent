@@ -54,10 +54,14 @@ import {
 } from "./workflows/extension";
 import { runDynamicWorkflow } from "./workflows/orchestrator";
 import { runWorkflowScript } from "./workflows/script-runtime";
-import { abortRunningWorkflows } from "./workflows/server-store";
+import { abortRunningWorkflows, getWorkflowRun } from "./workflows/server-store";
 import { createGitWorktreeManager } from "./workflows/git-worktree";
 import { getWorkflowNetworkPolicy } from "./workflows/network-policy";
 import { resolveLocalCodingAssistantCli } from "./local-coding-assistant/cli";
+import {
+  createWriteTruncationRecoveryExtension,
+  largeFileWriteProtocolLines,
+} from "./tool-recovery/truncated-write";
 import { DEFAULT_RULES } from "./collab/rules";
 import {
   clearAllStaleApprovals,
@@ -1777,11 +1781,11 @@ export async function createAgent(opts: CreateOptions): Promise<{
         "Be concise, but do not be terse. When a task involves analysis, tool results, implementation details, or user-facing decisions, provide enough substance for the user to understand the result without asking a follow-up. Prefer a short complete answer over a one-line answer.",
       ].join("\n"),
       [
-        "Large file writes guideline:",
-        "When creating a large file (e.g. a long report or document), do NOT put the entire body into a single write call's content argument — very long tool-call arguments can be truncated by the model output limit, producing an invalid call that is missing 'content'. Instead, write a short skeleton/outline first, then append each section with separate edit calls. Keep any single tool-call argument well within a few thousand characters.",
+        ...largeFileWriteProtocolLines(),
       ].join("\n"),
     ],
     extensionFactories: [
+      createWriteTruncationRecoveryExtension(),
       ...(opts.parentAgentId
         ? [
             createSubagentWriteBoundaryExtension({
@@ -1995,6 +1999,61 @@ export async function requestSubagentWorktreeMergeApprovalFor(
   return resp;
 }
 
+export async function requestWorkflowWorktreeMergeApprovalFor(
+  rec: AgentRecord,
+  params: {
+    workflowId: string;
+    objective: string;
+    rationale: string;
+    manifest: unknown;
+    worktree: { id: string; path: string; branchName: string; baseRef: string };
+    diff: {
+      stat: string;
+      diff: string;
+      path?: string;
+      branchName?: string;
+      baseRef?: string;
+    };
+  }
+): Promise<{ decision: "allow" | "deny"; denyReason?: string }> {
+  const toolCallId = `workflow-merge:${params.workflowId}:${params.worktree.id}`;
+  const req = {
+    id: `${rec.id}:${toolCallId}`,
+    agentId: rec.id,
+    toolCallId,
+    toolName: "workflow:merge_worktree",
+    input: {
+      workflowId: params.workflowId,
+      objective: params.objective,
+      rationale: params.rationale,
+      manifest: params.manifest,
+      worktree: params.worktree,
+      stat: params.diff.stat,
+      diffPreview: params.diff.diff.slice(0, 12000),
+      truncated: params.diff.diff.length > 12000,
+    },
+    reason: "manual" as const,
+    ruleId: "workflow-merge-worktree",
+    defaultDecision: "deny" as const,
+    createdAt: Date.now(),
+  };
+  pushExternalEvent(rec, { type: "approval_request", request: req });
+  const resp = await registerPendingApproval(req);
+  const resolvedBy: ApprovalResolvedEvent["resolvedBy"] =
+    resp.denyReason === undefined && resp.decision === req.defaultDecision
+      ? "timeout"
+      : "user";
+  pushExternalEvent(rec, {
+    type: "approval_resolved",
+    id: req.id,
+    toolCallId: req.toolCallId,
+    decision: resp.decision,
+    resolvedBy,
+    denyReason: resp.denyReason,
+  });
+  return resp;
+}
+
 /**
  * S1 / S6：构造 retry/resume 与 workflow 内部 runSubagents 都能复用的 deps，
  * 包括 resolveDefinition + worktrees + merge approval，保证“二次入口”的能力与首走一致。
@@ -2069,6 +2128,93 @@ export async function abortSubagentsForParent(parentAgentId: string): Promise<vo
 
 export async function abortWorkflowsForParent(parentAgentId: string): Promise<void> {
   await abortRunningWorkflows(parentAgentId);
+}
+
+export async function retryWorkflowScriptForParent(
+  parentAgentId: string,
+  workflowId: string
+) {
+  const rec = reg.agents.get(parentAgentId);
+  if (!rec) throw new Error("agent not found");
+  const workflow = getWorkflowRun(workflowId);
+  if (!workflow || workflow.parentAgentId !== parentAgentId) {
+    throw new Error("workflow not found");
+  }
+  if (workflow.status === "running") {
+    throw new Error("workflow is still running");
+  }
+  return runWorkflowScript(
+    {
+      parentAgentId,
+      onEvent: (event) => pushExternalEvent(rec, event),
+      approveCapability: async () => ({ decision: "allow" }),
+      approveWorktreeMerge: (request) =>
+        requestWorkflowWorktreeMergeApprovalFor(rec, request),
+      approveNetworkRequest: async () => ({ decision: "allow" }),
+      approveMcpTool: async () => ({ decision: "allow" }),
+      askUser: async (request) => ({
+        requestId: `${request.workflowId}:manual-retry-ask-user`,
+        customText:
+          "Workflow retry cannot ask follow-up questions from this direct retry path.",
+        answer:
+          "Workflow retry cannot ask follow-up questions from this direct retry path.",
+      }),
+      worktrees: createGitWorktreeManager(rec.cwd),
+      networkPolicy: getWorkflowNetworkPolicy(),
+      allowedMcpServers: undefined,
+      listMcpTools: async (serverId) => {
+        const ids = serverId
+          ? [serverId]
+          : listEnabledMcpServers().map((s) => s.id);
+        const out: Array<{
+          serverId: string;
+          name: string;
+          description?: string;
+          inputSchema?: Record<string, unknown>;
+        }> = [];
+        for (const sid of ids) {
+          try {
+            const tools = await listMcpToolsRuntime(sid);
+            for (const t of tools) {
+              out.push({
+                serverId: t.serverId,
+                name: t.name,
+                description: t.description,
+                inputSchema: t.inputSchema,
+              });
+            }
+          } catch {
+            // best effort
+          }
+        }
+        return out;
+      },
+      callMcpTool: async (callInput) => {
+        const result = await callMcpToolRuntime(
+          callInput.server,
+          callInput.tool,
+          callInput.input ?? {}
+        );
+        return {
+          server: callInput.server,
+          tool: callInput.tool,
+          text: result.text,
+          isError: result.isError,
+        };
+      },
+      runSubagents: (subagentInput, subagentSignal) =>
+        runSubagentBatch(buildSubagentDepsForAgent(rec), subagentInput, subagentSignal),
+    },
+    {
+      objective: workflow.objective,
+      rationale: `Manual retry of workflow ${workflow.id}: ${workflow.rationale}`,
+      script: workflow.script,
+      capabilities: workflow.manifest.capabilities,
+      maxAgents: workflow.manifest.maxAgents,
+      maxConcurrency: workflow.manifest.maxConcurrency,
+      successCriteria: workflow.manifest.successCriteria,
+    }
+  );
 }
 
 export function disposeAgent(id: string) {

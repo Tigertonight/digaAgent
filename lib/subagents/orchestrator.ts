@@ -40,6 +40,7 @@ import { runSubagentStartHook, runSubagentStopHook } from "./hooks";
 import type { WorkflowWorktree, WorkflowWorktreeManager } from "@/lib/workflows/types";
 import type { ApprovalResponse } from "@/lib/collab/types";
 import { readMeta, writeMeta } from "@/lib/meta/store";
+import { largeFileWriteProtocolLines } from "@/lib/tool-recovery/truncated-write";
 
 const DEFAULT_MAX_TASKS = 8;
 const EXPLICIT_MAX_TASKS = 32;
@@ -404,6 +405,8 @@ export function makeSubagentPrompt(
     "- 优先给出可核验依据；如果依据不足，明确说明缺口。",
     "- 不要向用户追问；信息不足时直接写明无法确认的部分。",
     "- 最终输出包含：结论、依据、注意事项。",
+    "",
+    ...largeFileWriteProtocolLines(),
   ].join("\n");
 }
 

@@ -137,7 +137,7 @@ function withFailure(tool: ToolPart, narration: ToolNarration, errorText: string
     const cause = `遇到的问题：工具调用疑似被截断——缺少必填字段「${truncatedField}」（${shorten(errorText, 120)}）。`;
     return {
       ...narration,
-      recovery: `${cause} 这通常是单次输出过长被截断造成的。建议：先写入较短的骨架/大纲，再用 edit 分多次追加内容，避免把超大内容一次性塞进同一个工具参数。`,
+      recovery: `${cause} 这通常是单次输出过长被截断造成的。不要原样重试同一个工具调用；应先写入较短的骨架/大纲，再用 edit 分多次追加每个章节，最后用 read 或 wc 校验文件非空，避免把超大内容一次性塞进同一个工具参数。`,
     };
   }
   const cause = errorText ? `遇到的问题：${errorText}` : "工具返回了错误状态。";
@@ -161,9 +161,11 @@ function describeCliCommand(command: string): { verb: string; object?: string } 
       // 原本是把 grep/rg 后面整个命令都填进 object——遇上多文件 / 多参数
       // 的 grep 会脓到不可读，上层可能还会加 "执行失败：" / "已处理：" 前缀、
       // 然后被裁到 44 字，看起来就是一条被截断的红框。这里抽出 pattern 作为 object，
-      // 其他 (path / glob / flags) 全干掉；抽不到就不给 object，使后置 text 只是 "查找"。
+      // 其他 (path / glob / flags) 全干掉；抽不到时也给用户一个完整动作文案。
       const pattern = extractGrepPattern(command);
-      return { verb: "查找", object: pattern || undefined };
+      return pattern
+        ? { verb: "查找", object: pattern }
+        : { verb: "查找相关内容" };
     }
     return null;
   }
@@ -183,15 +185,29 @@ function extractGrepPattern(command: string): string {
   const cleaned = stripSecrets(command);
   // 先按 shell 语义切 token（会处理引号 / 转义），再在 token 层面上看是不是遇到
   // 未引号的管道 / 逻辑运算符。避免把引号里的 "foo|bar" 误切。
+  // 对管道里常见的 "rg --files | rg pattern" 取最后一个 grep/rg 段的 pattern。
   const allTokens = splitShellTokens(cleaned);
-  const headTokens: string[] = [];
+  const segments: string[][] = [[]];
   for (const tok of allTokens) {
-    if (tok === "|" || tok === ";" || tok === "&" || tok === "&&" || tok === "||") break;
-    headTokens.push(tok);
+    if (tok === "|" || tok === ";" || tok === "&" || tok === "&&" || tok === "||") {
+      if (tok === "|" && segments.at(-1)?.length) segments.push([]);
+      else break;
+      continue;
+    }
+    segments.at(-1)?.push(tok);
   }
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const pattern = extractGrepPatternFromTokens(segments[i] ?? []);
+    if (pattern) return pattern;
+  }
+  return "";
+}
+
+function extractGrepPatternFromTokens(headTokens: string[]): string {
   const grepIdx = headTokens.findIndex((t) => /^(grep|rg|egrep|fgrep|ripgrep)$/.test(t));
   if (grepIdx < 0) return "";
   const tokens = headTokens.slice(grepIdx + 1);
+  if (tokens.some((tok) => tok === "--files")) return "";
   const flagsWithValue = new Set([
     "-e", "-f", "-g", "-G", "-t", "-T", "--glob", "--iglob", "--type", "--type-not",
     "--regexp", "--file", "--include", "--exclude", "--exclude-dir",

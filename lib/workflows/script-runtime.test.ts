@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildWorkflowWorkerSpawnConfig,
+  normalizeWorkflowScriptBody,
   runWorkflowScript,
   validateWorkflowScript,
 } from "./script-runtime";
@@ -150,6 +151,7 @@ describe("runWorkflowScript", () => {
     expect(result.manifest.capabilities).toEqual(["spawn_agent", "read_files"]);
     expect(result.manifest.maxAgents).toBe(8);
     expect(result.manifest.maxConcurrency).toBe(4);
+    expect(result.manifest.timeoutMs).toBe(30 * 60 * 1000);
     expect(events.map((event) => event.type)).toEqual([
       "workflow_start",
       "workflow_checkpoint",
@@ -1667,10 +1669,68 @@ describe("runWorkflowScript", () => {
     );
     expect(truncated.map((i) => i.code)).toContain("likely_truncated");
 
+    const prosePlan = validateWorkflowScript(
+      "1. list workflow skills\n2. inspect repository\n3. spawn review agents"
+    );
+    expect(prosePlan.map((i) => i.code)).toContain("not_javascript_body");
+
+    const partialFence = validateWorkflowScript(
+      "```js\nawait workflow.spawnAgent({ title: 'Review', prompt: 'Review it.' });"
+    );
+    expect(partialFence.map((i) => i.code)).toContain("markdown_fence");
+
     // A normal harness that only spawns agents (no return) is valid.
     expect(
       validateWorkflowScript("await workflow.spawnAgent({ title: 't', prompt: 'p' });")
     ).toEqual([]);
+  });
+
+  it("normalizes complete fenced script blocks before validation and execution", async () => {
+    expect(
+      normalizeWorkflowScriptBody(
+        "```js\nworkflow.artifact('final-report', 'ok');\nreturn 'done';\n```"
+      )
+    ).toBe("workflow.artifact('final-report', 'ok');\nreturn 'done';");
+
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-fenced-script",
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Run a fenced generated harness.",
+        rationale: "Regression for generated scripts wrapped in Markdown fences.",
+        script: "```js\nworkflow.artifact('final-report', 'ok');\nreturn 'done';\n```",
+        successCriteria: { requiredArtifacts: ["final-report"] },
+      }
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.returnValue).toBe("done");
+    expect(result.artifacts.find((a) => a.name === "final-report")?.value).toBe("ok");
+  });
+
+  it("records the dynamic workflow script-generation failure case as a fast validation failure", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-prose-script",
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Review dynamic workflow script generation stability.",
+        rationale: "Regression for workflow mode producing a plan instead of a script.",
+        script:
+          "1. list workflow skills and templates\n" +
+          "2. inspect the repo structure\n" +
+          "3. run a dynamic workflow review",
+      }
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("not_javascript_body");
+    expect(
+      result.logs.some((log) => log.message.includes("validation [not_javascript_body]"))
+    ).toBe(true);
   });
 
   it("fails fast with structured guidance when the script uses a forbidden API", async () => {

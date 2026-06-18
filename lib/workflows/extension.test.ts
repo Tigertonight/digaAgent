@@ -157,6 +157,33 @@ describe("workflow script tool contract", () => {
     // Reuse-first guidance is present (progressive disclosure).
     expect((tool.promptGuidelines ?? []).join("\n")).toContain("REUSE FIRST");
   });
+
+  it("rejects generated script calls that omit both script and skillRef before running", async () => {
+    let ran = false;
+    const tool = createWorkflowScriptTool({
+      onRunWorkflow: async () => {
+        throw new Error("not used");
+      },
+      onRunWorkflowScript: async () => {
+        ran = true;
+        throw new Error("should not run without a script");
+      },
+    });
+
+    await expect(
+      tool.execute(
+        "call-no-script",
+        {
+          objective: "Review workflow generation failure.",
+          rationale: "Regression for truncated or missing generated script.",
+        } as never,
+        new AbortController().signal,
+        undefined,
+        {} as never
+      )
+    ).rejects.toThrow("received neither a script nor a valid skillRef");
+    expect(ran).toBe(false);
+  });
 });
 
 describe("workflow script tool skillRef resolution", () => {

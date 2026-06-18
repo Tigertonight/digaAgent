@@ -5,6 +5,7 @@ import {
   abortSubagentsForParent,
   abortWorkflowsForParent,
   getAgent,
+  retryWorkflowScriptForParent,
 } from "@/lib/agent-registry";
 import { buildWorkflowDebugBundle } from "@/lib/workflows/debug-bundle";
 import { createGitWorktreeManager } from "@/lib/workflows/git-worktree";
@@ -67,6 +68,22 @@ export const POST = withRemoteAuth(async function (
     await abortWorkflowsForParent(id);
     await abortSubagentsForParent(id);
     return NextResponse.json({ ok: true });
+  }
+
+  if (type === "retry_workflow_script") {
+    const workflowId = typeof body.workflowId === "string" ? body.workflowId : "";
+    if (!workflowId) {
+      return NextResponse.json({ error: "workflowId is required" }, { status: 400 });
+    }
+    try {
+      const result = await retryWorkflowScriptForParent(id, workflowId);
+      return NextResponse.json({ ok: true, result });
+    } catch (err) {
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : String(err) },
+        { status: 500 }
+      );
+    }
   }
 
   if (type === "retry_merge_worktree" || type === "cleanup_worktree") {

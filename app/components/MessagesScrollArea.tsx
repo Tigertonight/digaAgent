@@ -64,6 +64,8 @@ interface MessagesScrollAreaProps {
   onRespondClarification?: (requestId: string, customText: string) => void;
   /** Dynamic workflow：从历史 workflow checkpoint/artifact 续跑 */
   onResumeWorkflow?: (workflowId: string, objective: string) => void;
+  /** Dynamic workflow：直接重跑同一个历史 workflow script */
+  onRetryWorkflow?: (workflowId: string) => Promise<void> | void;
   /** Dynamic workflow：重试 merge / 清理 workflow worktree */
   onWorkflowWorktreeAction?: (
     action: "retry_merge" | "cleanup",
@@ -108,6 +110,7 @@ export function MessagesScrollArea({
   onChooseClarification,
   onRespondClarification,
   onResumeWorkflow,
+  onRetryWorkflow,
   onWorkflowWorktreeAction,
   onRetrySubagentTask,
   onResumeSubagentBatch,
@@ -316,6 +319,7 @@ export function MessagesScrollArea({
                   onChooseClarification={onChooseClarification}
                   onRespondClarification={onRespondClarification}
                   onResumeWorkflow={onResumeWorkflow}
+                  onRetryWorkflow={onRetryWorkflow}
                   onWorkflowWorktreeAction={onWorkflowWorktreeAction}
                   onRetrySubagentTask={onRetrySubagentTask}
                   onResumeSubagentBatch={onResumeSubagentBatch}

@@ -48,7 +48,7 @@ import {
 import { appendWorkflowNetworkAudit } from "./network-policy";
 import { schemaInstruction, validateJsonSchema } from "./json-schema";
 
-const DEFAULT_SCRIPT_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_SCRIPT_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_AGENTS = 8;
 const DEFAULT_MAX_CONCURRENCY = 4;
 const MAX_SCRIPT_CHARS = 50000;
@@ -141,6 +141,15 @@ function now() {
 
 function cleanText(raw: string | undefined, limit: number): string {
   return (raw?.trim() ?? "").slice(0, limit);
+}
+
+export function normalizeWorkflowScriptBody(
+  raw: string | undefined,
+  maxChars = MAX_SCRIPT_CHARS
+): string {
+  const text = cleanText(raw, maxChars);
+  const fenced = text.match(/^```(?:javascript|js)?\s*\n([\s\S]*?)\n```\s*$/i);
+  return (fenced?.[1] ?? text).trim();
 }
 
 function serializeError(err: unknown): string {
@@ -547,6 +556,23 @@ export function validateWorkflowScript(
       code: "near_length_limit",
       message: `Script is ${text.length} chars, close to the ${maxChars} limit and at risk of truncation.`,
       fix: "Shorten the harness: reuse a saved skill/template, factor repeated logic, and keep large content inside spawnAgent prompts rather than the harness body.",
+    });
+  }
+
+  if (/```/.test(text)) {
+    issues.push({
+      code: "markdown_fence",
+      message: "Script contains Markdown code fences instead of a plain JavaScript body.",
+      fix: "Pass only the JavaScript async function body in script, or provide one complete fenced block so the runtime can unwrap it before validation.",
+    });
+  }
+
+  const firstLine = text.split(/\r?\n/).find((line) => line.trim())?.trim() ?? "";
+  if (/^(#{1,6}\s|[-*]\s|\d+[.)]\s|(?:plan|outline|steps?)\s*:)/i.test(firstLine)) {
+    issues.push({
+      code: "not_javascript_body",
+      message: "Script looks like a Markdown plan/list, not executable JavaScript.",
+      fix: "Generate the actual workflow harness body using workflow.spawnAgent/workflow.parallel/workflow.artifact, not a prose plan.",
     });
   }
 
@@ -1863,7 +1889,7 @@ export async function runWorkflowScript(
   const input: RunWorkflowScriptInput = {
     objective: cleanText(rawInput.objective, 2000),
     rationale: cleanText(rawInput.rationale, 2000),
-    script: cleanText(rawInput.script, MAX_SCRIPT_CHARS),
+    script: normalizeWorkflowScriptBody(rawInput.script, MAX_SCRIPT_CHARS),
     templateParams: rawInput.templateParams,
     templateRef: rawInput.templateRef,
     resumeFromWorkflowId: sanitizeWorkflowId(rawInput.resumeFromWorkflowId),

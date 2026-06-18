@@ -2822,6 +2822,35 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     [activeKeyRef, agentId, handleAgentEvent, runnersRef]
   );
 
+  const retryWorkflowFromCard = useCallback(
+    async (workflowId: string) => {
+      const ownerKeyAtClick = activeKeyRef.current;
+      const ownerSnapshot = runnersRef.current.get(ownerKeyAtClick);
+      const ownerAgentId = ownerSnapshot?.agentId ?? agentId;
+      if (!ownerAgentId) {
+        const message = "当前没有可用的 agent，无法重试 workflow";
+        setError(message);
+        throw new Error(message);
+      }
+      setError(null);
+      const r = await fetch(`/api/agent/${ownerAgentId}/workflows`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "retry_workflow_script", workflowId }),
+      });
+      const d = (await r.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      if (!r.ok || d.error) {
+        const message = d.error ?? `workflow retry failed: HTTP ${r.status}`;
+        setError(message);
+        throw new Error(message);
+      }
+      if (!runnersRef.current.has(ownerKeyAtClick)) return;
+    },
+    [activeKeyRef, agentId, runnersRef, setError]
+  );
+
   // S5：以卡片携带的 parentAgentId 为优先，退化到 active agent。
   const retrySubagentTaskFromCard = useCallback(
     async (batchId: string, taskId: string, parentAgentId?: string) => {
@@ -3279,6 +3308,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             onChooseClarification={chooseClarification}
             onRespondClarification={respondClarification}
             onResumeWorkflow={resumeWorkflowFromCard}
+            onRetryWorkflow={retryWorkflowFromCard}
             onWorkflowWorktreeAction={handleWorkflowWorktreeAction}
             onRetrySubagentTask={retrySubagentTaskFromCard}
             onResumeSubagentBatch={resumeSubagentBatchFromCard}

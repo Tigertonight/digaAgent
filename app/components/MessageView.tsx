@@ -108,6 +108,8 @@ export interface MessageViewProps {
   onRespondClarification?: (requestId: string, customText: string) => void;
   /** Dynamic workflow：从历史 workflow checkpoint/artifact 续跑 */
   onResumeWorkflow?: (workflowId: string, objective: string) => void;
+  /** Dynamic workflow：直接重跑同一个历史 workflow script */
+  onRetryWorkflow?: (workflowId: string) => Promise<void> | void;
   /** Dynamic workflow：重试 merge / 清理 workflow worktree */
   onWorkflowWorktreeAction?: (
     action: "retry_merge" | "cleanup",
@@ -166,6 +168,7 @@ function MessageViewInner({
   onChooseClarification,
   onRespondClarification,
   onResumeWorkflow,
+  onRetryWorkflow,
   onWorkflowWorktreeAction,
   onRetrySubagentTask,
   onResumeSubagentBatch,
@@ -506,6 +509,7 @@ function MessageViewInner({
                 key={i}
                 part={p}
                 onResumeWorkflow={onResumeWorkflow}
+                onRetryWorkflow={onRetryWorkflow}
                 onWorktreeAction={onWorkflowWorktreeAction}
               />
             );
@@ -634,6 +638,7 @@ function areMessageViewPropsEqual(
   if (prev.onChooseClarification !== next.onChooseClarification) return false;
   if (prev.onRespondClarification !== next.onRespondClarification) return false;
   if (prev.onResumeWorkflow !== next.onResumeWorkflow) return false;
+  if (prev.onRetryWorkflow !== next.onRetryWorkflow) return false;
   if (prev.onWorkflowWorktreeAction !== next.onWorkflowWorktreeAction) return false;
   if (prev.onRetrySubagentTask !== next.onRetrySubagentTask) return false;
   if (prev.onResumeSubagentBatch !== next.onResumeSubagentBatch) return false;
@@ -1552,10 +1557,12 @@ function worktreeStatesFromArtifacts(
 function WorkflowRunCard({
   part,
   onResumeWorkflow,
+  onRetryWorkflow,
   onWorktreeAction,
 }: {
   part: Extract<MessagePart, { kind: "workflow_run" }>;
   onResumeWorkflow?: (workflowId: string, objective: string) => void;
+  onRetryWorkflow?: (workflowId: string) => Promise<void> | void;
   onWorktreeAction?: (
     action: "retry_merge" | "cleanup",
     workflowId: string,
@@ -1563,6 +1570,7 @@ function WorkflowRunCard({
   ) => Promise<void> | void;
 }) {
   const [worktreeBusy, setWorktreeBusy] = useState<string | null>(null);
+  const [retryingWorkflow, setRetryingWorkflow] = useState(false);
   const [worktreeNotice, setWorktreeNotice] = useState<{
     tone: "success" | "error";
     text: string;
@@ -1579,6 +1587,7 @@ function WorkflowRunCard({
   const worktreeStates = worktreeStatesFromArtifacts(part.artifacts);
   const canResume =
     !running && part.checkpoints.length > 0 && Boolean(onResumeWorkflow);
+  const canRetry = failed && Boolean(onRetryWorkflow) && !retryingWorkflow;
   const runWorktreeAction = async (
     action: "retry_merge" | "cleanup",
     worktree: WorkflowWorktreeAction
@@ -1650,6 +1659,35 @@ function WorkflowRunCard({
           >
             <RotateCcw size={11} />
             Resume
+          </button>
+        )}
+        {failed && onRetryWorkflow && (
+          <button
+            type="button"
+            disabled={!canRetry}
+            className="inline-flex h-6 shrink-0 items-center gap-1 rounded border px-1.5 text-token-xs hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-45"
+            style={{
+              borderColor: "var(--border-soft)",
+              color: "var(--text-muted)",
+              background: "var(--bg-subtle)",
+            }}
+            title="Retry this workflow from the beginning with the same saved script"
+            onClick={async () => {
+              if (!canRetry) return;
+              setRetryingWorkflow(true);
+              try {
+                await onRetryWorkflow(part.id);
+              } finally {
+                setRetryingWorkflow(false);
+              }
+            }}
+          >
+            {retryingWorkflow ? (
+              <Loader2 size={11} className="animate-spin" />
+            ) : (
+              <RotateCcw size={11} />
+            )}
+            Retry
           </button>
         )}
       </div>
