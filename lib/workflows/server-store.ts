@@ -1,5 +1,6 @@
 import "server-only";
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync, gunzipSync } from "node:zlib";
@@ -112,11 +113,17 @@ function runFilePath(id: string): string {
   return path.join(runsDir(), `${id}.json`);
 }
 
+/**
+ * T2.5: 同步原子写（UUID tmp + open(wx) + fsync + rename）。
+ * 原实现已有 console.error，但未區分 ENOSPC 与临时错。
+ */
 function persistRun(run: WorkflowRun): void {
+  let tmp: string | null = null;
+  let fd: number | null = null;
   try {
     fs.mkdirSync(runsDir(), { recursive: true });
     const file = runFilePath(run.id);
-    const tmp = `${file}.tmp.${process.pid}.${Date.now()}`;
+    tmp = `${file}.tmp.${process.pid}.${Date.now()}.${randomUUID()}`;
     const encoded = encodeRunForPersistence(run);
     const persisted: PersistedWorkflowRunV2 = {
       schemaVersion: WORKFLOW_STORE_SCHEMA_VERSION,
@@ -126,10 +133,33 @@ function persistRun(run: WorkflowRun): void {
       artifactIndex: encoded.artifactIndex,
       migrationHistory: ["workflow-run:v2"],
     };
-    fs.writeFileSync(tmp, JSON.stringify(persisted, null, 2), "utf8");
+    fd = fs.openSync(tmp, "wx");
+    fs.writeSync(fd, JSON.stringify(persisted, null, 2), 0, "utf8");
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = null;
     fs.renameSync(tmp, file);
+    tmp = null;
   } catch (err) {
-    console.error("[workflow-store] persist failed:", err);
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch { /* ignore */ }
+    }
+    if (tmp) {
+      try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+    }
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOSPC") {
+      console.warn("[workflow-store] persist failed (no space)", {
+        id: run.id,
+        code,
+      });
+      throw err;
+    }
+    console.warn("[workflow-store] persist failed", {
+      id: run.id,
+      code,
+      err: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 

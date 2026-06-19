@@ -19,6 +19,12 @@ import {
   listWorkflowSkills,
   putWorkflowSkill,
 } from "./skill-store";
+import {
+  getWorkflowScriptDraft,
+  listWorkflowScriptDrafts,
+  putWorkflowScriptDraft,
+} from "./script-draft-store";
+import { diagnoseOversizedToolPayload } from "@/lib/tool-recovery/truncation-diagnosis";
 
 const RoleSchema = Type.Union([
   Type.Literal("general"),
@@ -82,13 +88,19 @@ const WorkflowScriptParams = Type.Object({
   script: Type.Optional(
     Type.String({
       description:
-        "JavaScript body for an async workflow harness. Use the provided workflow SDK; do not use import, require, process, fs, network, or shell APIs. Omit only when skillRef is provided.",
+        "JavaScript body for an async workflow harness. Use the provided workflow SDK; do not use import, require, process, fs, network, or shell APIs. Omit only when skillRef or draftRef is provided.",
     })
   ),
   skillRef: Type.Optional(
     Type.String({
       description:
         "Name of a saved workflow skill to run instead of inline script. Prefer this for recurring tasks: it avoids re-emitting a large harness (use list_workflow_skills + read_workflow_resource to discover skills first). When set, the saved harness and its capabilities are used; an inline script, if also provided, overrides the skill body.",
+    })
+  ),
+  draftRef: Type.Optional(
+    Type.String({
+      description:
+        "Name/id of a session workflow script draft to run instead of a large inline script. Prefer this when building or editing a harness over multiple turns.",
     })
   ),
   resumeFromWorkflowId: Type.Optional(
@@ -211,6 +223,7 @@ type WorkflowParamsValue = {
 };
 
 export interface WorkflowsExtensionOptions {
+  parentAgentId?: () => string | undefined;
   onRunWorkflow: (
     input: RunDynamicWorkflowInput,
     signal?: AbortSignal
@@ -224,6 +237,11 @@ export interface WorkflowsExtensionOptions {
     signal?: AbortSignal
   ) => Promise<WorkflowScriptResult>;
 }
+
+type WorkflowScriptDraftToolOptions = Pick<
+  WorkflowsExtensionOptions,
+  "parentAgentId"
+>;
 
 function normalizeInput(params: WorkflowParamsValue): RunDynamicWorkflowInput {
   return {
@@ -267,6 +285,13 @@ function scriptResultSummary(result: WorkflowScriptResult): string {
     `Workflow script ${result.workflowId} finished with status ${result.status}.`,
   ];
   if (result.error) lines.push(`Error: ${result.error}`);
+  if (result.status === "needs_continue") {
+    lines.push(
+      "",
+      "## Needs continue",
+      "The workflow preserved checkpoints/artifacts but hit the time budget. Continue with run_workflow_script({ resumeFromWorkflowId }) from the latest checkpoint instead of restarting from scratch."
+    );
+  }
   if (result.warnings && result.warnings.length > 0) {
     lines.push(
       "",
@@ -399,6 +424,8 @@ export function createWorkflowScriptTool(
       "run_workflow_script: write an async JavaScript workflow body using workflow.spawnAgent, workflow.parallel, workflow.stage, workflow.checkpoint, and workflow.artifact.",
     promptGuidelines: [
       "REUSE FIRST (keeps scripts short and avoids truncation): before writing a new harness, call list_workflow_skills and list_workflow_templates. If a relevant one exists, run it via run_workflow_template({ templateId }) or run_workflow_script({ skillRef }) instead of regenerating a large script. Use read_workflow_resource only to inspect a specific candidate.",
+      "SCRIPT DRAFTS: for large or iterative harnesses, save the script in a workflow draft first with save_workflow_script_draft. Build it in small replace/append edits, read it back, then run via run_workflow_script({ draftRef }). Do not keep a giant script in one tool argument when it can be persisted as a draft.",
+      "SPLIT LONG WORKFLOWS: the workflow harness may live up to 24 hours, but child agents still run in 30-minute task windows. Use checkpoints/artifacts between phases: scan first, then focused audit stages, then final synthesis via resumeFromWorkflowId when continuing later.",
       "SCALE EFFORT TO COMPLEXITY: simple fact-finding = 1 agent / 3-10 tool calls; direct comparisons = 2-4 subagents; complex multi-part work = more subagents (up to maxAgents) with clearly divided, non-overlapping responsibilities. Do not over-spawn agents for simple tasks.",
       "KEEP THE HARNESS SMALL: prefer many small focused spawnAgent calls and let subagents write large outputs to files/artifacts, returning only lightweight references. Do not inline large prompts or data blobs into the script. If a harness gets large, factor it into a saved skill (save_workflow_skill) and reuse it.",
       "REPORT FILE WRITES: when a spawned agent must write a long report/document, instruct it to write a short skeleton first, then append or edit one section at a time, then verify the file is non-empty. Never ask it to put the entire report into one write.content call.",
@@ -407,6 +434,8 @@ export function createWorkflowScriptTool(
       "Use run_workflow_script for complex tasks where a generated harness is clearer than a fixed stage list.",
       "The script runs inside an async function body. Use `return ...` for the final structured value.",
       "Available SDK: workflow.agent(prompt,{title,schema,isolation,agentType,tools,maxTurns,timeoutMs}), workflow.patterns.*, workflow.spawnAgent({title,prompt,role,cwd,allowedTools,maxTurns,timeoutMs}), workflow.askUser({title,question,context,options,recommendedOptionId}), workflow.fetchUrl({url,method,headers,body,maxBytes}), workflow.createWorktree({name,baseRef}), workflow.diffWorktree(worktree), workflow.mergeWorktree(worktree), workflow.removeWorktree(worktree), workflow.parallel([...]) (runs items with at most maxConcurrency in flight, queuing the rest; preserves input order), workflow.requireSuccess(results,{minSuccess,label}) (quality gate: throws if fewer than minSuccess spawnAgent results have status 'completed'; defaults to all; returns the successful subset), workflow.stage(title, fn), workflow.checkpoint(name,value), workflow.artifact(name,value), workflow.readArtifact(name), workflow.listArtifacts(), workflow.listTools(serverId), workflow.searchTools({query,serverId,detailLevel:'name'|'summary'|'full',limit}) (MCP progressive disclosure: discover only the tools you need at the detail you need, instead of loading every definition), workflow.callTool({server,tool,input}), workflow.log(message), workflow.warn(message), workflow.error(message), workflow.sleep(ms), and workflow.resume when resumeFromWorkflowId is provided. workflow.spawnAgent returns a subagent result with answer plus compatibility aliases text/output/summary.",
+      "Child agent tool names must be canonical: read, grep, find, ls, edit, write, apply_patch, bash, shell, or browser_* tools. Do not use glob; use find for file discovery and grep for content search. The same allowlist applies to workflow.agent({ tools: [...] }) and workflow.spawnAgent({ allowedTools: [...] }).",
+      "Workflow harness timeout defaults to 86400000 ms (24 hours). Child agent task timeouts are normalized to 1800000 ms (30 minutes). Do not set short per-agent timeoutMs values such as 300000 for audit/research workflow stages.",
       "To resume a prior workflow, pass resumeFromWorkflowId. Optionally pass resumeFromCheckpointName to resume from a specific checkpoint. Write a new harness that reads workflow.resume.lastCheckpoint plus workflow.readArtifact(name). This is checkpoint/artifact resume, not restoration of an arbitrary JavaScript call stack.",
       "Declare capabilities when needed. Safe default is capabilities: [\"spawn_agent\", \"read_files\"]. write_files, shell, browser, and worktree trigger user approval. For coding workflows, request capabilities [\"spawn_agent\", \"read_files\", \"write_files\", \"worktree\"], create a worktree, spawn implementation agents with cwd set to the worktree path, call workflow.diffWorktree, and only call workflow.mergeWorktree when the requested workflow should apply the isolated patch back to the main working tree.",
       "For command or browser workflows, request shell/browser explicitly and pass only the needed tool names through workflow.spawnAgent({ allowedTools: [...] }). The workflow script itself still cannot use shell, process, browser, or network APIs directly.",
@@ -423,10 +452,31 @@ export function createWorkflowScriptTool(
       if (!opts.onRunWorkflowScript) {
         throw new Error("run_workflow_script is not configured");
       }
+      const oversized = diagnoseOversizedToolPayload({
+        toolName: "run_workflow_script",
+        args: params,
+      });
+      if (oversized && !params.draftRef && !params.skillRef) {
+        throw new Error(
+          `${oversized.userMessage} Diagnostic: ${oversized.reason}`
+        );
+      }
       // Resolve a saved skill (progressive disclosure / reuse path). An inline
       // script always wins; otherwise the skill's harness + capabilities apply.
       let script = params.script;
       let capabilities = params.capabilities;
+      if (!script && params.draftRef) {
+        const draft = getWorkflowScriptDraft(
+          opts.parentAgentId?.() ?? "unknown",
+          params.draftRef,
+        );
+        if (!draft) {
+          throw new Error(
+            `workflow script draft not found: ${params.draftRef}. Use list_workflow_script_drafts to see available drafts.`
+          );
+        }
+        script = draft.script;
+      }
       if (!script && params.skillRef) {
         const skill = getWorkflowSkill(params.skillRef);
         if (!skill) {
@@ -444,11 +494,11 @@ export function createWorkflowScriptTool(
         // mode for very long scripts). Give actionable recovery guidance rather
         // than a bare "missing field" error that invites blind retries.
         throw new Error(
-          "run_workflow_script received neither a script nor a valid skillRef. " +
+          "run_workflow_script received neither a script, a valid draftRef, nor a valid skillRef. " +
             "If you intended to pass a large inline script, it was likely truncated by the output length limit. " +
             "Recover by: (1) running a saved skill via skillRef (see list_workflow_skills), " +
             "(2) running a template via run_workflow_template, or " +
-            "(3) splitting the work into a shorter harness."
+            "(3) saving the harness in chunks with save_workflow_script_draft and running it via draftRef."
         );
       }
       const result = await opts.onRunWorkflowScript(
@@ -458,6 +508,7 @@ export function createWorkflowScriptTool(
           script,
           resumeFromWorkflowId: params.resumeFromWorkflowId,
           resumeFromCheckpointName: params.resumeFromCheckpointName,
+          draftRef: params.draftRef,
           capabilities,
           maxAgents: params.maxAgents,
           maxConcurrency: params.maxConcurrency,
@@ -712,6 +763,126 @@ export function createSaveWorkflowSkillTool(): ToolDefinition<
   });
 }
 
+const WorkflowScriptDraftParams = Type.Object({
+  id: Type.String({
+    description:
+      "Stable draft id, e.g. session-audit-v1. This is scoped to the current agent/session owner.",
+  }),
+  title: Type.Optional(Type.String()),
+  script: Type.Optional(
+    Type.String({
+      description:
+        "Replacement JavaScript workflow harness body. Use this to write the skeleton or replace the current draft.",
+    })
+  ),
+  append: Type.Optional(
+    Type.String({
+      description:
+        "Text to append to the existing draft. Use this for large harnesses built in small chunks.",
+    })
+  ),
+});
+const ListWorkflowScriptDraftsParams = Type.Object({});
+
+export function createSaveWorkflowScriptDraftTool(
+  opts: WorkflowScriptDraftToolOptions
+): ToolDefinition<typeof WorkflowScriptDraftParams, Record<string, unknown>> {
+  return defineTool({
+    name: "save_workflow_script_draft",
+    label: "Save Workflow Script Draft",
+    description:
+      "Persist or append to a session-scoped workflow script draft. Use this for large/iterative harnesses, then run it with run_workflow_script({ draftRef }).",
+    promptSnippet:
+      "save_workflow_script_draft: write or append a session-scoped workflow script draft for later run_workflow_script({ draftRef }).",
+    parameters: WorkflowScriptDraftParams,
+    executionMode: "sequential",
+    async execute(_toolCallId, params) {
+      const draft = putWorkflowScriptDraft({
+        parentAgentId: opts.parentAgentId?.() ?? "unknown",
+        id: params.id,
+        title: params.title,
+        script: params.script,
+        append: params.append,
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Saved workflow script draft "${draft.id}" (${draft.script.length} chars). Run with run_workflow_script({ draftRef: "${draft.id}" }).`,
+          },
+        ],
+        details: { draft },
+      };
+    },
+  });
+}
+
+export function createListWorkflowScriptDraftsTool(
+  opts: WorkflowScriptDraftToolOptions
+): ToolDefinition<typeof ListWorkflowScriptDraftsParams, Record<string, unknown>> {
+  return defineTool({
+    name: "list_workflow_script_drafts",
+    label: "List Workflow Script Drafts",
+    description:
+      "List session-scoped workflow script drafts without loading their full bodies.",
+    promptSnippet:
+      "list_workflow_script_drafts: inspect available local workflow script drafts before regenerating a large harness.",
+    parameters: ListWorkflowScriptDraftsParams,
+    executionMode: "sequential",
+    async execute() {
+      const drafts = listWorkflowScriptDrafts(opts.parentAgentId?.() ?? "unknown");
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              drafts.length > 0
+                ? drafts
+                    .map((draft) => `- ${draft.id} (${draft.chars} chars)`)
+                    .join("\n")
+                : "No workflow script drafts found for this agent.",
+          },
+        ],
+        details: { drafts },
+      };
+    },
+  });
+}
+
+const ReadWorkflowScriptDraftParams = Type.Object({
+  id: Type.String({ description: "Draft id to read." }),
+});
+
+export function createReadWorkflowScriptDraftTool(
+  opts: WorkflowScriptDraftToolOptions
+): ToolDefinition<typeof ReadWorkflowScriptDraftParams, Record<string, unknown>> {
+  return defineTool({
+    name: "read_workflow_script_draft",
+    label: "Read Workflow Script Draft",
+    description: "Read a session-scoped workflow script draft body.",
+    promptSnippet:
+      "read_workflow_script_draft: read a saved workflow script draft before editing or running it.",
+    parameters: ReadWorkflowScriptDraftParams,
+    executionMode: "sequential",
+    async execute(_toolCallId, params) {
+      const draft = getWorkflowScriptDraft(
+        opts.parentAgentId?.() ?? "unknown",
+        params.id,
+      );
+      if (!draft) throw new Error(`workflow script draft not found: ${params.id}`);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `# Workflow script draft ${draft.id}\n\n${draft.script}`,
+          },
+        ],
+        details: { draft },
+      };
+    },
+  });
+}
+
 export function createWorkflowsExtension(
   opts: WorkflowsExtensionOptions
 ): ExtensionFactory {
@@ -725,6 +896,9 @@ export function createWorkflowsExtension(
       pi.registerTool(createListWorkflowSkillsTool());
       pi.registerTool(createReadWorkflowResourceTool());
       pi.registerTool(createSaveWorkflowSkillTool());
+      pi.registerTool(createListWorkflowScriptDraftsTool(opts));
+      pi.registerTool(createReadWorkflowScriptDraftTool(opts));
+      pi.registerTool(createSaveWorkflowScriptDraftTool(opts));
     }
   };
 }

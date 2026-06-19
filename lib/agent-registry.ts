@@ -51,6 +51,9 @@ import {
   createListWorkflowSkillsTool,
   createReadWorkflowResourceTool,
   createSaveWorkflowSkillTool,
+  createListWorkflowScriptDraftsTool,
+  createReadWorkflowScriptDraftTool,
+  createSaveWorkflowScriptDraftTool,
 } from "./workflows/extension";
 import { runDynamicWorkflow } from "./workflows/orchestrator";
 import { runWorkflowScript } from "./workflows/script-runtime";
@@ -643,6 +646,26 @@ function clearToolWatchdog(rec: AgentRecord) {
   rec.pendingToolCall = null;
 }
 
+/**
+ * T1.2：abort 路径为什么需要这个单点：
+ *
+ * 模型 `message_end → agent_end` 之间有个 1.5s 的 finish watchdog，如果用户
+ * 在此期间点中止，原送送路径只改 `isStreaming = false`，但 watchdog 仍
+ * 会在 1.5s 后调 `finishStreamingRun(rec)` → `maybeContinueGoal(rec)` →
+ * 在 goal 还 active 时起新一轮 prompt。表现为“点击中止后过 1.5s 却又跑了一轮”。
+ *
+ * 本函数把「清 watchdog」改在 `isStreaming = false` 之前顺序执行，保证
+ * abort 后不会再造成 ghost run；同时也会被 dispose 复用以避免重复书写。
+ *
+ * 调用顺序：clearFinishWatchdog → clearToolWatchdog → isStreaming=false。
+ */
+export function finalizeAfterAbort(rec: AgentRecord): void {
+  clearFinishWatchdog(rec);
+  clearToolWatchdog(rec);
+  rec.isStreaming = false;
+  rec.updatedAt = Date.now();
+}
+
 function finishStreamingRun(rec: AgentRecord): void {
   if (!rec.isStreaming) return;
   clearToolWatchdog(rec);
@@ -1073,6 +1096,25 @@ async function createLocalCodingAssistantAgent(opts: CreateOptions): Promise<{
   return { id, sessionId, sessionFile: undefined };
 }
 
+/**
+ * T3.1: 同 sessionPath 的 in-flight 去重。
+ *
+ * 原问题：`POST /api/agent/new` 两次几乎同时到达（双击 / SPA 双 useEffect /
+ * 网络重发）都会先走 `Array.from(reg.agents.values()).find(...)` 未命中，
+ * 随后 await `resourceLoader.reload()` / `loadMcpToolDefinitions` /
+ * `createAgentSession`，最后才 `reg.agents.set(id, record)`。在这段 await 窗口内
+ * 另一个 caller 也看不到已创建的 record，于是为同一 sessionFile 创建出两条
+ * AgentRecord，导致 SSE 双发事件、jsonl 并发写入。
+ *
+ * 修复思路：在入口维护 `Map<sessionPath, Promise<CreateResult>>`，后来者
+ * 直接 await 已存在的 promise。`finally` 里中手从 map 删除该 key，避免抣出
+ * 在缓存中被复用（下一个 caller 还能重试）。
+ */
+const createAgentInFlight = new Map<
+  string,
+  Promise<{ id: string; sessionId: string; sessionFile: string | undefined }>
+>();
+
 export async function createAgent(opts: CreateOptions): Promise<{
   id: string;
   sessionId: string;
@@ -1089,6 +1131,8 @@ export async function createAgent(opts: CreateOptions): Promise<{
         sessionFile: existing.session.sessionFile,
       };
     }
+    const inflight = createAgentInFlight.get(opts.sessionPath);
+    if (inflight) return inflight;
   }
 
   if (
@@ -1097,6 +1141,28 @@ export async function createAgent(opts: CreateOptions): Promise<{
   ) {
     return createLocalCodingAssistantAgent(opts);
   }
+
+  // 包装为可被中间复用的 promise。仅在 sessionPath 存在时才走 dedup（新建会话
+  // sessionPath 为空、总是应该独立创建）。
+  if (opts.sessionPath) {
+    const key = opts.sessionPath;
+    const promise = createAgentImpl(opts).finally(() => {
+      if (createAgentInFlight.get(key) === promise) {
+        createAgentInFlight.delete(key);
+      }
+    });
+    createAgentInFlight.set(key, promise);
+    return promise;
+  }
+
+  return createAgentImpl(opts);
+}
+
+async function createAgentImpl(opts: CreateOptions): Promise<{
+  id: string;
+  sessionId: string;
+  sessionFile: string | undefined;
+}> {
 
   const mr = getModelRegistry();
   const model = mr.find(opts.provider, opts.modelId);
@@ -1769,6 +1835,7 @@ export async function createAgent(opts: CreateOptions): Promise<{
     },
   });
   const workflowScriptTool = createWorkflowScriptTool({
+    parentAgentId: () => recordHolder.current?.id,
     onRunWorkflow: async (input, signal) => {
       return runDynamicWorkflow(
         {
@@ -1914,6 +1981,15 @@ export async function createAgent(opts: CreateOptions): Promise<{
           createListWorkflowSkillsTool() as unknown as ToolDefinition,
           createReadWorkflowResourceTool() as unknown as ToolDefinition,
           createSaveWorkflowSkillTool() as unknown as ToolDefinition,
+          createListWorkflowScriptDraftsTool({
+            parentAgentId: () => recordHolder.current?.id,
+          }) as unknown as ToolDefinition,
+          createReadWorkflowScriptDraftTool({
+            parentAgentId: () => recordHolder.current?.id,
+          }) as unknown as ToolDefinition,
+          createSaveWorkflowScriptDraftTool({
+            parentAgentId: () => recordHolder.current?.id,
+          }) as unknown as ToolDefinition,
         ];
   const allCustomTools = [...baseCustomTools, ...mcpTools];
 

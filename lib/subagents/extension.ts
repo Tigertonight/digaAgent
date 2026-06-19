@@ -13,6 +13,7 @@ import type {
   SubagentRole,
 } from "./types";
 import { planSubagents, type SubagentPlannerRecommendation } from "./planner";
+import { diagnoseOversizedToolPayload } from "@/lib/tool-recovery/truncation-diagnosis";
 
 const RoleSchema = Type.Union([
   Type.Literal("general"),
@@ -71,7 +72,12 @@ const TaskSchema = Type.Object({
     })
   ),
   maxTurns: Type.Optional(Type.Number()),
-  timeoutMs: Type.Optional(Type.Number()),
+  timeoutMs: Type.Optional(
+    Type.Number({
+      description:
+        "Optional task timeout in milliseconds. Subagent runtime normalizes task timeouts to 1800000 ms (30 minutes).",
+    })
+  ),
 });
 
 const DelegateParams = Type.Object({
@@ -296,6 +302,15 @@ export function createDelegateSubagentsTool(
     executionMode: "sequential",
 
     async execute(_toolCallId, params, signal) {
+      const oversized = diagnoseOversizedToolPayload({
+        toolName: "delegate_subagents",
+        args: params,
+      });
+      if (oversized) {
+        throw new Error(
+          `${oversized.userMessage} Diagnostic: ${oversized.reason}`
+        );
+      }
       // tasks is declared optional in the schema so a truncated tool call (very
       // common: each task.prompt is long, so the model's output hits the length
       // limit before `tasks` is emitted) reaches here instead of being rejected

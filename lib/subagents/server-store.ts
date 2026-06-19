@@ -1,5 +1,17 @@
 import "server-only";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
+import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import type {
@@ -122,16 +134,41 @@ function sanitizeBatch(raw: unknown): SubagentBatch | null {
   };
 }
 
+/**
+ * T2.4: 同步原子写（UUID tmp + open(wx) + fsync + rename）+ 错误可观察。
+ * 为什么仍同步：subagents store 被大量同步调用路径依赖。
+ */
 function persistBatch(batch: SubagentBatch): void {
+  let tmp: string | null = null;
+  let fd: number | null = null;
   try {
     mkdirSync(batchDir(), { recursive: true });
     const fp = batchFilePath(batch.id);
-    const tmp = `${fp}.tmp.${process.pid}.${Date.now()}`;
-    writeFileSync(tmp, JSON.stringify(batch, null, 2), "utf8");
+    tmp = `${fp}.tmp.${process.pid}.${Date.now()}.${randomUUID()}`;
+    fd = openSync(tmp, "wx");
+    writeSync(fd, JSON.stringify(batch, null, 2), 0, "utf8");
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = null;
     renameSync(tmp, fp);
-  } catch {
-    // Persistence is audit support. Runtime execution should not fail because
-    // the local metadata directory is temporarily unavailable.
+    tmp = null;
+  } catch (err) {
+    if (fd !== null) {
+      try { closeSync(fd); } catch { /* ignore */ }
+    }
+    if (tmp) {
+      try { unlinkSync(tmp); } catch { /* ignore */ }
+    }
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOSPC") {
+      console.warn("[subagent-store] persist failed (no space)", { id: batch.id, code });
+      throw err;
+    }
+    console.warn("[subagent-store] persist failed", {
+      id: batch.id,
+      code,
+      err: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 

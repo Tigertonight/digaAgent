@@ -1,4 +1,9 @@
 import type { ExtensionFactory, ToolResultEvent } from "@earendil-works/pi-coding-agent";
+import {
+  appendToolTruncationRecovery,
+  diagnoseToolTruncation,
+  toolResultText,
+} from "./truncation-diagnosis";
 
 const WRITE_TRUNCATION_RECOVERY =
   "Recovery protocol for large file writes: do not retry the same write call. " +
@@ -16,28 +21,17 @@ export function largeFileWriteProtocolLines(): string[] {
   ];
 }
 
-export function toolResultText(content: ToolResultEvent["content"]): string {
-  return content
-    .map((part) => (part.type === "text" ? part.text : ""))
-    .filter(Boolean)
-    .join("\n");
-}
-
 export function isMissingWriteContentFailure(event: Pick<
   ToolResultEvent,
   "toolName" | "isError" | "input" | "content"
 >): boolean {
-  if (event.toolName !== "write" || !event.isError) return false;
-  const hasContent =
-    event.input &&
-    Object.prototype.hasOwnProperty.call(event.input, "content") &&
-    typeof event.input.content === "string";
-  if (hasContent) return false;
-  const text = toolResultText(event.content);
-  return (
-    /validation failed/i.test(text) &&
-    /\bcontent\b/i.test(text) &&
-    /required propert|must have required|is required|required field/i.test(text)
+  return Boolean(
+    diagnoseToolTruncation({
+      toolName: event.toolName,
+      isError: event.isError,
+      input: event.input,
+      content: event.content,
+    })
   );
 }
 
@@ -49,11 +43,20 @@ export function appendWriteTruncationRecovery(text: string): string {
 export function createWriteTruncationRecoveryExtension(): ExtensionFactory {
   return (pi) => {
     pi.on("tool_result", (event) => {
-      if (!isMissingWriteContentFailure(event)) return undefined;
+      const diagnosis = diagnoseToolTruncation({
+        toolName: event.toolName,
+        isError: event.isError,
+        input: event.input,
+        content: event.content,
+      });
+      if (!diagnosis) return undefined;
       return {
         content: event.content.map((part) =>
           part.type === "text"
-            ? { ...part, text: appendWriteTruncationRecovery(part.text) }
+            ? {
+                ...part,
+                text: appendToolTruncationRecovery(part.text, diagnosis),
+              }
             : part
         ),
         isError: true,
@@ -61,3 +64,5 @@ export function createWriteTruncationRecoveryExtension(): ExtensionFactory {
     });
   };
 }
+
+export { diagnoseToolTruncation, toolResultText };

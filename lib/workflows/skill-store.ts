@@ -1,5 +1,6 @@
 import "server-only";
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -209,11 +210,30 @@ export function putWorkflowSkill(
   };
   const dir = skillDirPath(name);
   fs.mkdirSync(dir, { recursive: true });
-  // Atomic-ish writes per file (tmp + rename).
+  // T2.10: 同步原子写。与其他 store 一致使用 UUID tmp + open(wx) + fsync + rename + warn。
   const writeAtomic = (file: string, contents: string) => {
-    const tmp = `${file}.tmp.${process.pid}.${Date.now()}`;
-    fs.writeFileSync(tmp, contents, "utf8");
-    fs.renameSync(tmp, file);
+    const tmp = `${file}.tmp.${process.pid}.${Date.now()}.${randomUUID()}`;
+    let fd: number | null = null;
+    try {
+      fd = fs.openSync(tmp, "wx");
+      fs.writeSync(fd, contents, 0, "utf8");
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      fd = null;
+      fs.renameSync(tmp, file);
+    } catch (err) {
+      if (fd !== null) {
+        try { fs.closeSync(fd); } catch { /* ignore */ }
+      }
+      try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+      const code = (err as NodeJS.ErrnoException).code;
+      console.warn("[workflow-skill-store] persist failed", {
+        file,
+        code,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
   };
   writeAtomic(path.join(dir, "SKILL.md"), renderSkillMd(skill));
   writeAtomic(path.join(dir, "harness.js"), skill.harness);

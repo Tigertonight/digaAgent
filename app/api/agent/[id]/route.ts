@@ -36,6 +36,7 @@ import {
   LOCAL_CODING_ASSISTANT_MODELS,
   LOCAL_CODING_ASSISTANT_PROVIDER_ID,
   finishStreamingAfterPromptError,
+  finalizeAfterAbort,
 } from "@/lib/agent-registry";
 import {
   clearGoal,
@@ -62,6 +63,7 @@ import {
   getProgress,
   updateProgress,
 } from "@/lib/progress/server-store";
+import { appendRuntimeEvent } from "@/lib/runtime/event-store";
 import {
   readPersistedProgress,
   writePersistedProgress,
@@ -86,6 +88,20 @@ import { assertRemoteAuth } from "@/lib/remote/auth";
 import type { ProgressUpdateInput } from "@/lib/progress/types";
 import type { ThinkingLevel, ImageContentLite } from "@/lib/types";
 
+const WORKFLOW_MODE_TOOL_NAMES = [
+  "run_workflow_script",
+  "run_workflow_template",
+  "list_workflow_skills",
+  "list_workflow_templates",
+  "read_workflow_resource",
+  "save_workflow_skill",
+  "list_workflow_script_drafts",
+  "read_workflow_script_draft",
+  "save_workflow_script_draft",
+] as const;
+
+const DIRECT_DELEGATE_TOOL_NAME = "delegate_subagents";
+
 /** 校验并清洗 body.images */
 function parseImages(raw: unknown): ImageContentLite[] | undefined {
   if (!Array.isArray(raw) || raw.length === 0) return undefined;
@@ -107,7 +123,9 @@ function parseImages(raw: unknown): ImageContentLite[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
-function parseProgressUpdate(body: Record<string, unknown>): ProgressUpdateInput {
+function parseProgressUpdate(
+  body: Record<string, unknown>,
+): ProgressUpdateInput {
   return {
     steps: Array.isArray(body.steps)
       ? (body.steps as ProgressUpdateInput["steps"])
@@ -122,7 +140,7 @@ function parseProgressUpdate(body: Record<string, unknown>): ProgressUpdateInput
 
 async function persistProgressForAgent(
   rec: NonNullable<ReturnType<typeof getAgent>>,
-  progress: ReturnType<typeof getProgress>
+  progress: ReturnType<typeof getProgress>,
 ): Promise<void> {
   try {
     await writePersistedProgress(rec.session.sessionId, progress);
@@ -132,13 +150,87 @@ async function persistProgressForAgent(
   }
 }
 
+function appendWorkflowModeRuntimeEvent(
+  agentId: string,
+  type: string,
+  payload: Record<string, unknown>,
+  status: "running" | "error" | "done" = "running",
+): void {
+  appendRuntimeEvent({
+    id: `${agentId}:workflow-mode:${Date.now()}:${Math.random()
+      .toString(36)
+      .slice(2)}`,
+    source: "workflow",
+    type,
+    status,
+    agentId,
+    payload,
+    createdAt: Date.now(),
+  });
+}
+
+function workflowModeActiveTools(
+  rec: NonNullable<ReturnType<typeof getAgent>>,
+): {
+  previousActive: string[];
+  nextActive: string[];
+  missing: string[];
+  delegateWasActive: boolean;
+} {
+  const available = new Set(rec.session.getAllTools().map((tool) => tool.name));
+  const previousActive = rec.session.getActiveToolNames();
+  const nextActive = WORKFLOW_MODE_TOOL_NAMES.filter((name) =>
+    available.has(name),
+  );
+  const missing = WORKFLOW_MODE_TOOL_NAMES.filter(
+    (name) => !available.has(name),
+  );
+  const delegateWasActive = previousActive.includes(DIRECT_DELEGATE_TOOL_NAME);
+  return { previousActive, nextActive, missing, delegateWasActive };
+}
+
+async function runWithWorkflowModeTools<T>(
+  rec: NonNullable<ReturnType<typeof getAgent>>,
+  run: () => Promise<T>,
+): Promise<T> {
+  const { previousActive, nextActive, missing, delegateWasActive } =
+    workflowModeActiveTools(rec);
+  appendWorkflowModeRuntimeEvent(rec.id, "workflow_mode_start", {
+    allowedTools: nextActive,
+    previousActive,
+    missingTools: missing,
+    delegateDirectDisabled: !nextActive.includes(DIRECT_DELEGATE_TOOL_NAME),
+    delegateWasActive,
+  });
+  if (nextActive.length === 0) {
+    appendWorkflowModeRuntimeEvent(
+      rec.id,
+      "workflow_mode_violation",
+      {
+        reason: "no workflow tools are available",
+        previousActive,
+        missingTools: missing,
+      },
+      "error",
+    );
+    throw new Error("workflow mode has no available workflow tools");
+  }
+
+  rec.session.setActiveToolsByName(nextActive);
+  try {
+    return await run();
+  } finally {
+    rec.session.setActiveToolsByName(previousActive);
+  }
+}
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /** GET: agent meta + 可选 ?action=get_tools / context / thinking_levels */
 export async function GET(
   req: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const auth = await assertRemoteAuth(req);
   if (auth) return auth;
@@ -186,7 +278,7 @@ export async function GET(
     } catch (e) {
       return NextResponse.json(
         { error: (e as Error).message, tools: [], active: [] },
-        { status: 500 }
+        { status: 500 },
       );
     }
   }
@@ -216,7 +308,7 @@ export async function GET(
     } catch (e) {
       return NextResponse.json(
         { error: (e as Error).message, tree: [], leafId: null },
-        { status: 500 }
+        { status: 500 },
       );
     }
   }
@@ -228,7 +320,7 @@ export async function GET(
     } catch (e) {
       return NextResponse.json(
         { error: (e as Error).message, systemPrompt: "" },
-        { status: 500 }
+        { status: 500 },
       );
     }
   }
@@ -275,7 +367,7 @@ export async function GET(
     } catch (e) {
       return NextResponse.json(
         { error: (e as Error).message },
-        { status: 500 }
+        { status: 500 },
       );
     }
   }
@@ -314,7 +406,7 @@ export async function GET(
 }
 
 function parseRuntimeEventSource(
-  value: string | null
+  value: string | null,
 ): RuntimeEventSource | undefined {
   return value === "agent" ||
     value === "browser" ||
@@ -328,7 +420,7 @@ function parseRuntimeEventSource(
 }
 
 function parseRuntimeEventStatus(
-  value: string | null
+  value: string | null,
 ): RuntimeEventStatus | undefined {
   return value === "queued" ||
     value === "running" ||
@@ -357,7 +449,7 @@ function parseEvidenceKind(value: string | null): EvidenceKind | undefined {
 /** POST: 多 action 派发 */
 export async function POST(
   req: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const auth = await assertRemoteAuth(req);
   if (auth) return auth;
@@ -379,7 +471,7 @@ export async function POST(
   if (!type) {
     return NextResponse.json(
       { error: "missing 'type' field" },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -388,26 +480,21 @@ export async function POST(
       case "prompt": {
         const text = body.text as string;
         if (!text || typeof text !== "string") {
-          return NextResponse.json(
-            { error: "text required" },
-            { status: 400 }
-          );
+          return NextResponse.json({ error: "text required" }, { status: 400 });
         }
         const clientRequestId =
           typeof body.clientRequestId === "string"
             ? body.clientRequestId.trim().slice(0, 128)
             : "";
-        if (
-          clientRequestId &&
-          !claimClientRequest(rec.id, clientRequestId)
-        ) {
+        if (clientRequestId && !claimClientRequest(rec.id, clientRequestId)) {
           return NextResponse.json({ ok: true, deduped: true });
         }
         const images = parseImages(body.images) ?? [];
+        const workflowMode = body.workflowMode === true;
         // 附件引用（@path）：前端单独传 attachments，不再拼进展示文本。
         const attachments = Array.isArray(body.attachments)
           ? (body.attachments as unknown[]).filter(
-              (a): a is string => typeof a === "string"
+              (a): a is string => typeof a === "string",
             )
           : [];
 
@@ -423,7 +510,7 @@ export async function POST(
           composePromptWithAside(text, attachments, { specialistIds });
         const finalTextWithMode = withCommunicationInstructions(
           finalText,
-          await getCommunicationSettings()
+          await getCommunicationSettings(),
         );
 
         // F-A5 双气泡修复：prompt 进 SDK 之前先 push 一条 optimistic_user_ack，
@@ -471,13 +558,20 @@ export async function POST(
           // 会让无图请求也传 `{ images: [] }`。该参数必须是
           // images.length > 0 才传，避免 SDK 对空 multimodal 参数敏感。
           const imagesOpt = images.length > 0 ? { images } : undefined;
-          if (rec.isStreaming) {
-            await rec.session.prompt(finalTextWithMode, {
-              streamingBehavior: "followUp",
-              ...(imagesOpt ?? {}),
-            });
+          const runPrompt = async () => {
+            if (rec.isStreaming) {
+              await rec.session.prompt(finalTextWithMode, {
+                streamingBehavior: "followUp",
+                ...(imagesOpt ?? {}),
+              });
+            } else {
+              await rec.session.prompt(finalTextWithMode, imagesOpt);
+            }
+          };
+          if (workflowMode) {
+            await runWithWorkflowModeTools(rec, runPrompt);
           } else {
-            await rec.session.prompt(finalTextWithMode, imagesOpt);
+            await runPrompt();
           }
         } catch (e) {
           finishStreamingAfterPromptError(rec.id);
@@ -496,10 +590,7 @@ export async function POST(
       case "steering": {
         const text = body.text as string;
         if (!text || typeof text !== "string") {
-          return NextResponse.json(
-            { error: "text required" },
-            { status: 400 }
-          );
+          return NextResponse.json({ error: "text required" }, { status: 400 });
         }
         // P2 修复：steer 也接受 attachments，复用 prompt 的 aside 起装。
         // 不走 mention 路由（specialistIds = []）以免扩大 streaming 路径的行为面。
@@ -509,7 +600,7 @@ export async function POST(
         });
         const finalTextWithMode = withCommunicationInstructions(
           finalText,
-          await getCommunicationSettings()
+          await getCommunicationSettings(),
         );
         const images = parseImages(body.images);
         if (isLocalCodingAssistantAgent(rec)) {
@@ -525,10 +616,7 @@ export async function POST(
       case "followUp": {
         const text = body.text as string;
         if (!text || typeof text !== "string") {
-          return NextResponse.json(
-            { error: "text required" },
-            { status: 400 }
-          );
+          return NextResponse.json({ error: "text required" }, { status: 400 });
         }
         // P2 修复：follow_up 也接受 attachments，复用 prompt 的 aside 起装。
         const attachments = parseAttachments(body.attachments);
@@ -537,7 +625,7 @@ export async function POST(
         });
         const finalTextWithMode = withCommunicationInstructions(
           finalText,
-          await getCommunicationSettings()
+          await getCommunicationSettings(),
         );
         const images = parseImages(body.images);
         if (isLocalCodingAssistantAgent(rec)) {
@@ -562,7 +650,7 @@ export async function POST(
         if (!objective) {
           return NextResponse.json(
             { error: "objective required" },
-            { status: 400 }
+            { status: 400 },
           );
         }
         // P1 修复：goal 也接受 clientRequestId，跟 prompt 路径一致：
@@ -573,10 +661,7 @@ export async function POST(
           typeof body.clientRequestId === "string"
             ? body.clientRequestId.trim().slice(0, 128)
             : "";
-        if (
-          clientRequestId &&
-          !claimClientRequest(rec.id, clientRequestId)
-        ) {
+        if (clientRequestId && !claimClientRequest(rec.id, clientRequestId)) {
           return NextResponse.json({ ok: true, deduped: true });
         }
         const tokenBudget =
@@ -604,7 +689,7 @@ export async function POST(
             goalAside,
             CONTEXT_ASIDE_CLOSE,
           ].join("\n"),
-          await getCommunicationSettings()
+          await getCommunicationSettings(),
         );
 
         // F-A5 双气泡修复（goal 同补）：调 SDK 之前先 push optimistic_user_ack。
@@ -656,8 +741,8 @@ export async function POST(
                   resumeAside,
                   CONTEXT_ASIDE_CLOSE,
                 ].join("\n"),
-                await getCommunicationSettings()
-              )
+                await getCommunicationSettings(),
+              ),
             );
           } catch (e) {
             finishStreamingAfterPromptError(rec.id);
@@ -688,7 +773,7 @@ export async function POST(
         if (status !== "complete" && status !== "blocked") {
           return NextResponse.json(
             { error: "status must be complete or blocked" },
-            { status: 400 }
+            { status: 400 },
           );
         }
         // Route through the stop-time verifier so a premature `complete` is
@@ -718,13 +803,12 @@ export async function POST(
         pushProgressEvent(rec, progress);
         await abortWorkflowsForParent(id);
         await abortSubagentsForParent(id);
-        if (isLocalCodingAssistantAgent(rec)) await abortLocalCodingAssistantAgent(rec);
+        if (isLocalCodingAssistantAgent(rec))
+          await abortLocalCodingAssistantAgent(rec);
         else await rec.session.abort();
-        // SDK 不一定会再送 agent_end（底层 stream 已被拆）。为避免 sidebar 黄点
-        // 一直亮着，这里主动将 record.isStreaming 扯低。getRunningSessionFiles 下一
-        // 次被 GET /api/sessions 调用时就会不再含该 sessionFile。
-        rec.isStreaming = false;
-        rec.updatedAt = Date.now();
+        // T1.2：abort 顺序调 finalizeAfterAbort：先清 finish/tool watchdog（避免 1.5s
+        // 后 ghost run）再置 isStreaming=false。同时 sidebar 黄点也会随该位置扯低。
+        finalizeAfterAbort(rec);
         return NextResponse.json({ ok: true, progress });
       }
 
@@ -749,15 +833,17 @@ export async function POST(
         if (!provider || !modelId) {
           return NextResponse.json(
             { error: "provider and modelId required" },
-            { status: 400 }
+            { status: 400 },
           );
         }
         if (provider === LOCAL_CODING_ASSISTANT_PROVIDER_ID) {
-          const model = LOCAL_CODING_ASSISTANT_MODELS.find((item) => item.id === modelId);
+          const model = LOCAL_CODING_ASSISTANT_MODELS.find(
+            (item) => item.id === modelId,
+          );
           if (!model) {
             return NextResponse.json(
               { error: `model not found: ${provider}/${modelId}` },
-              { status: 404 }
+              { status: 404 },
             );
           }
           if (!isLocalCodingAssistantAgent(rec)) {
@@ -806,7 +892,7 @@ export async function POST(
           if (!model) {
             return NextResponse.json(
               { error: `model not found: ${provider}/${modelId}` },
-              { status: 404 }
+              { status: 404 },
             );
           }
           const replacement = await createAgent({
@@ -827,7 +913,7 @@ export async function POST(
         if (!model) {
           return NextResponse.json(
             { error: `model not found: ${provider}/${modelId}` },
-            { status: 404 }
+            { status: 404 },
           );
         }
         await rec.session.setModel(model);
@@ -843,7 +929,7 @@ export async function POST(
         if (!level) {
           return NextResponse.json(
             { error: "level required" },
-            { status: 400 }
+            { status: 400 },
           );
         }
         rec.session.setThinkingLevel(level);
@@ -859,7 +945,7 @@ export async function POST(
         if (!Array.isArray(raw)) {
           return NextResponse.json(
             { error: "tools (string[]) required" },
-            { status: 400 }
+            { status: 400 },
           );
         }
         const names = raw.filter((x): x is string => typeof x === "string");
@@ -876,7 +962,7 @@ export async function POST(
         if (!targetId) {
           return NextResponse.json(
             { error: "targetId required" },
-            { status: 400 }
+            { status: 400 },
           );
         }
         const result = await rec.session.navigateTree(targetId, {
@@ -891,7 +977,7 @@ export async function POST(
       default:
         return NextResponse.json(
           { error: `unknown action: ${type}` },
-          { status: 400 }
+          { status: 400 },
         );
     }
   } catch (e) {
@@ -905,7 +991,7 @@ export async function POST(
 /** DELETE: dispose agent */
 export async function DELETE(
   _req: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
   disposeAgent(id);

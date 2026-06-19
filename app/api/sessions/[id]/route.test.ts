@@ -6,6 +6,8 @@ const sessionsMock = vi.hoisted(() => ({
   collectSessionDescendants: vi.fn(),
   findSessionPathById: vi.fn(),
   getSessionDetail: vi.fn(),
+  // T1.3: 路由在删除后会调用该函数失效 listAll 缓存。
+  invalidateSessionListCache: vi.fn(),
 }));
 
 const fsMock = vi.hoisted(() => ({

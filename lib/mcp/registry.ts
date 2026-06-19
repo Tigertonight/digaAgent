@@ -1,11 +1,16 @@
 import "server-only";
 import {
+  closeSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
-  writeFileSync,
+  unlinkSync,
+  writeSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { McpServerConfig, McpTransport } from "./types";
@@ -74,19 +79,42 @@ function sanitizeServer(raw: unknown): McpServerConfig | null {
   };
 }
 
+// T2.7: 同步原子写 + ENOSPC 重抣 + 其他 errno warn。
 function persist(): void {
+  let tmp: string | null = null;
+  let fd: number | null = null;
   try {
     mkdirSync(mcpDir(), { recursive: true });
     const fp = serversFile();
-    const tmp = `${fp}.tmp.${process.pid}.${Date.now()}`;
+    tmp = `${fp}.tmp.${process.pid}.${Date.now()}.${randomUUID()}`;
     const envelope: McpStoreEnvelope = {
       version: CURRENT_VERSION,
       servers: Array.from(store.servers.values()),
     };
-    writeFileSync(tmp, JSON.stringify(envelope, null, 2), "utf8");
+    fd = openSync(tmp, "wx");
+    writeSync(fd, JSON.stringify(envelope, null, 2), 0, "utf8");
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = null;
     renameSync(tmp, fp);
-  } catch {
-    // Best-effort; config persistence must not crash the runtime.
+    tmp = null;
+  } catch (err) {
+    if (fd !== null) {
+      try { closeSync(fd); } catch { /* ignore */ }
+    }
+    if (tmp) {
+      try { unlinkSync(tmp); } catch { /* ignore */ }
+    }
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOSPC") {
+      console.warn("[mcp-registry] persist failed (no space)", { code });
+      throw err;
+    }
+    console.warn("[mcp-registry] persist failed", {
+      code,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    // 保留 best-effort 语义，不阈断运行时。
   }
 }
 

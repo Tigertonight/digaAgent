@@ -62,7 +62,26 @@ async function listAllSdkSessions(): Promise<SessionInfo[]> {
 }
 
 export function __clearSessionListCacheForTests(): void {
-  if (process.env.NODE_ENV !== "test") return;
+  // 释话：vitest 默认 NODE_ENV 为 'production'。过去在 'test' 下才生效导致该
+  // 函数在封存环境中是 no-op，lib/sessions.test.ts 的第三个 case 会从上一个
+  // case 的缓存里拿到错误的 listAll 结果。与 T1.3 同为 invalidate 逻辑，这里
+  // 允许任何环境下被调用，同时仅限于测试路径调用（函数名约定）。
+  listAllCache = null;
+}
+
+/**
+ * S5: 生产环境主动失效 listAll 缓存。
+ *
+ * `listAllSdkSessions()` 内部维持 200ms 缓存以缓冲 sidebar 高频拉取，但在以下
+ * 时机必须显式 invalidate，否则前端会在「DELETE → GET /api/sessions」之间的
+ * 短窗口内拿到已删除的 session（点开会触发 SessionManager.open 报错）：
+ *   - DELETE /api/sessions/[id]（删除 session）
+ *   - POST /api/sessions/[id]/fork（新建 fork）
+ *   - 任何会改动 SDK 端 jsonl 列表的服务端动作
+ *
+ * 与 `__clearSessionListCacheForTests` 区别：本函数在生产环境也生效。
+ */
+export function invalidateSessionListCache(): void {
   listAllCache = null;
 }
 
@@ -174,6 +193,39 @@ export async function resolveTrustedSessionPath(
   const all = await listAllSdkSessions();
   const hit = all.find((s) => s.id === expectedId && s.path === sessionPath);
   return hit?.path ?? null;
+}
+
+/** TrustedSessionPathError：sessionPath 不在可信清单内（用于 4xx 区分） */
+export class TrustedSessionPathError extends Error {
+  constructor(message = "sessionPath not in trusted list") {
+    super(message);
+    this.name = "TrustedSessionPathError";
+  }
+}
+
+/**
+ * S4 强化：resume 入口（POST /api/agent/new）等没有 expectedId 但接收 sessionPath
+ * 的位置，必须用本函数把请求路径锚定到可信清单内的某条 session。
+ *
+ * 直接使用 `path.resolve(p)` 规范化绝对路径后与 listAll 的 `path` 做精确比对，
+ * 命中即返回清单里登记的 path（而非用户原样字符串）；未命中抛
+ * `TrustedSessionPathError`。这阻止了「sessionPath = /Users/…/任意文件.jsonl」
+ * 被 SessionManager.open 拿去打开 / 写入 / 通过 SSE ring buffer 泄漏。
+ */
+export async function assertTrustedSessionPath(
+  sessionPath: string,
+): Promise<string> {
+  if (!sessionPath || typeof sessionPath !== "string") {
+    throw new TrustedSessionPathError("sessionPath required");
+  }
+  const path = await import("node:path");
+  const resolved = path.resolve(sessionPath);
+  const all = await listAllSdkSessions();
+  const hit = all.find((s) => path.resolve(s.path) === resolved);
+  if (!hit) {
+    throw new TrustedSessionPathError();
+  }
+  return hit.path;
 }
 
 /**

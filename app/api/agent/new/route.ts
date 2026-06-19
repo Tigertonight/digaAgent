@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { createAgent, getAgent } from "@/lib/agent-registry";
 import { assertRemoteAuth } from "@/lib/remote/auth";
 import { assertPathAllowed } from "@/lib/files/policy";
+import {
+  assertTrustedSessionPath,
+  TrustedSessionPathError,
+} from "@/lib/sessions";
+import { internalErrorResponse } from "@/lib/api/error-response";
 import type { ThinkingLevel } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -26,7 +31,7 @@ export async function POST(req: Request) {
         { status: 403 }
       );
     }
-    const sessionPath = body.sessionPath as string | undefined;
+    const rawSessionPath = body.sessionPath as string | undefined;
     const thinkingLevel = body.thinkingLevel as ThinkingLevel | undefined;
 
     if (!provider || !modelId) {
@@ -34,6 +39,23 @@ export async function POST(req: Request) {
         { error: "provider and modelId required" },
         { status: 400 }
       );
+    }
+
+    // T1.1：resume 路径越权修复。仅接受在 SDK listAll() 可信清单内的 sessionPath，
+    // 避免被作为任意路径写 / 读的入口（详见 docs/reports/session-audit.md H1）。
+    let sessionPath: string | undefined;
+    if (rawSessionPath) {
+      try {
+        sessionPath = await assertTrustedSessionPath(rawSessionPath);
+      } catch (e) {
+        if (e instanceof TrustedSessionPathError) {
+          return NextResponse.json(
+            { error: "sessionPath not allowed" },
+            { status: 400 }
+          );
+        }
+        throw e;
+      }
     }
 
     const result = await createAgent({
@@ -60,9 +82,7 @@ export async function POST(req: Request) {
         : null,
     });
   } catch (e) {
-    return NextResponse.json(
-      { error: (e as Error).message, stack: (e as Error).stack },
-      { status: 500 }
-    );
+    // 不再直返 message/stack，与其他路由对齐脱敏。
+    return internalErrorResponse(e, { scope: "POST /api/agent/new" });
   }
 }

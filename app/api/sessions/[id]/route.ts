@@ -5,6 +5,7 @@ import {
   collectSessionDescendants,
   findSessionPathById,
   getSessionDetail,
+  invalidateSessionListCache,
 } from "@/lib/sessions";
 import { deleteMeta } from "@/lib/meta/store";
 import { deletePersistedProgress } from "@/lib/progress/file-store";
@@ -102,7 +103,8 @@ export const DELETE = withRemoteAuth(async function (
     }
 
     // 删 jsonl + meta + progress；三者都是幂等，任何一个不存在都忽略。
-    const errors: Array<{ id: string; error: string }> = [];
+    // T3.2：errors 包含 errno，让前端能区分 EBUSY/EACCES 等错类。
+    const errors: Array<{ id: string; error: string; errno?: string }> = [];
     for (const t of targets) {
       try {
         await fs.unlink(t.path);
@@ -113,7 +115,11 @@ export const DELETE = withRemoteAuth(async function (
           // 否则会留下「对话还在、但重命名/进度全没了」的失忆态。记录错误后跳过本
           // target 的后续清理。ENOENT（本就不存在）视为已删除，继续清理残留元数据。
           console.error(`[DELETE /api/sessions/${t.id}] unlink failed:`, err);
-          errors.push({ id: t.id, error: err.code ?? "delete failed" });
+          errors.push({
+            id: t.id,
+            error: err.code ?? "delete failed",
+            ...(err.code ? { errno: err.code } : {}),
+          });
           continue;
         }
       }
@@ -128,6 +134,10 @@ export const DELETE = withRemoteAuth(async function (
       }
     }
 
+    // T1.3：任何删除动作（包含部分成功）都主动失效 listAll 缓存，
+    // 避免前端在 200ms 内 GET /api/sessions 拿到幽灵 session。
+    invalidateSessionListCache();
+
     if (errors.length > 0) {
       const deleted = targets
         .filter((t) => !errors.find((e) => e.id === t.id))
@@ -137,6 +147,9 @@ export const DELETE = withRemoteAuth(async function (
           {
             ok: true,
             partial: true,
+            // T3.2：让前端详细判别是「请稍后重试 (EBUSY)」还是「修权限 (EACCES)」。
+            // 内存中 agent record 已经 dispose，UI 应提示“已停止，但磁盘未能删除”。
+            inMemoryDisposed: true,
             deleted,
             failed: errors,
           },
@@ -146,6 +159,7 @@ export const DELETE = withRemoteAuth(async function (
       return NextResponse.json(
         {
           error: "some sessions failed to delete",
+          inMemoryDisposed: true,
           failed: errors,
           deleted,
         },

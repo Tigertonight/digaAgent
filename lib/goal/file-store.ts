@@ -1,13 +1,17 @@
 import "server-only";
 import {
+  closeSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   renameSync,
   unlinkSync,
-  writeFileSync,
+  writeSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import type {
@@ -148,16 +152,51 @@ function sanitizeEnvelope(raw: unknown): GoalStoreEnvelope | null {
   };
 }
 
+/**
+ * T2.3: 同步原子写入。
+ *
+ * 为什么仍然是同步：goal store 被大量同步调用点依赖（`putGoal` / `setGoalStatus`
+ * 等都是同步 API）。为避免改动面过大不走异步 helper，这里在本地升级为
+ * 「UUID tmp + open(wx) + write + fsync + close + rename」同步版。
+ *
+ * 错误处理：
+ *   - ENOSPC：inner re-throw（让上层 UI 必须感知，不能静默吞）；上层原本以
+ *     best-effort 为原则，但磁盘满是唯一需要强提示的场景；这里 throw 后由
+ *     上层调用点（persistEnvelope 调用者本身是 best-effort）依需决定。
+ *   - 其他 errno：warn 后吞掉（保留原语义但补上可观察性）。
+ */
 function persistEnvelope(agentId: string, envelope: GoalStoreEnvelope): void {
+  let tmp: string | null = null;
+  let fd: number | null = null;
   try {
     mkdirSync(goalsDir(), { recursive: true });
     const fp = goalFilePath(agentId);
-    const tmp = `${fp}.tmp.${process.pid}.${Date.now()}`;
-    writeFileSync(tmp, JSON.stringify(envelope, null, 2), "utf8");
+    tmp = `${fp}.tmp.${process.pid}.${Date.now()}.${randomUUID()}`;
+    fd = openSync(tmp, "wx");
+    writeSync(fd, JSON.stringify(envelope, null, 2), 0, "utf8");
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = null;
     renameSync(tmp, fp);
-  } catch {
-    // Persistence is best-effort. Runtime execution must not fail because the
-    // local metadata directory is temporarily unavailable.
+    tmp = null;
+  } catch (err) {
+    if (fd !== null) {
+      try { closeSync(fd); } catch { /* ignore */ }
+    }
+    if (tmp) {
+      try { unlinkSync(tmp); } catch { /* ignore */ }
+    }
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOSPC") {
+      console.warn("[goal-store] persist failed (no space)", { agentId, code });
+      throw err;
+    }
+    console.warn("[goal-store] persist failed", {
+      agentId,
+      code,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    // 除 ENOSPC 外仍然保留 best-effort 语义，不阈断运行时。
   }
 }
 

@@ -18,6 +18,7 @@ import {
   findSessionPathById,
   getForkableUserMessages,
   getSessionDetail,
+  invalidateSessionListCache,
 } from "@/lib/sessions";
 import { withRemoteAuth } from "@/lib/remote/with-auth";
 import { internalErrorResponse } from "@/lib/api/error-response";
@@ -88,6 +89,9 @@ export const POST = withRemoteAuth(async function (
       }
       throw e;
     }
+
+    // T1.3：fork 后主动失效 listAll 缓存，让前端立刻看到新建 session。
+    invalidateSessionListCache();
 
     return NextResponse.json({
       ok: true,

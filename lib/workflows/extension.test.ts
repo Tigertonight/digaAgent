@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createWorkflowScriptTool,
   createWorkflowTemplateTool,
+  createListWorkflowScriptDraftsTool,
+  createReadWorkflowScriptDraftTool,
+  createSaveWorkflowScriptDraftTool,
 } from "./extension";
 import {
   __resetWorkflowTemplateStoreForTest,
@@ -16,7 +19,9 @@ import {
   __setWorkflowSkillStoreRootForTest,
   putWorkflowSkill,
 } from "./skill-store";
+import { __setWorkflowScriptDraftRootForTest } from "./script-draft-store";
 import type { RunWorkflowScriptInput } from "./types";
+import type { WorkflowCapability } from "./types";
 
 describe("workflow template tool", () => {
   let root: string;
@@ -129,6 +134,18 @@ describe("workflow template tool", () => {
 });
 
 describe("workflow script tool contract", () => {
+  let draftRoot: string;
+
+  beforeEach(async () => {
+    draftRoot = await mkdtemp(path.join(os.tmpdir(), "workflow-draft-tool-test-"));
+    __setWorkflowScriptDraftRootForTest(draftRoot);
+  });
+
+  afterEach(async () => {
+    __setWorkflowScriptDraftRootForTest(null);
+    if (draftRoot) await rm(draftRoot, { recursive: true, force: true });
+  });
+
   it("makes script optional (script or skillRef) and documents spawnAgent answer aliases", () => {
     const tool = createWorkflowScriptTool({
       onRunWorkflow: async () => {
@@ -154,11 +171,110 @@ describe("workflow script tool contract", () => {
     expect((tool.promptGuidelines ?? []).join("\n")).toContain(
       "workflow.spawnAgent returns a subagent result with answer plus compatibility aliases text/output/summary"
     );
+    expect((tool.promptGuidelines ?? []).join("\n")).toContain(
+      "Child agent tool names must be canonical"
+    );
+    expect((tool.promptGuidelines ?? []).join("\n")).toContain(
+      "Do not use glob; use find for file discovery and grep for content search"
+    );
+    expect((tool.promptGuidelines ?? []).join("\n")).toContain(
+      "Child agent task timeouts are normalized to 1800000 ms"
+    );
+    expect((tool.promptGuidelines ?? []).join("\n")).toContain(
+      "Workflow harness timeout defaults to 86400000 ms"
+    );
+    expect((tool.promptGuidelines ?? []).join("\n")).toContain(
+      "save_workflow_script_draft"
+    );
+    expect((tool.promptGuidelines ?? []).join("\n")).toContain(
+      "SPLIT LONG WORKFLOWS"
+    );
     // Reuse-first guidance is present (progressive disclosure).
     expect((tool.promptGuidelines ?? []).join("\n")).toContain("REUSE FIRST");
   });
 
-  it("rejects generated script calls that omit both script and skillRef before running", async () => {
+  it("persists script drafts in chunks and runs them by draftRef", async () => {
+    const opts = {
+      parentAgentId: () => "agent-draft-test",
+      onRunWorkflow: async () => {
+        throw new Error("not used");
+      },
+      onRunWorkflowScript: async (input: RunWorkflowScriptInput) => ({
+        workflowId: "wf-draft",
+        objective: input.objective,
+        status: "completed" as const,
+        manifest: {
+          capabilities: ["spawn_agent", "read_files"] as WorkflowCapability[],
+          maxAgents: 8,
+          maxConcurrency: 4,
+          timeoutMs: 60000,
+          runtime: "process" as const,
+        },
+        returnValue: input.script,
+        artifacts: [],
+        checkpoints: [],
+        logs: [],
+        traceEvents: [],
+        startedAt: 1,
+        endedAt: 2,
+      }),
+    };
+    const saveTool = createSaveWorkflowScriptDraftTool(opts);
+    const listTool = createListWorkflowScriptDraftsTool(opts);
+    const readTool = createReadWorkflowScriptDraftTool(opts);
+    const runTool = createWorkflowScriptTool(opts);
+
+    await saveTool.execute(
+      "save-1",
+      { id: "audit", title: "Audit", script: "workflow.checkpoint('a', 1);" },
+      new AbortController().signal,
+      undefined,
+      {} as never
+    );
+    await saveTool.execute(
+      "save-2",
+      { id: "audit", append: "\nreturn 'done';" },
+      new AbortController().signal,
+      undefined,
+      {} as never
+    );
+
+    const listed = await listTool.execute(
+      "list",
+      {},
+      new AbortController().signal,
+      undefined,
+      {} as never
+    );
+    expect(JSON.stringify(listed.details)).toContain("audit");
+    const read = await readTool.execute(
+      "read",
+      { id: "audit" },
+      new AbortController().signal,
+      undefined,
+      {} as never
+    );
+    const readText =
+      read.content[0]?.type === "text" ? read.content[0].text : "";
+    expect(readText).toContain("return 'done';");
+
+    const result = await runTool.execute(
+      "run",
+      {
+        objective: "Run draft.",
+        rationale: "Verify draftRef.",
+        draftRef: "audit",
+      },
+      new AbortController().signal,
+      undefined,
+      {} as never
+    );
+
+    expect(result.details.returnValue).toContain("workflow.checkpoint");
+    expect(result.details.returnValue).toContain("return 'done';");
+  });
+
+  it("rejects generated script calls that omit script, skillRef, and draftRef before running", async () => {
     let ran = false;
     const tool = createWorkflowScriptTool({
       onRunWorkflow: async () => {
@@ -181,7 +297,37 @@ describe("workflow script tool contract", () => {
         undefined,
         {} as never
       )
-    ).rejects.toThrow("received neither a script nor a valid skillRef");
+    ).rejects.toThrow(
+      "received neither a script, a valid draftRef, nor a valid skillRef",
+    );
+    expect(ran).toBe(false);
+  });
+
+  it("rejects oversized inline scripts and asks for draftRef", async () => {
+    let ran = false;
+    const tool = createWorkflowScriptTool({
+      onRunWorkflow: async () => {
+        throw new Error("not used");
+      },
+      onRunWorkflowScript: async () => {
+        ran = true;
+        throw new Error("should not run oversized inline script");
+      },
+    });
+
+    await expect(
+      tool.execute(
+        "call-huge-script",
+        {
+          objective: "Review workflow generation failure.",
+          rationale: "Regression for oversized generated script.",
+          script: `const x = "${"x".repeat(19_000)}";\nreturn x.length;`,
+        },
+        new AbortController().signal,
+        undefined,
+        {} as never
+      )
+    ).rejects.toThrow(/draft|draftRef|too|above|参数疑似被截断/i);
     expect(ran).toBe(false);
   });
 });

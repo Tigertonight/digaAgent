@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildWorkflowWorkerSpawnConfig,
+  extractWorkflowJsonValue,
   normalizeWorkflowScriptBody,
   runWorkflowScript,
   validateWorkflowScript,
@@ -22,7 +23,9 @@ describe("runWorkflowScript", () => {
   let workflowRoot: string;
 
   beforeEach(async () => {
-    workflowRoot = await mkdtemp(path.join(os.tmpdir(), "workflow-store-test-"));
+    workflowRoot = await mkdtemp(
+      path.join(os.tmpdir(), "workflow-store-test-"),
+    );
     __setWorkflowStoreRootForTest(workflowRoot);
     __setWorkflowNetworkPolicyRootForTest(workflowRoot);
   });
@@ -135,7 +138,7 @@ describe("runWorkflowScript", () => {
             summaries: results.map((result) => result.summary),
           };
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
@@ -151,7 +154,7 @@ describe("runWorkflowScript", () => {
     expect(result.manifest.capabilities).toEqual(["spawn_agent", "read_files"]);
     expect(result.manifest.maxAgents).toBe(8);
     expect(result.manifest.maxConcurrency).toBe(4);
-    expect(result.manifest.timeoutMs).toBe(30 * 60 * 1000);
+    expect(result.manifest.timeoutMs).toBe(24 * 60 * 60 * 1000);
     expect(events.map((event) => event.type)).toEqual([
       "workflow_start",
       "workflow_checkpoint",
@@ -193,7 +196,7 @@ describe("runWorkflowScript", () => {
           workflow.artifact("recon.md", recon.text || "");
           return { answer: recon.answer, text: recon.text };
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
@@ -219,7 +222,10 @@ describe("runWorkflowScript", () => {
               taskId: input.tasks[0]?.id ?? "schema-agent",
               agentId: "agent-schema",
               status: "completed",
-              answer: JSON.stringify({ bugs: ["missing auth check"], count: 1 }),
+              answer: JSON.stringify({
+                bugs: ["missing auth check"],
+                count: 1,
+              }),
               startedAt: Date.now(),
               endedAt: Date.now(),
             },
@@ -244,7 +250,7 @@ describe("runWorkflowScript", () => {
             }
           });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
@@ -264,6 +270,59 @@ describe("runWorkflowScript", () => {
       "agent_end",
     ]);
     expect(getWorkflowRun(result.workflowId)?.traceEvents?.length).toBe(3);
+  });
+
+  it("accepts fenced or prose-wrapped workflow.agent JSON schema output", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-agent-schema-fenced",
+        runSubagents: async (input) => ({
+          batchId: "batch-agent-schema-fenced",
+          results: [
+            {
+              taskId: input.tasks[0]?.id ?? "schema-agent",
+              agentId: "agent-schema-fenced",
+              status: "completed",
+              answer: [
+                "Here is the structured result:",
+                "```json",
+                JSON.stringify({ bugs: ["missing auth check"], count: 1 }),
+                "```",
+              ].join("\n"),
+              startedAt: Date.now(),
+              endedAt: Date.now(),
+            },
+          ],
+        }),
+      },
+      {
+        objective: "Audit auth.",
+        rationale: "Verify fenced schema output recovery.",
+        script: `
+          return await workflow.agent("Audit auth.ts", {
+            id: "auth-audit-fenced",
+            title: "Auth audit",
+            schema: {
+              type: "object",
+              required: ["bugs", "count"],
+              properties: {
+                bugs: { type: "array", items: { type: "string" } },
+                count: { type: "number" }
+              }
+            }
+          });
+        `,
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.returnValue).toMatchObject({
+      data: { bugs: ["missing auth check"], count: 1 },
+    });
+    expect(result.artifacts[0]).toMatchObject({
+      name: "schema-output:auth-audit-fenced",
+      value: { valid: true },
+    });
   });
 
   it("fails workflow.agent when schema validation fails", async () => {
@@ -301,7 +360,7 @@ describe("runWorkflowScript", () => {
             }
           });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
@@ -311,9 +370,72 @@ describe("runWorkflowScript", () => {
       kind: "schema_output",
       value: { valid: false },
     });
-    expect(result.traceEvents.some(
-      (event) => event.type === "schema_validation" && event.valid === false
-    )).toBe(true);
+    expect(
+      result.traceEvents.some(
+        (event) => event.type === "schema_validation" && event.valid === false,
+      ),
+    ).toBe(true);
+  });
+
+  it("records truncated workflow.agent JSON schema output with recovery guidance", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-agent-schema-truncated",
+        runSubagents: async (input) => ({
+          batchId: "batch-agent-schema-truncated",
+          results: [
+            {
+              taskId: input.tasks[0]?.id ?? "schema-agent",
+              agentId: "agent-schema-truncated",
+              status: "completed",
+              answer: '```json\n{"bugs":["missing auth check"],"count":',
+              startedAt: Date.now(),
+              endedAt: Date.now(),
+            },
+          ],
+        }),
+      },
+      {
+        objective: "Audit auth.",
+        rationale: "Verify truncated schema output recovery guidance.",
+        script: `
+          await workflow.agent("Audit auth.ts", {
+            id: "auth-audit-truncated",
+            title: "Auth audit",
+            schema: {
+              type: "object",
+              required: ["bugs", "count"],
+              properties: {
+                bugs: { type: "array", items: { type: "string" } },
+                count: { type: "number" }
+              }
+            }
+          });
+        `,
+      },
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("schema JSON parse failed");
+    expect(result.error).toContain("appears truncated");
+    expect(result.error).toContain("Return only compact valid JSON");
+    expect(result.artifacts[0]).toMatchObject({
+      name: "schema-output:auth-audit-truncated",
+      kind: "schema_output",
+      value: {
+        valid: false,
+        data: null,
+        parseError: true,
+      },
+    });
+    expect(
+      result.traceEvents.some(
+        (event) =>
+          event.type === "schema_validation" &&
+          event.valid === false &&
+          event.errors.some((error) => error.includes("appears truncated")),
+      ),
+    ).toBe(true);
   });
 
   it("runs workflow.agent inside an automatically-created worktree", async () => {
@@ -365,7 +487,7 @@ describe("runWorkflowScript", () => {
             isolation: "worktree"
           });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
@@ -376,7 +498,11 @@ describe("runWorkflowScript", () => {
       text: "done",
       worktree: { path: "/tmp/workflow-agent" },
     });
-    expect(result.artifacts.some((artifact) => artifact.name.startsWith("worktree:"))).toBe(true);
+    expect(
+      result.artifacts.some((artifact) =>
+        artifact.name.startsWith("worktree:"),
+      ),
+    ).toBe(true);
   });
 
   it("supports fan-out and synthesis through workflow.patterns", async () => {
@@ -421,12 +547,17 @@ describe("runWorkflowScript", () => {
             })
           });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
-    expect(result.returnValue).toEqual({ count: 2, items: ["auth", "billing"] });
-    expect(result.artifacts.filter((artifact) => artifact.kind === "schema_output")).toHaveLength(2);
+    expect(result.returnValue).toEqual({
+      count: 2,
+      items: ["auth", "billing"],
+    });
+    expect(
+      result.artifacts.filter((artifact) => artifact.kind === "schema_output"),
+    ).toHaveLength(2);
   });
 
   it("supports adversarial verification through workflow.patterns", async () => {
@@ -458,12 +589,16 @@ describe("runWorkflowScript", () => {
             requirePass: true
           });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
     expect(result.returnValue).toMatchObject({ passed: true });
-    expect(result.artifacts.some((artifact) => artifact.name === "adversarial-verification")).toBe(true);
+    expect(
+      result.artifacts.some(
+        (artifact) => artifact.name === "adversarial-verification",
+      ),
+    ).toBe(true);
   });
 
   it("supports loop-until-done through workflow.patterns", async () => {
@@ -484,7 +619,7 @@ describe("runWorkflowScript", () => {
             stopWhen: (_state, verification) => verification.done
           });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
@@ -504,14 +639,15 @@ describe("runWorkflowScript", () => {
       {
         objective: "Run template.",
         rationale: "Verify template init data.",
-        script: "return { params: workflow.params, template: workflow.template };",
+        script:
+          "return { params: workflow.params, template: workflow.template };",
         templateParams: { topic: "dynamic workflows", depth: 2 },
         templateRef: {
           id: "deep-research",
           name: "Deep research",
           version: "1.0.0",
         },
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
@@ -539,7 +675,7 @@ describe("runWorkflowScript", () => {
             requireType: typeof require,
           };
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
@@ -562,13 +698,61 @@ describe("runWorkflowScript", () => {
         rationale: "Verify abort persistence.",
         script: "await workflow.sleep(1000); return 'done';",
       },
-      controller.signal
+      controller.signal,
     );
     controller.abort();
     const result = await resultPromise;
 
     expect(result.status).toBe("aborted");
     expect(getWorkflowRun(result.workflowId)?.status).toBe("aborted");
+  });
+
+  it("marks timeout after checkpoint progress as needs_continue", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-needs-continue",
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Long staged workflow.",
+        rationale: "Verify resumable timeout semantics.",
+        timeoutMs: 1000,
+        script: `
+          workflow.checkpoint("scan-done", { ok: true });
+          workflow.artifact("scan-summary", "done");
+          await workflow.sleep(2000);
+          return "unreachable";
+        `,
+      },
+    );
+
+    expect(result.status).toBe("needs_continue");
+    expect(result.error).toContain("resume from the latest checkpoint");
+    expect(result.checkpoints.map((checkpoint) => checkpoint.name)).toContain(
+      "scan-done",
+    );
+    expect(getWorkflowRun(result.workflowId)?.status).toBe("needs_continue");
+    expect(workflowResumeSnapshot(getWorkflowRun(result.workflowId)!).canResume).toBe(
+      true,
+    );
+  });
+
+  it("caps explicit workflow harness timeouts at 24 hours", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-timeout-cap",
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Timeout cap.",
+        rationale: "Verify main workflow cap is independent of child agents.",
+        timeoutMs: 48 * 60 * 60 * 1000,
+        script: "return 'done';",
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.manifest.timeoutMs).toBe(24 * 60 * 60 * 1000);
   });
 
   it("blocks unsafe child-agent tools when no approval broker exists", async () => {
@@ -590,12 +774,14 @@ describe("runWorkflowScript", () => {
             allowedTools: ["read", "bash"]
           });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
     // Inferred shell capability requires approval; with no broker it fails early.
-    expect(result.error).toContain("approval broker is not implemented for: shell");
+    expect(result.error).toContain(
+      "approval broker is not implemented for: shell",
+    );
     expect(result.manifest.capabilities).toContain("shell");
   });
 
@@ -633,7 +819,7 @@ describe("runWorkflowScript", () => {
           });
           return "done";
         `,
-      }
+      },
     );
 
     expect(approvals).toContain("shell");
@@ -651,11 +837,13 @@ describe("runWorkflowScript", () => {
         rationale: "Verify capability broker.",
         capabilities: ["spawn_agent", "read_files", "write_files"],
         script: "return 'unreachable';",
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
-    expect(result.error).toContain("approval broker is not implemented for: write_files");
+    expect(result.error).toContain(
+      "approval broker is not implemented for: write_files",
+    );
     expect(result.manifest.capabilities).toEqual([
       "spawn_agent",
       "read_files",
@@ -701,7 +889,7 @@ describe("runWorkflowScript", () => {
             allowedTools: ["read", "edit"]
           });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
@@ -724,7 +912,7 @@ describe("runWorkflowScript", () => {
         rationale: "Verify denied broker path.",
         capabilities: ["spawn_agent", "read_files", "write_files"],
         script: "return 'unreachable';",
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
@@ -768,7 +956,7 @@ describe("runWorkflowScript", () => {
             allowedTools: ["read", "bash"]
           });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
@@ -813,7 +1001,7 @@ describe("runWorkflowScript", () => {
             allowedTools: ["browser_open", "browser_extract", "browser_verify"]
           });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
@@ -821,6 +1009,116 @@ describe("runWorkflowScript", () => {
     expect(allowedTools).toEqual([
       ["browser_open", "browser_extract", "browser_verify"],
     ]);
+  });
+
+  it("normalizes common read-only child tool aliases before spawning agents", async () => {
+    const allowedTools: Array<string[] | undefined> = [];
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-tool-aliases",
+        runSubagents: async (input) => {
+          allowedTools.push(input.tasks[0]?.allowedTools);
+          return {
+            batchId: "batch-tool-aliases",
+            results: [
+              {
+                taskId: input.tasks[0]?.id ?? "task",
+                agentId: "agent-tool-aliases",
+                status: "completed",
+                answer: "aliases ok",
+                startedAt: Date.now(),
+              },
+            ],
+          };
+        },
+      },
+      {
+        objective: "Discover files.",
+        rationale: "Verify generated workflow tool alias recovery.",
+        script: `
+          return await workflow.spawnAgent({
+            title: "Discover",
+            prompt: "Find relevant files",
+            allowedTools: ["glob", "read", "rg", "ripgrep", "search", "list", "find"]
+          });
+        `,
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(allowedTools).toEqual([["find", "read", "grep", "ls"]]);
+    expect(
+      result.logs.some((log) =>
+        log.message.includes(
+          "normalized child agent tools: glob -> find, rg -> grep, ripgrep -> grep, search -> grep, list -> ls",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("normalizes workflow.agent tools aliases before spawning agents", async () => {
+    const allowedTools: Array<string[] | undefined> = [];
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-agent-tool-alias",
+        runSubagents: async (input) => {
+          allowedTools.push(input.tasks[0]?.allowedTools);
+          return {
+            batchId: "batch-agent-tool-alias",
+            results: [
+              {
+                taskId: input.tasks[0]?.id ?? "task",
+                agentId: "agent-agent-tool-alias",
+                status: "completed",
+                answer: "agent aliases ok",
+                startedAt: Date.now(),
+              },
+            ],
+          };
+        },
+      },
+      {
+        objective: "Audit files.",
+        rationale: "Verify workflow.agent tool alias recovery.",
+        script: `
+          return await workflow.agent("Find relevant files", {
+            title: "Agent discover",
+            tools: ["glob"]
+          });
+        `,
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(allowedTools).toEqual([["find"]]);
+  });
+
+  it("fails unsupported child tools with supported names and replacements", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-unknown-tool",
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Read files.",
+        rationale: "Verify unknown child tool diagnostics.",
+        script: `
+          return await workflow.spawnAgent({
+            title: "Unsupported",
+            prompt: "Try a bad tool",
+            allowedTools: ["cat"]
+          });
+        `,
+      },
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain(
+      "workflow.spawnAgent tool(s) are not mapped to workflow capabilities: cat",
+    );
+    expect(result.error).toContain("Supported child agent tools:");
+    expect(result.error).toContain("Common replacements:");
+    expect(result.error).toContain("glob -> find");
   });
 
   it("asks the user through the host clarification runtime after approval", async () => {
@@ -860,7 +1158,7 @@ describe("runWorkflowScript", () => {
           workflow.checkpoint("user-choice", answer);
           return answer;
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
@@ -893,7 +1191,7 @@ describe("runWorkflowScript", () => {
             options: [{ id: "yes", label: "Yes" }]
           });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
@@ -945,7 +1243,7 @@ describe("runWorkflowScript", () => {
           workflow.artifact("fetched", response);
           return response;
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
@@ -958,7 +1256,9 @@ describe("runWorkflowScript", () => {
       text: '{"ok":true}',
     });
     expect(result.artifacts[0]?.name).toBe("fetched");
-    expect(result.logs.some((log) => log.message.includes("[network] fetched"))).toBe(true);
+    expect(
+      result.logs.some((log) => log.message.includes("[network] fetched")),
+    ).toBe(true);
   });
 
   it("blocks workflow.fetchUrl until network is declared", async () => {
@@ -981,7 +1281,7 @@ describe("runWorkflowScript", () => {
         script: `
           await workflow.fetchUrl({ url: "https://example.com" });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
@@ -1005,11 +1305,13 @@ describe("runWorkflowScript", () => {
         script: `
           await workflow.fetchUrl({ url: "http://127.0.0.1:3000" });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
-    expect(result.error).toContain("does not allow localhost or private-network URLs");
+    expect(result.error).toContain(
+      "does not allow localhost or private-network URLs",
+    );
   });
 
   it("blocks public-looking URLs when DNS resolves to a private address", async () => {
@@ -1028,12 +1330,12 @@ describe("runWorkflowScript", () => {
         script: `
           await workflow.fetchUrl({ url: "https://example.com" });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
     expect(result.error).toContain(
-      "does not allow URLs that resolve to localhost or private-network addresses"
+      "does not allow URLs that resolve to localhost or private-network addresses",
     );
   });
 
@@ -1067,13 +1369,17 @@ describe("runWorkflowScript", () => {
         script: `
           await workflow.fetchUrl({ url: "https://example.com/private" });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
     expect(result.error).toBe("Do not fetch this URL.");
     expect(urls).toEqual([]);
-    expect(result.logs.some((log) => log.message.includes("[network] denied by user"))).toBe(true);
+    expect(
+      result.logs.some((log) =>
+        log.message.includes("[network] denied by user"),
+      ),
+    ).toBe(true);
   });
 
   it("enforces workflow network allowlist before custom fetch hooks", async () => {
@@ -1107,13 +1413,17 @@ describe("runWorkflowScript", () => {
         script: `
           await workflow.fetchUrl({ url: "https://other.example.com/data" });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
     expect(result.error).toContain("network policy does not allow URL");
     expect(urls).toEqual([]);
-    expect(result.logs.some((log) => log.message.includes("[network] blocked or failed"))).toBe(true);
+    expect(
+      result.logs.some((log) =>
+        log.message.includes("[network] blocked or failed"),
+      ),
+    ).toBe(true);
   });
 
   it("gives workflow network deny patterns precedence over allow rules", async () => {
@@ -1148,7 +1458,7 @@ describe("runWorkflowScript", () => {
         script: `
           await workflow.fetchUrl({ url: "https://api.example.com/private/token" });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
@@ -1207,13 +1517,17 @@ describe("runWorkflowScript", () => {
           });
           return wt;
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
     expect(approvals).toEqual(["write_files", "worktree"]);
     expect(cwdSeen).toEqual(["/tmp/workflow-ui"]);
-    expect(result.artifacts.some((artifact) => artifact.name.startsWith("worktree:"))).toBe(true);
+    expect(
+      result.artifacts.some((artifact) =>
+        artifact.name.startsWith("worktree:"),
+      ),
+    ).toBe(true);
     expect(result.returnValue).toMatchObject({
       path: "/tmp/workflow-ui",
       branchName: "diga-agent-workflow/test/ui",
@@ -1232,7 +1546,7 @@ describe("runWorkflowScript", () => {
         rationale: "Verify missing runtime.",
         capabilities: ["spawn_agent", "read_files", "worktree"],
         script: "await workflow.createWorktree({ name: 'missing' });",
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
@@ -1297,7 +1611,7 @@ describe("runWorkflowScript", () => {
           const merge = await workflow.mergeWorktree(wt);
           return { diffStat: diff.stat, merged: merge.applied };
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
@@ -1308,8 +1622,16 @@ describe("runWorkflowScript", () => {
       `merge:${result.returnValue ? result.workflowId.slice(0, 4) : ""}-feature`,
     ]);
     expect(mergeApprovals).toEqual([" a.txt | 1 +"]);
-    expect(result.artifacts.some((artifact) => artifact.name.startsWith("worktree-diff:"))).toBe(true);
-    expect(result.artifacts.some((artifact) => artifact.name.startsWith("worktree-merge:"))).toBe(true);
+    expect(
+      result.artifacts.some((artifact) =>
+        artifact.name.startsWith("worktree-diff:"),
+      ),
+    ).toBe(true);
+    expect(
+      result.artifacts.some((artifact) =>
+        artifact.name.startsWith("worktree-merge:"),
+      ),
+    ).toBe(true);
     expect(result.returnValue).toEqual({
       diffStat: " a.txt | 1 +",
       merged: true,
@@ -1351,7 +1673,7 @@ describe("runWorkflowScript", () => {
           const wt = await workflow.createWorktree({ name: "feature" });
           await workflow.mergeWorktree(wt);
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
@@ -1415,7 +1737,7 @@ describe("runWorkflowScript", () => {
           const wt = await workflow.createWorktree({ name: "feature" });
           await workflow.mergeWorktree(wt);
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
@@ -1425,7 +1747,11 @@ describe("runWorkflowScript", () => {
       `diff:${result.workflowId.slice(0, 4)}-feature`,
       "approval: a.txt | 1 +",
     ]);
-    expect(result.artifacts.some((artifact) => artifact.name.startsWith("worktree-diff:"))).toBe(true);
+    expect(
+      result.artifacts.some((artifact) =>
+        artifact.name.startsWith("worktree-diff:"),
+      ),
+    ).toBe(true);
   });
 
   it("records a merge failure artifact when applying a worktree patch fails", async () => {
@@ -1469,13 +1795,13 @@ describe("runWorkflowScript", () => {
           const wt = await workflow.createWorktree({ name: "feature" });
           await workflow.mergeWorktree(wt);
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
     expect(result.error).toBe("patch does not apply cleanly");
     const failure = result.artifacts.find((artifact) =>
-      artifact.name.startsWith("worktree-merge-failed:")
+      artifact.name.startsWith("worktree-merge-failed:"),
     );
     expect(failure?.value).toMatchObject({
       error: "patch does not apply cleanly",
@@ -1510,11 +1836,10 @@ describe("runWorkflowScript", () => {
           await workflow.spawnAgent({ title: "One", prompt: "one" });
           await workflow.spawnAgent({ title: "Two", prompt: "two" });
         `,
-      }
+      },
     );
     expect(tooManyAgents.status).toBe("failed");
     expect(tooManyAgents.error).toContain("maxAgents=1");
-
   });
 
   it("treats maxConcurrency as a budget and queues extra parallel items", async () => {
@@ -1548,7 +1873,7 @@ describe("runWorkflowScript", () => {
           workflow.artifact("peak", peak);
           return { out, peak };
         `,
-      }
+      },
     );
 
     if (result.status !== "completed") {
@@ -1597,7 +1922,7 @@ describe("runWorkflowScript", () => {
           workflow.requireSuccess(reviews, { minSuccess: 2, label: "module-reviews" });
           return "should-not-reach";
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
@@ -1640,7 +1965,7 @@ describe("runWorkflowScript", () => {
           const ok = workflow.requireSuccess(reviews, { minSuccess: 2 });
           return { survivors: ok.map((r) => r.answer) };
         `,
-      }
+      },
     );
 
     if (result.status !== "completed") {
@@ -1655,7 +1980,7 @@ describe("runWorkflowScript", () => {
     ]);
 
     const forbidden = validateWorkflowScript(
-      "const x = require('fs'); fetch('http://x'); return x;"
+      "const x = require('fs'); fetch('http://x'); return x;",
     );
     expect(forbidden.map((i) => i.code)).toContain("forbidden_api");
 
@@ -1665,31 +1990,54 @@ describe("runWorkflowScript", () => {
     expect(tooLong.map((i) => i.code)).toContain("too_long");
 
     const truncated = validateWorkflowScript(
-      "const r = await workflow.parallel([() => workflow.spawnAgent({ title: 't', prompt: 'p'"
+      "const r = await workflow.parallel([() => workflow.spawnAgent({ title: 't', prompt: 'p'",
     );
     expect(truncated.map((i) => i.code)).toContain("likely_truncated");
 
     const prosePlan = validateWorkflowScript(
-      "1. list workflow skills\n2. inspect repository\n3. spawn review agents"
+      "1. list workflow skills\n2. inspect repository\n3. spawn review agents",
     );
     expect(prosePlan.map((i) => i.code)).toContain("not_javascript_body");
 
     const partialFence = validateWorkflowScript(
-      "```js\nawait workflow.spawnAgent({ title: 'Review', prompt: 'Review it.' });"
+      "```js\nawait workflow.spawnAgent({ title: 'Review', prompt: 'Review it.' });",
     );
     expect(partialFence.map((i) => i.code)).toContain("markdown_fence");
 
+    const jsonToolArgs = validateWorkflowScript(
+      JSON.stringify({
+        objective: "Audit UI",
+        rationale: "Generated as tool args by mistake",
+        script: "return 1;",
+      }),
+    );
+    expect(jsonToolArgs.map((i) => i.code)).toContain("json_tool_arguments");
+
     // A normal harness that only spawns agents (no return) is valid.
     expect(
-      validateWorkflowScript("await workflow.spawnAgent({ title: 't', prompt: 'p' });")
+      validateWorkflowScript(
+        "await workflow.spawnAgent({ title: 't', prompt: 'p' });",
+      ),
     ).toEqual([]);
+  });
+
+  it("extractWorkflowJsonValue detects markdown and truncated JSON outputs", () => {
+    expect(
+      extractWorkflowJsonValue('Result:\n```json\n{"ok":true}\n```'),
+    ).toEqual({ ok: true });
+    expect(extractWorkflowJsonValue('prefix {"ok":true} suffix')).toEqual({
+      ok: true,
+    });
+    expect(() => extractWorkflowJsonValue('```json\n{"ok":')).toThrow(
+      /appears truncated/,
+    );
   });
 
   it("normalizes complete fenced script blocks before validation and execution", async () => {
     expect(
       normalizeWorkflowScriptBody(
-        "```js\nworkflow.artifact('final-report', 'ok');\nreturn 'done';\n```"
-      )
+        "```js\nworkflow.artifact('final-report', 'ok');\nreturn 'done';\n```",
+      ),
     ).toBe("workflow.artifact('final-report', 'ok');\nreturn 'done';");
 
     const result = await runWorkflowScript(
@@ -1699,15 +2047,19 @@ describe("runWorkflowScript", () => {
       },
       {
         objective: "Run a fenced generated harness.",
-        rationale: "Regression for generated scripts wrapped in Markdown fences.",
-        script: "```js\nworkflow.artifact('final-report', 'ok');\nreturn 'done';\n```",
+        rationale:
+          "Regression for generated scripts wrapped in Markdown fences.",
+        script:
+          "```js\nworkflow.artifact('final-report', 'ok');\nreturn 'done';\n```",
         successCriteria: { requiredArtifacts: ["final-report"] },
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
     expect(result.returnValue).toBe("done");
-    expect(result.artifacts.find((a) => a.name === "final-report")?.value).toBe("ok");
+    expect(result.artifacts.find((a) => a.name === "final-report")?.value).toBe(
+      "ok",
+    );
   });
 
   it("records the dynamic workflow script-generation failure case as a fast validation failure", async () => {
@@ -1718,18 +2070,21 @@ describe("runWorkflowScript", () => {
       },
       {
         objective: "Review dynamic workflow script generation stability.",
-        rationale: "Regression for workflow mode producing a plan instead of a script.",
+        rationale:
+          "Regression for workflow mode producing a plan instead of a script.",
         script:
           "1. list workflow skills and templates\n" +
           "2. inspect the repo structure\n" +
           "3. run a dynamic workflow review",
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
     expect(result.error).toContain("not_javascript_body");
     expect(
-      result.logs.some((log) => log.message.includes("validation [not_javascript_body]"))
+      result.logs.some((log) =>
+        log.message.includes("validation [not_javascript_body]"),
+      ),
     ).toBe(true);
   });
 
@@ -1743,7 +2098,7 @@ describe("runWorkflowScript", () => {
         objective: "Try a forbidden API.",
         rationale: "Verify validate-then-run.",
         script: "const fs = require('fs'); return fs;",
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
@@ -1751,8 +2106,10 @@ describe("runWorkflowScript", () => {
     expect(result.error).toContain("require()");
     expect(
       result.logs.some(
-        (log) => log.level === "error" && log.message.includes("validation [forbidden_api]")
-      )
+        (log) =>
+          log.level === "error" &&
+          log.message.includes("validation [forbidden_api]"),
+      ),
     ).toBe(true);
   });
 
@@ -1767,21 +2124,24 @@ describe("runWorkflowScript", () => {
       {
         objective: "Produce a report.",
         rationale: "Verify end-state gate.",
-        successCriteria: { requiredArtifacts: ["final-report"], minReportChars: 100 },
+        successCriteria: {
+          requiredArtifacts: ["final-report"],
+          minReportChars: 100,
+        },
         script: `
           // Writes an empty report -> should trip the end-state gate.
           workflow.artifact("final-report", "");
           return "done";
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("completed_with_warnings");
     expect(result.warnings?.join(" ")).toContain("final-report");
     const endEvent = events.find((e) => e.type === "workflow_end");
-    expect(endEvent && endEvent.type === "workflow_end" && endEvent.status).toBe(
-      "completed_with_warnings"
-    );
+    expect(
+      endEvent && endEvent.type === "workflow_end" && endEvent.status,
+    ).toBe("completed_with_warnings");
   });
 
   it("keeps status completed when successCriteria are met", async () => {
@@ -1793,12 +2153,15 @@ describe("runWorkflowScript", () => {
       {
         objective: "Produce a report.",
         rationale: "Verify end-state gate passes.",
-        successCriteria: { requiredArtifacts: ["final-report"], minReportChars: 5 },
+        successCriteria: {
+          requiredArtifacts: ["final-report"],
+          minReportChars: 5,
+        },
         script: `
           workflow.artifact("final-report", "This is a sufficiently long report body.");
           return "done";
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
@@ -1840,7 +2203,7 @@ describe("runWorkflowScript", () => {
           });
           return "done";
         `,
-      }
+      },
     );
 
     // The bash tool must have been inferred -> shell approval requested -> workflow
@@ -1849,7 +2212,9 @@ describe("runWorkflowScript", () => {
     expect(result.status).toBe("completed");
     expect(result.manifest.capabilities).toContain("shell");
     expect(
-      result.logs.some((log) => log.message.includes("auto-declared capabilities"))
+      result.logs.some((log) =>
+        log.message.includes("auto-declared capabilities"),
+      ),
     ).toBe(true);
   });
 
@@ -1857,7 +2222,10 @@ describe("runWorkflowScript", () => {
     const result = await runWorkflowScript(
       {
         parentAgentId: "parent-infer-deny",
-        approveCapability: async () => ({ decision: "deny", denyReason: "no shell" }),
+        approveCapability: async () => ({
+          decision: "deny",
+          denyReason: "no shell",
+        }),
         runSubagents: async () => ({ batchId: "unused", results: [] }),
       },
       {
@@ -1871,7 +2239,7 @@ describe("runWorkflowScript", () => {
           });
           return "done";
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
@@ -1892,7 +2260,7 @@ describe("runWorkflowScript", () => {
           workflow.artifact("note", "saved");
           return "done";
         `,
-      }
+      },
     );
 
     __clearWorkflowMemoryForTest();
@@ -1919,7 +2287,7 @@ describe("runWorkflowScript", () => {
           workflow.artifact("notes", { items: ["a", "b"] });
           return "first";
         `,
-      }
+      },
     );
     expect(first.status).toBe("completed");
 
@@ -1948,7 +2316,7 @@ describe("runWorkflowScript", () => {
             notes
           };
         `,
-      }
+      },
     );
 
     expect(resumed.status).toBe("completed");
@@ -1964,7 +2332,7 @@ describe("runWorkflowScript", () => {
       "synthesized",
     ]);
     expect(getWorkflowRun(resumed.workflowId)?.resumedFromWorkflowId).toBe(
-      first.workflowId
+      first.workflowId,
     );
   });
 
@@ -1982,7 +2350,7 @@ describe("runWorkflowScript", () => {
           workflow.artifact("recon", "");
           return "first";
         `,
-      }
+      },
     );
 
     __clearWorkflowMemoryForTest();
@@ -1997,7 +2365,7 @@ describe("runWorkflowScript", () => {
         rationale: "Verify empty-artifact resume warning.",
         resumeFromWorkflowId: first.workflowId,
         script: `return "second";`,
-      }
+      },
     );
 
     expect(
@@ -2005,8 +2373,8 @@ describe("runWorkflowScript", () => {
         (log) =>
           log.level === "warn" &&
           log.message.includes("resume warning") &&
-          log.message.includes("recon")
-      )
+          log.message.includes("recon"),
+      ),
     ).toBe(true);
   });
 
@@ -2025,7 +2393,7 @@ describe("runWorkflowScript", () => {
           workflow.artifact("notes", { ok: true });
           return "first";
         `,
-      }
+      },
     );
 
     const resumed = await runWorkflowScript(
@@ -2046,7 +2414,7 @@ describe("runWorkflowScript", () => {
             notes: workflow.readArtifact("notes")
           };
         `,
-      }
+      },
     );
 
     expect(resumed.status).toBe("completed");
@@ -2071,7 +2439,7 @@ describe("runWorkflowScript", () => {
           workflow.checkpoint("private", true);
           return "done";
         `,
-      }
+      },
     );
 
     await expect(
@@ -2085,8 +2453,8 @@ describe("runWorkflowScript", () => {
           rationale: "Verify resume ownership.",
           resumeFromWorkflowId: first.workflowId,
           script: "return 'unreachable';",
-        }
-      )
+        },
+      ),
     ).rejects.toThrow("does not belong to this agent");
   });
 
@@ -2137,7 +2505,7 @@ describe("runWorkflowScript", () => {
           });
           return res;
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
@@ -2154,7 +2522,9 @@ describe("runWorkflowScript", () => {
     expect(Array.isArray(toolsArtifact?.value)).toBe(true);
     expect((toolsArtifact?.value as unknown[]).length).toBe(2);
     expect(
-      result.logs.some((log) => log.message.includes("[mcp] called: fs/read_file"))
+      result.logs.some((log) =>
+        log.message.includes("[mcp] called: fs/read_file"),
+      ),
     ).toBe(true);
   });
 
@@ -2164,9 +2534,24 @@ describe("runWorkflowScript", () => {
         parentAgentId: "parent-mcp-search",
         approveCapability: async () => ({ decision: "allow" }),
         listMcpTools: async () => [
-          { serverId: "fs", name: "read_file", description: "read a file", inputSchema: { type: "object" } },
-          { serverId: "fs", name: "write_file", description: "write a file", inputSchema: { type: "object" } },
-          { serverId: "gh", name: "create_issue", description: "open a GitHub issue", inputSchema: { type: "object" } },
+          {
+            serverId: "fs",
+            name: "read_file",
+            description: "read a file",
+            inputSchema: { type: "object" },
+          },
+          {
+            serverId: "fs",
+            name: "write_file",
+            description: "write a file",
+            inputSchema: { type: "object" },
+          },
+          {
+            serverId: "gh",
+            name: "create_issue",
+            description: "open a GitHub issue",
+            inputSchema: { type: "object" },
+          },
         ],
         runSubagents: async () => ({ batchId: "unused", results: [] }),
       },
@@ -2185,7 +2570,7 @@ describe("runWorkflowScript", () => {
             issueHasDescription: namesOnly[0] && namesOnly[0].description !== undefined,
           };
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("completed");
@@ -2217,7 +2602,7 @@ describe("runWorkflowScript", () => {
         script: `
           await workflow.callTool({ server: "fs", tool: "read_file" });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
@@ -2251,7 +2636,7 @@ describe("runWorkflowScript", () => {
         script: `
           await workflow.callTool({ server: "fs", tool: "read_file" });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("failed");
@@ -2281,7 +2666,7 @@ describe("runWorkflowScript", () => {
         script: `
           await workflow.callTool({ server: "gh", tool: "create_issue" });
         `,
-      }
+      },
     );
 
     expect(result.status).toBe("failed");

@@ -1,5 +1,6 @@
 import "server-only";
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -179,17 +180,37 @@ export function putWorkflowTemplate(
     ...raw,
     createdAt: raw.createdAt ?? existing?.createdAt,
   });
+  // T2.9: 同步原子写 + ENOSPC 重抣 + 其他 errno warn。
   fs.mkdirSync(templatesDir(), { recursive: true });
   const file = templateFilePath(template.id);
-  const tmp = `${file}.tmp.${process.pid}.${Date.now()}`;
+  const tmp = `${file}.tmp.${process.pid}.${Date.now()}.${randomUUID()}`;
   const persisted: PersistedWorkflowTemplate = {
     schemaVersion: WORKFLOW_TEMPLATE_SCHEMA_VERSION,
     kind: "workflow-template",
     template,
     persistedAt: Date.now(),
   };
-  fs.writeFileSync(tmp, JSON.stringify(persisted, null, 2), "utf8");
-  fs.renameSync(tmp, file);
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(tmp, "wx");
+    fs.writeSync(fd, JSON.stringify(persisted, null, 2), 0, "utf8");
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = null;
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch { /* ignore */ }
+    }
+    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+    const code = (err as NodeJS.ErrnoException).code;
+    console.warn("[workflow-template-store] persist failed", {
+      id: template.id,
+      code,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
   return template;
 }
 

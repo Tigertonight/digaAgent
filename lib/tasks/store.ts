@@ -1,5 +1,6 @@
 import "server-only";
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -321,10 +322,11 @@ function load(): void {
   }
 }
 
+// T2.6: 同步原子写。原实现未包 try/catch——ENOSPC 会直接冲上层，此处保持该语义。
 function persist(): void {
   fs.mkdirSync(storeDir(), { recursive: true });
   const file = storeFile();
-  const tmp = `${file}.tmp.${process.pid}.${Date.now()}`;
+  const tmp = `${file}.tmp.${process.pid}.${Date.now()}.${randomUUID()}`;
   const payload: PersistedTaskStore = {
     schemaVersion: TASK_STORE_SCHEMA_VERSION,
     kind: "long-task-store",
@@ -333,8 +335,26 @@ function persist(): void {
     findings: Array.from(store.findings.values()).map(cloneFinding),
     persistedAt: Date.now(),
   };
-  fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), "utf8");
-  fs.renameSync(tmp, file);
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(tmp, "wx");
+    fs.writeSync(fd, JSON.stringify(payload, null, 2), 0, "utf8");
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = null;
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch { /* ignore */ }
+    }
+    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+    const code = (err as NodeJS.ErrnoException).code;
+    console.warn("[tasks-store] persist failed", {
+      code,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
 }
 
 export function listLongTasksDashboard(now = Date.now()): LongTaskDashboard {

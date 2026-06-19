@@ -87,6 +87,29 @@ describe("validateDelegateInput", () => {
     expect(out.concurrency).toBe(4);
   });
 
+  it("normalizes explicit short task timeouts to thirty minutes", () => {
+    const out = validateDelegateInput({
+      reason: "long audit tasks need the full runtime budget",
+      tasks: [
+        {
+          id: "audit",
+          title: "Audit",
+          prompt: "Audit lifecycle behavior",
+          timeoutMs: 300000,
+        },
+      ],
+    });
+
+    expect(out.tasks[0]?.timeoutMs).toBe(30 * 60 * 1000);
+    expect(out.planning.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          "1 task timeout(s) were normalized to 1800000 ms",
+        ),
+      ]),
+    );
+  });
+
   it("removes write-capable tools unless a write boundary is declared", () => {
     const out = validateDelegateInput({
       reason: "implementation review",

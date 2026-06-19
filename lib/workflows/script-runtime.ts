@@ -48,7 +48,8 @@ import {
 import { appendWorkflowNetworkAudit } from "./network-policy";
 import { schemaInstruction, validateJsonSchema } from "./json-schema";
 
-const DEFAULT_SCRIPT_TIMEOUT_MS = 30 * 60 * 1000;
+const DEFAULT_SCRIPT_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+const MAX_SCRIPT_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_AGENTS = 8;
 const DEFAULT_MAX_CONCURRENCY = 4;
 const MAX_SCRIPT_CHARS = 50000;
@@ -72,7 +73,28 @@ const BROWSER_WORKFLOW_AGENT_TOOLS = new Set([
   "browser_verify",
   "browser_close",
 ]);
-const DEFAULT_CAPABILITIES: WorkflowCapability[] = ["spawn_agent", "read_files"];
+const WORKFLOW_AGENT_TOOL_ALIASES = new Map<string, string>([
+  ["glob", "find"],
+  ["rg", "grep"],
+  ["ripgrep", "grep"],
+  ["search", "grep"],
+  ["list", "ls"],
+]);
+const WORKFLOW_AGENT_TOOL_REPLACEMENTS = [
+  "glob -> find",
+  "rg/ripgrep/search -> grep",
+  "list -> ls",
+].join(", ");
+const WORKFLOW_AGENT_SUPPORTED_TOOLS = [
+  ...SAFE_WORKFLOW_AGENT_TOOLS,
+  ...WRITE_WORKFLOW_AGENT_TOOLS,
+  ...SHELL_WORKFLOW_AGENT_TOOLS,
+  ...BROWSER_WORKFLOW_AGENT_TOOLS,
+].join(", ");
+const DEFAULT_CAPABILITIES: WorkflowCapability[] = [
+  "spawn_agent",
+  "read_files",
+];
 const IMPLEMENTED_CAPABILITIES = new Set<WorkflowCapability>([
   "spawn_agent",
   "read_files",
@@ -106,22 +128,31 @@ type WorkflowSdk = {
   artifact(name: string, value: unknown): unknown;
   readArtifact(name: string): unknown;
   listArtifacts(): WorkflowArtifact[];
-  createWorktree(input?: WorkflowCreateWorktreeInput): Promise<WorkflowWorktree>;
+  createWorktree(
+    input?: WorkflowCreateWorktreeInput,
+  ): Promise<WorkflowWorktree>;
   diffWorktree(worktree: WorkflowWorktree): Promise<WorkflowWorktreeDiff>;
-  mergeWorktree(worktree: WorkflowWorktree): Promise<WorkflowWorktreeMergeResult>;
+  mergeWorktree(
+    worktree: WorkflowWorktree,
+  ): Promise<WorkflowWorktreeMergeResult>;
   removeWorktree(worktree: WorkflowWorktree): Promise<void>;
   askUser(input: WorkflowAskUserInput): Promise<WorkflowAskUserResult>;
   fetchUrl(input: WorkflowFetchUrlInput): Promise<WorkflowFetchUrlResult>;
   listTools(serverId?: string): Promise<WorkflowMcpToolDescriptor[]>;
-  searchTools(input?: WorkflowSearchToolsInput): Promise<WorkflowMcpToolDescriptor[]>;
+  searchTools(
+    input?: WorkflowSearchToolsInput,
+  ): Promise<WorkflowMcpToolDescriptor[]>;
   callTool(input: WorkflowCallToolInput): Promise<WorkflowCallToolResult>;
   agent<T = unknown>(
     prompt: string,
-    input?: Omit<WorkflowAgentInput, "prompt">
+    input?: Omit<WorkflowAgentInput, "prompt">,
   ): Promise<WorkflowAgentResult<T>>;
   spawnAgent(input: WorkflowSpawnAgentInput): Promise<unknown>;
   parallel<T>(items: Array<Promise<T> | (() => Promise<T> | T)>): Promise<T[]>;
-  requireSuccess<T>(results: T[], options?: { minSuccess?: number; label?: string }): T[];
+  requireSuccess<T>(
+    results: T[],
+    options?: { minSuccess?: number; label?: string },
+  ): T[];
   stage<T>(title: string, fn: () => Promise<T> | T): Promise<T>;
   sleep(ms: number): Promise<void>;
 };
@@ -145,7 +176,7 @@ function cleanText(raw: string | undefined, limit: number): string {
 
 export function normalizeWorkflowScriptBody(
   raw: string | undefined,
-  maxChars = MAX_SCRIPT_CHARS
+  maxChars = MAX_SCRIPT_CHARS,
 ): string {
   const text = cleanText(raw, maxChars);
   const fenced = text.match(/^```(?:javascript|js)?\s*\n([\s\S]*?)\n```\s*$/i);
@@ -174,7 +205,9 @@ function sanitizeCheckpointName(raw: string | undefined): string | undefined {
   return name;
 }
 
-function normalizeCapabilities(raw: WorkflowCapability[] | undefined): WorkflowCapability[] {
+function normalizeCapabilities(
+  raw: WorkflowCapability[] | undefined,
+): WorkflowCapability[] {
   const source = raw === undefined ? DEFAULT_CAPABILITIES : raw;
   const out: WorkflowCapability[] = [];
   for (const capability of source) {
@@ -199,14 +232,20 @@ function normalizeManifest(input: RunWorkflowScriptInput): WorkflowManifest {
   const capabilities = normalizeCapabilities(input.capabilities);
   return {
     capabilities,
-    maxAgents: Math.max(1, Math.min(Math.floor(input.maxAgents ?? DEFAULT_MAX_AGENTS), 32)),
+    maxAgents: Math.max(
+      1,
+      Math.min(Math.floor(input.maxAgents ?? DEFAULT_MAX_AGENTS), 32),
+    ),
     maxConcurrency: Math.max(
       1,
-      Math.min(Math.floor(input.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY), 16)
+      Math.min(Math.floor(input.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY), 16),
     ),
     timeoutMs: Math.max(
       1000,
-      Math.min(input.timeoutMs ?? DEFAULT_SCRIPT_TIMEOUT_MS, DEFAULT_SCRIPT_TIMEOUT_MS)
+      Math.min(
+        input.timeoutMs ?? DEFAULT_SCRIPT_TIMEOUT_MS,
+        MAX_SCRIPT_TIMEOUT_MS,
+      ),
     ),
     runtime: "process",
     successCriteria: normalizeSuccessCriteria(input.successCriteria),
@@ -214,7 +253,7 @@ function normalizeManifest(input: RunWorkflowScriptInput): WorkflowManifest {
 }
 
 function normalizeSuccessCriteria(
-  raw: WorkflowManifest["successCriteria"]
+  raw: WorkflowManifest["successCriteria"],
 ): WorkflowManifest["successCriteria"] {
   if (!raw || typeof raw !== "object") return undefined;
   const out: NonNullable<WorkflowManifest["successCriteria"]> = {};
@@ -223,10 +262,19 @@ function normalizeSuccessCriteria(
       .map((name) => cleanText(name, 200))
       .filter(Boolean);
   }
-  if (typeof raw.minNonEmptyArtifacts === "number" && Number.isFinite(raw.minNonEmptyArtifacts)) {
-    out.minNonEmptyArtifacts = Math.max(0, Math.floor(raw.minNonEmptyArtifacts));
+  if (
+    typeof raw.minNonEmptyArtifacts === "number" &&
+    Number.isFinite(raw.minNonEmptyArtifacts)
+  ) {
+    out.minNonEmptyArtifacts = Math.max(
+      0,
+      Math.floor(raw.minNonEmptyArtifacts),
+    );
   }
-  if (typeof raw.minReportChars === "number" && Number.isFinite(raw.minReportChars)) {
+  if (
+    typeof raw.minReportChars === "number" &&
+    Number.isFinite(raw.minReportChars)
+  ) {
     out.minReportChars = Math.max(0, Math.floor(raw.minReportChars));
   }
   if (typeof raw.reportArtifact === "string") {
@@ -256,7 +304,7 @@ function artifactStringValue(value: unknown): string {
  */
 function evaluateSuccessCriteria(
   criteria: WorkflowManifest["successCriteria"],
-  artifacts: WorkflowArtifact[]
+  artifacts: WorkflowArtifact[],
 ): string[] {
   if (!criteria) return [];
   const warnings: string[] = [];
@@ -274,11 +322,11 @@ function evaluateSuccessCriteria(
 
   if (typeof criteria.minNonEmptyArtifacts === "number") {
     const nonEmpty = artifacts.filter(
-      (a) => artifactStringValue(a.value).length > 0
+      (a) => artifactStringValue(a.value).length > 0,
     ).length;
     if (nonEmpty < criteria.minNonEmptyArtifacts) {
       warnings.push(
-        `only ${nonEmpty} non-empty artifact(s); expected at least ${criteria.minNonEmptyArtifacts}`
+        `only ${nonEmpty} non-empty artifact(s); expected at least ${criteria.minNonEmptyArtifacts}`,
       );
     }
   }
@@ -291,7 +339,7 @@ function evaluateSuccessCriteria(
     if (len < criteria.minReportChars) {
       const label = criteria.reportArtifact ?? target?.name ?? "report";
       warnings.push(
-        `report artifact "${label}" is ${len} chars; expected at least ${criteria.minReportChars}`
+        `report artifact "${label}" is ${len} chars; expected at least ${criteria.minReportChars}`,
       );
     }
   }
@@ -304,15 +352,15 @@ async function approveManifestCapabilities(
   input: RunWorkflowScriptInput,
   workflowId: string,
   manifest: WorkflowManifest,
-  onTrace?: (trace: WorkflowTraceEvent) => void
+  onTrace?: (trace: WorkflowTraceEvent) => void,
 ): Promise<void> {
   const approvalRequired = manifest.capabilities.filter((capability) =>
-    APPROVAL_REQUIRED_CAPABILITIES.has(capability)
+    APPROVAL_REQUIRED_CAPABILITIES.has(capability),
   );
   if (approvalRequired.length === 0) return;
   if (!deps.approveCapability) {
     throw new Error(
-      `Workflow capability approval broker is not implemented for: ${approvalRequired.join(", ")}`
+      `Workflow capability approval broker is not implemented for: ${approvalRequired.join(", ")}`,
     );
   }
   for (const capability of approvalRequired) {
@@ -332,7 +380,7 @@ async function approveManifestCapabilities(
     });
     if (resp.decision !== "allow") {
       throw new Error(
-        resp.denyReason ?? `Workflow capability denied: ${capability}`
+        resp.denyReason ?? `Workflow capability denied: ${capability}`,
       );
     }
   }
@@ -340,26 +388,34 @@ async function approveManifestCapabilities(
 
 function assertRuntimeSupportsCapabilities(manifest: WorkflowManifest): void {
   const unimplemented = manifest.capabilities.filter(
-    (capability) => !IMPLEMENTED_CAPABILITIES.has(capability)
+    (capability) => !IMPLEMENTED_CAPABILITIES.has(capability),
   );
   if (unimplemented.length > 0) {
     throw new Error(
-      `Workflow runtime support is not implemented for: ${unimplemented.join(", ")}`
+      `Workflow runtime support is not implemented for: ${unimplemented.join(", ")}`,
     );
   }
 }
 
-function hasCapability(manifest: WorkflowManifest, capability: WorkflowCapability): boolean {
+function hasCapability(
+  manifest: WorkflowManifest,
+  capability: WorkflowCapability,
+): boolean {
   return manifest.capabilities.includes(capability);
 }
 
-function requireCapability(manifest: WorkflowManifest, capability: WorkflowCapability) {
+function requireCapability(
+  manifest: WorkflowManifest,
+  capability: WorkflowCapability,
+) {
   if (!hasCapability(manifest, capability)) {
     throw new Error(`workflow capability required: ${capability}`);
   }
 }
 
-function roleForAgentType(agentType: WorkflowAgentType | undefined): WorkflowSpawnAgentInput["role"] {
+function roleForAgentType(
+  agentType: WorkflowAgentType | undefined,
+): WorkflowSpawnAgentInput["role"] {
   switch (agentType) {
     case "classifier":
     case "researcher":
@@ -375,22 +431,98 @@ function roleForAgentType(agentType: WorkflowAgentType | undefined): WorkflowSpa
   }
 }
 
-function extractJsonValue(raw: string): unknown {
+function jsonRecoveryGuidance(): string {
+  return "Return only compact valid JSON matching the schema. If the answer is large, keep only the required fields in JSON and put long prose/detail into a separate artifact or file instead of the schema output.";
+}
+
+function jsonParseErrorMessage(reason: string, truncated = false): string {
+  const prefix = truncated
+    ? "workflow.agent schema JSON output appears truncated"
+    : "workflow.agent schema JSON output was not valid JSON";
+  return `${prefix}: ${reason}. ${jsonRecoveryGuidance()}`;
+}
+
+function hasBalancedJsonDelimiters(text: string): boolean {
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  for (const ch of text) {
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "{" || ch === "[") {
+      stack.push(ch);
+    } else if (ch === "}" || ch === "]") {
+      const open = stack.pop();
+      if ((ch === "}" && open !== "{") || (ch === "]" && open !== "[")) {
+        return false;
+      }
+    }
+  }
+  return !inString && stack.length === 0;
+}
+
+function looksLikeTruncatedJson(text: string, reason?: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (/Unexpected end of JSON input/i.test(reason ?? "")) return true;
+  if (/^```(?:json)?\s*[\s\S]*$/i.test(trimmed) && !/```\s*$/.test(trimmed)) {
+    return true;
+  }
+  if (/^[{[]/.test(trimmed) && !hasBalancedJsonDelimiters(trimmed)) return true;
+  if (/[,:]\s*$/.test(trimmed)) return true;
+  return false;
+}
+
+function parseJsonCandidate(candidate: string, source: string): unknown {
+  try {
+    return JSON.parse(candidate);
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    throw new Error(
+      jsonParseErrorMessage(reason, looksLikeTruncatedJson(source, reason)),
+    );
+  }
+}
+
+export function extractWorkflowJsonValue(raw: string): unknown {
   const text = raw.trim();
-  if (!text) throw new Error("schema output was empty");
+  if (!text) {
+    throw new Error(
+      "workflow.agent schema JSON output was empty. " + jsonRecoveryGuidance(),
+    );
+  }
   try {
     return JSON.parse(text);
   } catch {
     const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-    if (fenced?.[1]) return JSON.parse(fenced[1].trim());
+    if (fenced?.[1]) return parseJsonCandidate(fenced[1].trim(), text);
+    if (/^```(?:json)?\s*/i.test(text)) {
+      throw new Error(
+        jsonParseErrorMessage("missing closing markdown fence", true),
+      );
+    }
     const start = Math.min(
-      ...[text.indexOf("{"), text.indexOf("[")].filter((index) => index >= 0)
+      ...[text.indexOf("{"), text.indexOf("[")].filter((index) => index >= 0),
     );
     if (Number.isFinite(start)) {
       const end = Math.max(text.lastIndexOf("}"), text.lastIndexOf("]"));
-      if (end > start) return JSON.parse(text.slice(start, end + 1));
+      if (end > start)
+        return parseJsonCandidate(text.slice(start, end + 1), text);
+      throw new Error(
+        jsonParseErrorMessage("missing closing JSON delimiter", true),
+      );
     }
-    throw new Error("schema output was not valid JSON");
+    throw new Error(jsonParseErrorMessage("no JSON object or array found"));
   }
 }
 
@@ -400,7 +532,7 @@ function extractJsonValue(raw: string): unknown {
  */
 function isServerInScope(
   allowedMcpServers: string[] | undefined,
-  serverId: string
+  serverId: string,
 ): boolean {
   if (allowedMcpServers === undefined) return true;
   return allowedMcpServers.includes(serverId);
@@ -408,10 +540,21 @@ function isServerInScope(
 
 function safeAllowedTools(
   manifest: WorkflowManifest,
-  tools: string[] | undefined
-): string[] | undefined {
-  if (!tools) return undefined;
-  const cleaned = tools.map((tool) => tool.trim()).filter(Boolean);
+  tools: string[] | undefined,
+): { tools: string[] | undefined; normalized: string[] } {
+  if (!tools) return { tools: undefined, normalized: [] };
+  const cleaned: string[] = [];
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const rawTool of tools) {
+    const inputTool = rawTool.trim();
+    if (!inputTool) continue;
+    const tool = WORKFLOW_AGENT_TOOL_ALIASES.get(inputTool) ?? inputTool;
+    if (tool !== inputTool) normalized.push(`${inputTool} -> ${tool}`);
+    if (seen.has(tool)) continue;
+    seen.add(tool);
+    cleaned.push(tool);
+  }
   const unknown: string[] = [];
   for (const tool of cleaned) {
     if (SAFE_WORKFLOW_AGENT_TOOLS.has(tool)) {
@@ -434,10 +577,14 @@ function safeAllowedTools(
   }
   if (unknown.length > 0) {
     throw new Error(
-      `workflow.spawnAgent tool(s) are not mapped to workflow capabilities: ${unknown.join(", ")}`
+      [
+        `workflow.spawnAgent tool(s) are not mapped to workflow capabilities: ${unknown.join(", ")}`,
+        `Supported child agent tools: ${WORKFLOW_AGENT_SUPPORTED_TOOLS}.`,
+        `Common replacements: ${WORKFLOW_AGENT_TOOL_REPLACEMENTS}.`,
+      ].join(" "),
     );
   }
-  return cleaned;
+  return { tools: cleaned, normalized };
 }
 
 /**
@@ -445,6 +592,7 @@ function safeAllowedTools(
  * tool needs no extra capability beyond the safe default.
  */
 function capabilityForAgentTool(tool: string): WorkflowCapability | null {
+  tool = WORKFLOW_AGENT_TOOL_ALIASES.get(tool) ?? tool;
   if (WRITE_WORKFLOW_AGENT_TOOLS.has(tool)) return "write_files";
   if (SHELL_WORKFLOW_AGENT_TOOLS.has(tool)) return "shell";
   if (BROWSER_WORKFLOW_AGENT_TOOLS.has(tool)) return "browser";
@@ -473,12 +621,17 @@ function inferCapabilitiesFromScript(script: string): WorkflowCapability[] {
     if (capability) inferred.add(capability);
   }
   // SDK calls that intrinsically need a capability regardless of allowedTools.
-  if (/workflow\s*\.\s*(createWorktree|diffWorktree|mergeWorktree|removeWorktree)\s*\(/.test(script)) {
+  if (
+    /workflow\s*\.\s*(createWorktree|diffWorktree|mergeWorktree|removeWorktree)\s*\(/.test(
+      script,
+    )
+  ) {
     inferred.add("worktree");
   }
   if (/workflow\s*\.\s*fetchUrl\s*\(/.test(script)) inferred.add("network");
   if (/workflow\s*\.\s*askUser\s*\(/.test(script)) inferred.add("ask_user");
-  if (/workflow\s*\.\s*(callTool|listTools|searchTools)\s*\(/.test(script)) inferred.add("mcp");
+  if (/workflow\s*\.\s*(callTool|listTools|searchTools)\s*\(/.test(script))
+    inferred.add("mcp");
   return Array.from(inferred);
 }
 
@@ -494,7 +647,7 @@ export interface WorkflowScriptIssue {
  */
 function filterMcpToolsForSearch(
   tools: WorkflowMcpToolDescriptor[],
-  input: WorkflowSearchToolsInput | undefined
+  input: WorkflowSearchToolsInput | undefined,
 ): WorkflowMcpToolDescriptor[] {
   const query = (input?.query ?? "").trim().toLowerCase();
   const detail = input?.detailLevel ?? "summary";
@@ -530,7 +683,7 @@ function filterMcpToolsForSearch(
  */
 export function validateWorkflowScript(
   script: string,
-  options?: { maxChars?: number }
+  options?: { maxChars?: number },
 ): WorkflowScriptIssue[] {
   const issues: WorkflowScriptIssue[] = [];
   const text = script ?? "";
@@ -562,31 +715,84 @@ export function validateWorkflowScript(
   if (/```/.test(text)) {
     issues.push({
       code: "markdown_fence",
-      message: "Script contains Markdown code fences instead of a plain JavaScript body.",
+      message:
+        "Script contains Markdown code fences instead of a plain JavaScript body.",
       fix: "Pass only the JavaScript async function body in script, or provide one complete fenced block so the runtime can unwrap it before validation.",
     });
   }
 
-  const firstLine = text.split(/\r?\n/).find((line) => line.trim())?.trim() ?? "";
-  if (/^(#{1,6}\s|[-*]\s|\d+[.)]\s|(?:plan|outline|steps?)\s*:)/i.test(firstLine)) {
+  const firstLine =
+    text
+      .split(/\r?\n/)
+      .find((line) => line.trim())
+      ?.trim() ?? "";
+  if (
+    /^(#{1,6}\s|[-*]\s|\d+[.)]\s|(?:plan|outline|steps?)\s*:)/i.test(firstLine)
+  ) {
     issues.push({
       code: "not_javascript_body",
-      message: "Script looks like a Markdown plan/list, not executable JavaScript.",
+      message:
+        "Script looks like a Markdown plan/list, not executable JavaScript.",
       fix: "Generate the actual workflow harness body using workflow.spawnAgent/workflow.parallel/workflow.artifact, not a prose plan.",
+    });
+  }
+
+  const trimmed = text.trim();
+  if (
+    trimmed.startsWith("{") &&
+    /"(?:objective|rationale|script|skillRef)"\s*:/.test(trimmed)
+  ) {
+    issues.push({
+      code: "json_tool_arguments",
+      message:
+        "Script looks like the full run_workflow_script JSON arguments object, not the JavaScript harness body.",
+      fix: "Pass only the JavaScript async harness body in the script field. If the JSON arguments were truncated, retry with skillRef or a shorter saved workflow skill instead of re-emitting the whole object.",
     });
   }
 
   // Forbidden host APIs. The worker has no module system / fs / network, so these
   // are guaranteed runtime failures; flag them early with the right alternative.
   const forbidden: Array<{ re: RegExp; name: string; fix: string }> = [
-    { re: /\brequire\s*\(/, name: "require()", fix: "Modules are unavailable. Use the workflow SDK; do external work via workflow.spawnAgent." },
-    { re: /\bimport\s+[^;]*from\b|\bimport\s*\(/, name: "import", fix: "Modules are unavailable. Use the workflow SDK only." },
-    { re: /\bprocess\s*\./, name: "process", fix: "process is unavailable in the workflow sandbox. Remove it." },
-    { re: /\b(require\s*\(\s*["']fs["']\)|\bfs\s*\.\s*(readFile|writeFile|readdir|mkdir))/, name: "fs", fix: "Filesystem APIs are unavailable. Have a spawnAgent write files via its tools, then read artifacts." },
-    { re: /\bfetch\s*\(/, name: "fetch()", fix: "Global fetch is unavailable. Request the network capability and call workflow.fetchUrl instead." },
-    { re: /\beval\s*\(/, name: "eval()", fix: "eval is forbidden. Express logic directly in the harness." },
-    { re: /\bnew\s+Function\s*\(/, name: "new Function()", fix: "Dynamic code generation is forbidden. Express logic directly." },
-    { re: /\bchild_process\b/, name: "child_process", fix: "Spawning processes is forbidden. Request the shell capability and pass bash to a spawnAgent." },
+    {
+      re: /\brequire\s*\(/,
+      name: "require()",
+      fix: "Modules are unavailable. Use the workflow SDK; do external work via workflow.spawnAgent.",
+    },
+    {
+      re: /\bimport\s+[^;]*from\b|\bimport\s*\(/,
+      name: "import",
+      fix: "Modules are unavailable. Use the workflow SDK only.",
+    },
+    {
+      re: /\bprocess\s*\./,
+      name: "process",
+      fix: "process is unavailable in the workflow sandbox. Remove it.",
+    },
+    {
+      re: /\b(require\s*\(\s*["']fs["']\)|\bfs\s*\.\s*(readFile|writeFile|readdir|mkdir))/,
+      name: "fs",
+      fix: "Filesystem APIs are unavailable. Have a spawnAgent write files via its tools, then read artifacts.",
+    },
+    {
+      re: /\bfetch\s*\(/,
+      name: "fetch()",
+      fix: "Global fetch is unavailable. Request the network capability and call workflow.fetchUrl instead.",
+    },
+    {
+      re: /\beval\s*\(/,
+      name: "eval()",
+      fix: "eval is forbidden. Express logic directly in the harness.",
+    },
+    {
+      re: /\bnew\s+Function\s*\(/,
+      name: "new Function()",
+      fix: "Dynamic code generation is forbidden. Express logic directly.",
+    },
+    {
+      re: /\bchild_process\b/,
+      name: "child_process",
+      fix: "Spawning processes is forbidden. Request the shell capability and pass bash to a spawnAgent.",
+    },
   ];
   for (const { re, name, fix } of forbidden) {
     if (re.test(text)) {
@@ -630,7 +836,7 @@ type RequireSuccessOptions = {
  */
 function evaluateRequireSuccess(
   results: unknown,
-  options: RequireSuccessOptions | undefined
+  options: RequireSuccessOptions | undefined,
 ): unknown[] {
   if (!Array.isArray(results)) {
     throw new Error("workflow.requireSuccess requires an array of results");
@@ -639,7 +845,7 @@ function evaluateRequireSuccess(
   const total = results.length;
   const minSuccess = Math.max(
     0,
-    Math.min(Math.floor(options?.minSuccess ?? total), total)
+    Math.min(Math.floor(options?.minSuccess ?? total), total),
   );
   const succeeded: unknown[] = [];
   const failures: string[] = [];
@@ -659,13 +865,16 @@ function evaluateRequireSuccess(
   if (succeeded.length < minSuccess) {
     throw new Error(
       `${label}workflow.requireSuccess gate failed: ${succeeded.length}/${total} succeeded, ` +
-        `need at least ${minSuccess}. Failed: ${failures.join(", ") || "n/a"}`
+        `need at least ${minSuccess}. Failed: ${failures.join(", ") || "n/a"}`,
     );
   }
   return succeeded;
 }
 
-function makeTimeout(controller: AbortController, timeoutMs: number): Promise<never> {
+function makeTimeout(
+  controller: AbortController,
+  timeoutMs: number,
+): Promise<never> {
   return new Promise((_resolve, reject) => {
     const timeout = setTimeout(() => {
       controller.abort();
@@ -677,7 +886,7 @@ function makeTimeout(controller: AbortController, timeoutMs: number): Promise<ne
         clearTimeout(timeout);
         reject(new Error("Workflow script aborted"));
       },
-      { once: true }
+      { once: true },
     );
   });
 }
@@ -692,7 +901,9 @@ function normalizeFetchHeaders(raw: Record<string, string> | undefined) {
       lower === "set-cookie" ||
       lower === "proxy-authorization"
     ) {
-      throw new Error(`workflow.fetchUrl does not allow sensitive header: ${key}`);
+      throw new Error(
+        `workflow.fetchUrl does not allow sensitive header: ${key}`,
+      );
     }
     if (!/^[a-zA-Z0-9_.:-]+$/.test(key)) {
       throw new Error(`workflow.fetchUrl invalid header name: ${key}`);
@@ -737,9 +948,9 @@ function isPrivateOrLocalIp(address: string): boolean {
     a === 0 ||
     a === 10 ||
     a === 127 ||
-    a === 169 && b === 254 ||
-    a === 172 && b >= 16 && b <= 31 ||
-    a === 192 && b === 168
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168)
   );
 }
 
@@ -750,7 +961,9 @@ function assertPublicHttpUrl(raw: string): URL {
   }
   const host = url.hostname.toLowerCase();
   if (isPrivateOrLocalHostname(host) || isPrivateOrLocalIp(host)) {
-    throw new Error("workflow.fetchUrl does not allow localhost or private-network URLs");
+    throw new Error(
+      "workflow.fetchUrl does not allow localhost or private-network URLs",
+    );
   }
   return url;
 }
@@ -762,14 +975,14 @@ async function defaultResolveFetchHost(host: string): Promise<string[]> {
 
 async function assertPublicDnsResolution(
   url: URL,
-  resolveHost: (host: string) => Promise<string[]>
+  resolveHost: (host: string) => Promise<string[]>,
 ): Promise<void> {
   const host = url.hostname.toLowerCase();
   if (isPrivateOrLocalIp(host)) return;
   const addresses = await resolveHost(host);
   if (addresses.some((address) => isPrivateOrLocalIp(address))) {
     throw new Error(
-      "workflow.fetchUrl does not allow URLs that resolve to localhost or private-network addresses"
+      "workflow.fetchUrl does not allow URLs that resolve to localhost or private-network addresses",
     );
   }
 }
@@ -799,19 +1012,23 @@ function originMatches(rules: string[] | undefined, url: URL): boolean {
 function wildcardPatternMatches(pattern: string, value: string): boolean {
   const cleaned = cleanText(pattern, 1000);
   if (!cleaned) return false;
-  const escaped = cleaned.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  const escaped = cleaned
+    .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*");
   return new RegExp(`^${escaped}$`).test(value);
 }
 
 function urlPatternMatches(patterns: string[] | undefined, url: URL): boolean {
   const value = url.toString();
-  return (patterns ?? []).some((pattern) => wildcardPatternMatches(pattern, value));
+  return (patterns ?? []).some((pattern) =>
+    wildcardPatternMatches(pattern, value),
+  );
 }
 
 function assertNetworkPolicyAllows(
   input: WorkflowFetchUrlInput,
   url: URL,
-  policy: WorkflowNetworkPolicy | undefined
+  policy: WorkflowNetworkPolicy | undefined,
 ): void {
   if (!policy) return;
   const method = input.method === "POST" ? "POST" : "GET";
@@ -820,13 +1037,19 @@ function assertNetworkPolicyAllows(
     policy.allowedMethods.length > 0 &&
     !policy.allowedMethods.includes(method)
   ) {
-    throw new Error(`workflow.fetchUrl network policy does not allow method: ${method}`);
+    throw new Error(
+      `workflow.fetchUrl network policy does not allow method: ${method}`,
+    );
   }
   if (originMatches(policy.deniedOrigins, url)) {
-    throw new Error(`workflow.fetchUrl network policy denies origin: ${url.origin}`);
+    throw new Error(
+      `workflow.fetchUrl network policy denies origin: ${url.origin}`,
+    );
   }
   if (urlPatternMatches(policy.deniedUrlPatterns, url)) {
-    throw new Error(`workflow.fetchUrl network policy denies URL: ${url.toString()}`);
+    throw new Error(
+      `workflow.fetchUrl network policy denies URL: ${url.toString()}`,
+    );
   }
   const hasAllowRules =
     (policy.allowedOrigins?.length ?? 0) > 0 ||
@@ -836,14 +1059,16 @@ function assertNetworkPolicyAllows(
     !originMatches(policy.allowedOrigins, url) &&
     !urlPatternMatches(policy.allowedUrlPatterns, url)
   ) {
-    throw new Error(`workflow.fetchUrl network policy does not allow URL: ${url.toString()}`);
+    throw new Error(
+      `workflow.fetchUrl network policy does not allow URL: ${url.toString()}`,
+    );
   }
 }
 
 async function assertFetchRequestAllowed(
   input: WorkflowFetchUrlInput,
   policy: WorkflowNetworkPolicy | undefined,
-  resolveHost: (host: string) => Promise<string[]>
+  resolveHost: (host: string) => Promise<string[]>,
 ): Promise<URL> {
   const url = assertPublicHttpUrl(cleanText(input.url, 2000));
   assertNetworkPolicyAllows(input, url, policy);
@@ -855,13 +1080,16 @@ async function defaultFetchUrl(
   input: WorkflowFetchUrlInput,
   signal: AbortSignal,
   resolveHost: (host: string) => Promise<string[]> = defaultResolveFetchHost,
-  policy?: WorkflowNetworkPolicy
+  policy?: WorkflowNetworkPolicy,
 ): Promise<WorkflowFetchUrlResult> {
   const url = await assertFetchRequestAllowed(input, policy, resolveHost);
   const method = input.method === "POST" ? "POST" : "GET";
   const maxBytes = Math.max(
     1,
-    Math.min(Math.floor(input.maxBytes ?? DEFAULT_FETCH_MAX_BYTES), HARD_FETCH_MAX_BYTES)
+    Math.min(
+      Math.floor(input.maxBytes ?? DEFAULT_FETCH_MAX_BYTES),
+      HARD_FETCH_MAX_BYTES,
+    ),
   );
   const body = method === "POST" ? cleanText(input.body, 64 * 1024) : undefined;
   const response = await fetch(url.toString(), {
@@ -895,7 +1123,7 @@ function createSdk(
   checkpoints: WorkflowCheckpoint[],
   logs: WorkflowScriptLog[],
   traceEvents: WorkflowTraceEvent[],
-  resumeState?: WorkflowResumeState
+  resumeState?: WorkflowResumeState,
 ): WorkflowSdk {
   let spawnedAgents = 0;
   const createdWorktrees = new Map<string, WorkflowWorktree>();
@@ -923,13 +1151,20 @@ function createSdk(
     spawnedAgents += 1;
     if (spawnedAgents > manifest.maxAgents) {
       throw new Error(
-        `workflow.spawnAgent exceeded manifest maxAgents=${manifest.maxAgents}`
+        `workflow.spawnAgent exceeded manifest maxAgents=${manifest.maxAgents}`,
       );
     }
     const title = cleanText(agentInput.title, 120);
     const prompt = cleanText(agentInput.prompt, 12000);
     if (!title) throw new Error("workflow.spawnAgent requires a title");
     if (!prompt) throw new Error("workflow.spawnAgent requires a prompt");
+    const allowedTools = safeAllowedTools(manifest, agentInput.allowedTools);
+    if (allowedTools.normalized.length > 0) {
+      pushLog(
+        "warn",
+        `normalized child agent tools: ${allowedTools.normalized.join(", ")}`,
+      );
+    }
     const { results } = await deps.runSubagents(
       {
         reason: [
@@ -941,16 +1176,18 @@ function createSdk(
           {
             id: cleanText(agentInput.id, 80) || title,
             title,
-            prompt: [`Workflow objective: ${input.objective}`, prompt].join("\n\n"),
+            prompt: [`Workflow objective: ${input.objective}`, prompt].join(
+              "\n\n",
+            ),
             role: agentInput.role,
             cwd: agentInput.cwd,
-            allowedTools: safeAllowedTools(manifest, agentInput.allowedTools),
+            allowedTools: allowedTools.tools,
             maxTurns: agentInput.maxTurns,
             timeoutMs: agentInput.timeoutMs,
           },
         ],
       },
-      signal
+      signal,
     );
     const result = results[0];
     if (!result) throw new Error(`No subagent result returned for ${title}`);
@@ -1048,11 +1285,15 @@ function createSdk(
       if (signal.aborted) throw new Error("Workflow script aborted");
       requireCapability(manifest, "worktree");
       if (!deps.worktrees?.diff) {
-        throw new Error("workflow.diffWorktree requires a diff-capable worktree runtime");
+        throw new Error(
+          "workflow.diffWorktree requires a diff-capable worktree runtime",
+        );
       }
       const known = createdWorktrees.get(worktree.id);
       if (!known || known.path !== worktree.path) {
-        throw new Error("workflow.diffWorktree can only diff worktrees created by this workflow");
+        throw new Error(
+          "workflow.diffWorktree can only diff worktrees created by this workflow",
+        );
       }
       const diff = await deps.worktrees.diff(known);
       const artifact = {
@@ -1078,14 +1319,20 @@ function createSdk(
       requireCapability(manifest, "worktree");
       requireCapability(manifest, "write_files");
       if (!deps.worktrees?.merge) {
-        throw new Error("workflow.mergeWorktree requires a merge-capable worktree runtime");
+        throw new Error(
+          "workflow.mergeWorktree requires a merge-capable worktree runtime",
+        );
       }
       if (!deps.worktrees.diff) {
-        throw new Error("workflow.mergeWorktree requires a diff-capable worktree runtime for merge approval");
+        throw new Error(
+          "workflow.mergeWorktree requires a diff-capable worktree runtime for merge approval",
+        );
       }
       const known = createdWorktrees.get(worktree.id);
       if (!known || known.path !== worktree.path) {
-        throw new Error("workflow.mergeWorktree can only merge worktrees created by this workflow");
+        throw new Error(
+          "workflow.mergeWorktree can only merge worktrees created by this workflow",
+        );
       }
       const diff = await deps.worktrees.diff(known);
       const diffArtifact = {
@@ -1102,10 +1349,16 @@ function createSdk(
       };
       artifacts.set(diffArtifact.name, diffArtifact);
       putWorkflowArtifact(workflowId, diffArtifact);
-      deps.onEvent?.({ type: "workflow_artifact", workflowId, artifact: diffArtifact });
+      deps.onEvent?.({
+        type: "workflow_artifact",
+        workflowId,
+        artifact: diffArtifact,
+      });
       if (diff.diff.trim()) {
         if (!deps.approveWorktreeMerge) {
-          throw new Error("workflow.mergeWorktree requires merge approval before applying a diff");
+          throw new Error(
+            "workflow.mergeWorktree requires merge approval before applying a diff",
+          );
         }
         const resp = await deps.approveWorktreeMerge({
           workflowId,
@@ -1162,11 +1415,15 @@ function createSdk(
       if (signal.aborted) throw new Error("Workflow script aborted");
       requireCapability(manifest, "worktree");
       if (!deps.worktrees?.remove) {
-        throw new Error("workflow.removeWorktree requires a removable worktree runtime");
+        throw new Error(
+          "workflow.removeWorktree requires a removable worktree runtime",
+        );
       }
       const known = createdWorktrees.get(worktree.id);
       if (!known || known.path !== worktree.path) {
-        throw new Error("workflow.removeWorktree can only remove worktrees created by this workflow");
+        throw new Error(
+          "workflow.removeWorktree can only remove worktrees created by this workflow",
+        );
       }
       await deps.worktrees.remove(known);
       createdWorktrees.delete(known.id);
@@ -1176,17 +1433,17 @@ function createSdk(
       if (signal.aborted) throw new Error("Workflow script aborted");
       requireCapability(manifest, "ask_user");
       if (!deps.askUser) {
-        throw new Error("workflow.askUser requires a user clarification runtime");
+        throw new Error(
+          "workflow.askUser requires a user clarification runtime",
+        );
       }
       const options = Array.isArray(askInput.options)
-        ? askInput.options
-            .slice(0, 4)
-            .map((option, index) => ({
-              id: cleanText(option.id, 80) || undefined,
-              label: cleanText(option.label, 80) || `Option ${index + 1}`,
-              description: cleanText(option.description, 200) || undefined,
-              value: cleanText(option.value, 1000) || undefined,
-            }))
+        ? askInput.options.slice(0, 4).map((option, index) => ({
+            id: cleanText(option.id, 80) || undefined,
+            label: cleanText(option.label, 80) || `Option ${index + 1}`,
+            description: cleanText(option.description, 200) || undefined,
+            value: cleanText(option.value, 1000) || undefined,
+          }))
         : [];
       if (options.length === 0) {
         throw new Error("workflow.askUser requires at least one option");
@@ -1217,9 +1474,12 @@ function createSdk(
         body: fetchInput.body,
         maxBytes: fetchInput.maxBytes,
       };
-      if (!fetchRequest.url) throw new Error("workflow.fetchUrl requires a url");
+      if (!fetchRequest.url)
+        throw new Error("workflow.fetchUrl requires a url");
       if (!deps.approveNetworkRequest) {
-        throw new Error("workflow.fetchUrl requires per-request network approval");
+        throw new Error(
+          "workflow.fetchUrl requires per-request network approval",
+        );
       }
       const method = fetchRequest.method ?? "GET";
       const resp = await deps.approveNetworkRequest({
@@ -1239,7 +1499,7 @@ function createSdk(
         });
         pushLog(
           "warn",
-          `[network] denied by user: ${method} ${fetchRequest.url} (${resp.denyReason ?? "no reason"})`
+          `[network] denied by user: ${method} ${fetchRequest.url} (${resp.denyReason ?? "no reason"})`,
         );
         throw new Error(resp.denyReason ?? "Workflow network request denied");
       }
@@ -1248,7 +1508,7 @@ function createSdk(
           await assertFetchRequestAllowed(
             fetchRequest,
             deps.networkPolicy,
-            deps.resolveFetchHost ?? defaultResolveFetchHost
+            deps.resolveFetchHost ?? defaultResolveFetchHost,
           );
         }
         const result = deps.fetchUrl
@@ -1257,11 +1517,11 @@ function createSdk(
               fetchRequest,
               signal,
               deps.resolveFetchHost,
-              deps.networkPolicy
+              deps.networkPolicy,
             );
         pushLog(
           "info",
-          `[network] fetched: ${method} ${fetchRequest.url} -> ${result.status} ${result.statusText}`
+          `[network] fetched: ${method} ${fetchRequest.url} -> ${result.status} ${result.statusText}`,
         );
         appendWorkflowNetworkAudit({
           workflowId,
@@ -1274,7 +1534,10 @@ function createSdk(
         return result;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        pushLog("warn", `[network] blocked or failed: ${method} ${fetchRequest.url} (${message})`);
+        pushLog(
+          "warn",
+          `[network] blocked or failed: ${method} ${fetchRequest.url} (${message})`,
+        );
         appendWorkflowNetworkAudit({
           workflowId,
           url: fetchRequest.url,
@@ -1295,7 +1558,7 @@ function createSdk(
       const requested = cleanText(serverId, 120) || undefined;
       if (requested && !isServerInScope(deps.allowedMcpServers, requested)) {
         throw new Error(
-          `workflow.listTools: MCP server "${requested}" is not in this workflow's scope`
+          `workflow.listTools: MCP server "${requested}" is not in this workflow's scope`,
         );
       }
       const tools = await deps.listMcpTools(requested);
@@ -1303,12 +1566,12 @@ function createSdk(
       // scopes to allowedMcpServers; filter again so a scope leak can't slip a
       // tool through.
       return tools.filter((tool) =>
-        isServerInScope(deps.allowedMcpServers, tool.serverId)
+        isServerInScope(deps.allowedMcpServers, tool.serverId),
       );
     },
 
     async searchTools(
-      searchInput?: WorkflowSearchToolsInput
+      searchInput?: WorkflowSearchToolsInput,
     ): Promise<WorkflowMcpToolDescriptor[]> {
       if (signal.aborted) throw new Error("Workflow script aborted");
       requireCapability(manifest, "mcp");
@@ -1318,16 +1581,18 @@ function createSdk(
       const requested = cleanText(searchInput?.serverId, 120) || undefined;
       if (requested && !isServerInScope(deps.allowedMcpServers, requested)) {
         throw new Error(
-          `workflow.searchTools: MCP server "${requested}" is not in this workflow's scope`
+          `workflow.searchTools: MCP server "${requested}" is not in this workflow's scope`,
         );
       }
       const tools = (await deps.listMcpTools(requested)).filter((tool) =>
-        isServerInScope(deps.allowedMcpServers, tool.serverId)
+        isServerInScope(deps.allowedMcpServers, tool.serverId),
       );
       return filterMcpToolsForSearch(tools, searchInput);
     },
 
-    async callTool(toolInput: WorkflowCallToolInput): Promise<WorkflowCallToolResult> {
+    async callTool(
+      toolInput: WorkflowCallToolInput,
+    ): Promise<WorkflowCallToolResult> {
       if (signal.aborted) throw new Error("Workflow script aborted");
       requireCapability(manifest, "mcp");
       if (!deps.callMcpTool) {
@@ -1339,7 +1604,7 @@ function createSdk(
       if (!tool) throw new Error("workflow.callTool requires a tool name");
       if (!isServerInScope(deps.allowedMcpServers, server)) {
         throw new Error(
-          `workflow.callTool: MCP server "${server}" is not in this workflow's scope`
+          `workflow.callTool: MCP server "${server}" is not in this workflow's scope`,
         );
       }
       const callRequest: WorkflowCallToolInput = {
@@ -1365,25 +1630,26 @@ function createSdk(
       if (resp.decision !== "allow") {
         pushLog(
           "warn",
-          `[mcp] denied by user: ${server}/${tool} (${resp.denyReason ?? "no reason"})`
+          `[mcp] denied by user: ${server}/${tool} (${resp.denyReason ?? "no reason"})`,
         );
         throw new Error(resp.denyReason ?? "Workflow MCP tool call denied");
       }
       const result = await deps.callMcpTool(callRequest);
       pushLog(
         "info",
-        `[mcp] called: ${server}/${tool} -> ${result.isError ? "error" : "ok"}`
+        `[mcp] called: ${server}/${tool} -> ${result.isError ? "error" : "ok"}`,
       );
       return result;
     },
 
     async agent<T = unknown>(
       prompt: string,
-      agentInput?: Omit<WorkflowAgentInput, "prompt">
+      agentInput?: Omit<WorkflowAgentInput, "prompt">,
     ): Promise<WorkflowAgentResult<T>> {
       if (signal.aborted) throw new Error("Workflow script aborted");
       const title = cleanText(agentInput?.title, 120) || "Workflow agent";
-      const agentRunId = cleanText(agentInput?.id, 80) || `${title}-${spawnedAgents + 1}`;
+      const agentRunId =
+        cleanText(agentInput?.id, 80) || `${title}-${spawnedAgents + 1}`;
       const agentType = agentInput?.agentType;
       const role = roleForAgentType(agentType);
       const isolation = agentInput?.isolation ?? "none";
@@ -1398,10 +1664,7 @@ function createSdk(
         cwd = worktree.path;
       }
       const schema = agentInput?.schema;
-      const fullPrompt = [
-        prompt,
-        schema ? schemaInstruction(schema) : "",
-      ]
+      const fullPrompt = [prompt, schema ? schemaInstruction(schema) : ""]
         .filter(Boolean)
         .join("\n\n");
       pushTrace({
@@ -1431,7 +1694,41 @@ function createSdk(
         let data: T | undefined;
         const localArtifacts: WorkflowArtifact[] = [];
         if (schema) {
-          const parsed = extractJsonValue(text);
+          let parsed: unknown;
+          try {
+            parsed = extractWorkflowJsonValue(text);
+          } catch (error) {
+            const errors = [serializeError(error)];
+            schemaValid = false;
+            const trace: WorkflowTraceEvent = {
+              type: "schema_validation",
+              workflowId,
+              agentRunId,
+              valid: false,
+              errors,
+              createdAt: now(),
+            };
+            pushTrace(trace);
+            const artifact: WorkflowArtifact = {
+              name: `schema-output:${agentRunId}`,
+              value: {
+                valid: false,
+                data: null,
+                errors,
+                parseError: true,
+                rawPreview: cleanText(text, 1000),
+              },
+              kind: "schema_output",
+              createdAt: trace.createdAt,
+            };
+            artifacts.set(artifact.name, artifact);
+            localArtifacts.push(artifact);
+            putWorkflowArtifact(workflowId, artifact);
+            deps.onEvent?.({ type: "workflow_artifact", workflowId, artifact });
+            throw new Error(
+              `workflow.agent schema JSON parse failed: ${errors[0]}`,
+            );
+          }
           const errors = validateJsonSchema(parsed, schema);
           schemaValid = errors.length === 0;
           const trace: WorkflowTraceEvent = {
@@ -1454,7 +1751,9 @@ function createSdk(
           putWorkflowArtifact(workflowId, artifact);
           deps.onEvent?.({ type: "workflow_artifact", workflowId, artifact });
           if (!schemaValid) {
-            throw new Error(`workflow.agent schema validation failed: ${errors.join("; ")}`);
+            throw new Error(
+              `workflow.agent schema validation failed: ${errors.join("; ")}`,
+            );
           }
           data = parsed as T;
         }
@@ -1530,7 +1829,10 @@ function createSdk(
       return results;
     },
 
-    requireSuccess<T>(results: T[], options?: { minSuccess?: number; label?: string }) {
+    requireSuccess<T>(
+      results: T[],
+      options?: { minSuccess?: number; label?: string },
+    ) {
       return evaluateRequireSuccess(results, options) as T[];
     },
 
@@ -1541,7 +1843,10 @@ function createSdk(
         pushLog("info", `stage:end:${cleanText(title, 160)}`);
         return result;
       } catch (err) {
-        pushLog("error", `stage:failed:${cleanText(title, 160)}:${serializeError(err)}`);
+        pushLog(
+          "error",
+          `stage:failed:${cleanText(title, 160)}:${serializeError(err)}`,
+        );
         throw err;
       }
     },
@@ -1555,7 +1860,7 @@ function createSdk(
 
 function sendWorkerMessage(
   child: ChildProcessWithoutNullStreams,
-  message: unknown
+  message: unknown,
 ): void {
   if (child.stdin.destroyed) return;
   child.stdin.write(`${JSON.stringify(message)}\n`);
@@ -1570,22 +1875,32 @@ function workerScriptPath(): string {
     path.join(process.cwd(), rel),
     path.join(process.cwd(), ".next", "standalone", rel),
     resourcesPath
-      ? path.join(resourcesPath, "app.asar.unpacked", ".next", "standalone", rel)
+      ? path.join(
+          resourcesPath,
+          "app.asar.unpacked",
+          ".next",
+          "standalone",
+          rel,
+        )
       : "",
     resourcesPath ? path.join(resourcesPath, "app.asar.unpacked", rel) : "",
     resourcesPath ? path.join(resourcesPath, "app.asar", rel) : "",
   ].filter(Boolean);
-  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
+  return (
+    candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!
+  );
 }
 
-export function buildWorkflowWorkerSpawnConfig(options: {
-  platform?: NodeJS.Platform;
-  execPath?: string;
-  workerPath?: string;
-  memoryMb?: number;
-  cpuSeconds?: number;
-  sandboxArgv?: string[];
-} = {}): {
+export function buildWorkflowWorkerSpawnConfig(
+  options: {
+    platform?: NodeJS.Platform;
+    execPath?: string;
+    workerPath?: string;
+    memoryMb?: number;
+    cpuSeconds?: number;
+    sandboxArgv?: string[];
+  } = {},
+): {
   command: string;
   args: string[];
   usesPosixCpuLimit: boolean;
@@ -1595,11 +1910,13 @@ export function buildWorkflowWorkerSpawnConfig(options: {
   const execPath = options.execPath ?? process.execPath;
   const memoryMb = Math.max(
     16,
-    Math.floor(options.memoryMb ?? WORKFLOW_WORKER_MAX_OLD_SPACE_MB)
+    Math.floor(options.memoryMb ?? WORKFLOW_WORKER_MAX_OLD_SPACE_MB),
   );
   const workerPath = options.workerPath ?? workerScriptPath();
   const nodeArgs = [`--max-old-space-size=${memoryMb}`, workerPath];
-  const cpuSeconds = Math.floor(options.cpuSeconds ?? WORKFLOW_WORKER_CPU_SECONDS);
+  const cpuSeconds = Math.floor(
+    options.cpuSeconds ?? WORKFLOW_WORKER_CPU_SECONDS,
+  );
   let base: {
     command: string;
     args: string[];
@@ -1657,7 +1974,7 @@ function parseWorkflowWorkerSandboxArgv(): string[] {
 
 function wrapWorkerWithExternalSandbox(
   sandboxArgv: string[],
-  worker: { command: string; args: string[] }
+  worker: { command: string; args: string[] },
 ): { command: string; args: string[] } {
   const expanded: string[] = [];
   let sawCommand = false;
@@ -1694,7 +2011,10 @@ async function executeScriptInWorker(args: {
     const workerSpawn = buildWorkflowWorkerSpawnConfig({
       cpuSeconds: Math.max(
         1,
-        Math.min(WORKFLOW_WORKER_CPU_SECONDS, Math.ceil(args.manifest.timeoutMs / 1000))
+        Math.min(
+          WORKFLOW_WORKER_CPU_SECONDS,
+          Math.ceil(args.manifest.timeoutMs / 1000),
+        ),
       ),
     });
     const child: ChildProcessWithoutNullStreams = spawnProcess(
@@ -1703,7 +2023,7 @@ async function executeScriptInWorker(args: {
       {
         stdio: ["pipe", "pipe", "pipe"],
         env: process.env,
-      }
+      },
     );
     const stderr: string[] = [];
     let settled = false;
@@ -1745,36 +2065,56 @@ async function executeScriptInWorker(args: {
           else args.sdk.log(text);
           result = null;
         } else if (method === "checkpoint") {
-          result = args.sdk.checkpoint(String(requestArgs[0] ?? ""), requestArgs[1]);
+          result = args.sdk.checkpoint(
+            String(requestArgs[0] ?? ""),
+            requestArgs[1],
+          );
         } else if (method === "artifact") {
-          result = args.sdk.artifact(String(requestArgs[0] ?? ""), requestArgs[1]);
+          result = args.sdk.artifact(
+            String(requestArgs[0] ?? ""),
+            requestArgs[1],
+          );
         } else if (method === "createWorktree") {
           result = await args.sdk.createWorktree(
-            requestArgs[0] as WorkflowCreateWorktreeInput | undefined
+            requestArgs[0] as WorkflowCreateWorktreeInput | undefined,
           );
         } else if (method === "diffWorktree") {
-          result = await args.sdk.diffWorktree(requestArgs[0] as WorkflowWorktree);
+          result = await args.sdk.diffWorktree(
+            requestArgs[0] as WorkflowWorktree,
+          );
         } else if (method === "mergeWorktree") {
-          result = await args.sdk.mergeWorktree(requestArgs[0] as WorkflowWorktree);
+          result = await args.sdk.mergeWorktree(
+            requestArgs[0] as WorkflowWorktree,
+          );
         } else if (method === "removeWorktree") {
-          result = await args.sdk.removeWorktree(requestArgs[0] as WorkflowWorktree);
+          result = await args.sdk.removeWorktree(
+            requestArgs[0] as WorkflowWorktree,
+          );
         } else if (method === "askUser") {
-          result = await args.sdk.askUser(requestArgs[0] as WorkflowAskUserInput);
+          result = await args.sdk.askUser(
+            requestArgs[0] as WorkflowAskUserInput,
+          );
         } else if (method === "fetchUrl") {
-          result = await args.sdk.fetchUrl(requestArgs[0] as WorkflowFetchUrlInput);
+          result = await args.sdk.fetchUrl(
+            requestArgs[0] as WorkflowFetchUrlInput,
+          );
         } else if (method === "listTools") {
           result = await args.sdk.listTools(
-            requestArgs[0] as string | undefined
+            requestArgs[0] as string | undefined,
           );
         } else if (method === "callTool") {
-          result = await args.sdk.callTool(requestArgs[0] as WorkflowCallToolInput);
+          result = await args.sdk.callTool(
+            requestArgs[0] as WorkflowCallToolInput,
+          );
         } else if (method === "agent") {
           result = await args.sdk.agent(
             String(requestArgs[0] ?? ""),
-            requestArgs[1] as Omit<WorkflowAgentInput, "prompt"> | undefined
+            requestArgs[1] as Omit<WorkflowAgentInput, "prompt"> | undefined,
           );
         } else if (method === "spawnAgent") {
-          result = await args.sdk.spawnAgent(requestArgs[0] as WorkflowSpawnAgentInput);
+          result = await args.sdk.spawnAgent(
+            requestArgs[0] as WorkflowSpawnAgentInput,
+          );
         } else {
           throw new Error(`Unsupported workflow worker method: ${method}`);
         }
@@ -1794,7 +2134,9 @@ async function executeScriptInWorker(args: {
         message = JSON.parse(line) as Record<string, unknown>;
       } catch (err) {
         settle(() =>
-          reject(new Error(`Invalid workflow worker output: ${serializeError(err)}`))
+          reject(
+            new Error(`Invalid workflow worker output: ${serializeError(err)}`),
+          ),
         );
         return;
       }
@@ -1804,7 +2146,9 @@ async function executeScriptInWorker(args: {
       } else if (message.type === "done") {
         settle(() => resolve(message.value));
       } else if (message.type === "error") {
-        settle(() => reject(new Error(String(message.error ?? "Workflow worker error"))));
+        settle(() =>
+          reject(new Error(String(message.error ?? "Workflow worker error"))),
+        );
       }
     });
 
@@ -1820,9 +2164,9 @@ async function executeScriptInWorker(args: {
           new Error(
             `Workflow worker exited before completion (code=${code ?? "null"}, signal=${
               signal ?? "null"
-            })${detail ? `: ${detail}` : ""}`
-          )
-        )
+            })${detail ? `: ${detail}` : ""}`,
+          ),
+        ),
       );
     });
 
@@ -1842,7 +2186,7 @@ async function executeScriptInWorker(args: {
 
 function loadResumeRun(
   input: RunWorkflowScriptInput,
-  parentAgentId: string
+  parentAgentId: string,
 ): { run?: WorkflowRun; state?: WorkflowResumeState } {
   const resumeFromWorkflowId = input.resumeFromWorkflowId;
   if (!resumeFromWorkflowId) return {};
@@ -1860,14 +2204,16 @@ function loadResumeRun(
     throw new Error("cannot resume workflow without checkpoints");
   }
   const requestedCheckpointName = sanitizeCheckpointName(
-    input.resumeFromCheckpointName
+    input.resumeFromCheckpointName,
   );
   const selectedCheckpoint = requestedCheckpointName
-    ? run.checkpoints.find((checkpoint) => checkpoint.name === requestedCheckpointName)
+    ? run.checkpoints.find(
+        (checkpoint) => checkpoint.name === requestedCheckpointName,
+      )
     : run.checkpoints[run.checkpoints.length - 1];
   if (!selectedCheckpoint) {
     throw new Error(
-      `resume checkpoint not found in workflow ${resumeFromWorkflowId}: ${requestedCheckpointName}`
+      `resume checkpoint not found in workflow ${resumeFromWorkflowId}: ${requestedCheckpointName}`,
     );
   }
   const state: WorkflowResumeState = {
@@ -1884,17 +2230,18 @@ function loadResumeRun(
 export async function runWorkflowScript(
   deps: RunWorkflowScriptDeps,
   rawInput: RunWorkflowScriptInput,
-  externalSignal?: AbortSignal
+  externalSignal?: AbortSignal,
 ): Promise<WorkflowScriptResult> {
   const input: RunWorkflowScriptInput = {
     objective: cleanText(rawInput.objective, 2000),
     rationale: cleanText(rawInput.rationale, 2000),
     script: normalizeWorkflowScriptBody(rawInput.script, MAX_SCRIPT_CHARS),
+    draftRef: rawInput.draftRef,
     templateParams: rawInput.templateParams,
     templateRef: rawInput.templateRef,
     resumeFromWorkflowId: sanitizeWorkflowId(rawInput.resumeFromWorkflowId),
     resumeFromCheckpointName: sanitizeCheckpointName(
-      rawInput.resumeFromCheckpointName
+      rawInput.resumeFromCheckpointName,
     ),
     capabilities: rawInput.capabilities,
     maxAgents: rawInput.maxAgents,
@@ -1902,8 +2249,10 @@ export async function runWorkflowScript(
     timeoutMs: rawInput.timeoutMs,
     successCriteria: rawInput.successCriteria,
   };
-  if (!input.objective) throw new Error("run_workflow_script requires an objective");
-  if (!input.rationale) throw new Error("run_workflow_script requires a rationale");
+  if (!input.objective)
+    throw new Error("run_workflow_script requires an objective");
+  if (!input.rationale)
+    throw new Error("run_workflow_script requires a rationale");
   if (!input.script) throw new Error("run_workflow_script requires a script");
 
   // P0-4(a): auto-derive capabilities implied by the script BEFORE startup, so
@@ -1912,11 +2261,14 @@ export async function runWorkflowScript(
   // and what the script demonstrably needs.
   const declaredCapabilities = normalizeCapabilities(input.capabilities);
   const inferredCapabilities = inferCapabilitiesFromScript(input.script).filter(
-    (capability) => !declaredCapabilities.includes(capability)
+    (capability) => !declaredCapabilities.includes(capability),
   );
   const effectiveCapabilities =
     inferredCapabilities.length > 0
-      ? normalizeCapabilities([...declaredCapabilities, ...inferredCapabilities])
+      ? normalizeCapabilities([
+          ...declaredCapabilities,
+          ...inferredCapabilities,
+        ])
       : input.capabilities;
   const manifest = normalizeManifest({
     ...input,
@@ -1924,11 +2276,14 @@ export async function runWorkflowScript(
   });
 
   const parentAgentId = deps.parentAgentId ?? "unknown";
-  const { run: resumeRun, state: resumeState } = loadResumeRun(input, parentAgentId);
+  const { run: resumeRun, state: resumeState } = loadResumeRun(
+    input,
+    parentAgentId,
+  );
   const workflowId = randomUUID();
   const startedAt = now();
   const artifacts = new Map<string, WorkflowArtifact>(
-    (resumeRun?.artifacts ?? []).map((artifact) => [artifact.name, artifact])
+    (resumeRun?.artifacts ?? []).map((artifact) => [artifact.name, artifact]),
   );
   // When resuming, surface empty upstream artifacts instead of silently feeding
   // them downstream (the "empty recon.md carried forward" trap).
@@ -1937,7 +2292,8 @@ export async function runWorkflowScript(
         .filter((artifact) => artifactStringValue(artifact.value).length === 0)
         .map((artifact) => artifact.name)
     : [];
-  const checkpoints: WorkflowCheckpoint[] = resumeRun?.checkpoints.slice() ?? [];
+  const checkpoints: WorkflowCheckpoint[] =
+    resumeRun?.checkpoints.slice() ?? [];
   const logs: WorkflowScriptLog[] = [];
   const traceEvents: WorkflowTraceEvent[] = [];
   const abortController = new AbortController();
@@ -1960,7 +2316,7 @@ export async function runWorkflowScript(
       traceEvents: [],
       createdAt: startedAt,
     },
-    abortController
+    abortController,
   );
   deps.onEvent?.({
     type: "workflow_start",
@@ -2007,7 +2363,7 @@ export async function runWorkflowScript(
         .map((issue) => `- [${issue.code}] ${issue.message} Fix: ${issue.fix}`)
         .join("\n");
       throw new Error(
-        `Workflow script validation failed before execution:\n${summary}`
+        `Workflow script validation failed before execution:\n${summary}`,
       );
     }
     if (inferredCapabilities.length > 0) {
@@ -2035,7 +2391,7 @@ export async function runWorkflowScript(
       input,
       workflowId,
       manifest,
-      pushRuntimeTrace
+      pushRuntimeTrace,
     );
     assertRuntimeSupportsCapabilities(manifest);
     const sdk = createSdk(
@@ -2048,7 +2404,7 @@ export async function runWorkflowScript(
       checkpoints,
       logs,
       traceEvents,
-      resumeState
+      resumeState,
     );
     const value = await Promise.race([
       executeScriptInWorker({
@@ -2122,26 +2478,53 @@ export async function runWorkflowScript(
     };
   } catch (err) {
     const endedAt = now();
-    const status = abortController.signal.aborted ? "aborted" : "failed";
     const error = serializeError(err);
+    const finalArtifacts = Array.from(artifacts.values());
+    const elapsedMs = endedAt - startedAt;
+    const hasResumeProgress =
+      checkpoints.length > 0 || finalArtifacts.length > 0;
+    const likelyTimedOut =
+      error.includes("timed out") ||
+      (abortController.signal.aborted &&
+        elapsedMs >= Math.max(0, manifest.timeoutMs - 1_000));
+    const status: WorkflowRunStatus =
+      likelyTimedOut && hasResumeProgress
+        ? "needs_continue"
+        : abortController.signal.aborted
+          ? "aborted"
+          : "failed";
+    const finalError =
+      status === "needs_continue"
+        ? `${error}. Workflow reached its time budget after recording progress; resume from the latest checkpoint to continue.`
+        : error;
+    if (status === "needs_continue") {
+      const log = {
+        level: "warn" as const,
+        message:
+          "workflow needs_continue: time budget reached after checkpoint/artifact progress; resume from latest checkpoint.",
+        createdAt: endedAt,
+      };
+      logs.push(log);
+      appendWorkflowLog(workflowId, log);
+    }
     finishWorkflowRun(workflowId, {
       status,
       endedAt,
-      artifacts: Array.from(artifacts.values()),
+      artifacts: finalArtifacts,
       checkpoints,
       logs,
       traceEvents,
-      error,
+      error: finalError,
     });
     deps.onEvent?.({
       type: "workflow_end",
       workflowId,
       status,
       endedAt,
-      artifacts: Array.from(artifacts.values()),
+      artifacts: finalArtifacts,
       checkpoints,
       logs,
-      error,
+      error: finalError,
     });
     return {
       workflowId,
@@ -2149,13 +2532,13 @@ export async function runWorkflowScript(
       status,
       manifest,
       resumedFromWorkflowId: input.resumeFromWorkflowId,
-      artifacts: Array.from(artifacts.values()),
+      artifacts: finalArtifacts,
       checkpoints,
       logs,
       traceEvents,
       startedAt,
       endedAt,
-      error,
+      error: finalError,
     };
   } finally {
     externalSignal?.removeEventListener("abort", abortFromExternal);

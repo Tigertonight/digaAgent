@@ -1,6 +1,7 @@
 import "server-only";
 
 import { promises as fs } from "node:fs";
+import { atomicWriteJson } from "@/lib/storage/atomic";
 import * as os from "node:os";
 import * as path from "node:path";
 import type {
@@ -142,12 +143,23 @@ export async function readPersistedProgress(sessionId: string): Promise<AgentPro
   try {
     text = await fs.readFile(progressFilePath(sessionId), "utf8");
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === "ENOENT") return null;
+    // T1.4: 非 ENOENT IO 错误不能静默吞吃，上报一条 warn 供运维跟踪。
+    console.warn("[progress-store] read failed", {
+      sessionId,
+      code: err.code,
+      err: err.message,
+    });
     return null;
   }
   try {
     return sanitizeProgress(JSON.parse(text));
-  } catch {
+  } catch (e) {
+    console.warn("[progress-store] parse failed (corrupt file)", {
+      sessionId,
+      err: e instanceof Error ? e.message : String(e),
+    });
     return null;
   }
 }
@@ -160,9 +172,8 @@ export async function writePersistedProgress(
   if (!sanitized) throw new Error("invalid progress payload");
   await ensureRuntimeDir(sessionId);
   const fp = progressFilePath(sessionId);
-  const tmp = `${fp}.tmp.${process.pid}.${Date.now()}`;
-  await fs.writeFile(tmp, JSON.stringify(sanitized, null, 2), "utf8");
-  await fs.rename(tmp, fp);
+  // T2.2: 复用统一原子写 helper（UUID tmp + open(wx) + fsync + rename + fsyncDir + per-key 串行）。
+  await atomicWriteJson(fp, sanitized, { scope: "progress" });
 }
 
 export async function deletePersistedProgress(sessionId: string): Promise<void> {

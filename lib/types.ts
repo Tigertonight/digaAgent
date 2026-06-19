@@ -20,6 +20,7 @@ import type {
   WorkflowScriptLog,
   WorkflowTraceEvent,
 } from "./workflows/types";
+import type { ToolTruncationDiagnosis } from "./tool-recovery/truncation-diagnosis";
 
 export interface SessionInfoLite {
   id: string;
@@ -137,6 +138,7 @@ export type MessagePart =
       /** 终态 */
       result?: unknown;
       isError?: boolean;
+      truncation?: ToolTruncationDiagnosis;
       /** 进行中 / 完成 / 出错 */
       status: "running" | "done" | "error";
     }

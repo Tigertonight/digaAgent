@@ -6,6 +6,8 @@ const sessionsMock = vi.hoisted(() => ({
   findSessionPathById: vi.fn(),
   getForkableUserMessages: vi.fn(),
   getSessionDetail: vi.fn(),
+  // T1.3: fork 后会调用该函数失效 listAll 缓存。
+  invalidateSessionListCache: vi.fn(),
 }));
 
 const sessionManagerMock = vi.hoisted(() => ({

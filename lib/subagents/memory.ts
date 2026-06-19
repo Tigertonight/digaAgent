@@ -1,11 +1,16 @@
 import "server-only";
 import {
+  closeSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
-  writeFileSync,
+  unlinkSync,
+  writeSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -113,16 +118,42 @@ function sanitize(
   };
 }
 
+// T2.8: 同步原子写 + ENOSPC 重抣 + 其他 errno warn。
 function persist(memory: SubagentMemory): void {
+  let tmp: string | null = null;
+  let fd: number | null = null;
   try {
     mkdirSync(memoryDir(memory.scope), { recursive: true });
     const fp = memoryFile(memory.scope, memory.agentId);
-    const tmp = `${fp}.tmp.${process.pid}.${Date.now()}`;
+    tmp = `${fp}.tmp.${process.pid}.${Date.now()}.${randomUUID()}`;
     const envelope: MemoryEnvelope = { version: CURRENT_VERSION, memory };
-    writeFileSync(tmp, JSON.stringify(envelope, null, 2), "utf8");
+    fd = openSync(tmp, "wx");
+    writeSync(fd, JSON.stringify(envelope, null, 2), 0, "utf8");
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = null;
     renameSync(tmp, fp);
-  } catch {
-    // Best-effort; memory is an enhancement, not required for execution.
+    tmp = null;
+  } catch (err) {
+    if (fd !== null) {
+      try { closeSync(fd); } catch { /* ignore */ }
+    }
+    if (tmp) {
+      try { unlinkSync(tmp); } catch { /* ignore */ }
+    }
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOSPC") {
+      console.warn("[subagent-memory] persist failed (no space)", {
+        agentId: memory.agentId,
+        code,
+      });
+      throw err;
+    }
+    console.warn("[subagent-memory] persist failed", {
+      agentId: memory.agentId,
+      code,
+      err: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 

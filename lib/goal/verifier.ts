@@ -20,6 +20,7 @@ export interface GoalWorkflowStatus {
     | "running"
     | "completed"
     | "completed_with_warnings"
+    | "needs_continue"
     | "failed"
     | "aborted";
   createdAt?: number;

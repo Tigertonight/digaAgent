@@ -117,6 +117,35 @@ describe("createDelegateSubagentsTool", () => {
     // Must not attempt the batch when there is nothing to run.
     expect(onDelegate).not.toHaveBeenCalled();
   });
+
+  it("rejects oversized task payloads before dispatching subagents", async () => {
+    const onDelegate = vi.fn();
+    const tool = createDelegateSubagentsTool({ onDelegate });
+    const exec = tool.execute as (
+      toolCallId: string,
+      params: unknown,
+      signal?: AbortSignal
+    ) => ReturnType<typeof tool.execute>;
+
+    await expect(
+      exec(
+        "call-huge-tasks",
+        {
+          reason: "audit many things",
+          tasks: [
+            {
+              id: "huge",
+              title: "Huge Prompt",
+              prompt: "x".repeat(21_000),
+            },
+          ],
+        },
+        undefined,
+      )
+    ).rejects.toThrow(/减少单次 subagent|above|拆|truncated/i);
+
+    expect(onDelegate).not.toHaveBeenCalled();
+  });
 });
 
 describe("createPlanSubagentsTool", () => {

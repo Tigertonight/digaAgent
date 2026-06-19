@@ -45,7 +45,7 @@ import { largeFileWriteProtocolLines } from "@/lib/tool-recovery/truncated-write
 const DEFAULT_MAX_TASKS = 8;
 const EXPLICIT_MAX_TASKS = 32;
 const DEFAULT_CONCURRENCY = 4;
-const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_TURNS = 6;
 const WRITE_TOOL_PATTERN = /write|edit|patch|apply|delete|move|rename|mkdir|touch/i;
 const MAX_AUDIT_EVENTS = 200;
@@ -161,6 +161,13 @@ function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n));
 }
 
+function sanitizeTaskTimeoutMs(raw: number | undefined): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return DEFAULT_TIMEOUT_MS;
+  }
+  return DEFAULT_TIMEOUT_MS;
+}
+
 function sanitizeTask(raw: SubagentTask, index: number): SubagentTaskRuntime {
   const id = raw.id?.trim() || `task-${index + 1}`;
   const requestedTools = sanitizeAllowedTools(raw.allowedTools);
@@ -188,7 +195,7 @@ function sanitizeTask(raw: SubagentTask, index: number): SubagentTaskRuntime {
     allowedTools,
     writePaths,
     maxTurns: raw.maxTurns ?? DEFAULT_MAX_TURNS,
-    timeoutMs: raw.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    timeoutMs: sanitizeTaskTimeoutMs(raw.timeoutMs),
     status: "pending",
   };
 }
@@ -261,6 +268,17 @@ export function validateDelegateInput(input: DelegateSubagentsInput): {
   if (requestedConcurrency !== undefined && requestedConcurrency !== concurrency) {
     warnings.push(
       `Requested concurrency ${requestedConcurrency} was clamped to ${concurrency}.`
+    );
+  }
+  const timeoutAdjustments = input.tasks.filter(
+    (task) =>
+      typeof task.timeoutMs === "number" &&
+      Number.isFinite(task.timeoutMs) &&
+      Math.floor(task.timeoutMs) !== DEFAULT_TIMEOUT_MS
+  );
+  if (timeoutAdjustments.length > 0) {
+    warnings.push(
+      `${timeoutAdjustments.length} task timeout(s) were normalized to ${DEFAULT_TIMEOUT_MS} ms.`
     );
   }
   const unsafeWriteRequests = input.tasks.filter(

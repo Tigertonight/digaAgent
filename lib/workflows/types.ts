@@ -61,6 +61,7 @@ export interface RunWorkflowScriptInput {
   objective: string;
   rationale: string;
   script: string;
+  draftRef?: string;
   templateParams?: unknown;
   templateRef?: {
     id: string;
@@ -118,7 +119,12 @@ export interface WorkflowScriptLog {
 export interface WorkflowScriptResult {
   workflowId: string;
   objective: string;
-  status: "completed" | "completed_with_warnings" | "failed" | "aborted";
+  status:
+    | "completed"
+    | "completed_with_warnings"
+    | "failed"
+    | "aborted"
+    | "needs_continue";
   manifest: WorkflowManifest;
   resumedFromWorkflowId?: string;
   returnValue?: unknown;
@@ -378,6 +384,7 @@ export type WorkflowRunStatus =
   // the UI and any consuming goal loop can see "formally done, substantively
   // incomplete" instead of a false success.
   | "completed_with_warnings"
+  | "needs_continue"
   | "failed"
   | "aborted";
 
@@ -478,6 +485,24 @@ export interface WorkflowRun {
   error?: string;
   /** End-state quality warnings (set when status is completed_with_warnings). */
   warnings?: string[];
+}
+
+export interface WorkflowScriptDraft {
+  id: string;
+  parentAgentId: string;
+  title?: string;
+  script: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface WorkflowScriptDraftSummary {
+  id: string;
+  parentAgentId: string;
+  title?: string;
+  chars: number;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface WorkflowTemplate {

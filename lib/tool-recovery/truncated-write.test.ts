@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   appendWriteTruncationRecovery,
+  diagnoseToolTruncation,
   isMissingWriteContentFailure,
   largeFileWriteProtocolLines,
 } from "./truncated-write";
@@ -22,6 +23,56 @@ describe("write truncation recovery", () => {
         ],
       })
     ).toBe(true);
+  });
+
+  it("classifies truncation across workflow and subagent tools", () => {
+    expect(
+      diagnoseToolTruncation({
+        toolName: "run_workflow_script",
+        isError: true,
+        input: { objective: "Audit", rationale: "Long harness" },
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "run_workflow_script received neither a script, a valid draftRef, nor a valid skillRef. If you intended to pass a large inline script, it was likely truncated.",
+            },
+          ],
+        },
+      })
+    ).toMatchObject({
+      code: "script_args_truncated",
+      field: "script",
+      recommendedStrategy: "draft_ref",
+    });
+
+    expect(
+      diagnoseToolTruncation({
+        toolName: "delegate_subagents",
+        isError: true,
+        input: { reason: "audit project" },
+        result: "delegate_subagents was called without any tasks. This usually means the tool call was truncated.",
+      })
+    ).toMatchObject({
+      code: "tool_args_truncated",
+      field: "tasks",
+      recommendedStrategy: "split_subagent_batch",
+    });
+  });
+
+  it("detects oversized high-risk tool payloads before execution", () => {
+    expect(
+      diagnoseToolTruncation({
+        toolName: "write",
+        isError: true,
+        input: { path: "docs/report.md", content: "x".repeat(13_000) },
+        result: "tool error",
+      })
+    ).toMatchObject({
+      code: "oversized_tool_payload",
+      field: "content",
+      recommendedStrategy: "skeleton_then_sections",
+    });
   });
 
   it("does not flag normal write errors or valid write inputs", () => {
