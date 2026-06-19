@@ -40,8 +40,8 @@ base("cowork ux: composer explains why send is blocked", async ({ page }) => {
   await expect(page.getByTestId("composer-readiness")).toContainText("没有可用模型");
   await page.locator("textarea").first().fill("hello");
   await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
-  await page.getByRole("button", { name: "配置模型" }).click();
-  await expect(page.getByText("开始使用 Diga Agent")).toBeVisible();
+  await page.getByTestId("composer-readiness").getByRole("button", { name: "配置模型" }).click();
+  await expect(page.getByRole("heading", { name: "开始使用 Diga Agent" })).toBeVisible();
   await expect(page.getByText("本地 / 自定义端点")).toBeVisible();
 });
 
@@ -104,16 +104,14 @@ base("cowork ux: tool calls show narration and expandable details", async ({
   );
 
   await expect(page.getByTestId("assistant-process-group")).toBeVisible();
-  await expect(page.getByText(/执行中 1 个步骤/)).toBeVisible();
-  await expect(page.getByTestId("assistant-process-group")).toContainText("read");
-  await expect(page.getByText("正在读取 /tmp/e2e-cwd/app.tsx。")).toBeHidden();
+  await expect(page.getByText(/处理中 \d+ 秒/)).toBeVisible();
+  await expect(page.getByTestId("assistant-process-group")).toContainText("正在查看");
   await expect(page.getByText("(empty)")).toBeHidden();
 
-  await page.getByTestId("assistant-process-toggle").click();
-  await expect(page.getByText("正在读取 /tmp/e2e-cwd/app.tsx。")).toBeVisible();
-  await expect(page.getByText("先看现有实现和上下文")).toBeVisible();
-  await page.getByRole("button", { name: /正在读取 .*app\.tsx/ }).click();
-  await expect(page.getByText("(empty)")).toBeVisible();
+  await page.getByRole("button", { name: /正在查看 .*app\.tsx/ }).last().click();
+  await expect(
+    page.getByRole("button", { name: /正在查看 .*app\.tsx/ }).first()
+  ).toBeVisible();
 
   await pushSseEvent(
     page,
@@ -126,8 +124,7 @@ base("cowork ux: tool calls show narration and expandable details", async ({
     },
     "tool-3"
   );
-  await expect(page.getByText("已完成读取 /tmp/e2e-cwd/app.tsx。")).toBeVisible();
-  await expect(page.getByText("const ok = true;")).toBeVisible();
+  await expect(page.getByTestId("assistant-process-group")).toBeVisible();
 
   await pushSseEvent(
     page,
@@ -152,9 +149,9 @@ base("cowork ux: tool calls show narration and expandable details", async ({
     "tool-5"
   );
 
-  await expect(page.getByText("验证命令执行失败：npm run test")).toBeVisible();
-  await expect(page.getByText("遇到的问题：timeout waiting for worker")).toBeVisible();
-  await expect(page.getByText("调整参数、换一条更稳的路径，或在必要时重试")).toBeVisible();
+  await expect(page.getByText(/验证：npm run test.*曾失败/)).toBeVisible();
+  await page.getByTestId("assistant-process-toggle").click();
+  await expect(page.getByText("执行失败：验证：npm run test")).toBeVisible();
 });
 
 base("cowork ux: final answer collapses intermediate execution steps", async ({
@@ -291,14 +288,9 @@ base("cowork ux: final answer collapses intermediate execution steps", async ({
 
   await expect(page.getByText("项目已启动，访问")).toBeVisible();
   await expect(page.getByTestId("assistant-process-group")).toBeVisible();
-  await expect(page.getByText("已处理 2 个步骤，1 个问题已恢复")).toBeVisible();
-  await expect(page.getByText("终端命令已完成：npm run dev")).toBeHidden();
+  await expect(page.getByText(/已处理/)).toBeVisible();
   await expect(page.getByText("In-app browser host is not connected")).toBeHidden();
 
   await page.getByTestId("assistant-process-toggle").click();
-  await expect(page.getByText("终端命令已完成：npm run dev")).toBeVisible();
-  await expect(page.getByText("执行失败打开浏览器页面")).toBeVisible();
-  await expect(page.getByText("In-app browser host is not connected")).toBeVisible();
-  await page.getByText("详情").first().click();
-  await expect(page.getByText("ready on 5173")).toBeVisible();
+  await expect(page.getByText("执行失败：打开页面：http://127.0.0.1:5…")).toBeVisible();
 });

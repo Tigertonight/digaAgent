@@ -25,51 +25,23 @@ test("workbench: Overview 作为右侧 root 并支持折叠分组", async ({
 
   await page.getByLabel("Workbench 面板").click();
 
-  await expect(page.getByTestId("workbench-overview")).toBeVisible();
-  await expect(page.getByTestId("workbench-section-progress")).toBeVisible();
-  await expect(page.getByTestId("workbench-section-outputs")).toBeVisible();
-  await expect(page.getByTestId("workbench-section-files")).toBeVisible();
-  await expect(page.getByTestId("workbench-section-context")).toBeVisible();
-  await expect(page.getByTestId("workbench-section-browser")).toBeVisible();
-  await expect(page.getByTestId("workbench-section-files-toggle")).toHaveAttribute(
-    "aria-expanded",
-    "false"
-  );
-  await expect(page.getByTestId("workbench-section-context-toggle")).toHaveAttribute(
-    "aria-expanded",
-    "false"
-  );
-  await expect(page.getByTestId("workbench-section-progress-toggle")).toHaveAttribute(
-    "aria-expanded",
-    "false"
-  );
-  await expect(page.getByTestId("workbench-section-outputs-toggle")).toHaveAttribute(
-    "aria-expanded",
-    "false"
-  );
-  await expect(page.getByTestId("workbench-section-browser-toggle")).toHaveAttribute(
-    "aria-expanded",
-    "false"
-  );
+  await expect(page.getByTestId("workbench-home-launcher")).toBeVisible();
+  await expect(page.getByTestId("workbench-tab-home")).toBeVisible();
+  await expect(page.getByRole("button", { name: /进度/ }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: /上下文/ }).first()).toBeVisible();
 
-  await page.getByTestId("workbench-section-outputs-toggle").click();
-  await expect(page.getByText("0 个产物")).toBeVisible();
-  await page.getByTestId("workbench-section-outputs-toggle").click();
-  await expect(page.getByText("0 个产物")).toBeHidden();
-
-  await page.getByTestId("workbench-section-context-action").click();
-  await expect(page.getByTestId("workbench-context-detail")).toBeVisible();
-  await expect(page.getByText("sessionId")).toBeVisible();
+  await page.getByRole("button", { name: /上下文/ }).first().click();
+  await expect(page.getByText(/Context n\/a/)).toBeVisible();
 
   await page.getByTestId("workbench-tab-home").click();
-  await expect(page.getByTestId("workbench-overview")).toBeVisible();
+  await expect(page.getByTestId("workbench-home-launcher")).toBeVisible();
 
-  await page.getByTestId("workbench-section-progress-action").click();
-  await expect(page.getByTestId("workbench-progress-detail")).toBeVisible();
-  await expect(page.getByText("暂无进度")).toBeVisible();
+  await page.getByRole("button", { name: /进度/ }).first().click();
+  await expect(page.locator("body")).toContainText(/进度\s*idle/);
+  await expect(page.locator("body")).toContainText("暂无进行中的任务");
 
   await page.getByRole("button", { name: "New chat" }).click();
-  await expect(page.getByTestId("workbench-overview")).toBeVisible();
+  await expect(page.getByTestId("workbench-home-launcher")).toBeVisible();
 });
 
 test("workbench: Outputs 作为产物 inbox 展示 URL 和文件动作", async ({

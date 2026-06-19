@@ -109,7 +109,7 @@ test("provider switch selects the provider's first model before set_model", asyn
   await expect(page.getByText("provider and modelId required")).toBeHidden();
 });
 
-test("provider/model selection resets stale localStorage to curated default", async ({
+test("provider/model selection migrates valid legacy localStorage selection", async ({
   page,
 }) => {
   await installSseMock(page);
@@ -139,8 +139,8 @@ test("provider/model selection resets stale localStorage to curated default", as
   await page.waitForSelector("text=Diga Agent", { timeout: 10_000 });
 
   const selects = page.locator("select");
-  await expect(selects.nth(0)).toHaveValue("openai-codex");
-  await expect(selects.nth(1)).toHaveValue("gpt-5.5");
+  await expect(selects.nth(0)).toHaveValue("local-runway");
+  await expect(selects.nth(1)).toHaveValue("claude-opus-4-7");
 
   await editor(page).fill("hello");
   await sendBtn(page).click();
@@ -149,8 +149,8 @@ test("provider/model selection resets stale localStorage to curated default", as
     .poll(() => createBody)
     .toEqual(
       expect.objectContaining({
-        provider: "openai-codex",
-        modelId: "gpt-5.5",
+        provider: "local-runway",
+        modelId: "claude-opus-4-7",
       })
     );
   await expect(page.getByText("model not found")).toBeHidden();

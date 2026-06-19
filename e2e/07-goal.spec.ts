@@ -41,17 +41,6 @@ test("goal: slash command sets goal and renders goal bar updates", async ({
     return route.fulfill({ json: { ok: true } });
   });
 
-  await page.waitForFunction(() => {
-    try {
-      return Boolean(
-        localStorage.getItem("pi-provider-id") &&
-          localStorage.getItem("pi-model-id")
-      );
-    } catch {
-      return false;
-    }
-  });
-  await page.waitForTimeout(500);
   await editor(page).fill("/goal Ship durable goal mode");
   await expect(sendBtn(page)).toBeEnabled();
   await sendBtn(page).click();
@@ -76,7 +65,7 @@ test("goal: slash command sets goal and renders goal bar updates", async ({
   );
 
   await expect(page.getByTestId("goal-bar")).toBeVisible();
-  await expect(page.getByText("Ship durable goal mode")).toBeVisible();
+  await expect(page.getByTestId("goal-bar").getByText("Ship durable goal mode")).toBeVisible();
   await expect(page.getByLabel("Pause goal")).toBeVisible();
 
   await pushSseEvent(

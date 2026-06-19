@@ -119,7 +119,8 @@ test("tasks: create, run due, and resolve inbox finding", async ({ page }) => {
   await installTasksFixture(page);
 
   await page.goto("/tasks");
-  await expect(page.getByText("长期任务", { exact: true })).toBeVisible();
+  await expect(page.getByText("任务指挥台", { exact: true })).toBeVisible();
+  await expect(page.getByText("布置任务", { exact: true })).toBeVisible();
 
   await page.getByPlaceholder("例如：每日检查 CI 和高优先级反馈").fill("每日检查 CI");
   await page
@@ -129,7 +130,8 @@ test("tasks: create, run due, and resolve inbox finding", async ({ page }) => {
   await page.getByRole("button", { name: /保存任务/ }).click();
 
   await expect(page.getByText("每日检查 CI").first()).toBeVisible();
-  await expect(page.getByText("到期", { exact: true })).toBeVisible();
+  await expect(page.locator("body")).toContainText(/1\s*待运行/);
+  await expect(page.getByText("等待下次运行").first()).toBeVisible();
 
   await page.getByRole("button", { name: /运行到期任务/ }).click();
   await expect(page.getByText("CI 连续失败")).toBeVisible();

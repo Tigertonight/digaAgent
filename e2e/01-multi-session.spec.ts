@@ -352,7 +352,9 @@ test("场景 2: B 发送后切回 A,A 后续 token 连续显示", async ({
   // 最稳:直接改 window.__mockSessions + 触发一次 refresh = 调一个会触发 refresh 的动作。
   // 简单粗暴:reload 页面?会丢 runner。
   // 用 chatAppDiag.runners 直接读断言,而不通过 UI 切换。
-  const aText = await page.evaluate((k) => {
+  await expect
+    .poll(() =>
+      page.evaluate((k) => {
     const w = window as unknown as {
       __chatAppDiag?: {
         runners: { current: Map<string, { chatState: { messages: Array<{ parts?: Array<{ kind: string; text?: string }> }> } }> };
@@ -365,27 +367,29 @@ test("场景 2: B 发送后切回 A,A 后续 token 连续显示", async ({
       .filter((p) => p.kind === "text")
       .map((p) => p.text)
       .join("");
-  }, keyA);
-
-  expect(aText).toContain("A1");
-  expect(aText).toContain("A2");
+      }, keyA)
+    )
+    .toContain("A2");
 
   // 推 A 第三段
   await pushTextDelta(page, aidA, "A3", 5);
-  const aText2 = await page.evaluate((k) => {
-    const w = window as unknown as {
-      __chatAppDiag?: {
-        runners: { current: Map<string, { chatState: { messages: Array<{ parts?: Array<{ kind: string; text?: string }> }> } }> };
-      };
-    };
-    const r = w.__chatAppDiag!.runners.current.get(k);
-    return r!.chatState.messages
-      .flatMap((m) => m.parts ?? [])
-      .filter((p) => p.kind === "text")
-      .map((p) => p.text)
-      .join("");
-  }, keyA);
-  expect(aText2).toContain("A3");
+  await expect
+    .poll(() =>
+      page.evaluate((k) => {
+        const w = window as unknown as {
+          __chatAppDiag?: {
+            runners: { current: Map<string, { chatState: { messages: Array<{ parts?: Array<{ kind: string; text?: string }> }> } }> };
+          };
+        };
+        const r = w.__chatAppDiag!.runners.current.get(k);
+        return r!.chatState.messages
+          .flatMap((m) => m.parts ?? [])
+          .filter((p) => p.kind === "text")
+          .map((p) => p.text)
+          .join("");
+      }, keyA)
+    )
+    .toContain("A3");
 });
 
 // ---------- 场景 3 ----------
@@ -408,34 +412,55 @@ test("场景 3: B 流完成,切回 B 看到完整内容", async ({ bootedPage: p
   await pushAgentEnd(page, aidB, "B partial done.", 5);
 
   // 直接读 B runner,验证完整内容已累积
-  const bText = await page.evaluate((k) => {
-    const w = window as unknown as {
-      __chatAppDiag?: {
-        runners: {
-          current: Map<
-            string,
-            {
-              chatState: {
-                messages: Array<{ parts?: Array<{ kind: string; text?: string }> }>;
-              };
-              streaming: boolean;
-            }
-          >;
+  await expect
+    .poll(() =>
+      page.evaluate((k) => {
+        const w = window as unknown as {
+          __chatAppDiag?: {
+            runners: {
+              current: Map<
+                string,
+                {
+                  chatState: {
+                    messages: Array<{ parts?: Array<{ kind: string; text?: string }> }>;
+                  };
+                  streaming: boolean;
+                }
+              >;
+            };
+          };
         };
-      };
-    };
-    const r = w.__chatAppDiag!.runners.current.get(k);
-    return {
-      streaming: r!.streaming,
-      text: r!.chatState.messages
-        .flatMap((m) => m.parts ?? [])
-        .filter((p) => p.kind === "text")
-        .map((p) => p.text)
-        .join(""),
-    };
-  }, keyB);
-  expect(bText.streaming).toBe(false);
-  expect(bText.text).toContain("B partial done.");
+        const r = w.__chatAppDiag!.runners.current.get(k);
+        return r!.streaming;
+      }, keyB)
+    )
+    .toBe(false);
+  await expect
+    .poll(() =>
+      page.evaluate((k) => {
+        const w = window as unknown as {
+          __chatAppDiag?: {
+            runners: {
+              current: Map<
+                string,
+                {
+                  chatState: {
+                    messages: Array<{ parts?: Array<{ kind: string; text?: string }> }>;
+                  };
+                }
+              >;
+            };
+          };
+        };
+        const r = w.__chatAppDiag!.runners.current.get(k);
+        return r!.chatState.messages
+          .flatMap((m) => m.parts ?? [])
+          .filter((p) => p.kind === "text")
+          .map((p) => p.text)
+          .join("");
+      }, keyB)
+    )
+    .toContain("B partial done.");
 });
 
 // ---------- 场景 4 ----------

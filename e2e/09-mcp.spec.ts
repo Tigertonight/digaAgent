@@ -117,9 +117,7 @@ test("mcp settings: lists configured servers", async ({ page }) => {
 
   await expect(page.getByText("filesystem", { exact: true })).toBeVisible();
   await expect(page.getByText("Filesystem", { exact: true })).toBeVisible();
-  await expect(
-    page.locator("span.text-emerald-300").filter({ hasText: "已启用" })
-  ).toBeVisible();
+  await expect(page.getByText("已启用")).toBeVisible();
 });
 
 test("mcp settings: add a new server refreshes the list", async ({ page }) => {
