@@ -40,6 +40,7 @@ import type {
 } from "./workflows/types";
 import { stripContextAside } from "./context-aside";
 import { isFalseGrepNoMatch } from "./narration/false-error";
+import { diagnoseToolTruncation } from "./tool-recovery/truncation-diagnosis";
 
 /* SDK 事件的最小化类型（用 any-ish 但 narrow 到必要字段） */
 interface AnyEvent {
@@ -689,6 +690,7 @@ function workflowStatus(value: unknown): WorkflowRunStatus | undefined {
     value === "running" ||
     value === "completed" ||
     value === "completed_with_warnings" ||
+    value === "needs_continue" ||
     value === "failed" ||
     value === "aborted"
     ? value
@@ -934,6 +936,21 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         //   3. 【兼容兑底】last 是 pending optimistic、没带 clientRequestId（老客户端 /
         //      未重发路径），但 visible 文本与 textJoined 完全一致，同样衰变。
         //      仅在 last.pending === true 且文本完全相等时生效，安全。
+        const textJoinedNorm = textJoined.trim();
+        const replaceOptimisticUser = (index: number) => {
+          const previous = state.messages[index];
+          if (!previous) return;
+          state.messages[index] = {
+            role: "user",
+            parts,
+            text: textJoined,
+            timestamp: m.timestamp ?? previous.timestamp,
+            // 结构化 Composer A6：optimistic 期写上的 composerMeta 不能被 message_start 衰变丢失。
+            ...(previous.composerMeta
+              ? { composerMeta: previous.composerMeta }
+              : {}),
+          };
+        };
         const lastIdx = state.messages.length - 1;
         const last = lastIdx >= 0 ? state.messages[lastIdx] : null;
         const lastText = last?.text ?? "";
@@ -943,7 +960,6 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         //     总会包一层），message_start 走 stripContextAside 慢路径会 trim 掉末尾换行。
         //   - 不 normalize 时 lastText="hello\n"、textJoined="hello" → 衰变 miss → 双气泡。
         const lastTextNorm = lastText.trim();
-        const textJoinedNorm = textJoined.trim();
         const textsMatch = lastTextNorm === textJoinedNorm;
         const isPendingOptimistic =
           !!last &&
@@ -967,15 +983,31 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
           last &&
           (isPendingOptimistic || isAckedOptimistic || isPendingNoCriTextMatch)
         ) {
-          state.messages[lastIdx] = {
-            role: "user",
-            parts,
-            text: textJoined,
-            timestamp: m.timestamp ?? last.timestamp,
-            // 结构化 Composer A6：optimistic 期写上的 composerMeta 不能被 message_start 衰变丢失。
-            ...(last.composerMeta ? { composerMeta: last.composerMeta } : {}),
-          };
+          replaceOptimisticUser(lastIdx);
           return state;
+        }
+        // Workflow/progress events may arrive between the optimistic user bubble
+        // and the SDK's real user message_start. Reconcile the nearest matching
+        // optimistic user instead of assuming it is still the final message.
+        if (textJoinedNorm.length > 0) {
+          for (let i = state.messages.length - 2; i >= 0; i -= 1) {
+            const candidate = state.messages[i];
+            if (!candidate || candidate.role !== "user") continue;
+            if (typeof candidate.clientRequestId !== "string") continue;
+            const candidateTextNorm = (candidate.text ?? "").trim();
+            if (candidateTextNorm !== textJoinedNorm) continue;
+            replaceOptimisticUser(i);
+            if (
+              typeof process !== "undefined" &&
+              process.env.NODE_ENV !== "production"
+            ) {
+              console.debug(
+                "[chat-reducer] reconciled non-tail optimistic user message",
+                { index: i, lastIndex: lastIdx },
+              );
+            }
+            return state;
+          }
         }
         // “控制指令”修复：aside-only 的合成 user message（如 goal continuation、未来可能的
         // hidden system prompt）stripContextAside 后可见部分为空。这里跳过添加，
@@ -1593,10 +1625,17 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         // 这里识别出来作为成功处理，避免后续 UI 走 recovered 路径。
         const falseError = isFalseGrepNoMatch(tp.toolName, tp.args, ev.result);
         const realIsError = !falseError && (ev.isError ?? false);
+        const truncation = diagnoseToolTruncation({
+          toolName: tp.toolName,
+          isError: realIsError,
+          input: tp.args,
+          result: ev.result,
+        });
         return {
           ...tp,
           result: ev.result,
           isError: realIsError,
+          truncation: truncation ?? tp.truncation,
           status: realIsError ? "error" : "done",
         };
       });
@@ -1728,6 +1767,12 @@ export function ctxToMessages(
               ? isFalseGrepNoMatch(c.name, args, tr.result)
               : false;
           const trIsError = trIsErrorRaw && !trFalseError;
+          const truncation = diagnoseToolTruncation({
+            toolName: c.name,
+            isError: trIsError,
+            input: args,
+            result: tr?.result,
+          });
           parts.push({
             kind: "tool",
             toolCallId: c.id,
@@ -1735,6 +1780,7 @@ export function ctxToMessages(
             args,
             result: tr?.result ?? (missingResultIsError ? opts.unfinishedToolResult : undefined),
             isError: trIsError,
+            truncation: truncation ?? undefined,
             status: tr
               ? trIsError
                 ? "error"

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   appendRestoredSubagentBatches,
   applyEvent,
@@ -1319,6 +1319,49 @@ describe("applyEvent — stale tool events", () => {
     });
     expect(unchanged.messages).toHaveLength(1);
   });
+
+  it("marks tool argument truncation on failed tool results", () => {
+    let s = createInitialState([
+      {
+        role: "assistant",
+        parts: [
+          {
+            kind: "tool",
+            toolCallId: "tool-write",
+            toolName: "write",
+            args: { path: "docs/report.md" },
+            status: "running",
+          },
+        ],
+      },
+    ]);
+
+    s = applyEvent(s, {
+      type: "tool_execution_end",
+      toolCallId: "tool-write",
+      result: {
+        content: [
+          {
+            type: "text",
+            text:
+              'Validation failed for tool "write":\n' +
+              "  - content: must have required properties content",
+          },
+        ],
+      },
+      isError: true,
+    });
+
+    const part = s.messages[0].parts?.[0];
+    expect(part?.kind).toBe("tool");
+    if (part?.kind !== "tool") throw new Error("type narrow");
+    expect(part.status).toBe("error");
+    expect(part.truncation).toMatchObject({
+      code: "large_field_missing",
+      field: "content",
+      recommendedStrategy: "skeleton_then_sections",
+    });
+  });
 });
 
 describe("applyEvent — workflow script events", () => {
@@ -1381,6 +1424,49 @@ describe("applyEvent — workflow script events", () => {
     expect(part.artifacts[0].name).toBe("summary");
     expect(part.logs[0].message).toBe("stage:start");
     expect(part.returnValue).toEqual({ ok: true });
+  });
+
+  it("preserves needs_continue status from workflow_end", () => {
+    let s = createInitialState();
+    s = applyEvent(s, { type: "message_start", message: { role: "assistant" } });
+    s = applyEvent(s, {
+      type: "workflow_start",
+      run: {
+        id: "workflow-needs-continue",
+        parentAgentId: "agent-1",
+        objective: "Long audit",
+        rationale: "Needs staged continuation",
+        status: "running",
+        script: "return true",
+        manifest: {
+          capabilities: ["spawn_agent", "read_files"],
+          maxAgents: 8,
+          maxConcurrency: 4,
+          timeoutMs: 1800000,
+          runtime: "process",
+        },
+        artifacts: [],
+        checkpoints: [],
+        logs: [],
+        createdAt: 100,
+      },
+    });
+    s = applyEvent(s, {
+      type: "workflow_end",
+      workflowId: "workflow-needs-continue",
+      status: "needs_continue",
+      endedAt: 180,
+      checkpoints: [{ name: "scan-done", value: { ok: true }, createdAt: 120 }],
+      artifacts: [{ name: "scan-summary", value: "done", createdAt: 130 }],
+      logs: [],
+      error: "Workflow reached its time budget after recording progress.",
+    });
+
+    const part = (s.messages[s.activeAssistantIndex].parts as MessagePart[])[0];
+    expect(part.kind).toBe("workflow_run");
+    if (part.kind !== "workflow_run") throw new Error("type narrow");
+    expect(part.status).toBe("needs_continue");
+    expect(part.checkpoints[0].name).toBe("scan-done");
   });
 });
 
@@ -1837,6 +1923,111 @@ describe("applyEvent — goal / workflow optimistic + message_start 不双气泡
     const userMessages = s.messages.filter((m) => m.role === "user");
     expect(userMessages).toHaveLength(1);
     expect(userMessages[0].composerMeta?.mode).toBe("workflow");
+  });
+
+  it("workflow ack 后即使中间插入 assistant 事件，message_start 仍合并原 optimistic user", () => {
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+    let s = createInitialState();
+    s = applyEvent(s, {
+      type: "__optimistic_user",
+      clientRequestId: "wf-non-tail",
+      text: "帮我检查会话逻辑",
+      composerMode: "workflow",
+    });
+    s = applyEvent(s, {
+      type: "optimistic_user_ack",
+      clientRequestId: "wf-non-tail",
+      displayText: "帮我检查会话逻辑",
+    });
+    s = applyEvent(s, {
+      type: "message_start",
+      message: {
+        role: "assistant",
+        timestamp: 900,
+        responseId: "assistant-between",
+        content: [{ type: "text", text: "处理中" }],
+      },
+    });
+    s = applyEvent(s, {
+      type: "message_start",
+      message: {
+        role: "user",
+        timestamp: 1000,
+        content: [
+          {
+            type: "text",
+            text: "帮我检查会话逻辑\n\n<<<CONTEXT_ASIDE>>>workflowAside<<<END_CONTEXT_ASIDE>>>",
+          },
+        ],
+      },
+    });
+
+    const userMessages = s.messages.filter((m) => m.role === "user");
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0]).toMatchObject({
+      role: "user",
+      text: "帮我检查会话逻辑",
+      timestamp: 1000,
+    });
+    expect(userMessages[0].composerMeta?.mode).toBe("workflow");
+    debugSpy.mockRestore();
+  });
+
+  it("两条同文 workflow optimistic 时，非尾部 reconcile 合并最近的一条", () => {
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+    let s = createInitialState();
+    s = applyEvent(s, {
+      type: "__optimistic_user",
+      clientRequestId: "wf-old",
+      text: "审计会话逻辑",
+      composerMode: "workflow",
+    });
+    s = applyEvent(s, {
+      type: "optimistic_user_ack",
+      clientRequestId: "wf-old",
+      displayText: "审计会话逻辑",
+    });
+    s = applyEvent(s, {
+      type: "__optimistic_user",
+      clientRequestId: "wf-new",
+      text: "审计会话逻辑",
+      composerMode: "workflow",
+    });
+    s = applyEvent(s, {
+      type: "optimistic_user_ack",
+      clientRequestId: "wf-new",
+      displayText: "审计会话逻辑",
+    });
+    s = applyEvent(s, {
+      type: "message_start",
+      message: {
+        role: "assistant",
+        timestamp: 1900,
+        responseId: "assistant-between-2",
+        content: [{ type: "text", text: "处理中" }],
+      },
+    });
+    s = applyEvent(s, {
+      type: "message_start",
+      message: {
+        role: "user",
+        timestamp: 2000,
+        content: [
+          {
+            type: "text",
+            text: "审计会话逻辑\n\n<<<CONTEXT_ASIDE>>>workflowAside<<<END_CONTEXT_ASIDE>>>",
+          },
+        ],
+      },
+    });
+
+    const userMessages = s.messages.filter((m) => m.role === "user");
+    expect(userMessages).toHaveLength(2);
+    expect(userMessages[0].clientRequestId).toBe("wf-old");
+    expect(userMessages[1].clientRequestId).toBeUndefined();
+    expect(userMessages[1].timestamp).toBe(2000);
+    expect(userMessages[1].composerMeta?.mode).toBe("workflow");
+    debugSpy.mockRestore();
   });
 
   it("兑底：pending optimistic 没带 cri、但文本与 message_start 可见部分完全一致 → 衰变为一条", () => {

@@ -846,7 +846,7 @@ function CollapsedPartProcessGroup({
   return (
     <div
       className="group text-token-xs"
-      data-testid="assistant-process-group"
+      data-testid="assistant-part-process-group"
     >
       <button
         type="button"
@@ -855,7 +855,7 @@ function CollapsedPartProcessGroup({
         }}
         className="inline-flex items-center gap-2 py-0.5 text-left"
         aria-expanded={open}
-        data-testid="assistant-process-toggle"
+        data-testid="assistant-part-process-toggle"
         style={{ color: "var(--text-muted)" }}
       >
         {live ? (
@@ -1576,6 +1576,7 @@ function WorkflowRunCard({
     text: string;
   } | null>(null);
   const running = part.status === "running" || part.status === "pending";
+  const needsContinue = part.status === "needs_continue";
   const failed = part.status === "failed" || part.status === "aborted";
   const warned = part.status === "completed_with_warnings";
   const warnings = part.warnings ?? [];
@@ -1623,6 +1624,8 @@ function WorkflowRunCard({
       <div className="flex items-center gap-2 text-xs">
         {part.status === "completed" ? (
           <CheckCircle2 size={13} style={{ color: "var(--color-success)" }} />
+        ) : needsContinue ? (
+          <RotateCcw size={13} style={{ color: "var(--warning, #b8860b)" }} />
         ) : failed ? (
           <XCircle size={13} style={{ color: "var(--color-danger)" }} />
         ) : running ? (
@@ -1642,7 +1645,7 @@ function WorkflowRunCard({
           className="ml-auto shrink-0 text-token-xs"
           style={{ color: "var(--text-muted)" }}
         >
-          {part.status}
+          {needsContinue ? "needs continue" : part.status}
           {duration ? ` · ${duration}s` : ""}
         </span>
         {canResume && (
@@ -1694,6 +1697,19 @@ function WorkflowRunCard({
       {part.rationale && (
         <div className="text-xs" style={{ color: "var(--text-muted)" }}>
           {part.rationale}
+        </div>
+      )}
+      {needsContinue && (
+        <div
+          className="rounded-md border px-3 py-2 text-xs leading-relaxed"
+          style={{
+            borderColor: "var(--warning, #b8860b)",
+            background: "var(--bg-subtle)",
+            color: "var(--text)",
+          }}
+        >
+          Time budget reached after progress was saved. Use Resume to continue
+          from the latest checkpoint/artifacts instead of restarting.
         </div>
       )}
       {warned && warnings.length > 0 && (

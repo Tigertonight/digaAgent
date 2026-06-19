@@ -43,10 +43,7 @@ import {
 import type { AgentProgress, ProgressStep } from "@/lib/progress/types";
 import { userFacingMessage } from "@/lib/user-facing-error";
 import { applyEvent } from "@/lib/chat-reducer";
-import {
-  CONTEXT_ASIDE_CLOSE,
-  CONTEXT_ASIDE_OPEN,
-} from "@/lib/context-aside";
+import { CONTEXT_ASIDE_CLOSE, CONTEXT_ASIDE_OPEN } from "@/lib/context-aside";
 import { upsertOptimisticSession } from "@/lib/sessions/optimistic";
 import {
   deleteInput as deleteStoreInput,
@@ -56,15 +53,35 @@ import {
 
 function makeClientRequestId(): string {
   // F3：optimistic dedupe key。如果 crypto.randomUUID 不可用则 fallback。
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
     return crypto.randomUUID();
   }
   return `crid-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 type Updater<T> = T | ((prev: T) => T);
+export type SubmitMode = "prompt" | "goal" | "workflow";
 
-function failOpenProgressSteps(progress: AgentProgress | null): AgentProgress | null {
+export function createSubmitGate() {
+  const inFlight = new Set<string>();
+  return {
+    claim(ownerKey: RunnerKey, mode: SubmitMode): (() => void) | null {
+      const key = `${ownerKey}:${mode}`;
+      if (inFlight.has(key)) return null;
+      inFlight.add(key);
+      return () => {
+        inFlight.delete(key);
+      };
+    },
+  };
+}
+
+function failOpenProgressSteps(
+  progress: AgentProgress | null,
+): AgentProgress | null {
   if (!progress) return progress;
   const now = Date.now();
   const closeStep = (step: ProgressStep): ProgressStep => {
@@ -84,7 +101,7 @@ function failOpenProgressSteps(progress: AgentProgress | null): AgentProgress | 
     endedAt:
       group.endedAt ??
       (group.steps.some(
-        (step) => step.status === "running" || step.status === "pending"
+        (step) => step.status === "running" || step.status === "pending",
       )
         ? now
         : undefined),
@@ -105,7 +122,7 @@ function extractSessionIdFromPath(p: string): string | null {
   const base = p.split("/").pop() ?? "";
   const noExt = base.replace(/\.jsonl$/, "");
   const m = noExt.match(
-    /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i
+    /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i,
   );
   return m ? m[1] : null;
 }
@@ -156,14 +173,16 @@ export interface UseChatStreamParams {
 
   // ===== 数据拉取（注入，B2-a 不抽） =====
   refreshStats: (aid: string, ownerKey?: RunnerKey) => void | Promise<void>;
-  refreshToolsCount: (aid: string, ownerKey?: RunnerKey) => void | Promise<void>;
-
+  refreshToolsCount: (
+    aid: string,
+    ownerKey?: RunnerKey,
+  ) => void | Promise<void>;
 }
 
 export interface UseChatStreamReturn {
   agentAction: (
     aid: string,
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
   ) => Promise<unknown>;
   ensureAgent: () => Promise<{
     aid: string;
@@ -181,7 +200,7 @@ export interface UseChatStreamReturn {
 }
 
 export function useChatStream(
-  params: UseChatStreamParams
+  params: UseChatStreamParams,
 ): UseChatStreamReturn {
   const {
     agentId,
@@ -211,6 +230,16 @@ export function useChatStream(
     refreshStats,
     refreshToolsCount,
   } = params;
+  const submitGateRef = useRef<ReturnType<typeof createSubmitGate> | null>(
+    null,
+  );
+  if (!submitGateRef.current) submitGateRef.current = createSubmitGate();
+
+  const claimSubmit = useCallback(
+    (ownerKey: RunnerKey, mode: SubmitMode) =>
+      submitGateRef.current?.claim(ownerKey, mode) ?? null,
+    [],
+  );
 
   // 通用 agent action POST：失败时 setError 并 throw（让调用方决定吞或继续抛）
   const agentAction = useCallback(
@@ -228,7 +257,7 @@ export function useChatStream(
       }
       return data;
     },
-    [setError]
+    [setError],
   );
 
   /**
@@ -246,7 +275,7 @@ export function useChatStream(
     (
       sessionFilePath: string | null,
       sessionId?: string | null,
-      ownerKeyAtStart?: RunnerKey
+      ownerKeyAtStart?: RunnerKey,
     ): RunnerKey => {
       const currentActive = activeKeyRef.current ?? DRAFT_KEY;
       // P1：“创建请求属于谁，响应就写回谁”。传入明确的 ownerKey 为准；
@@ -256,7 +285,8 @@ export function useChatStream(
       const newKey: RunnerKey = sessionFilePath;
       const idFromBackend =
         sessionId && sessionId.length > 0 ? sessionId : null;
-      const idFromPath = idFromBackend ?? extractSessionIdFromPath(sessionFilePath);
+      const idFromPath =
+        idFromBackend ?? extractSessionIdFromPath(sessionFilePath);
       const ownerStillActive = currentActive === ownerAtStart;
 
       if (runnersRef.current?.has(newKey)) {
@@ -285,14 +315,7 @@ export function useChatStream(
       // 如果未来需要从其它入口调这个函数迁移运行中的 agent，从那处 attach 即可。
       return newKey;
     },
-    [
-      activeKeyRef,
-      runnersRef,
-      switchTo,
-      setSelectedId,
-      closeSseFor,
-      setRunner,
-    ]
+    [activeKeyRef, runnersRef, switchTo, setSelectedId, closeSseFor, setRunner],
   );
 
   // M4：同一 ownerKey 的 agent 创建去重。第一次 POST /agent/new 还没返回时
@@ -315,7 +338,7 @@ export function useChatStream(
         ownerKey: upgradeDraftIfNeeded(
           currentSessionFile,
           undefined,
-          ownerKeyAtStart
+          ownerKeyAtStart,
         ),
       };
     }
@@ -337,100 +360,101 @@ export function useChatStream(
       aid: string;
       ownerKey: RunnerKey;
     } | null> => {
-    const selectedIdAtStart = selectedId;
-    const sessionPathAtStart = selectedIdAtStart
-      ? sessions.find((s) => s.id === selectedIdAtStart)?.path
-      : undefined;
-    const runnerCwd =
-      runnersRef.current?.get(ownerKeyAtStart)?.cwd ?? null;
-    const effectiveCwd = runnerCwd ?? cwd;
-    const r = await fetch("/api/agent/new", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        provider: providerId,
-        modelId,
-        cwd: effectiveCwd,
-        thinkingLevel,
-        sessionPath: sessionPathAtStart,
-      }),
-    });
-    const data = await r.json();
-    if (data.error) {
-      setError(userFacingMessage(data.error));
-      return null;
-    }
-    if (!runnersRef.current?.has(ownerKeyAtStart)) {
-      // The owning runner may have been deleted while /api/agent/new was in
-      // flight. Do not attach an orphan SSE connection; dispose the fresh
-      // backend agent best-effort and drop the response.
-      void fetch(`/api/agent/${data.id}`, {
+      const selectedIdAtStart = selectedId;
+      const sessionPathAtStart = selectedIdAtStart
+        ? sessions.find((s) => s.id === selectedIdAtStart)?.path
+        : undefined;
+      const runnerCwd = runnersRef.current?.get(ownerKeyAtStart)?.cwd ?? null;
+      const effectiveCwd = runnerCwd ?? cwd;
+      const r = await fetch("/api/agent/new", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "abort" }),
-      }).catch(() => {});
-      return null;
-    }
-    // P1：不再读 activeKeyRef.current。await 期间用户可能已切 session，
-    // 留在 ownerKeyAtStart 写是“whose request, whose response”原则。
-    updateRunner(ownerKeyAtStart, {
-      agentId: data.id,
-      agentSessionId: data.sessionId,
-      sessionFile: data.sessionFile ?? null,
-      cwd: effectiveCwd,
-      pendingCwd: null,
-      ...(data.thinkingLevel
-        ? { thinkingLevel: data.thinkingLevel as ThinkingLevel }
-        : {}),
-      ...(data.availableThinkingLevels
-        ? {
-            availableThinkingLevels:
-              data.availableThinkingLevels as ThinkingLevel[],
-          }
-        : {}),
-      ...(typeof data.supportsThinking === "boolean"
-        ? { supportsThinking: data.supportsThinking }
-        : {}),
-    });
-    const upgradedKey = upgradeDraftIfNeeded(
-      data.sessionFile ?? null,
-      data.sessionId ?? null,
-      ownerKeyAtStart
-    );
-    // F8：SSE 只在这个唯一入口 attach，绑 owner 迁移后的 key。
-    attachSseFor(upgradedKey, data.id);
-    void refreshStats(data.id, upgradedKey);
-    void refreshToolsCount(data.id, upgradedKey);
-    // Optimistic sidebar：sessionId/sessionFile 一拿到就把会话插到左侧顶部，
-    // firstMessage 取当前输入框快照（如果调者是 /goal、/workflow、附件发送等场景，
-    // 都仍是用户原话）。后续 refreshSessions 会以服务端真值覆盖。
-    if (data.sessionId && data.sessionFile) {
-      const firstHint = (() => {
-        try {
-          return (getInput() ?? "").trim();
-        } catch {
-          return "";
-        }
-      })();
-      // P1：parentSessionPath 也用发起时的 capture，避免 await 期间用户切到
-      // 其它 session 后，optimistic sidebar 以“新表”作为 parent。
-      setSessions((prev) =>
-        upsertOptimisticSession(prev, {
-          id: data.sessionId,
-          path: data.sessionFile,
+        body: JSON.stringify({
+          provider: providerId,
+          modelId,
           cwd: effectiveCwd,
-          firstMessage: firstHint,
-          parentSessionPath: sessionPathAtStart,
-        })
+          thinkingLevel,
+          sessionPath: sessionPathAtStart,
+        }),
+      });
+      const data = await r.json();
+      if (data.error) {
+        setError(userFacingMessage(data.error));
+        return null;
+      }
+      if (!runnersRef.current?.has(ownerKeyAtStart)) {
+        // The owning runner may have been deleted while /api/agent/new was in
+        // flight. Do not attach an orphan SSE connection; dispose the fresh
+        // backend agent best-effort and drop the response.
+        void fetch(`/api/agent/${data.id}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: "abort" }),
+        }).catch(() => {});
+        return null;
+      }
+      // P1：不再读 activeKeyRef.current。await 期间用户可能已切 session，
+      // 留在 ownerKeyAtStart 写是“whose request, whose response”原则。
+      updateRunner(ownerKeyAtStart, {
+        agentId: data.id,
+        agentSessionId: data.sessionId,
+        sessionFile: data.sessionFile ?? null,
+        cwd: effectiveCwd,
+        pendingCwd: null,
+        ...(data.thinkingLevel
+          ? { thinkingLevel: data.thinkingLevel as ThinkingLevel }
+          : {}),
+        ...(data.availableThinkingLevels
+          ? {
+              availableThinkingLevels:
+                data.availableThinkingLevels as ThinkingLevel[],
+            }
+          : {}),
+        ...(typeof data.supportsThinking === "boolean"
+          ? { supportsThinking: data.supportsThinking }
+          : {}),
+      });
+      const upgradedKey = upgradeDraftIfNeeded(
+        data.sessionFile ?? null,
+        data.sessionId ?? null,
+        ownerKeyAtStart,
       );
-    }
-    return { aid: data.id, ownerKey: upgradedKey };
+      // F8：SSE 只在这个唯一入口 attach，绑 owner 迁移后的 key。
+      attachSseFor(upgradedKey, data.id);
+      void refreshStats(data.id, upgradedKey);
+      void refreshToolsCount(data.id, upgradedKey);
+      // Optimistic sidebar：sessionId/sessionFile 一拿到就把会话插到左侧顶部，
+      // firstMessage 取当前输入框快照（如果调者是 /goal、/workflow、附件发送等场景，
+      // 都仍是用户原话）。后续 refreshSessions 会以服务端真值覆盖。
+      if (data.sessionId && data.sessionFile) {
+        const firstHint = (() => {
+          try {
+            return (getInput() ?? "").trim();
+          } catch {
+            return "";
+          }
+        })();
+        // P1：parentSessionPath 也用发起时的 capture，避免 await 期间用户切到
+        // 其它 session 后，optimistic sidebar 以“新表”作为 parent。
+        setSessions((prev) =>
+          upsertOptimisticSession(prev, {
+            id: data.sessionId,
+            path: data.sessionFile,
+            cwd: effectiveCwd,
+            firstMessage: firstHint,
+            parentSessionPath: sessionPathAtStart,
+          }),
+        );
+      }
+      return { aid: data.id, ownerKey: upgradedKey };
     })();
     inflightEnsureRef.current.set(ownerKeyForInflight, createPromise);
     try {
       return await createPromise;
     } finally {
-      if (inflightEnsureRef.current.get(ownerKeyForInflight) === createPromise) {
+      if (
+        inflightEnsureRef.current.get(ownerKeyForInflight) === createPromise
+      ) {
         inflightEnsureRef.current.delete(ownerKeyForInflight);
       }
     }
@@ -472,82 +496,98 @@ export function useChatStream(
   // 发送一条新 prompt。fix-S4.b：不再重复写 ensureAgent 冷启动逻辑，
   // 直接复用。ensureAgent 已经处理了：冷启动 → fetch new → 升级草稿
   // → attachSSE → 拉 stats / tools。fast path 只走草稿升级。
-  const send = useCallback(async (textOverride?: string) => {
-    // 【性能】接收可选的 textOverride 是为了让 Composer 可以直接传本地 localInput，
-    // 不再需要 flushSync 同步写回上层 store 后才发送。flushSync 在 800 条消息的会话
-    // 里只点击 Send 的这一下会同步阻塞 UI 几十毫秒，是点击到气泡出现延迟的最大项。
-    const input = textOverride ?? getInput();
-    if (
-      !input.trim() &&
-      pendingImages.length === 0 &&
-      pendingFiles.length === 0
-    )
-      return;
-    if (!guardActiveKeyMatchesSelected()) return;
-    const ensured = await ensureAgent();
-    if (!ensured) return; // ensureAgent 内部已调 setError
-    const aid = ensured.aid;
-    const ownerKey = ensured.ownerKey;
-    const userText = input;
-    const images = pendingImages;
-    const attachments = pendingFiles;
-    // 展示文本 = 用户原话（不再把 @path 拼进去）。
-    // 附件引用单独通过 attachments 字段传给后端，由后端作为上下文 aside 喂给模型，
-    // 这样前台气泡只显示用户输入的原文。
-    const attachmentPaths = attachments.map((a) => a.path);
-    // F3：optimistic user message + clientRequestId。
-    const clientRequestId = makeClientRequestId();
-    const promptText =
-      userText || (attachmentPaths.length > 0 ? "(see attachments)" : "(image)");
-    // 【性能】一次 commit 完成所有 RunnerState 变动：optimistic user + 清 pending images/files。
-    // await ensureAgent() 后的多次 setState 在 React 18 不再自动批处理，手工合并可
-    // 把这段的整树 commit 从 3 次降到 1 次。
-    updateRunner(ownerKey, (state) => ({
-      chatState: applyEvent(state.chatState, {
-        type: "__optimistic_user",
-        clientRequestId,
-        text: promptText,
-        images: images.map((img) => ({ data: img.data, mimeType: img.mimeType })),
-        attachments: attachmentPaths,
-      }),
-      pendingImages: [],
-      pendingFiles: [],
-    }));
-    // setInput 走外部 store，只通知 Composer 订阅者，不进 React 树 commit。不进 batch。
-    setInput("");
-    setError(null);
-    // 滚动行为：发送后保持贴底跟随（不锚顶）。stickToBottomRef 由滚动监听维护，
-    // streamSignature effect 会在 user 气泡 + 后续 token 流入时持续 snap 到底。
-    try {
-      await agentAction(aid, {
-        type: "prompt",
-        text: promptText,
-        images: images.length > 0 ? images : undefined,
-        attachments: attachmentPaths.length > 0 ? attachmentPaths : undefined,
-        clientRequestId,
-      });
-    } catch {
-      /* error 已被 agentAction 设置 */
-      // F3：标记发送失败，供用户可见。
-      updateRunner(ownerKey, (state) => ({
-        chatState: applyEvent(state.chatState, {
-          type: "__optimistic_user_failed",
-          clientRequestId,
-          reason: "failed",
-        }),
-      }));
-    }
-  }, [
-    ensureAgent,
-    getInput,
-    guardActiveKeyMatchesSelected,
-    pendingImages,
-    pendingFiles,
-    agentAction,
-    updateRunner,
-    setInput,
-    setError,
-  ]);
+  const send = useCallback(
+    async (textOverride?: string) => {
+      // 【性能】接收可选的 textOverride 是为了让 Composer 可以直接传本地 localInput，
+      // 不再需要 flushSync 同步写回上层 store 后才发送。flushSync 在 800 条消息的会话
+      // 里只点击 Send 的这一下会同步阻塞 UI 几十毫秒，是点击到气泡出现延迟的最大项。
+      const input = textOverride ?? getInput();
+      if (
+        !input.trim() &&
+        pendingImages.length === 0 &&
+        pendingFiles.length === 0
+      )
+        return;
+      if (!guardActiveKeyMatchesSelected()) return;
+      const releaseSubmit = claimSubmit(activeKeyRef.current ?? DRAFT_KEY, "prompt");
+      if (!releaseSubmit) return;
+      try {
+        const ensured = await ensureAgent();
+        if (!ensured) return; // ensureAgent 内部已调 setError
+        const aid = ensured.aid;
+        const ownerKey = ensured.ownerKey;
+        const userText = input;
+        const images = pendingImages;
+        const attachments = pendingFiles;
+        // 展示文本 = 用户原话（不再把 @path 拼进去）。
+        // 附件引用单独通过 attachments 字段传给后端，由后端作为上下文 aside 喂给模型，
+        // 这样前台气泡只显示用户输入的原文。
+        const attachmentPaths = attachments.map((a) => a.path);
+        // F3：optimistic user message + clientRequestId。
+        const clientRequestId = makeClientRequestId();
+        const promptText =
+          userText ||
+          (attachmentPaths.length > 0 ? "(see attachments)" : "(image)");
+        // 【性能】一次 commit 完成所有 RunnerState 变动：optimistic user + 清 pending images/files。
+        // await ensureAgent() 后的多次 setState 在 React 18 不再自动批处理，手工合并可
+        // 把这段的整树 commit 从 3 次降到 1 次。
+        updateRunner(ownerKey, (state) => ({
+          chatState: applyEvent(state.chatState, {
+            type: "__optimistic_user",
+            clientRequestId,
+            text: promptText,
+            images: images.map((img) => ({
+              data: img.data,
+              mimeType: img.mimeType,
+            })),
+            attachments: attachmentPaths,
+          }),
+          pendingImages: [],
+          pendingFiles: [],
+        }));
+        // setInput 走外部 store，只通知 Composer 订阅者，不进 React 树 commit。不进 batch。
+        setInput("");
+        setError(null);
+        // 滚动行为：发送后保持贴底跟随（不锚顶）。stickToBottomRef 由滚动监听维护，
+        // streamSignature effect 会在 user 气泡 + 后续 token 流入时持续 snap 到底。
+        try {
+          await agentAction(aid, {
+            type: "prompt",
+            text: promptText,
+            images: images.length > 0 ? images : undefined,
+            attachments:
+              attachmentPaths.length > 0 ? attachmentPaths : undefined,
+            clientRequestId,
+          });
+        } catch {
+          /* error 已被 agentAction 设置 */
+          // F3：标记发送失败，供用户可见。
+          updateRunner(ownerKey, (state) => ({
+            chatState: applyEvent(state.chatState, {
+              type: "__optimistic_user_failed",
+              clientRequestId,
+              reason: "failed",
+            }),
+          }));
+        }
+      } finally {
+        releaseSubmit();
+      }
+    },
+    [
+      ensureAgent,
+      getInput,
+      guardActiveKeyMatchesSelected,
+      pendingImages,
+      pendingFiles,
+      agentAction,
+      updateRunner,
+      setInput,
+      setError,
+      claimSubmit,
+      activeKeyRef,
+    ],
+  );
 
   const startGoal = useCallback(
     async (objective: string) => {
@@ -555,41 +595,47 @@ export function useChatStream(
       if (!text) return;
       // G1：与 send() 同样的 owner 保护。goal 丢到老 runner 特别隐蔽。
       if (!guardActiveKeyMatchesSelected()) return;
-      const ensured = await ensureAgent();
-      if (!ensured) return;
-      setError(null);
-      // P1 修复：goal 路径也生成 clientRequestId。不这样的话 reducer 的
-      // “optimistic user 衰变”逻辑在 SDK message_start 回来时不会命中，
-      // 会让 UI 出现两条重复的 user 气泡。
-      const clientRequestId = makeClientRequestId();
-      // 结构化 Composer A6：在本地先插一条 optimistic user 气泡，携带 mode=goal。
-      // 然后 SSE message_start reconcile 路径会保留 composerMeta（reducer 已实现）。
-      const ownerKey = ensured.ownerKey;
-      updateRunner(ownerKey, (state) => ({
-        chatState: applyEvent(state.chatState, {
-          type: "__optimistic_user",
-          clientRequestId,
-          text,
-          composerMode: "goal",
-        }),
-      }));
-      // 滚动行为：保持贴底跟随，不再锚顶 user 气泡。
+      const releaseSubmit = claimSubmit(activeKeyRef.current ?? DRAFT_KEY, "goal");
+      if (!releaseSubmit) return;
       try {
-        await agentAction(ensured.aid, {
-          type: "goal_set",
-          objective: text,
-          clientRequestId,
-        });
-      } catch {
-        /* error 已被 agentAction 设置 */
-        // 发失败同样要标记，让 UI 可见 / 可重发。
+        const ensured = await ensureAgent();
+        if (!ensured) return;
+        setError(null);
+        // P1 修复：goal 路径也生成 clientRequestId。不这样的话 reducer 的
+        // “optimistic user 衰变”逻辑在 SDK message_start 回来时不会命中，
+        // 会让 UI 出现两条重复的 user 气泡。
+        const clientRequestId = makeClientRequestId();
+        // 结构化 Composer A6：在本地先插一条 optimistic user 气泡，携带 mode=goal。
+        // 然后 SSE message_start reconcile 路径会保留 composerMeta（reducer 已实现）。
+        const ownerKey = ensured.ownerKey;
         updateRunner(ownerKey, (state) => ({
           chatState: applyEvent(state.chatState, {
-            type: "__optimistic_user_failed",
+            type: "__optimistic_user",
             clientRequestId,
-            reason: "failed",
+            text,
+            composerMode: "goal",
           }),
         }));
+        // 滚动行为：保持贴底跟随，不再锚顶 user 气泡。
+        try {
+          await agentAction(ensured.aid, {
+            type: "goal_set",
+            objective: text,
+            clientRequestId,
+          });
+        } catch {
+          /* error 已被 agentAction 设置 */
+          // 发失败同样要标记，让 UI 可见 / 可重发。
+          updateRunner(ownerKey, (state) => ({
+            chatState: applyEvent(state.chatState, {
+              type: "__optimistic_user_failed",
+              clientRequestId,
+              reason: "failed",
+            }),
+          }));
+        }
+      } finally {
+        releaseSubmit();
       }
     },
     [
@@ -598,7 +644,9 @@ export function useChatStream(
       agentAction,
       setError,
       updateRunner,
-    ]
+      claimSubmit,
+      activeKeyRef,
+    ],
   );
 
   /**
@@ -612,64 +660,76 @@ export function useChatStream(
       if (!text) return;
       // G1：与 send() 同样的 owner 保护。
       if (!guardActiveKeyMatchesSelected()) return;
-      const ensured = await ensureAgent();
-      if (!ensured) return;
-      setError(null);
-
-      // 设计：UI 可见部分 = 用户原话；控制指令走 CONTEXT_ASIDE。
-      // session jsonl 存的是拼接后的全文 —— 重启后加载仍然能 stripContextAside
-      // 仅看到用户原话，不会出现“系统把我的表达改写”的体感。
-      // Soft guidance (Claude Code style): steer toward the workflow harness and
-      // good orchestration habits, but DO NOT forbid brief read-only recon —
-      // grounding a plan in the actual repo/state is healthy agent behavior.
-      const aside = [
-        "请用 dynamic workflow 来完成上面这个目标。建议流程：",
-        "1) 复用优先：先调用 list_workflow_skills / list_workflow_templates，若已有可复用的，用 run_workflow_script({ skillRef }) 或 run_workflow_template 执行，不要从头重写大脚本。",
-        "2) 允许少量只读探查（如读文件/检索）来把计划落到真实代码/状态上，但不要在对话里手动一步步把整件事做完——真正的执行应放进 workflow harness。",
-        "3) 规划 workflow script：拆解步骤，在关键节点写 checkpoint 和 artifact；按复杂度配置 agent 数量（简单任务 1 个、对比类 2-4 个、复杂任务更多且分工明确），不要为简单任务过度并发。",
-        "4) 质量门槛：扇出的子任务在进入综合前用 workflow.requireSuccess 把关；产出报告/产物时声明 successCriteria，避免“形式完成、实质为空”。",
-        "5) 执行完综合给出最终结果；若可复用，用 save_workflow_skill 沉淀。",
-      ].join("\n");
-      const prompt = [
-        text,
-        "",
-        CONTEXT_ASIDE_OPEN,
-        aside,
-        CONTEXT_ASIDE_CLOSE,
-      ].join("\n");
-
-      // 滚动行为：保持贴底跟随，不再锚顶 user 气泡。
-
-      // P1 修复：workflow 路径也生成 clientRequestId；workflow 下发靠的是
-      // type:"prompt"，后端 prompt 分支本身支持 cri 去重 + ack，不需要动后端。
-      const clientRequestId = makeClientRequestId();
-      // 结构化 Composer A6：optimistic user 气泡携 mode=workflow。
-      // text 只带用户原话；SSE message_start 收到的 finalText 含 aside，reducer 会 strip 后衰变。
-      const ownerKeyW = ensured.ownerKey;
-      updateRunner(ownerKeyW, (state) => ({
-        chatState: applyEvent(state.chatState, {
-          type: "__optimistic_user",
-          clientRequestId,
-          text,
-          composerMode: "workflow",
-        }),
-      }));
-
+      const releaseSubmit = claimSubmit(
+        activeKeyRef.current ?? DRAFT_KEY,
+        "workflow",
+      );
+      if (!releaseSubmit) return;
       try {
-        await agentAction(ensured.aid, {
-          type: "prompt",
-          text: prompt,
-          clientRequestId,
-        });
-      } catch {
-        /* error 已被 agentAction 设置 */
+        const ensured = await ensureAgent();
+        if (!ensured) return;
+        setError(null);
+
+        // 设计：UI 可见部分 = 用户原话；控制指令走 CONTEXT_ASIDE。
+        // session jsonl 存的是拼接后的全文 —— 重启后加载仍然能 stripContextAside
+        // 仅看到用户原话，不会出现“系统把我的表达改写”的体感。
+        // Soft guidance (Claude Code style): steer toward the workflow harness and
+        // good orchestration habits, but DO NOT forbid brief read-only recon —
+        // grounding a plan in the actual repo/state is healthy agent behavior.
+        const aside = [
+          "请用 dynamic workflow 来完成上面这个目标。建议流程：",
+          "1) 复用优先：先调用 list_workflow_skills / list_workflow_templates，若已有可复用的，用 run_workflow_script({ skillRef }) 或 run_workflow_template 执行，不要从头重写大脚本。",
+          "2) 不要直接调用 delegate_subagents。需要并行/分派时，把它写进 workflow harness 内，用 workflow.spawnAgent / workflow.parallel 调度。",
+          "3) 允许少量只读探查（如读文件/检索）来把计划落到真实代码/状态上，但不要在对话里手动一步步把整件事做完——真正的执行应放进 workflow harness。",
+          "4) 如果 run_workflow_script validation 失败，修正 script，或改用 saved skill/template；不要退回 delegate_subagents。",
+          "5) 规划 workflow script：拆解步骤，在关键节点写 checkpoint 和 artifact；按复杂度配置 agent 数量（简单任务 1 个、对比类 2-4 个、复杂任务更多且分工明确），不要为简单任务过度并发。",
+          "6) 质量门槛：扇出的子任务在进入综合前用 workflow.requireSuccess 把关；产出报告/产物时声明 successCriteria，避免“形式完成、实质为空”。",
+          "7) 执行完综合给出最终结果；若可复用，用 save_workflow_skill 沉淀。",
+        ].join("\n");
+        const prompt = [
+          text,
+          "",
+          CONTEXT_ASIDE_OPEN,
+          aside,
+          CONTEXT_ASIDE_CLOSE,
+        ].join("\n");
+
+        // 滚动行为：保持贴底跟随，不再锚顶 user 气泡。
+
+        // P1 修复：workflow 路径也生成 clientRequestId；workflow 下发靠的是
+        // type:"prompt"，后端 prompt 分支本身支持 cri 去重 + ack，不需要动后端。
+        const clientRequestId = makeClientRequestId();
+        // 结构化 Composer A6：optimistic user 气泡携 mode=workflow。
+        // text 只带用户原话；SSE message_start 收到的 finalText 含 aside，reducer 会 strip 后衰变。
+        const ownerKeyW = ensured.ownerKey;
         updateRunner(ownerKeyW, (state) => ({
           chatState: applyEvent(state.chatState, {
-            type: "__optimistic_user_failed",
+            type: "__optimistic_user",
             clientRequestId,
-            reason: "failed",
+            text,
+            composerMode: "workflow",
           }),
         }));
+
+        try {
+          await agentAction(ensured.aid, {
+            type: "prompt",
+            text: prompt,
+            clientRequestId,
+            workflowMode: true,
+          });
+        } catch {
+          /* error 已被 agentAction 设置 */
+          updateRunner(ownerKeyW, (state) => ({
+            chatState: applyEvent(state.chatState, {
+              type: "__optimistic_user_failed",
+              clientRequestId,
+              reason: "failed",
+            }),
+          }));
+        }
+      } finally {
+        releaseSubmit();
       }
     },
     [
@@ -678,7 +738,9 @@ export function useChatStream(
       agentAction,
       setError,
       updateRunner,
-    ]
+      claimSubmit,
+      activeKeyRef,
+    ],
   );
 
   // 中断当前 turn
@@ -731,11 +793,7 @@ export function useChatStream(
     async (type: "steer" | "follow_up") => {
       if (!agentId) return;
       const text = getInput().trim();
-      if (
-        !text &&
-        pendingImages.length === 0 &&
-        pendingFiles.length === 0
-      )
+      if (!text && pendingImages.length === 0 && pendingFiles.length === 0)
         return;
       // P2 修复：不再把 @path 拼进可见文本（会让历史 user 气泡里出玄路径）。
       // 附件以独立字段 attachments 下发，后端复用与 prompt 一致的 aside 起装。
@@ -745,9 +803,7 @@ export function useChatStream(
           type,
           text,
           ...(pendingImages.length ? { images: pendingImages } : {}),
-          ...(attachmentPaths.length
-            ? { attachments: attachmentPaths }
-            : {}),
+          ...(attachmentPaths.length ? { attachments: attachmentPaths } : {}),
         });
         setInput("");
         setPendingImages([]);
@@ -763,13 +819,13 @@ export function useChatStream(
       setInput,
       setPendingImages,
       setPendingFiles,
-    ]
+    ],
   );
 
   const onSteer = useCallback(() => sendAgentText("steer"), [sendAgentText]);
   const onFollowUp = useCallback(
     () => sendAgentText("follow_up"),
-    [sendAgentText]
+    [sendAgentText],
   );
 
   // 切换 thinking level（同步到 runner + 后端 agent）
@@ -783,7 +839,7 @@ export function useChatStream(
         } catch {}
       }
     },
-    [agentId, agentAction, updateRunner, activeKeyRef]
+    [agentId, agentAction, updateRunner, activeKeyRef],
   );
 
   return {

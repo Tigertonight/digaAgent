@@ -20,6 +20,7 @@ import {
   narrateTool,
   shouldHideTool,
 } from "@/lib/narration/tool";
+import { diagnoseToolTruncation } from "@/lib/tool-recovery/truncation-diagnosis";
 import { requestToolNarration } from "@/app/lib/narration-client";
 
 type ToolPart = Extract<MessagePart, { kind: "tool" }>;
@@ -358,6 +359,35 @@ function DiffView({ lines }: { lines: DiffLine[] }) {
 
 function errorBanner(tool: ToolPart) {
   if (!tool.isError) return null;
+  const truncation =
+    tool.truncation ??
+    diagnoseToolTruncation({
+      toolName: tool.toolName,
+      isError: tool.isError,
+      input: tool.args,
+      result: tool.result ?? tool.partialResult,
+    });
+  if (truncation) {
+    return (
+      <div
+        className="mb-1 rounded-[var(--radius-sm)] border px-2 py-1.5 text-token-xs leading-relaxed"
+        style={{
+          borderColor: "var(--warning, #b8860b)",
+          background: "var(--bg-subtle)",
+          color: "var(--text)",
+        }}
+      >
+        <div className="font-semibold text-[color:var(--warning,#b8860b)]">
+          工具参数被截断
+        </div>
+        <div>{truncation.userMessage}</div>
+        <div className="mt-0.5 text-[color:var(--text-muted)]">
+          {truncation.field ? `字段：${truncation.field} · ` : ""}
+          策略：{truncation.recommendedStrategy}
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="mb-1 rounded-[var(--radius-sm)] border border-[color:var(--color-danger)] bg-[color:var(--color-danger-bg)] px-1.5 py-1 text-token-xs text-[color:var(--color-danger)]">
       tool error

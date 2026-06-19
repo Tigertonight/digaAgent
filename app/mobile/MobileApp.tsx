@@ -1420,9 +1420,11 @@ function MobileMessagePart({
   }
 
   if (part.kind === "workflow_run") {
+    const statusLabel =
+      part.status === "needs_continue" ? "需要继续" : part.status;
     return (
       <MobileDisclosure
-        title={`工作流 · ${part.status}`}
+        title={`工作流 · ${statusLabel}`}
         subtitle={part.objective}
         icon={<GitBranch size={14} />}
       >

@@ -817,6 +817,7 @@ export function Composer(props: ComposerProps) {
               </>
             ) : (
               <button
+                type="button"
                 onClick={() => void handleSend()}
                 disabled={sendDisabled}
                 className="inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-token-ui font-medium text-[color:var(--color-bg)] transition-opacity disabled:opacity-40"
