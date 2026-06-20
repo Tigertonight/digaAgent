@@ -189,8 +189,103 @@ describe("workflow script tool contract", () => {
     expect((tool.promptGuidelines ?? []).join("\n")).toContain(
       "SPLIT LONG WORKFLOWS"
     );
+    expect((tool.promptGuidelines ?? []).join("\n")).toContain(
+      "partial_markdown_fence"
+    );
+    expect((tool.promptGuidelines ?? []).join("\n")).toContain(
+      "REPORT TEMPLATES"
+    );
     // Reuse-first guidance is present (progressive disclosure).
     expect((tool.promptGuidelines ?? []).join("\n")).toContain("REUSE FIRST");
+  });
+
+  it("does not label non-blocking quality warnings as substantively incomplete", async () => {
+    const tool = createWorkflowScriptTool({
+      onRunWorkflow: async () => {
+        throw new Error("not used");
+      },
+      onRunWorkflowScript: async () => ({
+        workflowId: "wf-quality-warning",
+        objective: "Audit browser use.",
+        status: "completed_with_warnings",
+        manifest: {
+          capabilities: ["spawn_agent", "read_files"],
+          maxAgents: 8,
+          maxConcurrency: 4,
+          timeoutMs: 60000,
+          runtime: "process",
+        },
+        returnValue: "done",
+        artifacts: [],
+        checkpoints: [],
+        logs: [],
+        traceEvents: [],
+        warnings: ["报告产物「browser-use-audit-report」约 1489 字符，期望约 1500 字符"],
+        startedAt: 1,
+        endedAt: 2,
+      }),
+    });
+
+    const result = await tool.execute(
+      "call-quality-warning",
+      {
+        objective: "Audit browser use.",
+        rationale: "quality gate",
+        script: "return 'done';",
+      },
+      new AbortController().signal,
+      undefined,
+      {} as never
+    );
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    expect(text).not.toContain("substantively incomplete");
+    expect(text).toContain("quality warnings");
+    expect(text).toContain("offer to refine or extend the artifact");
+  });
+
+  it("still treats missing required workflow outputs as incomplete", async () => {
+    const tool = createWorkflowScriptTool({
+      onRunWorkflow: async () => {
+        throw new Error("not used");
+      },
+      onRunWorkflowScript: async () => ({
+        workflowId: "wf-missing-report",
+        objective: "Audit browser use.",
+        status: "completed_with_warnings",
+        manifest: {
+          capabilities: ["spawn_agent", "read_files"],
+          maxAgents: 8,
+          maxConcurrency: 4,
+          timeoutMs: 60000,
+          runtime: "process",
+        },
+        returnValue: "done",
+        artifacts: [],
+        checkpoints: [],
+        logs: [],
+        traceEvents: [],
+        warnings: ["必需产物「browser-use-audit-report」缺失"],
+        startedAt: 1,
+        endedAt: 2,
+      }),
+    });
+
+    const result = await tool.execute(
+      "call-missing-warning",
+      {
+        objective: "Audit browser use.",
+        rationale: "quality gate",
+        script: "return 'done';",
+      },
+      new AbortController().signal,
+      undefined,
+      {} as never
+    );
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    expect(text).toContain("missing or empty");
+    expect(text).toContain("incomplete");
   });
 
   it("persists script drafts in chunks and runs them by draftRef", async () => {

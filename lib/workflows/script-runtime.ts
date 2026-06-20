@@ -70,6 +70,10 @@ const BROWSER_WORKFLOW_AGENT_TOOLS = new Set([
   "browser_search",
   "browser_wait",
   "browser_wait_for",
+  "browser_scroll",
+  "browser_tabs",
+  "browser_tab_open",
+  "browser_tab_switch",
   "browser_extract",
   "browser_verify",
   "browser_annotations",
@@ -177,13 +181,197 @@ function cleanText(raw: string | undefined, limit: number): string {
   return (raw?.trim() ?? "").slice(0, limit);
 }
 
+export interface WorkflowScriptNormalizationDiagnostic {
+  code:
+    | "outer_fence_unwrapped"
+    | "markdown_wrapper_extracted"
+    | "embedded_fence_allowed";
+  message: string;
+}
+
+const COMPLETE_SCRIPT_FENCE_RE =
+  /^```(?:javascript|js)?\s*\n([\s\S]*?)\n```\s*$/i;
+
+function parseMarkdownCodeBlocks(
+  text: string,
+): Array<{ language: string; body: string; start: number; end: number }> {
+  const blocks: Array<{
+    language: string;
+    body: string;
+    start: number;
+    end: number;
+  }> = [];
+  const re = /```([A-Za-z0-9_-]*)[^\S\r\n]*(?:\r?\n)([\s\S]*?)(?:\r?\n)```/g;
+  for (const match of text.matchAll(re)) {
+    blocks.push({
+      language: (match[1] ?? "").toLowerCase(),
+      body: match[2] ?? "",
+      start: match.index ?? 0,
+      end: (match.index ?? 0) + match[0].length,
+    });
+  }
+  return blocks;
+}
+
+function firstNonEmptyLine(text: string): string {
+  return (
+    text
+      .split(/\r?\n/)
+      .find((line) => line.trim())
+      ?.trim() ?? ""
+  );
+}
+
+function looksLikeMarkdownOrProseWrapper(text: string): boolean {
+  const firstLine = firstNonEmptyLine(text);
+  if (!firstLine) return false;
+  if (/^```/.test(firstLine)) return true;
+  if (/^(#{1,6}\s|[-*]\s|\d+[.)]\s|(?:plan|outline|steps?)\s*:)/i.test(firstLine)) {
+    return true;
+  }
+  if (/^(here(?:'s| is)|below|script|workflow script|代码|脚本|计划|步骤)[:：\s]/i.test(firstLine)) {
+    return true;
+  }
+  return false;
+}
+
+function isJavaScriptFenceLanguage(language: string): boolean {
+  return language === "" || language === "js" || language === "javascript";
+}
+
+function findMarkdownFenceOutsideJavaScript(
+  text: string,
+): Array<{ index: number }> {
+  const hits: Array<{ index: number }> = [];
+  let state:
+    | "code"
+    | "single"
+    | "double"
+    | "template"
+    | "line_comment"
+    | "block_comment" = "code";
+  let escaped = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    const next = text[i + 1];
+
+    if (state === "line_comment") {
+      if (ch === "\n" || ch === "\r") state = "code";
+      continue;
+    }
+    if (state === "block_comment") {
+      if (ch === "*" && next === "/") {
+        state = "code";
+        i += 1;
+      }
+      continue;
+    }
+    if (state === "single" || state === "double" || state === "template") {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (state === "template" && text.startsWith("```", i)) {
+        i += 2;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (
+        (state === "single" && ch === "'") ||
+        (state === "double" && ch === '"') ||
+        (state === "template" && ch === "`")
+      ) {
+        state = "code";
+      }
+      continue;
+    }
+
+    if (text.startsWith("```", i)) {
+      hits.push({ index: i });
+      i += 2;
+      continue;
+    }
+    if (ch === "/" && next === "/") {
+      state = "line_comment";
+      i += 1;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      state = "block_comment";
+      i += 1;
+      continue;
+    }
+    if (ch === "'") {
+      state = "single";
+      continue;
+    }
+    if (ch === '"') {
+      state = "double";
+      continue;
+    }
+    if (ch === "`") {
+      state = "template";
+    }
+  }
+
+  return hits;
+}
+
+export function normalizeAndDiagnoseWorkflowScript(
+  raw: string | undefined,
+  maxChars = MAX_SCRIPT_CHARS,
+): { script: string; diagnostics: WorkflowScriptNormalizationDiagnostic[] } {
+  const text = cleanText(raw, maxChars);
+  const diagnostics: WorkflowScriptNormalizationDiagnostic[] = [];
+  const fenced = text.match(COMPLETE_SCRIPT_FENCE_RE);
+  if (fenced?.[1] !== undefined) {
+    diagnostics.push({
+      code: "outer_fence_unwrapped",
+      message:
+        "script_normalized.outer_fence_unwrapped: removed one complete outer JavaScript Markdown fence before validation.",
+    });
+    return { script: fenced[1].trim(), diagnostics };
+  }
+
+  const blocks = parseMarkdownCodeBlocks(text).filter((block) =>
+    isJavaScriptFenceLanguage(block.language),
+  );
+  if (blocks.length === 1 && looksLikeMarkdownOrProseWrapper(text)) {
+    const block = blocks[0];
+    const outside = `${text.slice(0, block.start)}\n${text.slice(block.end)}`;
+    if (outside.trim()) {
+      diagnostics.push({
+        code: "markdown_wrapper_extracted",
+        message:
+          "script_normalized.markdown_wrapper_extracted: extracted the single JavaScript fenced block from surrounding prose before validation.",
+      });
+      return { script: block.body.trim(), diagnostics };
+    }
+  }
+
+  if (
+    text.includes("```") &&
+    findMarkdownFenceOutsideJavaScript(text).length === 0
+  ) {
+    diagnostics.push({
+      code: "embedded_fence_allowed",
+      message:
+        "script_validation.embedded_fence_allowed: Markdown fence characters appear only inside JavaScript strings/comments.",
+    });
+  }
+
+  return { script: text, diagnostics };
+}
+
 export function normalizeWorkflowScriptBody(
   raw: string | undefined,
   maxChars = MAX_SCRIPT_CHARS,
 ): string {
-  const text = cleanText(raw, maxChars);
-  const fenced = text.match(/^```(?:javascript|js)?\s*\n([\s\S]*?)\n```\s*$/i);
-  return (fenced?.[1] ?? text).trim();
+  return normalizeAndDiagnoseWorkflowScript(raw, maxChars).script;
 }
 
 function serializeError(err: unknown): string {
@@ -321,9 +509,9 @@ function evaluateSuccessCriteria(
   for (const name of criteria.requiredArtifacts ?? []) {
     const artifact = byName.get(name);
     if (!artifact) {
-      warnings.push(`required artifact "${name}" is missing`);
+      warnings.push(`必需产物「${name}」缺失`);
     } else if (artifactStringValue(artifact.value).length === 0) {
-      warnings.push(`required artifact "${name}" is empty`);
+      warnings.push(`必需产物「${name}」为空`);
     }
   }
 
@@ -333,7 +521,7 @@ function evaluateSuccessCriteria(
     ).length;
     if (nonEmpty < criteria.minNonEmptyArtifacts) {
       warnings.push(
-        `only ${nonEmpty} non-empty artifact(s); expected at least ${criteria.minNonEmptyArtifacts}`,
+        `非空产物只有 ${nonEmpty} 个，期望至少 ${criteria.minNonEmptyArtifacts} 个`,
       );
     }
   }
@@ -343,10 +531,14 @@ function evaluateSuccessCriteria(
       ? byName.get(criteria.reportArtifact)
       : artifacts[artifacts.length - 1];
     const len = artifactStringValue(target?.value).length;
-    if (len < criteria.minReportChars) {
+    const hardMin = Math.max(
+      criteria.minReportChars > 0 ? 1 : 0,
+      Math.floor(criteria.minReportChars * 0.98),
+    );
+    if (len < hardMin) {
       const label = criteria.reportArtifact ?? target?.name ?? "report";
       warnings.push(
-        `report artifact "${label}" is ${len} chars; expected at least ${criteria.minReportChars}`,
+        `报告产物「${label}」约 ${len} 字符，期望约 ${criteria.minReportChars} 字符`,
       );
     }
   }
@@ -719,12 +911,19 @@ export function validateWorkflowScript(
     });
   }
 
-  if (/```/.test(text)) {
+  const markdownFenceHits = findMarkdownFenceOutsideJavaScript(text);
+  if (markdownFenceHits.length > 0) {
+    const completeBlocks = parseMarkdownCodeBlocks(text);
+    const partialFence =
+      markdownFenceHits.length % 2 === 1 || completeBlocks.length === 0;
     issues.push({
-      code: "markdown_fence",
-      message:
-        "Script contains Markdown code fences instead of a plain JavaScript body.",
-      fix: "Pass only the JavaScript async function body in script, or provide one complete fenced block so the runtime can unwrap it before validation.",
+      code: partialFence ? "partial_markdown_fence" : "markdown_wrapper_invalid",
+      message: partialFence
+        ? "Script contains an incomplete Markdown code fence outside JavaScript strings/comments."
+        : "Script mixes Markdown wrapper text/code fences with the JavaScript harness body.",
+      fix: partialFence
+        ? "Finish or remove the Markdown fence. For large scripts, save the harness in chunks with save_workflow_script_draft, read it back, then run via draftRef."
+        : "Pass only the JavaScript async function body in script, or one complete JavaScript fenced block. Do not include explanatory Markdown around the tool argument.",
     });
   }
 
@@ -2239,10 +2438,14 @@ export async function runWorkflowScript(
   rawInput: RunWorkflowScriptInput,
   externalSignal?: AbortSignal,
 ): Promise<WorkflowScriptResult> {
+  const normalizedScript = normalizeAndDiagnoseWorkflowScript(
+    rawInput.script,
+    MAX_SCRIPT_CHARS,
+  );
   const input: RunWorkflowScriptInput = {
     objective: cleanText(rawInput.objective, 2000),
     rationale: cleanText(rawInput.rationale, 2000),
-    script: normalizeWorkflowScriptBody(rawInput.script, MAX_SCRIPT_CHARS),
+    script: normalizedScript.script,
     draftRef: rawInput.draftRef,
     templateParams: rawInput.templateParams,
     templateRef: rawInput.templateRef,
@@ -2350,6 +2553,17 @@ export async function runWorkflowScript(
   };
 
   try {
+    for (const diagnostic of normalizedScript.diagnostics) {
+      const log = {
+        level: "info" as const,
+        message: diagnostic.message,
+        createdAt: now(),
+      };
+      logs.push(log);
+      appendWorkflowLog(workflowId, log);
+      deps.onEvent?.({ type: "workflow_log", workflowId, log });
+    }
+
     // Validate-then-run: fail fast with structured, actionable guidance before
     // spending a worker run on a script that cannot succeed.
     const issues = validateWorkflowScript(input.script, {

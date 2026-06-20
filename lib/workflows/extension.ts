@@ -159,7 +159,8 @@ const WorkflowScriptParams = Type.Object({
         ),
         minReportChars: Type.Optional(
           Type.Number({
-            description: "Minimum length of the report artifact's string form.",
+            description:
+              "Approximate minimum length of the report artifact's string form. The runtime treats tiny near misses as acceptable; generate comfortably above this target.",
           })
         ),
         reportArtifact: Type.Optional(
@@ -293,11 +294,18 @@ function scriptResultSummary(result: WorkflowScriptResult): string {
     );
   }
   if (result.warnings && result.warnings.length > 0) {
+    const blockingWarnings = result.warnings.filter((warning) =>
+      /缺失|为空|missing|required|empty/i.test(warning)
+    );
+    const guidance =
+      blockingWarnings.length > 0
+        ? "Some required workflow outputs are missing or empty. Treat those gaps as incomplete and ask the user to resume or retry the workflow before presenting a clean success."
+        : "These are quality warnings. Explain the caveat and, when useful, offer to refine or extend the artifact; do not describe the run as incomplete unless required outputs are missing.";
     lines.push(
       "",
       "## Quality warnings (end-state check failed)",
       ...result.warnings.map((w) => `- ${w}`),
-      "Treat this as substantively incomplete: report the gaps to the user; do not present it as a clean success."
+      guidance
     );
   }
   if (result.checkpoints.length > 0) {
@@ -425,12 +433,14 @@ export function createWorkflowScriptTool(
     promptGuidelines: [
       "REUSE FIRST (keeps scripts short and avoids truncation): before writing a new harness, call list_workflow_skills and list_workflow_templates. If a relevant one exists, run it via run_workflow_template({ templateId }) or run_workflow_script({ skillRef }) instead of regenerating a large script. Use read_workflow_resource only to inspect a specific candidate.",
       "SCRIPT DRAFTS: for large or iterative harnesses, save the script in a workflow draft first with save_workflow_script_draft. Build it in small replace/append edits, read it back, then run via run_workflow_script({ draftRef }). Do not keep a giant script in one tool argument when it can be persisted as a draft.",
+      "SCRIPT FORMAT: pass only the JavaScript async function body in script, or one complete outer ```js fenced block. Do not wrap the tool argument in prose plus Markdown fences. If validation reports partial_markdown_fence or markdown_wrapper_invalid, fix the current script/draft instead of retrying the same payload.",
       "SPLIT LONG WORKFLOWS: the workflow harness may live up to 24 hours, but child agents still run in 30-minute task windows. Use checkpoints/artifacts between phases: scan first, then focused audit stages, then final synthesis via resumeFromWorkflowId when continuing later.",
       "SCALE EFFORT TO COMPLEXITY: simple fact-finding = 1 agent / 3-10 tool calls; direct comparisons = 2-4 subagents; complex multi-part work = more subagents (up to maxAgents) with clearly divided, non-overlapping responsibilities. Do not over-spawn agents for simple tasks.",
       "KEEP THE HARNESS SMALL: prefer many small focused spawnAgent calls and let subagents write large outputs to files/artifacts, returning only lightweight references. Do not inline large prompts or data blobs into the script. If a harness gets large, factor it into a saved skill (save_workflow_skill) and reuse it.",
+      "REPORT TEMPLATES: do not inline large Markdown report templates or fenced Markdown examples directly into the harness. Ask subagents to write files/artifacts section by section, or store a draft/skill/template and run it by reference.",
       "REPORT FILE WRITES: when a spawned agent must write a long report/document, instruct it to write a short skeleton first, then append or edit one section at a time, then verify the file is non-empty. Never ask it to put the entire report into one write.content call.",
       "GATE QUALITY: when a stage fans out agents whose outputs feed a later synthesis step, call workflow.requireSuccess(results,{minSuccess,label}) before synthesizing, so the workflow fails fast instead of synthesizing from failed agents.",
-      "DECLARE SUCCESS CRITERIA: when the workflow produces a report or artifacts the user depends on, pass successCriteria (e.g. { requiredArtifacts: ['final-report'], minReportChars: 500 }). If the harness returns but these are unmet, the run is marked completed_with_warnings (not completed), so a formally-finished-but-empty result is not reported as success.",
+      "DECLARE SUCCESS CRITERIA: when the workflow produces a report or artifacts the user depends on, pass successCriteria (e.g. { requiredArtifacts: ['final-report'], minReportChars: 500 }). Treat minReportChars as a quality floor and write comfortably above it, not exactly to it. If the harness returns but these are unmet, the run is marked completed_with_warnings (not completed), so a formally-finished-but-empty result is not reported as success.",
       "Use run_workflow_script for complex tasks where a generated harness is clearer than a fixed stage list.",
       "The script runs inside an async function body. Use `return ...` for the final structured value.",
       "Available SDK: workflow.agent(prompt,{title,schema,isolation,agentType,tools,maxTurns,timeoutMs}), workflow.patterns.*, workflow.spawnAgent({title,prompt,role,cwd,allowedTools,maxTurns,timeoutMs}), workflow.askUser({title,question,context,options,recommendedOptionId}), workflow.fetchUrl({url,method,headers,body,maxBytes}), workflow.createWorktree({name,baseRef}), workflow.diffWorktree(worktree), workflow.mergeWorktree(worktree), workflow.removeWorktree(worktree), workflow.parallel([...]) (runs items with at most maxConcurrency in flight, queuing the rest; preserves input order), workflow.requireSuccess(results,{minSuccess,label}) (quality gate: throws if fewer than minSuccess spawnAgent results have status 'completed'; defaults to all; returns the successful subset), workflow.stage(title, fn), workflow.checkpoint(name,value), workflow.artifact(name,value), workflow.readArtifact(name), workflow.listArtifacts(), workflow.listTools(serverId), workflow.searchTools({query,serverId,detailLevel:'name'|'summary'|'full',limit}) (MCP progressive disclosure: discover only the tools you need at the detail you need, instead of loading every definition), workflow.callTool({server,tool,input}), workflow.log(message), workflow.warn(message), workflow.error(message), workflow.sleep(ms), and workflow.resume when resumeFromWorkflowId is provided. workflow.spawnAgent returns a subagent result with answer plus compatibility aliases text/output/summary.",

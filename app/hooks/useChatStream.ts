@@ -689,7 +689,9 @@ export function useChatStream(
           "4) 如果 run_workflow_script validation 失败，修正 script，或改用 saved skill/template；不要退回 delegate_subagents。",
           "5) 规划 workflow script：拆解步骤，在关键节点写 checkpoint 和 artifact；按复杂度配置 agent 数量（简单任务 1 个、对比类 2-4 个、复杂任务更多且分工明确），不要为简单任务过度并发。",
           "6) 质量门槛：扇出的子任务在进入综合前用 workflow.requireSuccess 把关；产出报告/产物时声明 successCriteria，避免“形式完成、实质为空”。",
-          "7) 执行完综合给出最终结果；若可复用，用 save_workflow_skill 沉淀。",
+          "7) 脚本格式：script 只传 JavaScript async function body，或一个完整外层 ```js 代码块；不要把说明文 + Markdown fence 混进工具参数。大脚本用 save_workflow_script_draft 分段保存后用 draftRef 执行。",
+          "8) 报告模板：不要把大段 Markdown 报告模板直接塞进 script；让子任务分段写文件/产物，或沉淀为 draft/skill/template。",
+          "9) 执行完综合给出最终结果；若可复用，用 save_workflow_skill 沉淀。",
         ].join("\n");
         const prompt = [
           text,

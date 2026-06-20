@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildWorkflowWorkerSpawnConfig,
   extractWorkflowJsonValue,
+  normalizeAndDiagnoseWorkflowScript,
   normalizeWorkflowScriptBody,
   runWorkflowScript,
   validateWorkflowScript,
@@ -1079,6 +1080,10 @@ describe("runWorkflowScript", () => {
               "browser_search",
               "browser_wait",
               "browser_wait_for",
+              "browser_scroll",
+              "browser_tabs",
+              "browser_tab_open",
+              "browser_tab_switch",
               "browser_extract",
               "browser_verify",
               "browser_annotations",
@@ -1102,6 +1107,10 @@ describe("runWorkflowScript", () => {
         "browser_search",
         "browser_wait",
         "browser_wait_for",
+        "browser_scroll",
+        "browser_tabs",
+        "browser_tab_open",
+        "browser_tab_switch",
         "browser_extract",
         "browser_verify",
         "browser_annotations",
@@ -2102,7 +2111,9 @@ describe("runWorkflowScript", () => {
     const partialFence = validateWorkflowScript(
       "```js\nawait workflow.spawnAgent({ title: 'Review', prompt: 'Review it.' });",
     );
-    expect(partialFence.map((i) => i.code)).toContain("markdown_fence");
+    expect(partialFence.map((i) => i.code)).toContain(
+      "partial_markdown_fence",
+    );
 
     const jsonToolArgs = validateWorkflowScript(
       JSON.stringify({
@@ -2160,6 +2171,87 @@ describe("runWorkflowScript", () => {
     expect(result.artifacts.find((a) => a.name === "final-report")?.value).toBe(
       "ok",
     );
+  });
+
+  it("allows Markdown fences inside JavaScript string content", async () => {
+    const script = [
+      "const report = \"Use markdown fences like ```markdown when describing report examples.\";",
+      "workflow.artifact('final-report', report);",
+      "return report;",
+    ].join("\n");
+
+    expect(validateWorkflowScript(script)).toEqual([]);
+
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-embedded-fence",
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Write report with embedded Markdown fence text.",
+        rationale:
+          "Regression for scripts that contain Markdown fences in JS strings.",
+        script,
+        successCriteria: { requiredArtifacts: ["final-report"] },
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.logs.some((log) =>
+      log.message.includes("script_validation.embedded_fence_allowed"),
+    )).toBe(true);
+    expect(
+      result.artifacts.find((a) => a.name === "final-report")?.value,
+    ).toContain("```markdown");
+  });
+
+  it("does not reject Markdown fences inside template literal content", () => {
+    const script = [
+      "const report = `Use this template:",
+      "```markdown",
+      "# Report",
+      "```",
+      "`;",
+      "return report;",
+    ].join("\n");
+
+    expect(validateWorkflowScript(script)).toEqual([]);
+  });
+
+  it("extracts a unique fenced JavaScript block from surrounding prose", () => {
+    const normalized = normalizeAndDiagnoseWorkflowScript(
+      [
+        "Here is the workflow script:",
+        "```js",
+        "workflow.artifact('final-report', 'ok');",
+        "return 'done';",
+        "```",
+      ].join("\n"),
+    );
+
+    expect(normalized.script).toBe(
+      "workflow.artifact('final-report', 'ok');\nreturn 'done';",
+    );
+    expect(normalized.diagnostics.map((d) => d.code)).toContain(
+      "markdown_wrapper_extracted",
+    );
+    expect(validateWorkflowScript(normalized.script)).toEqual([]);
+  });
+
+  it("rejects ambiguous Markdown-wrapped scripts without hiding the format problem", () => {
+    const issues = validateWorkflowScript(
+      [
+        "Here is the workflow script:",
+        "```js",
+        "return 'one';",
+        "```",
+        "```js",
+        "return 'two';",
+        "```",
+      ].join("\n"),
+    );
+
+    expect(issues.map((i) => i.code)).toContain("markdown_wrapper_invalid");
   });
 
   it("records the dynamic workflow script-generation failure case as a fast validation failure", async () => {
@@ -2259,6 +2351,31 @@ describe("runWorkflowScript", () => {
         },
         script: `
           workflow.artifact("final-report", "This is a sufficiently long report body.");
+          return "done";
+        `,
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.warnings).toBeUndefined();
+  });
+
+  it("does not downgrade near-threshold report length misses", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-criteria-near-threshold",
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Produce a report.",
+        rationale: "Verify minReportChars is a quality guard, not an exact byte gate.",
+        successCriteria: {
+          requiredArtifacts: ["browser-use-audit-report"],
+          reportArtifact: "browser-use-audit-report",
+          minReportChars: 1500,
+        },
+        script: `
+          workflow.artifact("browser-use-audit-report", "x".repeat(1489));
           return "done";
         `,
       },
