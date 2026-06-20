@@ -1,31 +1,20 @@
 import type { AgentProfile } from "./types";
 
 /**
- * 内置 agent profiles（Phase A：仅数据，不接线到运行时）。
+ * 内置 agent profiles。
  *
- * 轴取值对照 docs/plans/agent-profiles.md §5 的表；reasoning 使用 ThinkingLevel
- * 取值（minimal/low/medium/high）。这些 profile 都标 builtIn=true，不可直接编辑。
+ * 产品面只保留两种用户能稳定理解的工作形态：
+ * - daily: 日常问答 / 研究整理，低风险、只读、偏紧凑展示。
+ * - coding: 代码协作 / 修改验证，工作区可写、高推理、完整展示。
+ *
+ * 更细的 quick-chat / code-review / code-edit / yolo 等历史预设不再作为
+ * built-in 展示；resolve 层会把旧 id 迁移到这两个 canonical id。
  */
 export const BUILT_IN_PROFILES: readonly AgentProfile[] = [
   {
-    id: "quick-chat",
-    label: "Quick Chat",
-    description: "快速问答，不主动改环境。",
-    risk: "low",
-    builtIn: true,
-    defaults: {
-      communication: "daily",
-      approval: "always-ask",
-      sandbox: "read-only",
-      reasoning: "low",
-      display: "compact",
-      toolsets: ["chat"],
-    },
-  },
-  {
-    id: "daily-research",
-    label: "Daily Research",
-    description: "检索、整理、归纳，过程可展开。",
+    id: "daily",
+    label: "Daily",
+    description: "日常问答、检索、整理和归纳；默认只读、低风险。",
     risk: "low",
     builtIn: true,
     defaults: {
@@ -38,59 +27,14 @@ export const BUILT_IN_PROFILES: readonly AgentProfile[] = [
     },
   },
   {
-    id: "code-review",
-    label: "Code Review",
-    description: "读代码、找风险、给建议。",
-    risk: "low",
-    builtIn: true,
-    defaults: {
-      communication: "coding",
-      approval: "always-ask",
-      sandbox: "read-only",
-      reasoning: "high",
-      display: "full",
-      toolsets: ["code-read", "research"],
-    },
-  },
-  {
-    id: "code-edit",
-    label: "Code Edit",
-    description: "可修改工作区并验证。",
+    id: "coding",
+    label: "Coding",
+    description: "代码阅读、修改、工作流编排和验证；默认需要按需审批。",
     risk: "medium",
     builtIn: true,
     defaults: {
       communication: "coding",
       approval: "on-request",
-      sandbox: "workspace-write",
-      reasoning: "high",
-      display: "full",
-      toolsets: ["code-read", "code-write", "workflow"],
-    },
-  },
-  {
-    id: "workflow-planner",
-    label: "Workflow Planner",
-    description: "拆任务、生成计划、少执行。",
-    risk: "low",
-    builtIn: true,
-    defaults: {
-      communication: "daily",
-      approval: "always-ask",
-      sandbox: "read-only",
-      reasoning: "high",
-      display: "grouped",
-      toolsets: ["chat", "research", "workflow"],
-    },
-  },
-  {
-    id: "yolo-refactor",
-    label: "Yolo Refactor",
-    description: "在可回滚环境中自动推进（高风险）。",
-    risk: "high",
-    builtIn: true,
-    defaults: {
-      communication: "coding",
-      approval: "never",
       sandbox: "workspace-write",
       reasoning: "high",
       display: "full",
@@ -100,11 +44,25 @@ export const BUILT_IN_PROFILES: readonly AgentProfile[] = [
 ] as const;
 
 /**
- * 默认 profile：保持现状 communication=coding，read-only，零行为变更（见文档 §5.1）。
- * 引入 profile 抽象但不静默把存量用户切到 daily。
+ * 默认 profile：保持现状 communication=coding，避免静默把存量用户切到 daily。
  */
-export const DEFAULT_PROFILE_ID = "code-review";
+export const DEFAULT_PROFILE_ID = "coding";
+
+export const LEGACY_PROFILE_ALIASES: Readonly<Record<string, string>> = {
+  "quick-chat": "daily",
+  "daily-research": "daily",
+  "workflow-planner": "daily",
+  "code-review": "coding",
+  "code-edit": "coding",
+  "yolo-refactor": "coding",
+};
+
+export function canonicalProfileId(id: string | undefined): string | undefined {
+  if (!id) return undefined;
+  return LEGACY_PROFILE_ALIASES[id] ?? id;
+}
 
 export function getBuiltInProfile(id: string): AgentProfile | undefined {
-  return BUILT_IN_PROFILES.find((p) => p.id === id);
+  const canonical = canonicalProfileId(id);
+  return BUILT_IN_PROFILES.find((p) => p.id === canonical);
 }

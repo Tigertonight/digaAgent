@@ -18,6 +18,7 @@ import {
   RotateCw,
   Shield,
   Smartphone,
+  SlidersHorizontal,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -78,53 +79,66 @@ type SettingsSectionId =
   | "mobile";
 
 const SETTINGS_SECTIONS: Array<{
-  group: "核心" | "工具与集成" | "桌面与访问";
+  group: "模型" | "Agent 行为" | "安全与权限" | "工具与集成" | "设备与访问";
   id: SettingsSectionId;
   label: string;
   description: string;
   icon: typeof Shield;
 }> = [
   {
-    group: "核心",
+    group: "模型",
     id: "models",
     label: "模型与账号",
-    description: "管理模型服务商、API 密钥、OAuth 登录和自定义模型。",
+    description: "连接模型服务，管理密钥和自定义模型。",
     icon: FileSliders,
   },
   {
-    group: "核心",
+    group: "Agent 行为",
+    id: "agent-profiles",
+    label: "工作模式",
+    description: "选择日常或编程模式，决定默认沟通方式和处理深度。",
+    icon: SlidersHorizontal,
+  },
+  {
+    group: "Agent 行为",
+    id: "narration",
+    label: "过程说明",
+    description: "控制任务执行时的简短进度说明和改写等待时间。",
+    icon: Sparkles,
+  },
+  {
+    group: "安全与权限",
     id: "safety",
-    label: "安全与审批",
-    description: "控制高风险操作、工具审批和敏感访问边界。",
+    label: "操作确认",
+    description: "控制删除文件、重置 Git 等高风险操作前是否先询问。",
     icon: Shield,
   },
   {
-    group: "核心",
+    group: "安全与权限",
     id: "usage",
     label: "用量保护",
-    description: "限制单次任务的费用、轮数和运行时间。",
+    description: "为单次任务设置费用、轮数和运行时间上限。",
     icon: CreditCard,
   },
   {
-    group: "核心",
-    id: "agent-profiles",
-    label: "Agent Profiles",
-    description:
-      "选择工作 profile：沟通风格、推理强度、审批、权限边界、过程展示、工具族的打包配置。",
-    icon: Sparkles,
+    group: "安全与权限",
+    id: "browser",
+    label: "浏览器权限",
+    description: "管理 Agent 浏览网页时哪些站点可直接访问。",
+    icon: Compass,
   },
   {
-    group: "核心",
-    id: "narration",
-    label: "思维链叙事",
-    description: "控制工具反检过程的人话叙事体验、超时和可选 LLM 增强。",
-    icon: Sparkles,
+    group: "安全与权限",
+    id: "workflows",
+    label: "工作流联网",
+    description: "限制动态工作流能访问的域名和 URL。",
+    icon: Globe2,
   },
   {
     group: "工具与集成",
     id: "skills",
     label: "技能",
-    description: "管理 Agent 可用的技能、启用状态和安装来源。",
+    description: "管理 Agent 可使用的技能、启用状态和安装来源。",
     icon: Hammer,
   },
   {
@@ -135,33 +149,27 @@ const SETTINGS_SECTIONS: Array<{
     icon: Paperclip,
   },
   {
-    group: "工具与集成",
-    id: "browser",
-    label: "浏览器",
-    description: "管理浏览器自动化、站点权限和网页操作策略。",
-    icon: Compass,
-  },
-  {
-    group: "工具与集成",
-    id: "workflows",
-    label: "工作流网络",
-    description: "管理动态工作流的网络访问规则、模板和运行记录。",
-    icon: Globe2,
-  },
-  {
-    group: "桌面与访问",
+    group: "设备与访问",
     id: "desktop",
     label: "桌面运行",
-    description: "控制 Diga Agent 在屏保、锁屏和熄屏时的本机运行行为。",
+    description: "控制屏保、锁屏和熄屏时是否继续运行本地任务。",
     icon: MonitorCog,
   },
   {
-    group: "桌面与访问",
+    group: "设备与访问",
     id: "mobile",
     label: "移动端访问",
     description: "用手机连接这台电脑上的 Diga Agent。",
     icon: Smartphone,
   },
+];
+
+const SETTINGS_GROUPS: Array<(typeof SETTINGS_SECTIONS)[number]["group"]> = [
+  "模型",
+  "Agent 行为",
+  "安全与权限",
+  "工具与集成",
+  "设备与访问",
 ];
 
 const SECTION_META = Object.fromEntries(
@@ -230,7 +238,7 @@ function SettingsShell({
           返回应用
         </Link>
         <nav className="min-h-0 flex-1 overflow-y-auto pr-1">
-          {(["核心", "工具与集成", "桌面与访问"] as const).map((group) => (
+          {SETTINGS_GROUPS.map((group) => (
             <div key={group} className="mb-6">
               <div className="mb-2 px-3 text-token-sm font-semibold text-[color:var(--text-dim)]">
                 {group}
@@ -1882,7 +1890,11 @@ export default function SettingsPanel() {
       onSectionChange={changeSection}
       onRefresh={() => void refresh()}
       refreshDisabled={busy !== null}
-      onReloadServer={() => void reloadServer()}
+      onReloadServer={
+        activeSection === "models" || activeSection === "mobile"
+          ? () => void reloadServer()
+          : undefined
+      }
       reloadDisabled={busy !== null}
     >
       {error ? (

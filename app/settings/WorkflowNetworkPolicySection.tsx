@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   WorkflowNetworkAuditEntry,
   WorkflowNetworkPolicy,
@@ -18,6 +18,10 @@ function linesToList(value: string): string[] | undefined {
 
 function listToLines(value: string[] | undefined): string {
   return (value ?? []).join("\n");
+}
+
+function lineCount(value: string): number {
+  return linesToList(value)?.length ?? 0;
 }
 
 function appendUniqueLine(text: string, value: string): string {
@@ -42,6 +46,45 @@ function patternForUrl(raw: string): string | null {
   }
 }
 
+function accessSummary({
+  allowedOrigins,
+  deniedOrigins,
+  allowedUrlPatterns,
+  deniedUrlPatterns,
+  allowGet,
+  allowPost,
+}: {
+  allowedOrigins: string;
+  deniedOrigins: string;
+  allowedUrlPatterns: string;
+  deniedUrlPatterns: string;
+  allowGet: boolean;
+  allowPost: boolean;
+}) {
+  const allowCount = lineCount(allowedOrigins) + lineCount(allowedUrlPatterns);
+  const denyCount = lineCount(deniedOrigins) + lineCount(deniedUrlPatterns);
+  const methodLimited = allowGet || allowPost;
+  if (allowCount > 0) {
+    return {
+      label: "只允许清单内站点",
+      tone: "warning" as const,
+      detail: `已允许 ${allowCount} 项${denyCount > 0 ? `，另有 ${denyCount} 项禁止规则` : ""}${methodLimited ? "，并限制请求方式" : ""}。`,
+    };
+  }
+  if (denyCount > 0 || methodLimited) {
+    return {
+      label: "默认允许，带限制",
+      tone: "info" as const,
+      detail: `${denyCount > 0 ? `已禁止 ${denyCount} 项` : "未限制站点"}${methodLimited ? "，并限制请求方式" : ""}。`,
+    };
+  }
+  return {
+    label: "默认允许",
+    tone: "success" as const,
+    detail: "工作流可以访问公开网页；危险地址仍会被底层安全规则拦截。",
+  };
+}
+
 export function WorkflowNetworkPolicySection() {
   const [open, setOpen] = useState(false);
   const [allowedOrigins, setAllowedOrigins] = useState("");
@@ -61,6 +104,7 @@ export function WorkflowNetworkPolicySection() {
   >("");
   const [auditSearch, setAuditSearch] = useState("");
   const [auditLimit, setAuditLimit] = useState(50);
+  const [quickSite, setQuickSite] = useState("");
 
   const applyPolicy = useCallback((policy: WorkflowNetworkPolicy) => {
     setAllowedOrigins(listToLines(policy.allowedOrigins));
@@ -184,22 +228,193 @@ export function WorkflowNetworkPolicySection() {
     ]
   );
 
+  const summary = useMemo(
+    () =>
+      accessSummary({
+        allowedOrigins,
+        deniedOrigins,
+        allowedUrlPatterns,
+        deniedUrlPatterns,
+        allowGet,
+        allowPost,
+      }),
+    [
+      allowGet,
+      allowPost,
+      allowedOrigins,
+      allowedUrlPatterns,
+      deniedOrigins,
+      deniedUrlPatterns,
+    ]
+  );
+
+  const recentAudits = audits.slice(0, 3);
+  const hasPolicy =
+    lineCount(allowedOrigins) > 0 ||
+    lineCount(deniedOrigins) > 0 ||
+    lineCount(allowedUrlPatterns) > 0 ||
+    lineCount(deniedUrlPatterns) > 0 ||
+    allowGet ||
+    allowPost;
+
+  const applyQuickSite = useCallback(
+    async (type: "allow" | "deny") => {
+      const origin = originForUrl(quickSite);
+      if (!origin) {
+        setStatus("请输入完整网址，例如 https://example.com");
+        return;
+      }
+      if (type === "allow") {
+        const next = appendUniqueLine(allowedOrigins, origin);
+        setAllowedOrigins(next);
+        await saveWithPatch({ allowedOrigins: linesToList(next) });
+      } else {
+        const next = appendUniqueLine(deniedOrigins, origin);
+        setDeniedOrigins(next);
+        await saveWithPatch({ deniedOrigins: linesToList(next) });
+      }
+      setQuickSite("");
+    },
+    [allowedOrigins, deniedOrigins, quickSite, saveWithPatch]
+  );
+
   return (
-    <section className="mb-6 rounded-token border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-4">
-      <div className="flex items-start justify-between gap-3">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="min-w-0 flex-1 text-left"
-        >
-          <h2 className="mb-1 text-token-body font-semibold">
-            工作流网络访问规则
-          </h2>
-          <p className="mb-4 text-token-sm text-[color:var(--text-muted)]">
-            高级安全配置。用于限制工作流能访问哪些域名和 URL；禁止规则优先生效。
+    <section className="mb-6 space-y-4">
+      <div className="rounded-token border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-4">
+        <div className="min-w-0">
+          <div className="mb-1 flex flex-wrap items-center gap-2">
+            <h2 className="text-token-body font-semibold">联网权限</h2>
+            <Badge tone={summary.tone} variant="soft">
+              {summary.label}
+            </Badge>
+          </div>
+          <p className="text-token-sm leading-relaxed text-[color:var(--text-muted)]">
+            {summary.detail}
           </p>
-        </button>
-        <div className="flex shrink-0 items-center gap-2">
+        </div>
+
+        <div className="mt-4 flex flex-col gap-3 border-t border-[color:var(--border-soft)] pt-4">
+          <div className="text-token-sm font-medium text-[color:var(--text)]">
+            允许或禁止站点
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <FieldInput
+              value={quickSite}
+              onChange={(e) => setQuickSite(e.target.value)}
+              placeholder="https://example.com"
+              className="min-w-[260px] flex-1 font-mono"
+            />
+            <Button
+              type="button"
+              onClick={() => void applyQuickSite("allow")}
+              disabled={loading || saving || !quickSite.trim()}
+              size="sm"
+              tone="accent"
+              variant="soft"
+            >
+              允许该站点
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void applyQuickSite("deny")}
+              disabled={loading || saving || !quickSite.trim()}
+              size="sm"
+              tone="warning"
+              variant="outline"
+            >
+              禁止该站点
+            </Button>
+            {hasPolicy ? (
+              <Button
+                type="button"
+                onClick={() => void savePolicy({})}
+                disabled={loading || saving}
+                size="sm"
+                variant="outline"
+              >
+                恢复默认
+              </Button>
+            ) : null}
+          </div>
+          <p className="text-token-xs text-[color:var(--text-dim)]">
+            输入完整网址即可，系统会自动识别站点域名。需要限制具体路径时再使用高级规则。
+          </p>
+          {status ? (
+            <div className="text-token-sm text-[color:var(--text-muted)]">
+              {status}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mt-4 border-t border-[color:var(--border-soft)] pt-4">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h3 className="text-token-sm font-semibold text-[color:var(--text)]">
+              最近访问
+            </h3>
+            <Button
+              type="button"
+              onClick={() => void load()}
+              disabled={loading || saving}
+              size="xs"
+              variant="outline"
+            >
+              刷新
+            </Button>
+          </div>
+          {recentAudits.length === 0 ? (
+            <div className="text-token-sm text-[color:var(--text-dim)]">
+              暂无工作流联网记录。
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              {recentAudits.map((entry) => (
+                <AuditRow
+                  key={entry.id}
+                  entry={entry}
+                  disabled={saving}
+                  compact
+                  onAllowOrigin={async () => {
+                    const origin = originForUrl(entry.url);
+                    if (!origin) return;
+                    const next = appendUniqueLine(allowedOrigins, origin);
+                    setAllowedOrigins(next);
+                    await saveWithPatch({ allowedOrigins: linesToList(next) });
+                  }}
+                  onDenyOrigin={async () => {
+                    const origin = originForUrl(entry.url);
+                    if (!origin) return;
+                    const next = appendUniqueLine(deniedOrigins, origin);
+                    setDeniedOrigins(next);
+                    await saveWithPatch({ deniedOrigins: linesToList(next) });
+                  }}
+                  onDenyPattern={async () => {
+                    const pattern = patternForUrl(entry.url);
+                    if (!pattern) return;
+                    const next = appendUniqueLine(deniedUrlPatterns, pattern);
+                    setDeniedUrlPatterns(next);
+                    await saveWithPatch({ deniedUrlPatterns: linesToList(next) });
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-token border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-4">
+        <div className="flex items-start justify-between gap-3">
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="min-w-0 flex-1 text-left"
+          >
+            <h2 className="mb-1 text-token-body font-semibold">
+              高级规则
+            </h2>
+            <p className="text-token-sm text-[color:var(--text-muted)]">
+              精确限制域名、URL 路径和请求方法，并查看完整网络记录。
+            </p>
+          </button>
           <Button
             type="button"
             onClick={() => setOpen((v) => !v)}
@@ -208,23 +423,11 @@ export function WorkflowNetworkPolicySection() {
           >
             {open ? "收起" : "展开"}
           </Button>
-          {open ? (
-            <Button
-              type="button"
-              onClick={() => void load()}
-              disabled={loading || saving}
-              size="sm"
-              variant="outline"
-            >
-              {loading ? "加载中" : "刷新"}
-            </Button>
-          ) : null}
         </div>
-      </div>
 
       {open ? (
       <>
-      <div className="grid gap-3 md:grid-cols-2">
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
         <PolicyTextarea
           label="允许访问的域名"
           placeholder="https://api.example.com"
@@ -276,7 +479,7 @@ export function WorkflowNetworkPolicySection() {
 
       <div className="mt-4 flex items-center justify-between gap-3">
         <p className="text-token-xs leading-relaxed text-[color:var(--text-dim)]">
-          规则保存到本机配置文件，下一次工作流运行时自动生效。
+          规则保存后，下一次工作流运行时自动生效。
         </p>
         <Button
           type="button"
@@ -392,6 +595,7 @@ export function WorkflowNetworkPolicySection() {
       </div>
       </>
       ) : null}
+      </div>
     </section>
   );
 }
@@ -399,12 +603,14 @@ export function WorkflowNetworkPolicySection() {
 function AuditRow({
   entry,
   disabled,
+  compact = false,
   onAllowOrigin,
   onDenyOrigin,
   onDenyPattern,
 }: {
   entry: WorkflowNetworkAuditEntry;
   disabled: boolean;
+  compact?: boolean;
   onAllowOrigin: () => void | Promise<void>;
   onDenyOrigin: () => void | Promise<void>;
   onDenyPattern: () => void | Promise<void>;
@@ -417,7 +623,7 @@ function AuditRow({
         : "danger";
   return (
     <div className="rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg)] p-3">
-      <div className="flex items-start gap-2">
+      <div className={`flex items-start gap-2 ${compact ? "flex-col md:flex-row" : ""}`}>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2 text-token-sm">
             <Badge tone={tone} variant="soft">
@@ -445,7 +651,7 @@ function AuditRow({
             </div>
           ) : null}
         </div>
-        <div className="flex shrink-0 flex-col gap-1">
+        <div className={`flex shrink-0 gap-1 ${compact ? "flex-row flex-wrap" : "flex-col"}`}>
           <Button
             type="button"
             disabled={disabled}

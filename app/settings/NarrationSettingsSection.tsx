@@ -82,11 +82,11 @@ export function NarrationSettingsSection() {
   return (
     <section className="flex flex-col gap-5 text-token-sm leading-relaxed">
       <header className="flex flex-col gap-1">
-        <h2 className="text-token-lg font-semibold text-[color:var(--text)]">思维链叙事</h2>
+        <h2 className="text-token-lg font-semibold text-[color:var(--text)]">过程说明</h2>
         <p className="text-[color:var(--text-muted)]">
-          控制工具反检过程的人话叙事。关闭后只用规则文案；开启后会在
+          控制任务执行时的进度说明。关闭后只显示基础状态；开启后会在
           {` ${timeoutMs}ms `}
-          内尝试用 LLM 改写，超时自动回落规则文案。
+          内尝试改写成更自然的短句，超时会自动使用基础说明。
         </p>
       </header>
 
@@ -116,6 +116,9 @@ export function NarrationSettingsSection() {
             }}
           />
           <span>启用 LLM 叙事增强</span>
+          <span className="text-token-sm text-[color:var(--text-muted)]">
+            让进度说明更自然
+          </span>
         </label>
         {savedAt && !error ? (
           <span className="text-token-xs text-[color:var(--text-dim)]">已保存</span>
@@ -123,7 +126,7 @@ export function NarrationSettingsSection() {
       </div>
 
       <div className="flex flex-col gap-2">
-        <span className="text-[color:var(--text-muted)]">同步等待上限（毫秒）</span>
+        <span className="text-[color:var(--text-muted)]">等待改写时间</span>
         <div className="flex items-center gap-3">
           <input
             type="range"
@@ -139,31 +142,31 @@ export function NarrationSettingsSection() {
           <span className="tabular-nums">{timeoutMs} ms</span>
         </div>
         <p className="text-token-xs text-[color:var(--text-dim)]">
-          越短越能保证零延迟，越长越可能拿到 LLM 改写。推荐 600 - 1200 ms。
+          越短越快，越长越可能拿到更自然的说明。推荐 600 - 1200 ms。
         </p>
       </div>
 
       <details className="rounded-md border px-3 py-2"
         style={{ borderColor: "var(--border-soft)" }}>
         <summary className="cursor-pointer text-[color:var(--text-muted)]">
-          高级：单独指定叙事模型（默认跟随聊天模型）
+          高级：指定说明改写使用的模型
         </summary>
         <div className="mt-3 flex flex-col gap-2">
           <label className="flex flex-col gap-1">
-            <span className="text-token-xs text-[color:var(--text-muted)]">provider</span>
+            <span className="text-token-xs text-[color:var(--text-muted)]">服务商</span>
             <FieldInput
               value={provider}
-              placeholder="留空跟随 lastModel"
+              placeholder="留空则跟随当前聊天模型"
               onChange={(e) => setProvider(e.target.value)}
               onBlur={() => void save({ provider: provider.trim() || undefined })}
               disabled={loading || saving}
             />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-token-xs text-[color:var(--text-muted)]">modelId</span>
+            <span className="text-token-xs text-[color:var(--text-muted)]">模型 ID</span>
             <FieldInput
               value={modelId}
-              placeholder="留空跟随 lastModel"
+              placeholder="留空则跟随当前聊天模型"
               onChange={(e) => setModelId(e.target.value)}
               onBlur={() => void save({ modelId: modelId.trim() || undefined })}
               disabled={loading || saving}

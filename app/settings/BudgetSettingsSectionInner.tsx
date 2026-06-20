@@ -33,6 +33,15 @@ function fromDimState(s: DimState): number | undefined {
   return n;
 }
 
+function formatSeconds(value: string): string {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  if (n % 3600 === 0) return `${n / 3600} 小时`;
+  if (n % 60 === 0) return `${n / 60} 分钟`;
+  if (n > 60) return `约 ${Math.round(n / 60)} 分钟`;
+  return `${n} 秒`;
+}
+
 async function loadBudgetFromServer(): Promise<SessionBudget> {
   try {
     const r = await fetch("/api/budget-settings", { cache: "no-store" });
@@ -60,7 +69,7 @@ export default function BudgetSettingsSectionInner() {
   // 默认三维都关（不限流）。展示时仍给 input 一个友好的 placeholder 数值。
   const [cost, setCost] = useState<DimState>({ enabled: false, value: "5" });
   const [turns, setTurns] = useState<DimState>({ enabled: false, value: "30" });
-  const [dur, setDur] = useState<DimState>({ enabled: false, value: "600" });
+  const [dur, setDur] = useState<DimState>({ enabled: false, value: "1800" });
   const [action, setAction] = useState<"pause" | "stop">("pause");
 
   // mount 时拉服务端值。空 deps：ssr:false 包装 + 单次加载。
@@ -71,7 +80,7 @@ export default function BudgetSettingsSectionInner() {
       if (cancelled) return;
       setCost(toDimState(b.maxCostUsd, 5));
       setTurns(toDimState(b.maxTurns, 30));
-      setDur(toDimState(b.maxDurationSec, 600));
+      setDur(toDimState(b.maxDurationSec, 1800));
       setAction(b.action ?? "pause");
     })();
     return () => {
@@ -100,8 +109,7 @@ export default function BudgetSettingsSectionInner() {
     <section className="mb-6 rounded-token border border-[color:var(--border)] bg-[color:var(--bg-panel)] p-4">
       <h2 className="mb-1 text-token-body font-semibold">任务用量保护</h2>
       <p className="mb-4 text-token-sm text-[color:var(--text-muted)]">
-        默认不限流；任意启用一项后，达到上限会按下方策略处理。设置存到本机
-        {" "}<code>~/.diga-agent/settings.json</code>，重启不丢。
+        默认不限制。启用任意一项后，达到上限时会按下方策略处理。
       </p>
 
       <div className="flex flex-col gap-3 text-token-body">
@@ -177,7 +185,7 @@ export default function BudgetSettingsSectionInner() {
                 persist({ d: next });
               }}
             />
-            <span>最长时间</span>
+            <span>最长运行</span>
           </label>
           <FieldInput
             type="number"
@@ -193,6 +201,9 @@ export default function BudgetSettingsSectionInner() {
             className="w-32 font-mono disabled:opacity-50"
           />
           <span className="text-token-sm text-[color:var(--text-muted)]">秒</span>
+          <span className="text-token-sm text-[color:var(--text-dim)]">
+            {formatSeconds(dur.value)}
+          </span>
         </div>
 
         {/* Action */}

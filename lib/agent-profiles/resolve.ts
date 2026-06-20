@@ -2,6 +2,7 @@ import type { WorkMode } from "@/lib/communication/settings";
 import {
   BUILT_IN_PROFILES,
   DEFAULT_PROFILE_ID,
+  canonicalProfileId,
   getBuiltInProfile,
 } from "./built-in";
 import type {
@@ -43,7 +44,7 @@ export function normalizeAgentProfilesSettings(
   const customProfiles = Array.isArray(input?.customProfiles)
     ? input!.customProfiles.filter(isValidCustomProfile)
     : [];
-  const requestedId = input?.defaultProfileId;
+  const requestedId = canonicalProfileId(input?.defaultProfileId);
   const known =
     (requestedId && getBuiltInProfile(requestedId)) ||
     customProfiles.find((p) => p.id === requestedId);
@@ -61,10 +62,11 @@ export function resolveProfile(
   id: string | undefined,
   settings?: AgentProfilesSettings
 ): AgentProfile {
-  if (id) {
-    const builtIn = getBuiltInProfile(id);
+  const canonicalId = canonicalProfileId(id);
+  if (canonicalId) {
+    const builtIn = getBuiltInProfile(canonicalId);
     if (builtIn) return builtIn;
-    const custom = settings?.customProfiles.find((p) => p.id === id);
+    const custom = settings?.customProfiles.find((p) => p.id === canonicalId);
     if (custom) return custom;
   }
   return (

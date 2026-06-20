@@ -49,13 +49,13 @@ describe("communication settings", () => {
   // C-1: communication is now derived from the active agent profile's
   // communication axis (single source of truth), not the standalone field.
   it("derives workMode from the active profile's communication axis", async () => {
-    // default profile (code-review) -> coding
+    // default profile -> coding
     expect(await getCommunicationSettings()).toEqual({ workMode: "coding" });
 
-    // switch default profile to a daily-communication one -> daily
+    // switch default profile to daily -> daily
     writeFileSync(
       settingsFile,
-      JSON.stringify({ agentProfiles: { defaultProfileId: "daily-research" } })
+      JSON.stringify({ agentProfiles: { defaultProfileId: "daily" } })
     );
     expect(await getCommunicationSettings()).toEqual({ workMode: "daily" });
 
@@ -64,8 +64,22 @@ describe("communication settings", () => {
       settingsFile,
       JSON.stringify({
         communication: { workMode: "daily" }, // legacy field must be ignored
-        agentProfiles: { defaultProfileId: "code-edit" },
+        agentProfiles: { defaultProfileId: "coding" },
       })
+    );
+    expect(await getCommunicationSettings()).toEqual({ workMode: "coding" });
+  });
+
+  it("maps legacy agent profile ids to their canonical communication mode", async () => {
+    writeFileSync(
+      settingsFile,
+      JSON.stringify({ agentProfiles: { defaultProfileId: "daily-research" } })
+    );
+    expect(await getCommunicationSettings()).toEqual({ workMode: "daily" });
+
+    writeFileSync(
+      settingsFile,
+      JSON.stringify({ agentProfiles: { defaultProfileId: "code-review" } })
     );
     expect(await getCommunicationSettings()).toEqual({ workMode: "coding" });
   });

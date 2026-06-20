@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Badge, Button } from "@/app/components/DesignPrimitives";
 import { userFacingMessage } from "@/lib/user-facing-error";
 import type {
   AgentProfile,
@@ -9,9 +10,9 @@ import type {
 } from "@/lib/agent-profiles/types";
 
 const RISK_LABEL: Record<AgentProfile["risk"], string> = {
-  low: "低风险",
-  medium: "中风险",
-  high: "高风险",
+  low: "更保守",
+  medium: "平衡",
+  high: "更主动",
 };
 
 const AXIS_LABELS: Array<{ key: keyof ProfileAxes; label: string }> = [
@@ -23,9 +24,66 @@ const AXIS_LABELS: Array<{ key: keyof ProfileAxes; label: string }> = [
   { key: "toolsets", label: "工具族" },
 ];
 
+const AXIS_VALUE_LABELS: Partial<Record<keyof ProfileAxes, Record<string, string>>> = {
+  communication: {
+    daily: "日常表达",
+    coding: "工程表达",
+  },
+  approval: {
+    "on-request": "需要时询问",
+  },
+  sandbox: {
+    "read-only": "默认只读",
+    "workspace-write": "可修改工作区",
+  },
+  reasoning: {
+    medium: "标准",
+    high: "更深入",
+  },
+  display: {
+    grouped: "摘要展示",
+    full: "完整展示",
+  },
+  toolsets: {
+    chat: "对话",
+    research: "检索",
+    browser: "浏览器",
+    "code-read": "代码阅读",
+    "code-write": "代码修改",
+    workflow: "工作流",
+  },
+};
+
 function axisValue(axes: ProfileAxes, key: keyof ProfileAxes): string {
   const v = axes[key];
-  return Array.isArray(v) ? v.join(", ") : String(v);
+  const labels = AXIS_VALUE_LABELS[key] ?? {};
+  if (Array.isArray(v)) {
+    return v.map((item) => labels[item] ?? item).join("、");
+  }
+  const raw = String(v);
+  return labels[raw] ?? raw;
+}
+
+function profileDisplay(profile: AgentProfile) {
+  if (profile.id === "daily") {
+    return {
+      title: "日常模式",
+      summary: "适合问答、检索、整理和归纳。回答更轻量，默认更保守。",
+      details: "默认偏只读，适合不需要改代码的任务。",
+    };
+  }
+  if (profile.id === "coding") {
+    return {
+      title: "编程模式",
+      summary: "适合阅读代码、修改实现、运行检查和编排工作流。",
+      details: "会使用更深入的推理和更完整的过程展示，需要时仍会请求确认。",
+    };
+  }
+  return {
+    title: profile.label,
+    summary: profile.description,
+    details: profile.builtIn ? "内置模式" : "自定义模式",
+  };
 }
 
 export function AgentProfilesSettingsSection() {
@@ -98,15 +156,10 @@ export function AgentProfilesSettingsSection() {
     <section className="flex flex-col gap-5">
       <header className="flex flex-col gap-1">
         <h2 className="text-token-lg font-semibold text-[color:var(--text)]">
-          Agent Profiles
+          工作模式
         </h2>
         <p className="text-token-body text-[color:var(--text-muted)]">
-          每个 profile 是一组配置轴的打包：沟通风格、审批、权限边界、推理强度、过程展示、工具族。
-          这里可以查看每个 profile 背后的轴，并选择默认 profile。
-        </p>
-        <p className="text-token-sm text-[color:var(--text-dim)]">
-          注意：当前阶段仅展示与默认选择，profile 尚未真正改变工具权限或执行行为（后续阶段接入）。
-          权限边界在系统级沙盒就绪前为软边界（靠工具可见性 + 审批实现）。
+          选择 Agent 默认用哪种方式开始工作。日常模式更轻，编程模式更适合代码和复杂任务。
         </p>
       </header>
 
@@ -129,73 +182,68 @@ export function AgentProfilesSettingsSection() {
         <div className="flex flex-col gap-3">
           {profiles.map((profile) => {
             const selected = profile.id === defaultId;
+            const display = profileDisplay(profile);
             return (
               <div
                 key={profile.id}
-                className={`rounded-md border p-4 ${
+                className={`rounded-md border bg-[color:var(--bg-panel)] p-4 transition ${
                   selected
-                    ? "border-[color:var(--bg-selected)] bg-[color:var(--bg-selected)]"
-                    : "border-[color:var(--border)] bg-[color:var(--bg-panel)]"
+                    ? "border-[color:var(--accent)]"
+                    : "border-[color:var(--border)]"
                 }`}
               >
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-token-lg font-semibold text-[color:var(--text)]">
-                        {profile.label}
+                        {display.title}
                       </span>
-                      <span
-                        className="rounded-full border px-2 py-0.5 text-token-xs"
-                        style={{
-                          borderColor:
-                            profile.risk === "high"
-                              ? "var(--color-danger)"
-                              : "var(--border)",
-                          color:
-                            profile.risk === "high"
-                              ? "var(--color-danger)"
-                              : "var(--text-muted)",
-                        }}
-                      >
+                      <Badge tone={profile.risk === "high" ? "warning" : "default"} variant="outline">
                         {RISK_LABEL[profile.risk]}
-                      </span>
+                      </Badge>
                       {profile.builtIn ? (
-                        <span className="text-token-xs text-[color:var(--text-dim)]">
+                        <Badge tone="default" variant="outline">
                           内置
-                        </span>
+                        </Badge>
                       ) : null}
                     </div>
                     <div className="mt-1 text-token-body text-[color:var(--text-muted)]">
-                      {profile.description}
+                      {display.summary}
+                    </div>
+                    <div className="mt-1 text-token-sm text-[color:var(--text-dim)]">
+                      {display.details}
                     </div>
                   </div>
-                  <button
-                    type="button"
+                  <Button
                     disabled={saving || selected}
                     onClick={() => void selectDefault(profile.id)}
                     aria-pressed={selected}
-                    className={`shrink-0 rounded-md border px-3 py-1.5 text-token-sm transition disabled:cursor-not-allowed ${
-                      selected
-                        ? "border-[color:var(--accent)] text-[color:var(--accent)]"
-                        : "border-[color:var(--border)] text-[color:var(--text)] hover:bg-[color:var(--bg-hover)]"
-                    }`}
+                    className="shrink-0"
+                    size="sm"
+                    tone={selected ? "accent" : "default"}
+                    variant={selected ? "soft" : "outline"}
                   >
                     {selected ? "默认" : "设为默认"}
-                  </button>
+                  </Button>
                 </div>
 
-                <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1.5 md:grid-cols-3">
-                  {AXIS_LABELS.map(({ key, label }) => (
-                    <div key={key} className="min-w-0">
-                      <dt className="text-token-xs text-[color:var(--text-dim)]">
-                        {label}
-                      </dt>
-                      <dd className="truncate text-token-sm text-[color:var(--text)]">
-                        {axisValue(profile.defaults, key)}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
+                <details className="mt-3 rounded-token border border-[color:var(--border-soft)] bg-[color:var(--bg)] px-3 py-2">
+                  <summary className="cursor-pointer text-token-sm font-medium text-[color:var(--text-muted)]">
+                    查看详细配置
+                  </summary>
+                  <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 md:grid-cols-3">
+                    {AXIS_LABELS.map(({ key, label }) => (
+                      <div key={key} className="min-w-0">
+                        <dt className="text-token-xs text-[color:var(--text-dim)]">
+                          {label}
+                        </dt>
+                        <dd className="truncate text-token-sm text-[color:var(--text)]">
+                          {axisValue(profile.defaults, key)}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                </details>
               </div>
             );
           })}

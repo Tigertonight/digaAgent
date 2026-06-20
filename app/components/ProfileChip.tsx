@@ -8,11 +8,7 @@ import type {
 } from "@/lib/agent-profiles/types";
 
 /**
- * 只读 profile chip（Phase B）。
- *
- * 展示当前生效的 profile（Phase B 阶段 = 全局默认 profile；session 级 override 在
- * 后续 Phase 接入）。纯展示，不改变任何运行时行为。自包含拉取，避免改动 Composer
- * 的 props 链路。点击打开一个小的轴摘要 popover。
+ * 展示当前默认工作模式。点击打开简短摘要，避免在 composer 里直接暴露底层配置枚举。
  */
 export function ProfileChip() {
   const [profile, setProfile] = useState<AgentProfile | null>(null);
@@ -49,6 +45,24 @@ export function ProfileChip() {
   if (!profile) return null;
 
   const axes = profile.defaults;
+  const displayName =
+    profile.id === "daily" ? "日常" : profile.id === "coding" ? "编程" : profile.label;
+  const displayDescription =
+    profile.id === "daily"
+      ? "适合问答、检索、整理和归纳。"
+      : profile.id === "coding"
+        ? "适合代码阅读、修改和验证。"
+        : profile.description;
+  const approvalLabel =
+    axes.approval === "on-request" ? "需要时询问" : axes.approval;
+  const sandboxLabel =
+    axes.sandbox === "workspace-write"
+      ? "可修改工作区"
+      : axes.sandbox === "read-only"
+        ? "默认只读"
+        : axes.sandbox;
+  const reasoningLabel = axes.reasoning === "high" ? "更深入" : "标准";
+  const displayLabel = axes.display === "full" ? "完整展示" : "摘要展示";
 
   return (
     <span className="relative">
@@ -57,10 +71,10 @@ export function ProfileChip() {
         onClick={() => setOpen((v) => !v)}
         className="inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs hover:bg-[color:var(--bg-hover)]"
         style={{ borderColor: "var(--border)" }}
-        title={`当前 profile：${profile.label}`}
+        title={`当前工作模式：${displayName}`}
       >
         <Sparkles size={12} />
-        {profile.label}
+        {displayName}
       </button>
       {open ? (
         <div
@@ -71,24 +85,24 @@ export function ProfileChip() {
             color: "var(--text)",
           }}
         >
-          <div className="mb-1 font-semibold">{profile.label}</div>
+          <div className="mb-1 font-semibold">{displayName}模式</div>
           <div className="mb-2 text-[color:var(--text-muted)]">
-            {profile.description}
+            {displayDescription}
           </div>
           <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
             <dt className="text-[color:var(--text-dim)]">沟通</dt>
-            <dd>{axes.communication}</dd>
+            <dd>{axes.communication === "coding" ? "工程表达" : "日常表达"}</dd>
             <dt className="text-[color:var(--text-dim)]">审批</dt>
-            <dd>{axes.approval}</dd>
+            <dd>{approvalLabel}</dd>
             <dt className="text-[color:var(--text-dim)]">权限</dt>
-            <dd>{axes.sandbox}</dd>
+            <dd>{sandboxLabel}</dd>
             <dt className="text-[color:var(--text-dim)]">推理</dt>
-            <dd>{axes.reasoning}</dd>
+            <dd>{reasoningLabel}</dd>
             <dt className="text-[color:var(--text-dim)]">展示</dt>
-            <dd>{axes.display}</dd>
+            <dd>{displayLabel}</dd>
           </dl>
           <div className="mt-2 text-[10px] text-[color:var(--text-dim)]">
-            只读预览，暂不改变执行行为。可在设置 · Agent Profiles 中切换默认。
+            可在设置 · 工作模式 中切换默认。
           </div>
         </div>
       ) : null}

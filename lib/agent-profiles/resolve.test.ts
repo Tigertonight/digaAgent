@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   BUILT_IN_PROFILES,
   DEFAULT_PROFILE_ID,
+  canonicalProfileId,
   communicationToWorkMode,
   getBuiltInProfile,
   normalizeAgentProfilesSettings,
@@ -16,9 +17,12 @@ describe("built-in profiles", () => {
   it("default profile keeps the current coding communication (no silent behavior change)", () => {
     const def = getBuiltInProfile(DEFAULT_PROFILE_ID);
     expect(def).toBeDefined();
-    // §5.1 hard constraint: default must stay coding + read-only.
+    // Hard constraint: default must stay coding.
     expect(def!.defaults.communication).toBe("coding");
-    expect(def!.defaults.sandbox).toBe("read-only");
+  });
+
+  it("only exposes the two canonical built-in profiles", () => {
+    expect(BUILT_IN_PROFILES.map((p) => p.id)).toEqual(["daily", "coding"]);
   });
 
   it("all built-ins have unique ids and a complete axes set", () => {
@@ -31,12 +35,14 @@ describe("built-in profiles", () => {
     }
   });
 
-  it("only yolo-refactor is high risk + auto-approval", () => {
-    const yolo = getBuiltInProfile("yolo-refactor")!;
-    expect(yolo.risk).toBe("high");
-    expect(yolo.defaults.approval).toBe("never");
-    const others = BUILT_IN_PROFILES.filter((p) => p.id !== "yolo-refactor");
-    expect(others.every((p) => p.defaults.approval !== "never")).toBe(true);
+  it("keeps legacy profile ids as aliases to the two canonical ids", () => {
+    expect(canonicalProfileId("quick-chat")).toBe("daily");
+    expect(canonicalProfileId("daily-research")).toBe("daily");
+    expect(canonicalProfileId("workflow-planner")).toBe("daily");
+    expect(canonicalProfileId("code-review")).toBe("coding");
+    expect(canonicalProfileId("code-edit")).toBe("coding");
+    expect(canonicalProfileId("yolo-refactor")).toBe("coding");
+    expect(getBuiltInProfile("code-review")?.id).toBe("coding");
   });
 });
 
@@ -49,8 +55,8 @@ describe("communication <-> WorkMode mapping (no double source)", () => {
   });
 
   it("profileWorkMode derives WorkMode from the profile axis", () => {
-    expect(profileWorkMode(getBuiltInProfile("daily-research")!)).toBe("daily");
-    expect(profileWorkMode(getBuiltInProfile("code-edit")!)).toBe("coding");
+    expect(profileWorkMode(getBuiltInProfile("daily")!)).toBe("daily");
+    expect(profileWorkMode(getBuiltInProfile("coding")!)).toBe("coding");
   });
 });
 
@@ -67,14 +73,25 @@ describe("normalizeAgentProfilesSettings", () => {
 
   it("keeps a valid built-in default id", () => {
     expect(
+      normalizeAgentProfilesSettings({ defaultProfileId: "daily" })
+        .defaultProfileId
+    ).toBe("daily");
+  });
+
+  it("migrates legacy built-in default ids to canonical ids", () => {
+    expect(
+      normalizeAgentProfilesSettings({ defaultProfileId: "daily-research" })
+        .defaultProfileId
+    ).toBe("daily");
+    expect(
       normalizeAgentProfilesSettings({ defaultProfileId: "code-edit" })
         .defaultProfileId
-    ).toBe("code-edit");
+    ).toBe("coding");
   });
 
   it("drops malformed custom profiles", () => {
     const settings = normalizeAgentProfilesSettings({
-      defaultProfileId: "code-review",
+      defaultProfileId: "coding",
       customProfiles: [
         { id: "bad" } as unknown as AgentProfile, // missing label/defaults
         {
@@ -83,7 +100,7 @@ describe("normalizeAgentProfilesSettings", () => {
           description: "",
           risk: "low",
           builtIn: false,
-          defaults: getBuiltInProfile("code-review")!.defaults,
+          defaults: getBuiltInProfile("coding")!.defaults,
         },
       ],
     });
@@ -97,7 +114,7 @@ describe("normalizeAgentProfilesSettings", () => {
       description: "",
       risk: "low",
       builtIn: false,
-      defaults: getBuiltInProfile("daily-research")!.defaults,
+      defaults: getBuiltInProfile("daily")!.defaults,
     };
     const settings = normalizeAgentProfilesSettings({
       defaultProfileId: "mine",
@@ -109,7 +126,12 @@ describe("normalizeAgentProfilesSettings", () => {
 
 describe("resolveProfile", () => {
   it("resolves built-in by id", () => {
-    expect(resolveProfile("code-edit").id).toBe("code-edit");
+    expect(resolveProfile("coding").id).toBe("coding");
+  });
+
+  it("resolves legacy built-in ids to canonical profiles", () => {
+    expect(resolveProfile("code-edit").id).toBe("coding");
+    expect(resolveProfile("daily-research").id).toBe("daily");
   });
 
   it("resolves custom by id from settings", () => {
@@ -119,7 +141,7 @@ describe("resolveProfile", () => {
       description: "",
       risk: "low",
       builtIn: false,
-      defaults: getBuiltInProfile("daily-research")!.defaults,
+      defaults: getBuiltInProfile("daily")!.defaults,
     };
     const settings = normalizeAgentProfilesSettings({
       defaultProfileId: DEFAULT_PROFILE_ID,
@@ -136,9 +158,9 @@ describe("resolveProfile", () => {
 
 describe("profileAxesSnapshot", () => {
   it("returns a deep-ish copy whose toolsets do not alias the source", () => {
-    const profile = getBuiltInProfile("code-edit")!;
+    const profile = getBuiltInProfile("coding")!;
     const snap = profileAxesSnapshot(profile);
-    snap.toolsets.push("browser");
-    expect(profile.defaults.toolsets).not.toContain("browser");
+    snap.toolsets.push("chat");
+    expect(profile.defaults.toolsets).not.toContain("chat");
   });
 });
