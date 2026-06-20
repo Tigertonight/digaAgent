@@ -3320,6 +3320,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
               activeAssistantIndex={chatState.activeAssistantIndex}
               agentPhase={agentPhase}
               cwd={cwd}
+              goal={goal}
               streaming={streaming}
               compacting={compacting}
               compactError={compactError}

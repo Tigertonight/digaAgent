@@ -1,5 +1,8 @@
 # Session 生命周期审计报告
 
+> 归档说明：这是历史审计快照，不代表当前 Overview / Workbench 的最新行为。
+> 当前实现请以 `app/components/WorkbenchSidebar.tsx` 和 e2e / vitest 测试为准。
+
 范围（只读）：
 - app/ChatApp.tsx
 - app/hooks/useSessions.ts
@@ -592,4 +595,3 @@ useEffect(() => {
 - `app/api/sessions/[id]/route.ts:91-128` 的级联删除流程是"deleteMeta / deletePersistedProgress / removeBatchesByParentSessionPath"按顺序执行，与 P-Finding 1/4 直接相关，但属上层调用方，未列入本次 finding 主体。
 - 反序列化失败处理：`readMeta` 对 ENOENT/解析失败均返回 null（仅 console.warn），符合"损坏文件不挂全表"语义；未发现额外问题。
 - writeMeta 已实现 tmp+rename+fsync+fsyncDir，原子写本身是正确的；本次 finding 集中在锁 / 调用边界。
-

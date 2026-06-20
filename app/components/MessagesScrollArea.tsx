@@ -2,7 +2,7 @@
 
 import type { RefObject } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { CheckCircle2, Loader2, Pause, Target, XCircle } from "lucide-react";
 import { MessageView } from "./MessageView";
 import { UiFaultBoundary } from "./UiFaultBoundary";
 import { ChatMinimap } from "../ChatMinimap";
@@ -10,7 +10,9 @@ import type { ChatMessage } from "@/lib/types";
 import type { MessagePart } from "@/lib/types";
 import type { AgentPhase } from "@/lib/session-runner";
 import type { ProviderInfo } from "@/lib/types";
+import type { AgentGoal } from "@/lib/goal/types";
 import type { WorkflowWorktreeAction } from "./MessageView";
+import { goalAcceptanceSummary, goalStatusLabel } from "@/lib/goal/labels";
 import {
   buildProcessSummary,
   type ProcessSummary,
@@ -33,6 +35,7 @@ interface MessagesScrollAreaProps {
   activeAssistantIndex: number;
   agentPhase: AgentPhase;
   cwd: string;
+  goal?: AgentGoal | null;
   streaming: boolean;
   compacting: boolean;
   compactError: string | null;
@@ -90,6 +93,7 @@ export function MessagesScrollArea({
   activeAssistantIndex,
   agentPhase,
   cwd,
+  goal,
   streaming,
   compacting,
   compactError,
@@ -243,6 +247,7 @@ export function MessagesScrollArea({
         // 跟随” · “用户手动滚后 400ms 不抢”的逻辑，不需要浏览器额外 anchor。
         style={{ overflowAnchor: "none" }}
       >
+        {goal && <StickyGoalSummary goal={goal} />}
         <div className="mx-auto w-full max-w-[820px] px-4 py-5 space-y-4">
           {error && (
             <div
@@ -438,6 +443,52 @@ export function MessagesScrollArea({
         scrollContainer={messagesScrollRef}
         messageRefs={messageRefs}
       />
+    </div>
+  );
+}
+
+function stickyGoalTone(goal: AgentGoal) {
+  if (goal.status === "complete")
+    return { color: "var(--color-success)", icon: CheckCircle2 };
+  if (goal.status === "blocked")
+    return { color: "var(--color-danger)", icon: XCircle };
+  if (goal.status === "paused")
+    return { color: "var(--color-warning)", icon: Pause };
+  return { color: "var(--accent)", icon: Target };
+}
+
+function StickyGoalSummary({ goal }: { goal: AgentGoal }) {
+  const tone = stickyGoalTone(goal);
+  const Icon = tone.icon;
+  return (
+    <div
+      className="sticky top-0 z-10 border-b px-4 py-2 backdrop-blur"
+      style={{
+        borderColor: "var(--border-soft)",
+        background: "color-mix(in srgb, var(--bg) 92%, transparent)",
+        color: "var(--text)",
+      }}
+      role="status"
+      data-testid="sticky-goal-summary"
+    >
+      <div className="mx-auto flex w-full max-w-[820px] items-center gap-2 text-token-xs">
+        <Icon size={13} className="shrink-0" style={{ color: tone.color }} />
+        <span
+          className="shrink-0 rounded px-1.5 py-0.5"
+          style={{ background: "var(--bg-selected)", color: tone.color }}
+        >
+          {goalStatusLabel(goal)}
+        </span>
+        <span className="min-w-0 flex-1 truncate" title={goal.objective}>
+          {goal.objective}
+        </span>
+        <span className="hidden shrink-0 sm:inline" style={{ color: "var(--text-muted)" }}>
+          {goalAcceptanceSummary(goal.acceptanceCriteria)}
+        </span>
+        <span className="shrink-0 tabular-nums" style={{ color: "var(--text-muted)" }}>
+          {goal.turns} 轮
+        </span>
+      </div>
     </div>
   );
 }

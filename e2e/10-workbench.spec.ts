@@ -203,10 +203,10 @@ test("workbench: Tab OS 支持创建菜单、推荐项和本地 URL 过滤", asy
 
   await page.getByLabel("Workbench 面板").click();
   await expect(page.getByTestId("workbench-home-launcher")).toBeVisible();
-  await expect(page.getByTestId("workbench-launch-文件")).toBeVisible();
-  await expect(page.getByTestId("workbench-launch-浏览器")).toBeVisible();
-  await expect(page.getByTestId("workbench-launch-终端")).toBeVisible();
-  await expect(page.getByTestId("workbench-launch-概览")).toBeVisible();
+  await expect(page.getByTestId("workbench-launch-files")).toBeVisible();
+  await expect(page.getByTestId("workbench-launch-browser")).toBeVisible();
+  await expect(page.getByTestId("workbench-launch-terminal")).toBeVisible();
+  await expect(page.getByTestId("workbench-launch-overview")).toBeVisible();
 
   await page.getByTestId("workbench-create-tab").click();
   await expect(page.getByTestId("workbench-create-menu")).toBeVisible();

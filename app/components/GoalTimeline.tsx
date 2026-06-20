@@ -9,7 +9,12 @@ import {
   Loader2,
   XCircle,
 } from "lucide-react";
-import type { GoalEvidence, GoalTurn } from "@/lib/goal/types";
+import type { AgentGoal, GoalEvidence, GoalTurn } from "@/lib/goal/types";
+import {
+  GOAL_ACCEPTANCE_STATUS_LABELS,
+  GOAL_TURN_STATUS_LABELS,
+  goalAcceptanceSummary,
+} from "@/lib/goal/labels";
 import { userFacingMessage } from "@/lib/user-facing-error";
 
 export interface GoalTimelineProps {
@@ -19,6 +24,7 @@ export interface GoalTimelineProps {
 }
 
 interface TimelinePayload {
+  goal?: AgentGoal | null;
   turns: GoalTurn[];
   evidence: GoalEvidence[];
 }
@@ -71,6 +77,7 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
       // useCallback 重建后老 closure 里仍是老 aidAtStart — 不能仅靠该判断。
       // 用下面的 useEffect 里的 cancelled token 是主要防护。
       setData({
+        goal: json.goal ?? null,
         turns: Array.isArray(json.turns) ? json.turns : [],
         evidence: Array.isArray(json.evidence) ? json.evidence : [],
       });
@@ -100,6 +107,7 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
         const json = (await res.json()) as Partial<TimelinePayload>;
         if (cancelled) return;
         setData({
+          goal: json.goal ?? null,
           turns: Array.isArray(json.turns) ? json.turns : [],
           evidence: Array.isArray(json.evidence) ? json.evidence : [],
         });
@@ -158,8 +166,12 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
         <>
           {data.turns.length === 0 && data.evidence.length === 0 && (
             <div style={{ color: "var(--text-muted)" }}>
-              No turns or evidence recorded yet.
+              还没有记录执行轮次或证据。
             </div>
+          )}
+
+          {data.goal && (
+            <GoalTimelineAcceptance goal={data.goal} />
           )}
 
           {data.turns.length > 0 && (
@@ -168,7 +180,7 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
                 className="mb-1 font-medium uppercase tracking-wide text-token-xs"
                 style={{ color: "var(--text-muted)" }}
               >
-                Turns ({data.turns.length})
+                执行轮次 ({data.turns.length})
               </div>
               <ol className="space-y-1">
                 {data.turns.map((turn) => {
@@ -186,7 +198,9 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
                           <span className="font-medium">#{turn.turnNumber}</span>
-                          <span style={{ color }}>{turn.status}</span>
+                          <span style={{ color }}>
+                            {GOAL_TURN_STATUS_LABELS[turn.status]}
+                          </span>
                           <span
                             className="text-token-xs"
                             style={{ color: "var(--text-muted)" }}
@@ -212,7 +226,7 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
                             title={turn.blockedReason}
                             style={{ color: "var(--color-danger)" }}
                           >
-                            blocked: {turn.blockedReason}
+                            阻塞：{turn.blockedReason}
                           </div>
                         )}
                       </div>
@@ -229,7 +243,7 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
                 className="mb-1 font-medium uppercase tracking-wide text-token-xs"
                 style={{ color: "var(--text-muted)" }}
               >
-                Evidence ({data.evidence.length})
+                证据 ({data.evidence.length})
               </div>
               <ul className="space-y-1">
                 {data.evidence.map((ev) => (
@@ -269,6 +283,58 @@ export function GoalTimeline({ agentId, open }: GoalTimelineProps) {
             </div>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+function GoalTimelineAcceptance({ goal }: { goal: AgentGoal }) {
+  const criteria = goal.acceptanceCriteria ?? [];
+  return (
+    <div className="mb-2">
+      <div
+        className="mb-1 font-medium uppercase tracking-wide text-token-xs"
+        style={{ color: "var(--text-muted)" }}
+      >
+        验收标准 · {goalAcceptanceSummary(criteria)}
+      </div>
+      {criteria.length === 0 ? (
+        <div style={{ color: "var(--text-muted)" }}>
+          该 goal 未定义验收标准。
+        </div>
+      ) : (
+        <ul className="space-y-1">
+          {criteria.map((criterion) => {
+            const met = criterion.status === "met";
+            const failed = criterion.status === "failed";
+            const color = met
+              ? "var(--color-success)"
+              : failed
+                ? "var(--color-danger)"
+                : "var(--text-muted)";
+            const Icon = met ? CheckCircle2 : failed ? XCircle : CircleDot;
+            return (
+              <li key={criterion.id} className="flex items-start gap-1.5">
+                <Icon size={12} className="mt-0.5 shrink-0" style={{ color }} />
+                <div className="min-w-0 flex-1">
+                  <div
+                    className={met ? "line-through" : undefined}
+                    style={{
+                      color: met ? "var(--text-muted)" : "var(--text)",
+                      opacity: met ? 0.72 : 1,
+                    }}
+                  >
+                    {criterion.criterion}
+                  </div>
+                  <div className="text-token-xs" style={{ color }}>
+                    {GOAL_ACCEPTANCE_STATUS_LABELS[criterion.status]}
+                    {criterion.evidence ? ` · ${criterion.evidence}` : ""}
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </div>
   );

@@ -20,6 +20,8 @@ import {
   narrateTool,
   shouldHideTool,
 } from "@/lib/narration/tool";
+import { redactSecrets } from "@/lib/narration/redact";
+import { toolStatusLabel } from "@/lib/i18n/phase-label";
 import { diagnoseToolTruncation } from "@/lib/tool-recovery/truncation-diagnosis";
 import { requestToolNarration } from "@/app/lib/narration-client";
 
@@ -85,16 +87,28 @@ function StatusDot({
   const color =
     recovered
       ? "var(--text-dim)"
+      : status === "queued"
+      ? "var(--text-muted)"
       : status === "running"
       ? "var(--text-muted)"
       : status === "error"
         ? "var(--color-danger)"
+        : status === "timeout"
+          ? "var(--warning, #b8860b)"
+          : status === "cancelled"
+            ? "var(--text-dim)"
         : "var(--text-dim)";
   return (
-    <span
-      className="mt-[7px] inline-block h-1.5 w-1.5 shrink-0 rounded-full"
-      style={{ background: color }}
-    />
+    <span className="mt-[7px] inline-flex shrink-0 items-center">
+      <span
+        className="inline-block h-1.5 w-1.5 rounded-full"
+        style={{ background: color }}
+        aria-hidden
+      />
+      <span className="sr-only" role="status" aria-live="polite">
+        {toolStatusLabel(status)}
+      </span>
+    </span>
   );
 }
 
@@ -115,7 +129,16 @@ function ToolFrame({
   questionContext?: string;
   recovered?: boolean;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const shouldAutoOpen =
+    defaultOpen ||
+    tool.status === "error" ||
+    tool.status === "timeout" ||
+    tool.status === "cancelled" ||
+    Boolean(tool.isError || tool.truncation);
+  const [open, setOpen] = usePersistedDisclosure(
+    `tool:${tool.toolName}:${tool.toolCallId}`,
+    shouldAutoOpen
+  );
   const narration = useMemo(() => narrateTool(tool), [tool]);
   const narrationKey = useMemo(
     () =>
@@ -176,6 +199,7 @@ function ToolFrame({
         onClick={() => setOpen((v) => !v)}
         className="flex w-full items-start gap-2 rounded-md px-1.5 py-1.5 text-left hover:bg-[color:var(--bg-hover)]"
         aria-expanded={open}
+        aria-busy={tool.status === "running" || tool.status === "queued"}
       >
         <StatusDot status={tool.status} recovered={recovered} />
         <span className="min-w-0 flex-1">
@@ -228,7 +252,7 @@ function ToolFrame({
         >
           <div className="mb-1 flex items-center gap-2 text-token-xs" style={{ color: "var(--text-muted)" }}>
             <span className="font-mono">{tool.toolName}</span>
-            <span>{tool.status}</span>
+            <span>{toolStatusLabel(tool.status)}</span>
             {subtitle ? <span className="truncate">{subtitle}</span> : null}
             <span className="truncate">{title}</span>
           </div>
@@ -244,28 +268,87 @@ function recoveredNarration(primary: string): string {
   return label ? `已处理失败：${label}` : "已处理失败";
 }
 
+function usePersistedDisclosure(
+  key: string,
+  defaultOpen: boolean
+): [boolean, (updater: boolean | ((value: boolean) => boolean)) => void] {
+  const storageKey = `diga:disclosure:${key}`;
+  const [open, setOpenState] = useState(defaultOpen);
+  useEffect(() => {
+    try {
+      const stored = window.sessionStorage.getItem(storageKey);
+      if (stored !== "1" && stored !== "0") return;
+      window.queueMicrotask(() => setOpenState(stored === "1"));
+    } catch {
+      /* sessionStorage can be unavailable in restricted contexts */
+    }
+  }, [storageKey]);
+  const setOpen = (updater: boolean | ((value: boolean) => boolean)) => {
+    setOpenState((current) => {
+      const next = typeof updater === "function" ? updater(current) : updater;
+      try {
+        window.sessionStorage.setItem(storageKey, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+  return [open, setOpen];
+}
+
 function CodeBlock({
   text,
   lang,
   maxHeight = 320,
+  redact = true,
 }: {
   text: string;
   lang?: string;
   maxHeight?: number;
+  redact?: boolean;
 }) {
+  const redactedText = redact ? redactSecrets(text) : text;
+  const hasSensitiveRedaction = redact && redactedText !== text;
+  const [showSensitiveRaw, setShowSensitiveRaw] = useState(false);
+  const displayText = showSensitiveRaw ? text : redactedText;
   return (
-    <pre
-      className="text-token-xs leading-[1.45] overflow-auto rounded p-2 whitespace-pre"
-      style={{
-        background: "var(--bg-app)",
-        maxHeight,
-        fontFamily:
-          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-      }}
-      data-lang={lang}
-    >
-      {text}
-    </pre>
+    <div className="space-y-1">
+      {hasSensitiveRedaction && (
+        <div className="flex items-center justify-between gap-2 rounded border px-2 py-1 text-token-xs"
+          style={{
+            borderColor: "var(--warning, #b8860b)",
+            color: "var(--warning, #b8860b)",
+            background: "var(--bg-subtle)",
+          }}
+        >
+          <span>敏感内容已脱敏</span>
+          <button
+            type="button"
+            className="rounded border px-1.5 py-0.5 hover:opacity-85"
+            style={{
+              borderColor: "var(--warning, #b8860b)",
+              color: "var(--warning, #b8860b)",
+            }}
+            onClick={() => setShowSensitiveRaw((value) => !value)}
+          >
+            {showSensitiveRaw ? "隐藏原文" : "显示原文（敏感）"}
+          </button>
+        </div>
+      )}
+      <pre
+        className="text-token-xs leading-[1.45] overflow-auto rounded p-2 whitespace-pre"
+        style={{
+          background: "var(--bg-app)",
+          maxHeight,
+          fontFamily:
+            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+        }}
+        data-lang={lang}
+      >
+        {displayText}
+      </pre>
+    </div>
   );
 }
 
@@ -492,6 +575,8 @@ function EditTool({ tool, questionContext, recovered }: ToolRenderProps) {
   const path = asString(getArg(tool.args, "path", "file_path", "file"));
   const oldStr = asString(getArg(tool.args, "oldString", "old_string", "old"));
   const newStr = asString(getArg(tool.args, "newString", "new_string", "new"));
+  const redactedOld = redactSecrets(oldStr);
+  const redactedNew = redactSecrets(newStr);
   const [mode, setMode] = useState<"diff" | "code" | "raw">("diff");
   const noChange = isNoChange(oldStr, newStr);
   return (
@@ -507,9 +592,9 @@ function EditTool({ tool, questionContext, recovered }: ToolRenderProps) {
       <ViewModeSwitch
         mode={mode}
         modes={[
-          { id: "diff", label: "Diff" },
-          { id: "code", label: "Code" },
-          { id: "raw", label: "Raw" },
+          { id: "diff", label: "差异" },
+          { id: "code", label: "代码" },
+          { id: "raw", label: "原始" },
         ]}
         onChange={(m) => setMode(m as typeof mode)}
       />
@@ -519,14 +604,14 @@ function EditTool({ tool, questionContext, recovered }: ToolRenderProps) {
             className="text-token-xs px-2 py-1 rounded"
             style={{ background: "var(--bg-app)", color: "var(--fg-faint)" }}
           >
-            No changes
+            无变更
           </div>
         ) : (
-          <DiffView lines={unifiedDiff(oldStr, newStr)} />
+          <DiffView lines={unifiedDiff(redactedOld, redactedNew)} />
         ))}
       {mode === "code" && (
         <div className="space-y-1">
-          <div className="text-token-xs opacity-60">- old</div>
+          <div className="text-token-xs opacity-60">- 旧内容</div>
           <pre
             className="text-token-xs overflow-auto rounded p-2 whitespace-pre"
             style={{
@@ -535,9 +620,9 @@ function EditTool({ tool, questionContext, recovered }: ToolRenderProps) {
               maxHeight: 200,
             }}
           >
-            {oldStr || "(empty)"}
+            {redactedOld || "(empty)"}
           </pre>
-          <div className="text-token-xs opacity-60">+ new</div>
+          <div className="text-token-xs opacity-60">+ 新内容</div>
           <pre
             className="text-token-xs overflow-auto rounded p-2 whitespace-pre"
             style={{
@@ -546,7 +631,7 @@ function EditTool({ tool, questionContext, recovered }: ToolRenderProps) {
               maxHeight: 200,
             }}
           >
-            {newStr || "(empty)"}
+            {redactedNew || "(empty)"}
           </pre>
         </div>
       )}
@@ -566,13 +651,13 @@ function WriteTool({ tool, questionContext, recovered }: ToolRenderProps) {
   const [mode, setMode] = useState<"code" | "preview" | "raw">("code");
   const modes = isHtml
     ? [
-        { id: "code", label: "Code" },
-        { id: "preview", label: "Preview" },
-        { id: "raw", label: "Raw" },
+        { id: "code", label: "代码" },
+        { id: "preview", label: "预览" },
+        { id: "raw", label: "原始" },
       ]
     : [
-        { id: "code", label: "Code" },
-        { id: "raw", label: "Raw" },
+        { id: "code", label: "代码" },
+        { id: "raw", label: "原始" },
       ];
   return (
     <ToolFrame
@@ -717,7 +802,7 @@ function GenericTool({ tool, questionContext, recovered }: ToolRenderProps) {
       questionContext={questionContext}
       recovered={recovered}
       title={tool.toolName}
-      subtitle={tool.status}
+      subtitle={toolStatusLabel(tool.status)}
     >
       {errorBanner(tool)}
       <ToolImages tool={tool} />

@@ -122,6 +122,7 @@ export type MessagePart =
       startedAt?: number;
       /** 离开 thinking（出现 text/tool）时记的墙钟时间（ms） */
       endedAt?: number;
+      endedReason?: "ok" | "aborted" | "error";
     }
   | {
       kind: "image";
@@ -140,8 +141,8 @@ export type MessagePart =
       result?: unknown;
       isError?: boolean;
       truncation?: ToolTruncationDiagnosis;
-      /** 进行中 / 完成 / 出错 */
-      status: "running" | "done" | "error";
+      /** 排队 / 进行中 / 完成 / 出错 / 超时 / 取消 */
+      status: "queued" | "running" | "done" | "error" | "timeout" | "cancelled";
     }
   | {
       /**

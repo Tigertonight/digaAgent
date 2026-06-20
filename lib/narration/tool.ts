@@ -10,6 +10,8 @@ import {
   shorten,
   summarizeToolError as summarizeToolErrorFromResult,
 } from "./tool-utils";
+import { toolPhasePrefix } from "@/lib/i18n/phase-label";
+import { redactSecrets } from "./redact";
 
 export {
   asString,
@@ -61,7 +63,7 @@ export function narrateTool(tool: ToolPart): ToolNarration {
   if (shouldHideTool(tool)) return { primary: "", hidden: true };
   const name = normalizeToolName(tool.toolName);
   const phase = phaseText(tool.status);
-  const errorText = tool.status === "error" || tool.isError ? summarizeToolError(tool) : "";
+  const errorText = isProblemStatus(tool) ? summarizeToolError(tool) : "";
   const path = pathArg(tool);
   const cmd = commandArg(tool);
   const skill = detectSkillFromPath(path) || detectSkillFromPath(cmd);
@@ -105,9 +107,7 @@ export function summarizeToolError(tool: ToolPart): string {
 }
 
 function phaseText(status: ToolPart["status"]): string {
-  if (status === "running") return "正在";
-  if (status === "error") return "执行失败：";
-  return "已完成：";
+  return toolPhasePrefix(status);
 }
 /**
  * 识别"工具调用被截断"特征：schema 校验报某个必填字段缺失（如 write 缺 content、
@@ -131,7 +131,13 @@ export function detectTruncatedToolCall(errorText: string): string | null {
 }
 
 function withFailure(tool: ToolPart, narration: ToolNarration, errorText: string): ToolNarration {
-  if (tool.status !== "error" && !tool.isError) return narration;
+  if (!isProblemStatus(tool)) return narration;
+  if (tool.status === "cancelled" && !errorText) {
+    return { ...narration, recovery: "这一步已被取消，未按失败处理。需要继续时可以从当前上下文重新发起。" };
+  }
+  if (tool.status === "timeout" && !errorText) {
+    return { ...narration, recovery: "这一步超过时间窗口，建议缩小操作范围、分段执行，或从当前进度重试。" };
+  }
   const truncatedField = detectTruncatedToolCall(errorText);
   if (truncatedField) {
     const cause = `遇到的问题：工具调用疑似被截断——缺少必填字段「${truncatedField}」（${shorten(errorText, 120)}）。`;
@@ -142,6 +148,9 @@ function withFailure(tool: ToolPart, narration: ToolNarration, errorText: string
   }
   const cause = errorText ? `遇到的问题：${errorText}` : "工具返回了错误状态。";
   return { ...narration, recovery: `${cause} 接下来应根据错误信息调整参数、换一条更稳的路径，或在必要时重试。` };
+}
+function isProblemStatus(tool: ToolPart): boolean {
+  return tool.status === "error" || tool.status === "timeout" || tool.status === "cancelled" || Boolean(tool.isError);
 }
 function browserNarration(name: string, target: string, status: ToolPart["status"]): ToolNarration {
   const phase = phaseText(status);
@@ -175,7 +184,7 @@ function describeCliCommand(command: string): { verb: string; object?: string } 
   return { verb: "帮你查询知识库", object: rest || undefined };
 }
 function cleanCommandForDisplay(command: string): string { return shorten(stripSecrets(command).replace(/\s+/g, " ").trim(), 120); }
-function stripSecrets(text: string): string { return text.replace(/(--cookie|--token|--secret|--password)\s+\S+/gi, "$1 ***").replace(/(cookie|token|secret|password)=\S+/gi, "$1=***"); }
+function stripSecrets(text: string): string { return redactSecrets(text); }
 function stripFlags(text: string): string { return stripSecrets(text).replace(/--[\w-]+(?:\s+\S+)?/g, "").replace(/\s+/g, " ").trim(); }
 /**
  * 从一条 "... grep/rg [flags] PATTERN [paths…]" 形式的命令里提取 PATTERN。

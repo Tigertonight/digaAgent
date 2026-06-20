@@ -195,6 +195,29 @@ export function createInitialState(messages: ChatMessage[] = []): ReducerState {
   return { messages, activeAssistantIndex: -1 };
 }
 
+function normalizedVisibleUserTextFromText(text: string | undefined): string {
+  return stripContextAside(text ?? "").trim();
+}
+
+function normalizedVisibleUserTextFromParts(
+  parts: MessagePart[] | undefined,
+): string {
+  return (parts ?? [])
+    .filter((part): part is Extract<MessagePart, { kind: "text" }> =>
+      part.kind === "text"
+    )
+    .map((part) => stripContextAside(part.text))
+    .join("")
+    .trim();
+}
+
+function normalizedVisibleUserText(message: ChatMessage): string {
+  return (
+    normalizedVisibleUserTextFromParts(message.parts) ||
+    normalizedVisibleUserTextFromText(message.text)
+  );
+}
+
 function ensureAssistant(state: ReducerState): {
   msg: ChatMessage;
   idx: number;
@@ -223,6 +246,7 @@ function appendToLastTextPart(parts: MessagePart[], delta: string) {
 }
 
 function appendToLastThinkingPart(parts: MessagePart[], delta: string) {
+  if (!delta.trim() && parts[parts.length - 1]?.kind !== "thinking") return;
   const last = parts[parts.length - 1];
   if (last && last.kind === "thinking") {
     parts[parts.length - 1] = { ...last, text: last.text + delta };
@@ -391,12 +415,15 @@ function assistantIndexInCurrentTurn(
 }
 
 /** thinking 段已经"翻篇"——出现 text 或 tool 时调用，给最后一个未结束的 thinking 打 endedAt */
-function sealLastThinkingIfOpen(parts: MessagePart[]) {
+function sealLastThinkingIfOpen(
+  parts: MessagePart[],
+  endedReason: Extract<MessagePart, { kind: "thinking" }>["endedReason"] = "ok"
+) {
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i];
     if (p.kind !== "thinking") return;
     if (p.endedAt === undefined) {
-      parts[i] = { ...p, endedAt: Date.now() };
+      parts[i] = { ...p, endedAt: Date.now(), endedReason };
     }
     return;
   }
@@ -802,7 +829,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
       const parts: MessagePart[] = [];
       // 与 message_start 里的 stripContextAside 保持同步 normalize：trim 末尾空白，
       // 避免衰变时 lastText 带 \n、textJoined 不带 \n 造成双气泡。
-      const visibleText = stripContextAside(text).replace(/\s+$/u, "");
+      const visibleText = normalizedVisibleUserTextFromText(text);
       if (visibleText) parts.push({ kind: "text", text: visibleText });
       for (const img of images) {
         if (img.data && img.mimeType) {
@@ -840,9 +867,9 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
       const requestId = (ev as unknown as { clientRequestId?: string })
         .clientRequestId;
       // 同上：ack 写入的 displayText 也 trim 末尾，保证后续 message_start 衰变能命中。
-      const finalText = (
-        (ev as unknown as { displayText?: string }).displayText ?? ""
-      ).replace(/\s+$/u, "");
+      const finalText = normalizedVisibleUserTextFromText(
+        (ev as unknown as { displayText?: string }).displayText,
+      );
       if (!requestId) return state;
       for (let i = state.messages.length - 1; i >= 0; i -= 1) {
         const msg = state.messages[i];
@@ -893,7 +920,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
       if (index < 0 || index >= state.messages.length) return state;
       const current = state.messages[index];
       if (!current || current.role !== "user") return state;
-      const text = stripContextAside(ev.text ?? "");
+      const text = normalizedVisibleUserTextFromText(ev.text);
       const parts: MessagePart[] = text ? [{ kind: "text", text }] : [];
       state.messages = state.messages.slice(0, index + 1);
       state.messages[index] = {
@@ -939,7 +966,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         //   3. 【兼容兑底】last 是 pending optimistic、没带 clientRequestId（老客户端 /
         //      未重发路径），但 visible 文本与 textJoined 完全一致，同样衰变。
         //      仅在 last.pending === true 且文本完全相等时生效，安全。
-        const textJoinedNorm = textJoined.trim();
+        const textJoinedNorm = normalizedVisibleUserTextFromText(textJoined);
         const replaceOptimisticUser = (index: number) => {
           const previous = state.messages[index];
           if (!previous) return;
@@ -956,13 +983,13 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         };
         const lastIdx = state.messages.length - 1;
         const last = lastIdx >= 0 ? state.messages[lastIdx] : null;
-        const lastText = last?.text ?? "";
+        const lastText = last ? normalizedVisibleUserText(last) : "";
         // 文本对比用 trim 后的 normalized 形式：
         //   - server displayText（来自 composePromptWithAside）保留用户原文末尾空白；
         //   - SDK 写进 jsonl 的 finalText 一定带 CONTEXT_ASIDE（withCommunicationInstructions
         //     总会包一层），message_start 走 stripContextAside 慢路径会 trim 掉末尾换行。
         //   - 不 normalize 时 lastText="hello\n"、textJoined="hello" → 衰变 miss → 双气泡。
-        const lastTextNorm = lastText.trim();
+        const lastTextNorm = lastText;
         const textsMatch = lastTextNorm === textJoinedNorm;
         const isPendingOptimistic =
           !!last &&
@@ -996,8 +1023,13 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
           for (let i = state.messages.length - 2; i >= 0; i -= 1) {
             const candidate = state.messages[i];
             if (!candidate || candidate.role !== "user") continue;
-            if (typeof candidate.clientRequestId !== "string") continue;
-            const candidateTextNorm = (candidate.text ?? "").trim();
+            const isOptimisticOrModeUser =
+              typeof candidate.clientRequestId === "string" ||
+              candidate.pending === true ||
+              candidate.composerMeta?.mode === "workflow" ||
+              candidate.composerMeta?.mode === "goal";
+            if (!isOptimisticOrModeUser) continue;
+            const candidateTextNorm = normalizedVisibleUserText(candidate);
             if (candidateTextNorm !== textJoinedNorm) continue;
             replaceOptimisticUser(i);
             if (
@@ -1157,8 +1189,14 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         }
         parts = reconcileFinalTextParts(parts, m.content);
         parts = appendAssistantErrorFallback(parts, m);
+        const thinkingEndReason =
+          m.stopReason === "aborted"
+            ? "aborted"
+            : m.stopReason === "error"
+              ? "error"
+              : "ok";
         // 不管哪种来源，最后一个未结束的 thinking 在结束时间打个 endedAt
-        sealLastThinkingIfOpen(parts);
+        sealLastThinkingIfOpen(parts, thinkingEndReason);
         state.messages[state.activeAssistantIndex] = {
           ...cur,
           parts,
@@ -1634,12 +1672,21 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
           input: tp.args,
           result: ev.result,
         });
+        const resultText =
+          typeof ev.result === "string" ? ev.result : JSON.stringify(ev.result ?? "");
+        const terminalStatus = /timed out|timeout/i.test(resultText)
+          ? "timeout"
+          : /aborted|cancelled|canceled/i.test(resultText)
+            ? "cancelled"
+            : realIsError
+              ? "error"
+              : "done";
         return {
           ...tp,
           result: ev.result,
           isError: realIsError,
           truncation: truncation ?? tp.truncation,
-          status: realIsError ? "error" : "done",
+          status: terminalStatus,
         };
       });
       return state;

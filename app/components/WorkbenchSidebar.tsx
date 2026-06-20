@@ -41,7 +41,7 @@ export type WorkbenchView =
   | { type: "context" }
   | { type: "browser"; url?: string };
 
-type WorkbenchTabKind =
+export type WorkbenchTabKind =
   | "home"
   | "progress"
   | "outputs"
@@ -51,7 +51,7 @@ type WorkbenchTabKind =
   | "terminal"
   | "sidechat";
 
-interface WorkbenchTab {
+export interface WorkbenchTab {
   id: string;
   kind: WorkbenchTabKind;
   title: string;
@@ -70,6 +70,16 @@ interface WorkbenchRecommendation {
   subtitle: string;
   href?: string;
 }
+
+const OVERVIEW_SECTION_IDS = [
+  "progress",
+  "outputs",
+  "files",
+  "context",
+  "browser",
+] as const;
+type OverviewSectionId = (typeof OVERVIEW_SECTION_IDS)[number];
+type OverviewExpandedOverrides = Partial<Record<OverviewSectionId, boolean>>;
 
 export interface WorkbenchSidebarProps {
   open: boolean;
@@ -136,6 +146,7 @@ export function WorkbenchSidebar({
   const [tabs, setTabs] = useState<WorkbenchTab[]>(() => [homeTab()]);
   const [activeTabId, setActiveTabId] = useState("home");
   const [loadedStorageKey, setLoadedStorageKey] = useState(storageKey);
+  const overviewExpandedStorageKey = `${storageKey}:overview-expanded-v1`;
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const viewRequestKey = `${view.type}:${"url" in view ? view.url ?? "" : ""}:${
     "path" in view ? view.path ?? "" : ""
@@ -319,6 +330,7 @@ export function WorkbenchSidebar({
         <div className="min-h-0 w-full max-w-full flex-1 overflow-auto">
           {activeTab.kind === "home" && (
             <OverviewPanel
+              expandedStorageKey={overviewExpandedStorageKey}
               progress={progress}
               browserSnapshot={browserSnapshot}
               cwd={cwd}
@@ -568,24 +580,28 @@ function WorkbenchHomeLauncher({
     <section className="w-full min-w-0 max-w-full space-y-2" data-testid="workbench-home-launcher">
       <div className="w-full min-w-0 max-w-full" style={gridStyle}>
         <LauncherTile
+          id="files"
           icon={<FolderOpen size={18} />}
           title="文件"
           body="浏览项目文件"
           onClick={() => onOpenView({ type: "files" })}
         />
         <LauncherTile
+          id="browser"
           icon={<Globe size={18} />}
           title="浏览器"
           body="打开本地项目"
           onClick={() => onOpenView({ type: "browser" })}
         />
         <LauncherTile
+          id="terminal"
           icon={<Terminal size={18} />}
           title="终端"
           body="启动任务命令"
           onClick={onOpenTerminal}
         />
         <LauncherTile
+          id="overview"
           icon={<LayoutDashboard size={18} />}
           title="概览"
           body="查看 session 摘要"
@@ -618,11 +634,13 @@ function WorkbenchHomeLauncher({
 }
 
 function LauncherTile({
+  id,
   icon,
   title,
   body,
   onClick,
 }: {
+  id: string;
   icon: ReactNode;
   title: string;
   body: string;
@@ -636,7 +654,7 @@ function LauncherTile({
       onClick={onClick}
       className="flex w-full min-w-0 max-w-full flex-col items-start gap-1 overflow-hidden rounded border p-2.5 text-left hover:bg-[color:var(--bg-hover)]"
       style={{ borderColor: "var(--border-soft)", background: "var(--bg-panel-2)" }}
-      data-testid={`workbench-launch-${title}`}
+      data-testid={`workbench-launch-${id}`}
     >
       <span
         className="inline-flex h-7 w-7 items-center justify-center rounded"
@@ -800,6 +818,7 @@ function SidechatPlaceholder() {
 }
 
 function OverviewPanel({
+  expandedStorageKey,
   progress,
   browserSnapshot,
   cwd,
@@ -815,6 +834,7 @@ function OverviewPanel({
   onOpenView,
   onOpenTerminal,
 }: {
+  expandedStorageKey: string;
   progress: AgentProgress | null;
   browserSnapshot: BrowserSnapshot;
   cwd: string;
@@ -838,28 +858,46 @@ function OverviewPanel({
   const budgetTriggered = budgetStatus.triggered.length > 0;
   const browserAnnotations = browserSnapshot.annotations ?? [];
   const progressGroups = normalizedGroups(progress);
-  const progressSteps = progressGroups.at(-1)?.steps ?? [];
+  const progressSteps = progressGroups.flatMap((group) => group.steps);
   const browserStatus = describeBrowserStatus(browserSnapshot);
-  const hasProgressContent = progressSteps.length > 0;
-  const hasOutputContent = artifacts.length > 0;
-  const hasFilesContent = pendingFileCount + pendingImageCount > 0;
-  const hasContextContent =
-    toolsCount > 0 || stats?.ctxPct != null || budgetTriggered;
-  const hasBrowserContent =
-    Boolean(browserSnapshot.url) ||
-    browserAnnotations.length > 0 ||
-    browserSnapshot.status === "ready" ||
-    browserSnapshot.status === "busy" ||
-    browserSnapshot.status === "error";
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({
-    progress: hasProgressContent,
-    outputs: hasOutputContent,
-    files: hasFilesContent,
-    context: hasContextContent,
-    browser: hasBrowserContent,
-  });
-  const toggle = (id: string) => {
-    setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
+  const hasContent: Record<OverviewSectionId, boolean> = {
+    progress: progressSteps.length > 0,
+    outputs: artifacts.length > 0,
+    files: pendingFileCount + pendingImageCount > 0,
+    context: toolsCount > 0 || stats?.ctxPct != null || budgetTriggered,
+    browser:
+      Boolean(browserSnapshot.url) ||
+      browserAnnotations.length > 0 ||
+      browserSnapshot.status === "busy" ||
+      browserSnapshot.status === "error",
+  };
+  const [expandedOverrides, setExpandedOverrides] =
+    useState<OverviewExpandedOverrides>(() =>
+      loadOverviewExpandedOverrides(expandedStorageKey)
+    );
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) {
+        setExpandedOverrides(loadOverviewExpandedOverrides(expandedStorageKey));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [expandedStorageKey]);
+  useEffect(() => {
+    saveOverviewExpandedOverrides(expandedStorageKey, expandedOverrides);
+  }, [expandedOverrides, expandedStorageKey]);
+  const expanded: Record<OverviewSectionId, boolean> = {
+    progress: expandedOverrides.progress ?? hasContent.progress,
+    outputs: expandedOverrides.outputs ?? hasContent.outputs,
+    files: expandedOverrides.files ?? hasContent.files,
+    context: expandedOverrides.context ?? hasContent.context,
+    browser: expandedOverrides.browser ?? hasContent.browser,
+  };
+  const toggle = (id: OverviewSectionId) => {
+    setExpandedOverrides((prev) => ({ ...prev, [id]: !expanded[id] }));
   };
 
   return (
@@ -1009,7 +1047,7 @@ function OverviewSection({
 }: {
   icon: ReactNode;
   title: string;
-  id: string;
+  id: OverviewSectionId;
   summary?: string;
   open: boolean;
   actionLabel?: string;
@@ -1092,11 +1130,21 @@ function OverviewLine({
   tone?: "running" | "done" | "error";
 }) {
   const color =
-    tone === "error" ? "var(--color-danger)" : tone === "running" ? "var(--color-warning)" : "var(--text-muted)";
+    tone === "error"
+      ? "var(--color-danger)"
+      : tone === "running"
+        ? "var(--color-warning)"
+        : tone === "done"
+          ? "var(--color-success)"
+          : "var(--text-muted)";
+  const checkColor = checked ? "var(--color-success)" : "var(--border-soft)";
   return (
     <div className="flex min-w-0 items-start gap-1.5 text-xs">
       {checked != null ? (
-        <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: checked ? "var(--text-muted)" : color }} />
+        <span
+          className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full"
+          style={{ background: checkColor }}
+        />
       ) : null}
       <span className="min-w-0 flex-1">
         <span
@@ -1322,14 +1370,50 @@ function EmptyDetail({ title, body }: { title: string; body: string }) {
   );
 }
 
-function summarizeProgress(progress: AgentProgress | null) {
+function loadOverviewExpandedOverrides(
+  storageKey: string
+): OverviewExpandedOverrides {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: OverviewExpandedOverrides = {};
+    for (const id of OVERVIEW_SECTION_IDS) {
+      if (typeof parsed[id] === "boolean") out[id] = parsed[id];
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveOverviewExpandedOverrides(
+  storageKey: string,
+  value: OverviewExpandedOverrides
+) {
+  if (typeof window === "undefined") return;
+  try {
+    const clean: OverviewExpandedOverrides = {};
+    for (const id of OVERVIEW_SECTION_IDS) {
+      if (typeof value[id] === "boolean") clean[id] = value[id];
+    }
+    localStorage.setItem(storageKey, JSON.stringify(clean));
+  } catch {
+    /* noop */
+  }
+}
+
+export function summarizeProgress(progress: AgentProgress | null) {
   const groups = normalizedGroups(progress);
-  const steps = groups.at(-1)?.steps ?? [];
-  const completed = steps.filter((step) => step.status === "completed").length;
-  const running = steps.find((step) => step.status === "running");
-  const failed = steps.filter((step) => step.status === "failed").length;
-  const blocked = steps.filter((step) => step.status === "blocked").length;
-  if (steps.length === 0) {
+  const allSteps = groups.flatMap((group) => group.steps);
+  const currentGroup = groups.at(-1);
+  const currentSteps = currentGroup?.steps ?? [];
+  const completed = allSteps.filter((step) => step.status === "completed").length;
+  const running = allSteps.find((step) => step.status === "running");
+  const failed = allSteps.filter((step) => step.status === "failed").length;
+  const blocked = allSteps.filter((step) => step.status === "blocked").length;
+  if (allSteps.length === 0) {
     return {
       primary: "暂无进行中的任务",
       secondary: "等待 agent 更新进度",
@@ -1337,17 +1421,22 @@ function summarizeProgress(progress: AgentProgress | null) {
       tone: undefined,
     };
   }
+  const currentCompleted = currentSteps.filter(
+    (step) => step.status === "completed"
+  ).length;
   return {
-    primary: running?.title ?? `${completed}/${steps.length} completed`,
-    secondary: `任务组 ${groups.at(-1)?.index ?? 1} · ${completed}/${steps.length}${
-      failed || blocked ? ` · ${failed + blocked} needs attention` : ""
+    primary: running?.title ?? `${completed}/${allSteps.length} 已完成`,
+    secondary: `全部 ${completed}/${allSteps.length} · 当前组 ${
+      currentGroup?.index ?? groups.length
+    } ${currentCompleted}/${currentSteps.length || 0}${
+      failed || blocked ? ` · ${failed + blocked} 个需处理` : ""
     }`,
-    badge: `${completed}/${steps.length}`,
+    badge: `${completed}/${allSteps.length}`,
     tone: failed || blocked ? "error" : running ? "running" : "done",
   } as const;
 }
 
-function normalizedGroups(progress: AgentProgress | null): ProgressGroup[] {
+export function normalizedGroups(progress: AgentProgress | null): ProgressGroup[] {
   if (!progress) return [];
   const groups = progress.groups ?? [];
   const steps = progress.steps ?? [];
@@ -1363,7 +1452,7 @@ function normalizedGroups(progress: AgentProgress | null): ProgressGroup[] {
   ];
 }
 
-function summarizeArtifacts(artifacts: ProgressArtifact[]): string {
+export function summarizeArtifacts(artifacts: ProgressArtifact[]): string {
   if (artifacts.length === 0) return "";
   const counts = new Map<string, number>();
   for (const artifact of artifacts) {
@@ -1385,7 +1474,7 @@ function artifactKindLabel(kind: string): string {
   return "Other";
 }
 
-function describeBrowserStatus(snapshot: BrowserSnapshot): {
+export function describeBrowserStatus(snapshot: BrowserSnapshot): {
   short: string;
   title: string;
   detail: string;
@@ -1471,7 +1560,7 @@ function sidechatTab(): WorkbenchTab {
   };
 }
 
-function tabFromView(view: WorkbenchView): WorkbenchTab {
+export function tabFromView(view: WorkbenchView): WorkbenchTab {
   if (view.type === "overview") return homeTab();
   if (view.type === "progress") {
     return {
@@ -1522,7 +1611,7 @@ function tabFromView(view: WorkbenchView): WorkbenchTab {
   };
 }
 
-function viewFromTab(tab: WorkbenchTab): WorkbenchView {
+export function viewFromTab(tab: WorkbenchTab): WorkbenchView {
   if (tab.kind === "home") return { type: "overview" };
   if (tab.kind === "progress") return { type: "progress" };
   if (tab.kind === "outputs") return { type: "outputs" };
@@ -1532,7 +1621,7 @@ function viewFromTab(tab: WorkbenchTab): WorkbenchView {
   return { type: "overview" };
 }
 
-function upsertWorkbenchTab(tabs: WorkbenchTab[], tab: WorkbenchTab): WorkbenchTab[] {
+export function upsertWorkbenchTab(tabs: WorkbenchTab[], tab: WorkbenchTab): WorkbenchTab[] {
   if (tab.id === "home") {
     return tabs.some((item) => item.id === "home") ? tabs : [homeTab(), ...tabs];
   }
@@ -1544,7 +1633,7 @@ function upsertWorkbenchTab(tabs: WorkbenchTab[], tab: WorkbenchTab): WorkbenchT
   return [...withHome, tab];
 }
 
-function loadStoredWorkbenchTabs(storageKey: string): {
+export function loadStoredWorkbenchTabs(storageKey: string): {
   tabs: WorkbenchTab[];
   activeTabId: string;
 } {

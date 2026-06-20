@@ -12,6 +12,12 @@ import {
   XCircle,
 } from "lucide-react";
 import type { AgentGoal } from "@/lib/goal/types";
+import {
+  GOAL_ACCEPTANCE_STATUS_LABELS,
+  GOAL_BLOCKED_CATEGORY_LABELS,
+  goalAcceptanceSummary,
+  goalStatusLabel,
+} from "@/lib/goal/labels";
 import { GoalTimeline } from "./GoalTimeline";
 import { UiFaultBoundary } from "./UiFaultBoundary";
 
@@ -76,16 +82,19 @@ export function GoalBar({
         </button>
         <StatusIcon size={14} style={{ color: tone.color }} className="shrink-0" />
         <span
-          className="shrink-0 rounded px-1.5 py-0.5 uppercase tracking-normal"
+          className="shrink-0 rounded px-1.5 py-0.5 tracking-normal"
           style={{ background: "var(--bg-selected)", color: tone.color }}
         >
-          {goal.status}
+          {goalStatusLabel(goal)}
         </span>
         <span className="min-w-0 flex-1 truncate" title={goal.objective}>
           {goal.objective}
         </span>
+        <span className="hidden shrink-0 text-token-xs sm:inline" style={{ color: "var(--text-muted)" }}>
+          {goalAcceptanceSummary(goal.acceptanceCriteria)}
+        </span>
         <span className="shrink-0 text-token-xs" style={{ color: "var(--text-muted)" }}>
-          {goal.turns} turns
+          {goal.turns} 轮
         </span>
         {canPause && (
           <button
@@ -105,8 +114,8 @@ export function GoalBar({
             disabled={disabled}
             onClick={() => void onResume()}
             className="inline-flex h-7 w-7 items-center justify-center rounded hover:bg-[color:var(--bg-hover)] disabled:opacity-40"
-            title="Resume goal"
-            aria-label="Resume goal"
+            title="继续目标"
+            aria-label="继续目标"
           >
             <Play size={13} />
           </button>
@@ -137,7 +146,7 @@ export function GoalBar({
           <div className="flex items-center gap-1.5">
             <XCircle size={12} className="shrink-0" />
             <span className="font-medium uppercase tracking-wide">
-              {blocked.category.replace(/_/g, " ")}
+              {GOAL_BLOCKED_CATEGORY_LABELS[blocked.category]}
             </span>
             {blocked.repeatedCount > 1 && (
               <span
@@ -157,6 +166,10 @@ export function GoalBar({
         </div>
       )}
 
+      {expanded && (
+        <GoalAcceptancePanel goal={goal} />
+      )}
+
       {agentId && (
         <UiFaultBoundary
           surface="GoalTimeline"
@@ -164,6 +177,67 @@ export function GoalBar({
         >
           <GoalTimeline agentId={agentId} open={expanded} />
         </UiFaultBoundary>
+      )}
+    </div>
+  );
+}
+
+function GoalAcceptancePanel({ goal }: { goal: AgentGoal }) {
+  const criteria = goal.acceptanceCriteria ?? [];
+  return (
+    <div
+      className="mt-1 rounded-md border px-3 py-2 text-xs"
+      style={{
+        background: "var(--bg-panel)",
+        borderColor: "var(--border)",
+        color: "var(--text)",
+      }}
+      data-testid="goal-acceptance-panel"
+    >
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="font-medium">验收标准</span>
+        <span style={{ color: "var(--text-muted)" }}>
+          {goalAcceptanceSummary(criteria)}
+        </span>
+      </div>
+      {criteria.length === 0 ? (
+        <div style={{ color: "var(--text-muted)" }}>
+          该 goal 未定义验收标准。
+        </div>
+      ) : (
+        <ul className="space-y-1">
+          {criteria.map((criterion) => {
+            const met = criterion.status === "met";
+            const failed = criterion.status === "failed";
+            const Icon = met ? CheckCircle2 : failed ? XCircle : Target;
+            const color = met
+              ? "var(--color-success)"
+              : failed
+                ? "var(--color-danger)"
+                : "var(--text-muted)";
+            return (
+              <li key={criterion.id} className="flex items-start gap-2">
+                <Icon size={12} className="mt-0.5 shrink-0" style={{ color }} />
+                <div className="min-w-0 flex-1">
+                  <div
+                    className={met ? "line-through" : undefined}
+                    style={{
+                      color: met ? "var(--text-muted)" : "var(--text)",
+                      opacity: met ? 0.72 : 1,
+                    }}
+                    title={criterion.criterion}
+                  >
+                    {criterion.criterion}
+                  </div>
+                  <div className="text-token-xs" style={{ color }}>
+                    {GOAL_ACCEPTANCE_STATUS_LABELS[criterion.status]}
+                    {criterion.evidence ? ` · ${criterion.evidence}` : ""}
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </div>
   );

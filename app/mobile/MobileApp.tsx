@@ -23,14 +23,18 @@ import {
   Layers3,
   Loader2,
   Menu,
+  Pause,
   Plus,
+  Play,
   RefreshCw,
   Send,
   Settings2,
   ShieldAlert,
   Sparkles,
   Square,
+  Target,
   TerminalSquare,
+  Trash2,
   Wrench,
   WifiOff,
   X,
@@ -52,6 +56,11 @@ import type {
   SessionInfoLite,
   SessionRuntimeState,
 } from "@/lib/types";
+import type { AgentGoal } from "@/lib/goal/types";
+import {
+  goalAcceptanceSummary,
+  goalStatusLabel,
+} from "@/lib/goal/labels";
 import {
   approxBase64Bytes,
   fileToImageContent,
@@ -1575,6 +1584,89 @@ function MobileChatMessage({
   );
 }
 
+function MobileGoalStrip({
+  goal,
+  disabled,
+  onPause,
+  onResume,
+  onClear,
+}: {
+  goal: AgentGoal;
+  disabled?: boolean;
+  onPause: () => void;
+  onResume: () => void;
+  onClear: () => void;
+}) {
+  const canPause = goal.status === "active";
+  const canResume = goal.status === "paused" || goal.status === "blocked";
+  const tone =
+    goal.status === "complete"
+      ? "var(--color-success)"
+      : goal.status === "blocked"
+        ? "var(--color-danger)"
+        : goal.status === "paused"
+          ? "var(--color-warning)"
+          : "var(--accent)";
+  return (
+    <div
+      className="flex shrink-0 items-center gap-2 border-b border-[color:var(--border)] bg-[color:var(--bg-panel)] px-3 py-2 text-xs"
+      data-testid="mobile-goal-strip"
+    >
+      <Target size={14} className="shrink-0" style={{ color: tone }} />
+      <span
+        className="shrink-0 rounded-full border px-1.5 py-0.5"
+        style={{
+          borderColor: "var(--border-soft)",
+          color: tone,
+          background: "var(--bg-subtle)",
+        }}
+      >
+        {goalStatusLabel(goal)}
+      </span>
+      <span className="min-w-0 flex-1 truncate" title={goal.objective}>
+        {goal.objective}
+      </span>
+      <span className="hidden shrink-0 text-token-xs text-[color:var(--text-muted)] min-[380px]:inline">
+        {goalAcceptanceSummary(goal.acceptanceCriteria)}
+      </span>
+      {canPause && (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onPause}
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[color:var(--border-soft)] text-[color:var(--text-muted)] disabled:opacity-40"
+          title="暂停目标"
+          aria-label="暂停目标"
+        >
+          <Pause size={13} />
+        </button>
+      )}
+      {canResume && (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onResume}
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[color:var(--border-soft)] text-[color:var(--text-muted)] disabled:opacity-40"
+          title="继续目标"
+          aria-label="继续目标"
+        >
+          <Play size={13} />
+        </button>
+      )}
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onClear}
+        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[color:var(--border-soft)] text-[color:var(--text-muted)] disabled:opacity-40"
+        title="清除目标"
+        aria-label="清除目标"
+      >
+        <Trash2 size={13} />
+      </button>
+    </div>
+  );
+}
+
 export default function MobileApp({
   initialRemote = null,
 }: {
@@ -1598,6 +1690,7 @@ export default function MobileApp({
   );
   const [selected, setSelected] = useState<SessionInfoLite | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
+  const [mobileGoal, setMobileGoal] = useState<AgentGoal | null>(null);
   const [chatState, setChatState] = useState<ReducerState>(() => createInitialState());
   const [sessionDrawerOpen, setSessionDrawerOpen] = useState(false);
   const [input, setInput] = useState("");
@@ -1877,6 +1970,25 @@ export default function MobileApp({
     [apiFetch]
   );
 
+  const loadMobileGoal = useCallback(
+    async (aid: string | null = agentId) => {
+      if (!aid) {
+        setMobileGoal(null);
+        return;
+      }
+      try {
+        const res = await apiFetch(`/api/agent/${aid}?action=goal_timeline`);
+        const json = (await res.json().catch(() => ({}))) as { goal?: AgentGoal | null };
+        if (!res.ok) throw new Error("goal_timeline failed");
+        setMobileGoal(json.goal ?? null);
+      } catch {
+        // Goal visibility should never block the mobile chat path.
+        setMobileGoal(null);
+      }
+    },
+    [agentId, apiFetch]
+  );
+
   const loadSessionContext = useCallback(
     async (
       session: SessionInfoLite,
@@ -1896,6 +2008,24 @@ export default function MobileApp({
     },
     [fetchSessionContextState]
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!agentId) {
+      window.queueMicrotask(() => {
+        if (!cancelled) setMobileGoal(null);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+    window.queueMicrotask(() => {
+      if (!cancelled) void loadMobileGoal(agentId);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId, loadMobileGoal]);
 
   const reconcileSelectedSession = useCallback(
     async (reason = "network") => {
@@ -2125,6 +2255,10 @@ export default function MobileApp({
             setAgentRunning(false);
             scheduleReconcileSelectedSession("agent_end", 450);
             void loadAll();
+            void loadMobileGoal(nextAgentId);
+          }
+          if (event?.type === "goal_updated") {
+            setMobileGoal((event as { goal?: AgentGoal | null }).goal ?? null);
           }
           setChatState((prev) => applyEvent(prev, event));
         };
@@ -2145,7 +2279,7 @@ export default function MobileApp({
       };
       void start();
     },
-    [baseUrl, loadAll, refreshReachableBase, scheduleReconcileSelectedSession]
+    [baseUrl, loadAll, loadMobileGoal, refreshReachableBase, scheduleReconcileSelectedSession]
   );
 
   useEffect(() => {
@@ -2339,6 +2473,7 @@ export default function MobileApp({
     setSessionDrawerOpen(false);
     setSelected(session);
     setAgentId(null);
+    setMobileGoal(null);
     setAgentRunning(false);
     setVisibleMessageWindow(MOBILE_MESSAGE_WINDOW);
     const cached = sessionContextCacheRef.current.get(session.id);
@@ -2575,6 +2710,34 @@ export default function MobileApp({
       body: JSON.stringify({ type: "abort" }),
     });
     scheduleReconcileSelectedSession("abort", 600);
+  };
+
+  const runGoalAction = async (
+    action: "goal_pause" | "goal_resume" | "goal_clear"
+  ) => {
+    if (!agentId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await apiFetch(`/api/agent/${agentId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: action }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error ?? res.statusText);
+      await loadMobileGoal(agentId);
+      scheduleReconcileSelectedSession("goal", 500);
+    } catch (e) {
+      setError(
+        userFacingMessage(e, {
+          baseUrl: baseUrlRef.current || baseUrl,
+          context: "remote",
+        })
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
   const approve = async (
@@ -3211,6 +3374,15 @@ export default function MobileApp({
               </span>
               <span className="shrink-0">查看</span>
             </button>
+          ) : null}
+          {mobileGoal ? (
+            <MobileGoalStrip
+              goal={mobileGoal}
+              disabled={busy}
+              onPause={() => void runGoalAction("goal_pause")}
+              onResume={() => void runGoalAction("goal_resume")}
+              onClear={() => void runGoalAction("goal_clear")}
+            />
           ) : null}
           <div
             ref={messagesScrollRef}

@@ -475,6 +475,74 @@ describe("appendRestoredSubagentBatches", () => {
 });
 
 describe("applyEvent — shim duplicate completion guards", () => {
+  it("skips blank thinking chunks and records aborted thinking end reason", () => {
+    let s = createInitialState();
+    s = applyEvent(s, {
+      type: "message_start",
+      message: { role: "assistant", responseId: "thinking-1", content: [] },
+    });
+    s = applyEvent(s, {
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        delta: "   \n\t",
+        partial: { responseId: "thinking-1" },
+      },
+    });
+    expect(s.messages[0].parts).toEqual([]);
+
+    s = applyEvent(s, {
+      type: "message_update",
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        delta: "先定位问题",
+        partial: { responseId: "thinking-1" },
+      },
+    });
+    s = applyEvent(s, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        responseId: "thinking-1",
+        stopReason: "aborted",
+        content: [],
+      },
+    });
+
+    const part = s.messages[0].parts?.[0];
+    expect(part).toMatchObject({
+      kind: "thinking",
+      text: "先定位问题",
+      endedReason: "aborted",
+    });
+  });
+
+  it("classifies watchdog terminal tool events as timeout", () => {
+    let s = createInitialState();
+    s = applyEvent(s, {
+      type: "message_start",
+      message: { role: "assistant", responseId: "tool-timeout", content: [] },
+    });
+    s = applyEvent(s, {
+      type: "tool_execution_start",
+      toolCallId: "tool-timeout-1",
+      toolName: "browser_extract",
+      args: { url: "https://example.com" },
+    });
+    s = applyEvent(s, {
+      type: "tool_execution_end",
+      toolCallId: "tool-timeout-1",
+      result: "Tool execution timed out after 300s without a terminal event.",
+      isError: true,
+    });
+
+    const part = s.messages[0].parts?.find(
+      (item): item is Extract<MessagePart, { kind: "tool" }> =>
+        item.kind === "tool" && item.toolCallId === "tool-timeout-1"
+    );
+    expect(part?.status).toBe("timeout");
+  });
+
   it("message_end 认证失效且 content 为空 → 不保留空 assistant 气泡", () => {
     let s = createInitialState();
     const message = {
@@ -2017,6 +2085,97 @@ describe("applyEvent — goal / workflow optimistic + message_start 不双气泡
       timestamp: 1000,
     });
     expect(userMessages[0].composerMeta?.mode).toBe("workflow");
+    debugSpy.mockRestore();
+  });
+
+  it("workflow ack 文本若误带 aside，真实 message_start 仍按可见文本合并", () => {
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+    let s = createInitialState();
+    s = applyEvent(s, {
+      type: "__optimistic_user",
+      clientRequestId: "wf-ack-aside",
+      text: "browser use相关的功能点，是否已经都修复了呢?",
+      composerMode: "workflow",
+    });
+    s = applyEvent(s, {
+      type: "optimistic_user_ack",
+      clientRequestId: "wf-ack-aside",
+      displayText:
+        "browser use相关的功能点，是否已经都修复了呢?\n\n<<<CONTEXT_ASIDE>>>workflowAside<<<END_CONTEXT_ASIDE>>>",
+    });
+    s = applyEvent(s, {
+      type: "message_start",
+      message: {
+        role: "assistant",
+        timestamp: 900,
+        responseId: "assistant-between-ack-aside",
+        content: [{ type: "text", text: "处理中" }],
+      },
+    });
+    s = applyEvent(s, {
+      type: "message_start",
+      message: {
+        role: "user",
+        timestamp: 1000,
+        content: [
+          {
+            type: "text",
+            text: "browser use相关的功能点，是否已经都修复了呢?\n\n<<<CONTEXT_ASIDE>>>workflowAside<<<END_CONTEXT_ASIDE>>>",
+          },
+        ],
+      },
+    });
+
+    const userMessages = s.messages.filter((m) => m.role === "user");
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0].text).toBe(
+      "browser use相关的功能点，是否已经都修复了呢?",
+    );
+    expect(userMessages[0].composerMeta?.mode).toBe("workflow");
+    debugSpy.mockRestore();
+  });
+
+  it("非尾部 workflow mode 气泡即使没有 cri，也会按可见文本兜底合并", () => {
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+    let s = createInitialState();
+    s = applyEvent(s, {
+      type: "__optimistic_user",
+      text: "检查 browser use 修复状态",
+      composerMode: "workflow",
+    });
+    // 模拟已经被别的路径去掉 pending / cri，但 mode 标签还在。
+    s.messages[0] = {
+      ...s.messages[0],
+      pending: false,
+      clientRequestId: undefined,
+    };
+    s = applyEvent(s, {
+      type: "message_start",
+      message: {
+        role: "assistant",
+        timestamp: 900,
+        responseId: "assistant-between-no-cri",
+        content: [{ type: "text", text: "处理中" }],
+      },
+    });
+    s = applyEvent(s, {
+      type: "message_start",
+      message: {
+        role: "user",
+        timestamp: 1000,
+        content: [
+          {
+            type: "text",
+            text: "检查 browser use 修复状态\n\n<<<CONTEXT_ASIDE>>>workflowAside<<<END_CONTEXT_ASIDE>>>",
+          },
+        ],
+      },
+    });
+
+    const userMessages = s.messages.filter((m) => m.role === "user");
+    expect(userMessages).toHaveLength(1);
+    expect(userMessages[0].composerMeta?.mode).toBe("workflow");
+    expect(userMessages[0].timestamp).toBe(1000);
     debugSpy.mockRestore();
   });
 

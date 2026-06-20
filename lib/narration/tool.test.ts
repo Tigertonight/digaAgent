@@ -6,6 +6,7 @@ import {
   shouldHideTool,
   type ToolPart,
 } from "./tool";
+import { redactSecrets } from "./redact";
 
 const mk = (over: Partial<ToolPart>): ToolPart => ({
   kind: "tool",
@@ -263,5 +264,26 @@ describe("工具失败错误透出 + 截断检测", () => {
     expect(
       detectTruncatedToolCall('Validation failed for tool "read": - path: must be string')
     ).toBeNull();
+  });
+});
+
+describe("redactSecrets — 工具详情统一脱敏", () => {
+  it("covers headers, api keys, bearer tokens, URL query tokens, and provider keys", () => {
+    const redacted = redactSecrets(
+      [
+        "Authorization: Bearer abc.def.ghi",
+        "x-api-key: live_key_123",
+        "OPENAI_API_KEY=sk-testSecret1234567890",
+        "curl 'https://example.com?a=1&token=secret-token'",
+        "aws=AKIA1234567890ABCDEF",
+      ].join("\n")
+    );
+
+    expect(redacted).not.toContain("abc.def.ghi");
+    expect(redacted).not.toContain("live_key_123");
+    expect(redacted).not.toContain("sk-testSecret1234567890");
+    expect(redacted).not.toContain("secret-token");
+    expect(redacted).not.toContain("AKIA1234567890ABCDEF");
+    expect(redacted).toContain("***");
   });
 });

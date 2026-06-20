@@ -25,6 +25,7 @@ import {
   CheckCircle2,
   Circle,
   CornerDownLeft,
+  Copy,
   FileText,
   GitBranch,
   Lightbulb,
@@ -248,7 +249,7 @@ function MessageViewInner({
           <UserComposerMetaStrip meta={msg.composerMeta} />
         )}
 
-        {/* 时间戳 + hover 操作行（Copy / Edit from here / New session） */}
+        {/* 时间戳 + hover 操作行（复制 / 从此处编辑 / 新会话） */}
         <div
           className="text-token-xs mt-1 flex items-center gap-2"
           style={{ color: "var(--text-muted)" }}
@@ -269,7 +270,7 @@ function MessageViewInner({
                   title="复制"
                 >
                   <FileText size={11} />
-                  Copy
+                  复制
                 </button>
               )}
               {canFork && (
@@ -280,7 +281,7 @@ function MessageViewInner({
                   title="从此处编辑：截断后续对话并重新发送（同 session）"
                 >
                   <CornerDownLeft size={11} />
-                  Edit from here
+                  从此处编辑
                 </button>
               )}
               {canFork && (
@@ -291,7 +292,7 @@ function MessageViewInner({
                   title="从此处分叉成新 session"
                 >
                   <GitBranch size={11} />
-                  New session
+                  新会话
                 </button>
               )}
             </span>
@@ -320,7 +321,7 @@ function MessageViewInner({
                 className="text-token-xs"
                 style={{ color: "var(--fg-faint)" }}
               >
-                Edit entry {msg.entryId.slice(0, 8)} · 提交后覆盖这条消息并丢弃后续内容
+                编辑消息 {msg.entryId.slice(0, 8)} · 提交后覆盖这条消息并丢弃后续内容
               </div>
               <textarea
                 value={forkText}
@@ -345,7 +346,7 @@ function MessageViewInner({
                     color: "var(--fg)",
                   }}
                 >
-                  Cancel
+                  取消
                 </button>
                 <button
                   type="button"
@@ -354,7 +355,7 @@ function MessageViewInner({
                   className="px-2 py-1 rounded text-white disabled:opacity-50"
                   style={{ background: "var(--accent)" }}
                 >
-                  {forkBusy ? "Sending…" : "Send edit"}
+                  {forkBusy ? "发送中…" : "发送编辑"}
                 </button>
               </div>
             </div>
@@ -433,14 +434,20 @@ function MessageViewInner({
               if (parts[j].kind === "text") { tailTextIdx = j; break; }
             }
           }
+          const thinkingTotal = parts.filter((part) => part.kind === "thinking").length;
+          let thinkingSeen = 0;
           const renderPart = (p: MessagePart, i: number) => {
           if (p.kind === "thinking") {
+            thinkingSeen += 1;
             return (
               <ThinkingBlock
                 key={i}
                 text={p.text}
                 startedAt={p.startedAt}
                 endedAt={p.endedAt}
+                endedReason={p.endedReason}
+                index={thinkingTotal > 1 ? thinkingSeen : undefined}
+                total={thinkingTotal > 1 ? thinkingTotal : undefined}
               />
             );
           }
@@ -767,13 +774,13 @@ function phaseLabel(phase: AgentPhase): string {
   if (!phase) return "";
   if (phase.kind === "running_tools") {
     const names = phase.tools.map((t) => t.name);
-    if (names.length === 0) return "Running tool…";
-    if (names.length === 1) return `Running ${names[0]}…`;
-    if (names.length <= 3) return `Running ${names.join(", ")}…`;
-    return `Running ${names.slice(0, 2).join(", ")} (+${names.length - 2})…`;
+    if (names.length === 0) return "正在执行工具…";
+    if (names.length === 1) return `正在执行 ${names[0]}…`;
+    if (names.length <= 3) return `正在执行 ${names.join(", ")}…`;
+    return `正在执行 ${names.slice(0, 2).join(", ")}（另 ${names.length - 2} 个）…`;
   }
-  if (phase.kind === "waiting_model") return "Waiting for model…";
-  if (phase.kind === "thinking") return "Thinking…";
+  if (phase.kind === "waiting_model") return "等待模型回复…";
+  if (phase.kind === "thinking") return "思考中…";
   return "";
 }
 
@@ -814,10 +821,10 @@ function CopyButton({ text }: { text: string }) {
       }}
       className="opacity-0 group-hover:opacity-100 transition-opacity inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-[color:var(--bg-hover)]"
       style={{ color: "var(--text-muted)" }}
-      title="Copy"
+      title={copied ? "已复制" : "复制"}
+      aria-label={copied ? "已复制" : "复制"}
     >
-      <FileText size={11} />
-      {copied ? "Copied" : "Copy"}
+      <Copy size={11} />
     </button>
   );
 }
@@ -881,6 +888,7 @@ function CollapsedPartProcessGroup({
               key={group.key}
               group={group}
               questionContext={questionContext}
+              forceOpen={live && group.status === "running"}
             />
           ))}
         </div>
@@ -915,11 +923,17 @@ interface ProcessPartGroup {
 function ProcessPartGroupRow({
   group,
   questionContext,
+  forceOpen = false,
 }: {
   group: ProcessPartGroup;
   questionContext?: string;
+  forceOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = usePersistedDisclosure(
+    `process-group:${group.key}:${group.kind}`,
+    false
+  );
+  const visibleOpen = forceOpen || open;
   // 同类工具调用聚合：record/exec/search/… 且 ≥2 条 → 走 list view，
   // 避免列表里摆 N 张独立 ToolFrame。其它（thinking/approval/tool unknown、或单条）仍走单卡。
   const aggregable =
@@ -930,16 +944,18 @@ function ProcessPartGroupRow({
     <div className="text-token-xs">
       <button
         type="button"
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => {
+          if (!forceOpen) setOpen((value) => !value);
+        }}
         className="inline-flex items-center gap-2 py-0.5 text-left"
-        aria-expanded={open}
-        title={open ? "收起细节" : "展开细节"}
+        aria-expanded={visibleOpen}
+        title={visibleOpen ? "收起细节" : "展开细节"}
         style={{ color: "var(--text-muted)" }}
       >
         <ProcessPartGroupIcon kind={group.kind} status={group.status} />
         <span>{group.title}</span>
       </button>
-      {open ? (
+      {visibleOpen ? (
         <div className="space-y-1 pl-5 pt-2">
           {aggregable ? (
             <ToolAggregateList
@@ -955,6 +971,17 @@ function ProcessPartGroupRow({
                   part={part}
                   questionContext={questionContext}
                   recovered={Boolean(group.recovered)}
+                  forceLive={forceOpen && part.kind === "thinking"}
+                  thinkingIndex={
+                    group.kind === "thinking" && group.parts.length > 1
+                      ? index + 1
+                      : undefined
+                  }
+                  thinkingTotal={
+                    group.kind === "thinking" && group.parts.length > 1
+                      ? group.parts.length
+                      : undefined
+                  }
                 />
               ))}
             </div>
@@ -1007,14 +1034,19 @@ function ToolAggregateRow({
   questionContext?: string;
   recovered: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = usePersistedDisclosure(
+    `tool-aggregate:${part.toolCallId || part.toolName}`,
+    false
+  );
   const summary = summarizeToolTarget(part) || part.toolName;
   const isError =
-    part.status === "error" || Boolean(part.isError);
+    part.status === "error" || part.status === "timeout" || Boolean(part.isError);
   const showAsRecovered = recovered && isError;
   const dotColor =
-    part.status === "running"
+    part.status === "running" || part.status === "queued"
       ? "var(--text-muted)"
+      : part.status === "timeout"
+        ? "var(--warning, #b8860b)"
       : showAsRecovered
         ? "var(--text-dim)"
         : isError
@@ -1031,7 +1063,7 @@ function ToolAggregateRow({
         <span
           aria-hidden
           className={
-            part.status === "running"
+            part.status === "running" || part.status === "queued"
               ? "inline-block h-1.5 w-1.5 shrink-0 rounded-full animate-pulse"
               : "inline-block h-1.5 w-1.5 shrink-0 rounded-full"
           }
@@ -1169,9 +1201,9 @@ function processPartStatus(
   opts: { recovered?: boolean } = {}
 ): ProcessPartGroupStatus {
   if (part.kind === "tool") {
-    if (part.status === "running") return "running";
-    if (opts.recovered && (part.status === "error" || part.isError)) return "done";
-    if (part.status === "error" || part.isError) return "error";
+    if (part.status === "running" || part.status === "queued") return "running";
+    if (opts.recovered && (part.status === "error" || part.status === "timeout" || part.isError)) return "done";
+    if (part.status === "error" || part.status === "timeout" || part.isError) return "error";
     return "done";
   }
   if (part.kind === "approval") {
@@ -1233,7 +1265,7 @@ function processPartGroupTitle(group: ProcessPartGroup): string {
       ? singleToolTitle
       : `${prefix}${singleToolTitle.replace(/^(正在|已完成：)/, "")}`;
   }
-  if (group.kind === "thinking") return `${active ? "正在" : "已"}整理思路`;
+  if (group.kind === "thinking") return active ? "思考中" : "已思考";
   if (group.kind === "approval") return `${prefix}已处理工具确认`;
   if (group.kind === "read") return `${prefix}${active ? "正在读取" : "已读取"} ${count} 个文件`;
   if (group.kind === "write") return `${prefix}${active ? "正在编辑" : "已编辑"} ${count} 个文件`;
@@ -1267,17 +1299,23 @@ function ProcessPartDetail({
   part,
   questionContext,
   recovered = false,
+  forceLive = false,
+  thinkingIndex,
+  thinkingTotal,
 }: {
   part: MessagePart;
   questionContext?: string;
   recovered?: boolean;
+  forceLive?: boolean;
+  thinkingIndex?: number;
+  thinkingTotal?: number;
 }) {
   if (part.kind === "tool") {
     return (
       <ToolRender
         tool={part}
         questionContext={questionContext}
-        recovered={recovered && (part.status === "error" || Boolean(part.isError))}
+        recovered={recovered && (part.status === "error" || part.status === "timeout" || Boolean(part.isError))}
       />
     );
   }
@@ -1287,6 +1325,10 @@ function ProcessPartDetail({
         text={part.text}
         startedAt={part.startedAt}
         endedAt={part.endedAt}
+        endedReason={part.endedReason}
+        defaultOpen={forceLive}
+        index={thinkingIndex}
+        total={thinkingTotal}
       />
     );
   }
@@ -1316,7 +1358,7 @@ function isProcessPart(part: MessagePart): boolean {
 
 function hasRunningProcessPart(parts: MessagePart[]): boolean {
   return parts.some((part) => {
-    if (part.kind === "tool") return part.status === "running";
+    if (part.kind === "tool") return part.status === "running" || part.status === "queued";
     if (part.kind === "approval" || part.kind === "clarification") {
       return part.status === "pending";
     }
@@ -1341,7 +1383,7 @@ function summarizeProcessParts(
       if (shouldHideTool(part)) continue;
       const label = narrateTool(part).primary;
       if (label) toolLabels.push(label);
-      if (part.status === "error" || part.isError) {
+      if (part.status === "error" || part.status === "timeout" || part.isError) {
         errorCount += 1;
         errorLabels.push(label || `调用 ${part.toolName}`);
       }
@@ -1395,11 +1437,11 @@ function summarizeProcessIssue(
   const rawLabel = dedupeToolLabels(labels)[0]?.replace(/^执行失败：/, "").trim();
   // label 里可能包含完整命令（例如 grep -n "..." file1 file2 ...），
   // 拼到 issue title 上后会被后面 truncate 成一条面目全非的被截断字符串。
-  // 这里先限制为 24 字，超过则取冲决 “” 后复用裁减尾部。
+  // 这里保留更长的目标片段，避免关键参数在折叠头里被截没。
 
   const label = rawLabel
-    ? rawLabel.length > 24
-      ? `${rawLabel.slice(0, 23)}…`
+    ? rawLabel.length > 64
+      ? `${rawLabel.slice(0, 63)}…`
       : rawLabel
     : rawLabel;
   const prefix = opts.recovered ? "已处理：" : "执行失败：";
@@ -1414,7 +1456,7 @@ function summarizeProcessIssue(
     count > 1
       ? `${prefix}${label} 等 ${count} 个步骤${suffix}`
       : `${prefix}${label}${suffix}`;
-  return text.length > 44 ? `${text.slice(0, 41)}...` : text;
+  return text.length > 84 ? `${text.slice(0, 83)}…` : text;
 }
 
 function extractPlainText(parts: MessagePart[]): string {
@@ -1571,6 +1613,28 @@ function worktreeStatesFromArtifacts(
     .slice(0, 4);
 }
 
+function workflowStatusLabel(status: Extract<MessagePart, { kind: "workflow_run" }>["status"]): string {
+  if (status === "pending") return "排队中";
+  if (status === "running") return "执行中";
+  if (status === "completed") return "已完成";
+  if (status === "completed_with_warnings") return "已完成，有提醒";
+  if (status === "needs_continue") return "需要继续";
+  if (status === "failed") return "失败";
+  if (status === "aborted") return "已中止";
+  return status;
+}
+
+function workflowWarningArtifactNames(warnings: string[]): Set<string> {
+  const names = new Set<string>();
+  for (const warning of warnings) {
+    const quoted = warning.match(/[「"]([^」"]+)[」"]/);
+    if (quoted?.[1]) names.add(quoted[1]);
+    const english = warning.match(/\b(?:artifact|report artifact)\s+["']([^"']+)["']/i);
+    if (english?.[1]) names.add(english[1]);
+  }
+  return names;
+}
+
 function WorkflowRunCard({
   part,
   onResumeWorkflow,
@@ -1597,11 +1661,13 @@ function WorkflowRunCard({
   const failed = part.status === "failed" || part.status === "aborted";
   const warned = part.status === "completed_with_warnings";
   const warnings = part.warnings ?? [];
+  const warningArtifactNames = workflowWarningArtifactNames(warnings);
   const duration =
     part.endedAt && part.createdAt && part.endedAt > part.createdAt
       ? Math.max(1, Math.round((part.endedAt - part.createdAt) / 1000))
       : null;
   const recentLogs = part.logs.slice(-5);
+  const workflowStages = workflowStagesFromLogs(part.logs);
   const worktreeStates = worktreeStatesFromArtifacts(part.artifacts);
   const canResume =
     !running && part.checkpoints.length > 0 && Boolean(onResumeWorkflow);
@@ -1620,16 +1686,16 @@ function WorkflowRunCard({
         tone: "success",
         text:
           action === "retry_merge"
-            ? "Merge retry completed."
-            : "Worktree cleanup completed.",
+            ? "已重新尝试合并。"
+            : "已清理 worktree。",
       });
     } catch (e) {
       setWorktreeNotice({
         tone: "error",
         text:
           action === "retry_merge"
-            ? `Merge retry failed: ${String(e)}`
-            : `Worktree cleanup failed: ${String(e)}`,
+            ? `重新合并失败：${String(e)}`
+            : `清理 worktree 失败：${String(e)}`,
       });
     } finally {
       setWorktreeBusy(null);
@@ -1654,7 +1720,7 @@ function WorkflowRunCard({
         ) : (
           <Circle size={13} style={{ color: "var(--text-muted)" }} />
         )}
-        <span className="font-semibold">Workflow</span>
+        <span className="font-semibold">工作流</span>
         <span className="truncate" style={{ color: "var(--text-muted)" }}>
           {part.objective}
         </span>
@@ -1662,8 +1728,20 @@ function WorkflowRunCard({
           className="ml-auto shrink-0 text-token-xs"
           style={{ color: "var(--text-muted)" }}
         >
-          {needsContinue ? "needs continue" : part.status}
+          {needsContinue ? "需要继续" : workflowStatusLabel(part.status)}
           {duration ? ` · ${duration}s` : ""}
+        </span>
+        <span
+          className="hidden shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-token-xs sm:inline-flex"
+          style={{
+            borderColor: "var(--border-soft)",
+            color: "var(--text-muted)",
+            background: "var(--bg-subtle)",
+          }}
+          title={part.id}
+        >
+          ID {part.id.slice(0, 8)}
+          <CopyButton text={part.id} />
         </span>
         {canResume && (
           <button
@@ -1674,11 +1752,11 @@ function WorkflowRunCard({
               color: "var(--text-muted)",
               background: "var(--bg-subtle)",
             }}
-            title="Resume this workflow from its latest checkpoint/artifacts"
+            title="从最新 checkpoint/artifact 继续这个工作流"
             onClick={() => onResumeWorkflow?.(part.id, part.objective)}
           >
             <RotateCcw size={11} />
-            Resume
+            继续
           </button>
         )}
         {failed && onRetryWorkflow && (
@@ -1691,7 +1769,7 @@ function WorkflowRunCard({
               color: "var(--text-muted)",
               background: "var(--bg-subtle)",
             }}
-            title="Retry this workflow from the beginning with the same saved script"
+            title="使用同一份脚本从头重试这个工作流"
             onClick={async () => {
               if (!canRetry) return;
               setRetryingWorkflow(true);
@@ -1707,7 +1785,7 @@ function WorkflowRunCard({
             ) : (
               <RotateCcw size={11} />
             )}
-            Retry
+            重试
           </button>
         )}
       </div>
@@ -1715,6 +1793,9 @@ function WorkflowRunCard({
         <div className="text-xs" style={{ color: "var(--text-muted)" }}>
           {part.rationale}
         </div>
+      )}
+      {workflowStages.length > 0 && (
+        <WorkflowStageProgress stages={workflowStages} />
       )}
       {needsContinue && (
         <div
@@ -1725,8 +1806,8 @@ function WorkflowRunCard({
             color: "var(--text)",
           }}
         >
-          Time budget reached after progress was saved. Use Resume to continue
-          from the latest checkpoint/artifacts instead of restarting.
+          时间预算已用尽，但进度已经保存。请点击继续，从最新 checkpoint/artifact
+          接着执行，避免从头开始。
         </div>
       )}
       {warned && warnings.length > 0 && (
@@ -1738,9 +1819,7 @@ function WorkflowRunCard({
             color: "var(--warning, #b8860b)",
           }}
         >
-          <div className="mb-1 font-semibold">
-            Completed with warnings — substantively incomplete
-          </div>
+          <div className="mb-1 font-semibold">已完成，但有质量提醒</div>
           <ul className="ml-4 list-disc space-y-0.5">
             {warnings.map((warning, index) => (
               <li key={index}>{warning}</li>
@@ -1754,12 +1833,13 @@ function WorkflowRunCard({
           style={{ color: "var(--text-muted)" }}
         >
           {part.resumedFromWorkflowId && (
-            <span>Resumed from: {part.resumedFromWorkflowId.slice(0, 8)}</span>
+          <span>续跑自：{part.resumedFromWorkflowId.slice(0, 8)}</span>
           )}
-          <span>Capabilities: {part.manifest.capabilities.join(", ")}</span>
-          <span>Agents: {part.manifest.maxAgents}</span>
-          <span>Parallel: {part.manifest.maxConcurrency}</span>
-          <span>Runtime: {part.manifest.runtime}</span>
+          <span>Workflow id: {part.id}</span>
+          <span>能力：{part.manifest.capabilities.join(", ")}</span>
+          <span>子智能体：{part.manifest.maxAgents}</span>
+          <span>并发：{part.manifest.maxConcurrency}</span>
+          <span>运行时：{part.manifest.runtime}</span>
         </div>
       )}
       <div className="grid gap-2 sm:grid-cols-2">
@@ -1770,26 +1850,19 @@ function WorkflowRunCard({
             background: "var(--bg-subtle)",
           }}
         >
-          <div className="mb-1 text-token-xs font-semibold">Checkpoints</div>
+          <div className="mb-1 text-token-xs font-semibold">
+            Checkpoints ({part.checkpoints.length})
+          </div>
           {part.checkpoints.length ? (
-            <div className="space-y-1">
-              {part.checkpoints.slice(-4).map((checkpoint, index) => (
-                <details key={`${checkpoint.name}-${index}`} className="text-xs">
-                  <summary className="cursor-pointer list-none truncate [&::-webkit-details-marker]:hidden">
-                    {checkpoint.name}
-                  </summary>
-                  <pre
-                    className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-token-xs"
-                    style={{ color: "var(--text-muted)" }}
-                  >
-                    {shortJson(checkpoint.value)}
-                  </pre>
-                </details>
-              ))}
-            </div>
+            <WorkflowValueList
+              items={part.checkpoints.map((checkpoint) => ({
+                name: checkpoint.name,
+                value: checkpoint.value,
+              }))}
+            />
           ) : (
             <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-              No checkpoints yet
+              暂无 checkpoints
             </div>
           )}
         </div>
@@ -1800,26 +1873,21 @@ function WorkflowRunCard({
             background: "var(--bg-subtle)",
           }}
         >
-          <div className="mb-1 text-token-xs font-semibold">Artifacts</div>
+          <div className="mb-1 text-token-xs font-semibold">
+            Artifacts ({part.artifacts.length})
+          </div>
           {part.artifacts.length ? (
-            <div className="space-y-1">
-              {part.artifacts.slice(-4).map((artifact, index) => (
-                <details key={`${artifact.name}-${index}`} className="text-xs">
-                  <summary className="cursor-pointer list-none truncate [&::-webkit-details-marker]:hidden">
-                    {artifact.name}
-                  </summary>
-                  <pre
-                    className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-token-xs"
-                    style={{ color: "var(--text-muted)" }}
-                  >
-                    {shortJson(artifact.value)}
-                  </pre>
-                </details>
-              ))}
-            </div>
+            <WorkflowValueList
+              items={part.artifacts.map((artifact) => ({
+                name: artifact.name,
+                value: artifact.preview ?? artifact.value,
+                badge: artifact.kind,
+                invalid: warningArtifactNames.has(artifact.name),
+              }))}
+            />
           ) : (
             <div className="text-xs" style={{ color: "var(--text-muted)" }}>
-              No artifacts yet
+              暂无 artifacts
             </div>
           )}
         </div>
@@ -1857,12 +1925,12 @@ function WorkflowRunCard({
                     <div className="min-w-0 flex-1">
                       <div className="truncate font-medium">
                         {kind === "failed"
-                          ? "Merge failed"
+                          ? "合并失败"
                           : kind === "merged"
-                            ? "Merge applied"
+                            ? "已合并"
                             : kind === "cleaned"
-                              ? "Worktree cleaned"
-                              : "Created worktree"}
+                              ? "已清理 worktree"
+                              : "已创建 worktree"}
                       </div>
                       <div
                         className="truncate text-token-xs"
@@ -1893,7 +1961,7 @@ function WorkflowRunCard({
                             {worktreeBusy === `retry_merge:${worktree.id}` && (
                               <Loader2 size={10} className="animate-spin" />
                             )}
-                            <span>Retry merge</span>
+                            <span>重试合并</span>
                           </button>
                         )}
                         {kind !== "cleaned" && (
@@ -1910,7 +1978,7 @@ function WorkflowRunCard({
                             {worktreeBusy === `cleanup:${worktree.id}` && (
                               <Loader2 size={10} className="animate-spin" />
                             )}
-                            <span>Cleanup</span>
+                            <span>清理</span>
                           </button>
                         )}
                       </div>
@@ -1961,7 +2029,299 @@ function WorkflowRunCard({
           ))}
         </div>
       )}
+      {part.traceEvents && part.traceEvents.length > 0 && (
+        <details
+          className="rounded-md border px-3 py-2 text-xs"
+          style={{
+            borderColor: "var(--border-soft)",
+            background: "var(--bg-subtle)",
+            color: "var(--text-muted)",
+          }}
+        >
+          <summary className="cursor-pointer list-none font-medium [&::-webkit-details-marker]:hidden">
+            Run timeline ({part.traceEvents.length})
+          </summary>
+          <div className="mt-2 space-y-1">
+            {part.traceEvents.slice(-20).map((event, index) => (
+              <WorkflowTraceRow key={`${event.type}-${event.createdAt}-${index}`} event={event} />
+            ))}
+          </div>
+        </details>
+      )}
     </div>
+  );
+}
+
+interface WorkflowUiStage {
+  title: string;
+  status: "running" | "completed" | "failed";
+  startedAt: number;
+  endedAt?: number;
+  error?: string;
+}
+
+function workflowStagesFromLogs(
+  logs: Extract<MessagePart, { kind: "workflow_run" }>["logs"]
+): WorkflowUiStage[] {
+  const stages: WorkflowUiStage[] = [];
+  const byTitle = new Map<string, WorkflowUiStage>();
+  for (const log of logs) {
+    const start = log.message.match(/^stage:start:(.+)$/);
+    if (start) {
+      const title = start[1] ?? "stage";
+      const stage: WorkflowUiStage = {
+        title,
+        status: "running",
+        startedAt: log.createdAt,
+      };
+      byTitle.set(title, stage);
+      stages.push(stage);
+      continue;
+    }
+    const end = log.message.match(/^stage:end:(.+)$/);
+    if (end) {
+      const title = end[1] ?? "stage";
+      const stage = byTitle.get(title);
+      if (stage) {
+        stage.status = "completed";
+        stage.endedAt = log.createdAt;
+      }
+      continue;
+    }
+    const failed = log.message.match(/^stage:failed:([^:]+):(.+)$/);
+    if (failed) {
+      const title = failed[1] ?? "stage";
+      const stage = byTitle.get(title);
+      if (stage) {
+        stage.status = "failed";
+        stage.endedAt = log.createdAt;
+        stage.error = failed[2];
+      }
+    }
+  }
+  return stages;
+}
+
+function WorkflowStageProgress({ stages }: { stages: WorkflowUiStage[] }) {
+  const completed = stages.filter((stage) => stage.status === "completed").length;
+  const failed = stages.filter((stage) => stage.status === "failed").length;
+  return (
+    <div
+      className="rounded-md border px-3 py-2 text-xs"
+      style={{
+        borderColor: failed ? "var(--color-danger)" : "var(--border-soft)",
+        background: "var(--bg-subtle)",
+      }}
+    >
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="font-medium">阶段进度</span>
+        <span style={{ color: "var(--text-muted)" }}>
+          {completed}/{stages.length} 完成{failed ? ` · ${failed} 失败` : ""}
+        </span>
+      </div>
+      <ol className="grid gap-1 sm:grid-cols-2">
+        {stages.map((stage, index) => {
+          const color =
+            stage.status === "completed"
+              ? "var(--color-success)"
+              : stage.status === "failed"
+                ? "var(--color-danger)"
+                : "var(--accent)";
+          return (
+            <li
+              key={`${stage.title}-${index}`}
+              className="flex min-w-0 items-center gap-2 rounded border px-2 py-1"
+              style={{ borderColor: "var(--border-soft)" }}
+              title={stage.error ?? stage.title}
+            >
+              <span
+                className="h-1.5 w-1.5 shrink-0 rounded-full"
+                style={{ background: color }}
+              />
+              <span className="min-w-0 flex-1 truncate">{stage.title}</span>
+              <span className="shrink-0" style={{ color }}>
+                {stage.status === "completed"
+                  ? "完成"
+                  : stage.status === "failed"
+                    ? "失败"
+                    : "进行中"}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+function WorkflowTraceRow({
+  event,
+}: {
+  event: NonNullable<Extract<MessagePart, { kind: "workflow_run" }>["traceEvents"]>[number];
+}) {
+  let label: string = event.type;
+  let detail = "";
+  let tone = "var(--text-muted)";
+  if (event.type === "agent_start") {
+    label = "启动子任务";
+    detail = event.title;
+    tone = "var(--accent)";
+  } else if (event.type === "agent_end") {
+    label = "子任务结束";
+    detail = `${event.title} · ${event.status}${event.error ? ` · ${event.error}` : ""}`;
+    tone = event.status === "completed" ? "var(--color-success)" : "var(--color-danger)";
+  } else if (event.type === "schema_validation") {
+    label = "结构校验";
+    detail = event.valid ? "通过" : event.errors.join("; ");
+    tone = event.valid ? "var(--color-success)" : "var(--color-danger)";
+  } else if (event.type === "approval") {
+    label = "能力确认";
+    detail = `${event.capability} · ${event.decision}`;
+  }
+  return (
+    <div className="grid grid-cols-[72px_86px_minmax(0,1fr)] gap-2">
+      <span className="font-mono">
+        {new Date(event.createdAt).toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        })}
+      </span>
+      <span style={{ color: tone }}>{label}</span>
+      <span className="min-w-0 truncate" title={detail}>
+        {detail}
+      </span>
+    </div>
+  );
+}
+
+function WorkflowValueList({
+  items,
+}: {
+  items: { name: string; value: unknown; badge?: string; invalid?: boolean }[];
+}) {
+  const recent = items.slice(-4);
+  const hidden = items.slice(0, Math.max(0, items.length - 4));
+  const renderItem = (
+    item: { name: string; value: unknown; badge?: string; invalid?: boolean },
+    index: number
+  ) => (
+    <details
+      key={`${item.name}-${index}`}
+      className="rounded px-1 py-0.5 text-xs"
+      data-quality-warning={item.invalid || undefined}
+      style={
+        item.invalid
+          ? {
+              border: "1px solid var(--warning, #b8860b)",
+              background: "var(--bg-subtle)",
+            }
+          : undefined
+      }
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-1 truncate [&::-webkit-details-marker]:hidden">
+        <span className="min-w-0 flex-1 truncate">{item.name}</span>
+        {item.invalid && (
+          <span
+            className="shrink-0 rounded border px-1 text-[10px]"
+            style={{
+              borderColor: "var(--warning, #b8860b)",
+              color: "var(--warning, #b8860b)",
+            }}
+          >
+            需补强
+          </span>
+        )}
+        {item.badge && (
+          <span
+            className="shrink-0 rounded border px-1 text-[10px]"
+            style={{
+              borderColor: "var(--border-soft)",
+              color: "var(--text-muted)",
+            }}
+          >
+            {item.badge}
+          </span>
+        )}
+      </summary>
+      <WorkflowValueContent item={item} />
+    </details>
+  );
+  return (
+    <div className="space-y-1">
+      {recent.map(renderItem)}
+      {hidden.length > 0 && (
+        <details className="text-xs">
+          <summary
+            className="cursor-pointer list-none rounded px-1 py-0.5 hover:bg-[color:var(--bg-hover)] [&::-webkit-details-marker]:hidden"
+            style={{ color: "var(--text-muted)" }}
+          >
+            查看全部（{items.length}）
+          </summary>
+          <div className="mt-1 space-y-1">{hidden.map(renderItem)}</div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function WorkflowValueContent({
+  item,
+}: {
+  item: { name: string; value: unknown; badge?: string; invalid?: boolean };
+}) {
+  const text =
+    typeof item.value === "string" ? item.value : shortJson(item.value);
+  if (item.badge === "result" && typeof item.value === "string") {
+    return (
+      <div
+        className="mt-1 max-h-64 overflow-auto rounded border px-2 py-2"
+        style={{ borderColor: "var(--border-soft)", color: "var(--text)" }}
+      >
+        <Markdown text={item.value} size="small" />
+      </div>
+    );
+  }
+  if (item.badge === "diff") {
+    return (
+      <pre
+        className="mt-1 max-h-64 overflow-auto whitespace-pre rounded border px-2 py-2 text-token-xs"
+        style={{
+          borderColor: "var(--border-soft)",
+          color: "var(--text-muted)",
+          fontFamily:
+            "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+        }}
+      >
+        {text}
+      </pre>
+    );
+  }
+  if (item.badge === "verification") {
+    return (
+      <pre
+        className="mt-1 max-h-52 overflow-auto whitespace-pre-wrap rounded border px-2 py-2 text-token-xs"
+        style={{
+          borderColor: "var(--border-soft)",
+          color: /fail|error|false/i.test(text)
+            ? "var(--color-danger)"
+            : "var(--color-success)",
+        }}
+      >
+        {text}
+      </pre>
+    );
+  }
+  return (
+    <pre
+      className="mt-1 max-h-52 overflow-auto whitespace-pre-wrap rounded border px-2 py-2 text-token-xs"
+      style={{
+        borderColor: "var(--border-soft)",
+        color: "var(--text-muted)",
+      }}
+    >
+      {text}
+    </pre>
   );
 }
 
@@ -1992,6 +2352,9 @@ function SubagentBatchCard({
   );
   const [resuming, setResuming] = useState(false);
   const completed = part.tasks.filter((task) => task.status === "completed").length;
+  const timeoutCount = part.tasks.filter((task) => task.status === "timeout").length;
+  const abortedCount = part.tasks.filter((task) => task.status === "aborted").length;
+  const failedCount = part.tasks.filter((task) => task.status === "failed").length;
   const failed = part.tasks.filter(
     (task) =>
       task.status === "failed" ||
@@ -2026,6 +2389,23 @@ function SubagentBatchCard({
       : failed > 0
       ? `${completed} 个完成，${failed} 个失败`
       : `${completed} 个子智能体已完成`;
+  const statusBadges = [
+    completed > 0 ? `完成 ${completed}` : "",
+    runningCount > 0 ? `执行中 ${runningCount}` : "",
+    pendingCount > 0 ? `排队 ${pendingCount}` : "",
+    failedCount > 0 ? `失败 ${failedCount}` : "",
+    timeoutCount > 0 ? `超时 ${timeoutCount}` : "",
+    abortedCount > 0 ? `中止 ${abortedCount}` : "",
+  ].filter(Boolean);
+  const failedTitles = part.tasks
+    .filter(
+      (task) =>
+        task.status === "failed" ||
+        task.status === "aborted" ||
+        task.status === "timeout"
+    )
+    .map((task) => task.title)
+    .slice(0, 3);
   const hasBatchMeta = Boolean(
     part.planning || part.synthesis || (part.auditEvents && part.auditEvents.length > 0)
   );
@@ -2060,6 +2440,24 @@ function SubagentBatchCard({
         <Bot size={24} strokeWidth={2.2} />
         {running && <Loader2 size={16} className="animate-spin" />}
         <span>{statusLabel}</span>
+        <span
+          className="hidden min-w-0 flex-1 flex-wrap gap-1 sm:flex"
+          aria-label="子任务状态汇总"
+        >
+          {statusBadges.map((badge) => (
+            <span
+              key={badge}
+              className="rounded border px-1.5 py-0.5 text-token-xs font-normal"
+              style={{
+                borderColor: "var(--border-soft)",
+                color: "var(--text-muted)",
+                background: "var(--bg-subtle)",
+              }}
+            >
+              {badge}
+            </span>
+          ))}
+        </span>
         {part.verification && (
           <span
             className="ml-1 inline-flex h-6 items-center gap-1 rounded-token-sm border px-1.5 text-token-xs font-medium"
@@ -2096,21 +2494,34 @@ function SubagentBatchCard({
             ) : (
               <Play size={12} />
             )}
-            Continue
+            继续
           </button>
         )}
       </div>
+      {failedTitles.length > 0 && (
+        <div
+          className="rounded-md border px-3 py-2 text-token-xs"
+          style={{
+            borderColor: "var(--color-danger)",
+            background: "var(--bg-subtle)",
+            color: "var(--color-danger)",
+          }}
+        >
+          失败子任务：{failedTitles.join("、")}
+          {failed > failedTitles.length ? ` 等 ${failed} 个` : ""}
+        </div>
+      )}
       {hasBatchMeta && (
         <details
           className="rounded-token-sm text-token-xs"
           style={{ color: "var(--text-muted)" }}
         >
           <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-token-sm px-1.5 py-1 hover:bg-[color:var(--bg-hover)] [&::-webkit-details-marker]:hidden">
-            Details
+            详情
             <span className="tabular-nums">
-              {part.planning ? " · planner" : ""}
-              {part.synthesis ? " · synthesis" : ""}
-              {part.auditEvents?.length ? ` · ${part.auditEvents.length} audit` : ""}
+              {part.planning ? " · 规划" : ""}
+              {part.synthesis ? " · 综合" : ""}
+              {part.auditEvents?.length ? ` · ${part.auditEvents.length} 条审计` : ""}
             </span>
           </summary>
           <div className="mt-2 space-y-2">
@@ -2125,12 +2536,12 @@ function SubagentBatchCard({
               >
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="font-semibold" style={{ color: "var(--text)" }}>
-                    Planner: {part.planning.status}
+                    规划：{part.planning.status}
                   </span>
-                  <span>{part.planning.taskCount} tasks</span>
-                  <span>concurrency {part.planning.concurrency}</span>
+                  <span>{part.planning.taskCount} 个任务</span>
+                  <span>并发 {part.planning.concurrency}</span>
                   {part.planning.warnings.length > 0 && (
-                    <span>{part.planning.warnings.length} warnings</span>
+                    <span>{part.planning.warnings.length} 条提醒</span>
                   )}
                 </div>
               </div>
@@ -2146,14 +2557,14 @@ function SubagentBatchCard({
               >
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="font-semibold" style={{ color: "var(--text)" }}>
-                    Synthesis: {part.synthesis.status}
+                    综合：{part.synthesis.status}
                   </span>
                   <span>{part.synthesis.summary}</span>
                 </div>
                 <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
-                  <span>{part.synthesis.usableTaskIds.length} usable</span>
-                  <span>{part.synthesis.cautionTaskIds.length} caution</span>
-                  <span>{part.synthesis.rejectedTaskIds.length} rejected</span>
+                  <span>{part.synthesis.usableTaskIds.length} 个可用</span>
+                  <span>{part.synthesis.cautionTaskIds.length} 个需注意</span>
+                  <span>{part.synthesis.rejectedTaskIds.length} 个已拒绝</span>
                 </div>
               </div>
             )}
@@ -2166,7 +2577,7 @@ function SubagentBatchCard({
                 }}
               >
                 <div className="font-semibold" style={{ color: "var(--text)" }}>
-                  Audit: {part.auditEvents.length} events
+                  审计：{part.auditEvents.length} 条事件
                 </div>
                 <div className="mt-2 space-y-1">
                   {part.auditEvents.slice(-12).map((event, index) => (
@@ -2194,7 +2605,10 @@ function SubagentBatchCard({
           </div>
         </details>
       )}
-      <div className="flex flex-wrap gap-2">
+      <div
+        className="grid gap-2 md:grid-cols-2 xl:grid-cols-3"
+        data-testid="subagent-task-grid"
+      >
         {part.tasks.map((task) => {
           const isDone = task.status === "completed";
           const isRunning = task.status === "running";
@@ -2222,7 +2636,7 @@ function SubagentBatchCard({
               : task.verification?.status === "failed"
               ? "var(--color-danger)"
               : "var(--text-muted)";
-          const openByDefault = isRunning && part.tasks.length <= 5;
+          const openByDefault = (isRunning || isFailed) && part.tasks.length <= 8;
           const statusIcon = isDone ? (
             <CheckCircle2 size={13} style={{ color: "var(--color-success)" }} />
           ) : isFailed ? (
@@ -2240,32 +2654,62 @@ function SubagentBatchCard({
             <details
               key={task.id}
               open={openByDefault}
-              className="group/subagent max-w-full"
-            >
-              <summary
-                className="inline-flex max-w-full cursor-pointer list-none items-center gap-2 rounded-full border px-3 py-1.5 text-token-sm shadow-sm hover:bg-[color:var(--bg-hover)] [&::-webkit-details-marker]:hidden"
-                style={{
-                  borderColor: isFailed
-                    ? "var(--color-danger)"
-                    : isRunning
+              className="group/subagent min-w-0 rounded-token-md border"
+              style={{
+                borderColor: isFailed
+                  ? "var(--color-danger)"
+                  : isRunning
                     ? "var(--accent)"
                     : "var(--border-soft)",
-                  background: "var(--bg-panel)",
+                background: "var(--bg-panel)",
+              }}
+            >
+              <summary
+                className="flex max-w-full cursor-pointer list-none items-start gap-2 rounded-token-md px-3 py-2 text-token-sm hover:bg-[color:var(--bg-hover)] [&::-webkit-details-marker]:hidden"
+                style={{
                   color: "var(--text)",
                 }}
                 title={`${task.status}: ${task.title}`}
               >
-                <span className="font-mono text-token-lg leading-none" style={{ color: "var(--text-muted)" }}>
-                  ⋮
+                <span className="mt-0.5 shrink-0">{statusIcon}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{task.title}</span>
+                  <span className="mt-1 flex flex-wrap gap-1">
+                    <span
+                      className="shrink-0 rounded border px-1.5 py-0.5 text-[10px]"
+                      style={{
+                        borderColor: "var(--border-soft)",
+                        color: "var(--text-muted)",
+                        background: "var(--bg-subtle)",
+                      }}
+                    >
+                      {subagentRoleLabel(task.role)}
+                    </span>
+                    <span
+                      className="shrink-0 rounded border px-1.5 py-0.5 text-[10px]"
+                      style={{
+                        borderColor: isFailed
+                          ? "var(--color-danger)"
+                          : isRunning
+                            ? "var(--accent)"
+                            : "var(--border-soft)",
+                        color: isFailed
+                          ? "var(--color-danger)"
+                          : isRunning
+                            ? "var(--accent)"
+                            : "var(--text-muted)",
+                        background: "var(--bg-subtle)",
+                      }}
+                    >
+                      {subagentStatusLabel(task.status)}
+                    </span>
+                  </span>
                 </span>
-                <span className="shrink-0">{statusIcon}</span>
-                <span className="min-w-0 truncate">{task.title}</span>
               </summary>
               <div
-                className="mt-2 w-[min(760px,calc(100vw-96px))] rounded-token-md border p-3"
+                className="border-t p-3"
                 style={{
                   borderColor: "var(--border-soft)",
-                  background: "var(--bg-panel)",
                 }}
               >
                 <div
@@ -2383,16 +2827,45 @@ function SubagentBatchCard({
   );
 }
 
+function subagentRoleLabel(role: string | undefined): string {
+  if (role === "rag") return "知识库";
+  if (role === "research") return "研究";
+  if (role === "code-review") return "审计";
+  if (role === "implementation") return "实现";
+  if (role === "general") return "通用";
+  return "通用";
+}
+
+function subagentStatusLabel(status: string): string {
+  if (status === "completed") return "已完成";
+  if (status === "running") return "执行中";
+  if (status === "pending") return "排队中";
+  if (status === "failed") return "失败";
+  if (status === "aborted") return "已中止";
+  if (status === "timeout") return "已超时";
+  return status;
+}
+
 function ThinkingBlock({
   text,
   startedAt,
   endedAt,
+  endedReason,
+  defaultOpen = false,
+  index,
+  total,
 }: {
   text: string;
   startedAt?: number;
   endedAt?: number;
+  endedReason?: Extract<MessagePart, { kind: "thinking" }>["endedReason"];
+  defaultOpen?: boolean;
+  index?: number;
+  total?: number;
 }) {
-  if (!text) return null;
+  const [copied, setCopied] = useState(false);
+  if (!text || !text.trim()) return null;
+  const running = endedAt === undefined;
   // 仅在思考阶段已结束（有 endedAt）时展示时长；流式中不显示
   const duration =
     startedAt && endedAt && endedAt > startedAt
@@ -2401,8 +2874,15 @@ function ThinkingBlock({
   return (
     <details
       className="text-xs"
+      open={defaultOpen}
+      aria-busy={running}
       style={{
         color: "var(--text-muted)",
+        borderTop:
+          index && index > 1 && total && total > 1
+            ? "1px solid var(--border-soft)"
+            : undefined,
+        paddingTop: index && index > 1 && total && total > 1 ? 4 : undefined,
       }}
     >
       <summary
@@ -2410,7 +2890,28 @@ function ThinkingBlock({
         style={{ color: "var(--text-muted)" }}
       >
         <Lightbulb size={12} />
-        <span>思考</span>
+        <span>
+          {running
+            ? "思考中"
+            : endedReason === "aborted"
+              ? "思考已中断"
+              : endedReason === "error"
+                ? "思考异常结束"
+                : "思考"}
+        </span>
+        {index && total && (
+          <span
+            className="tabular-nums"
+            style={{ fontSize: 11, color: "var(--fg-faint)" }}
+          >
+            {index}/{total}
+          </span>
+        )}
+        {running && (
+          <span className="animate-pulse" aria-hidden>
+            …
+          </span>
+        )}
         {duration !== null && (
           <span
             className="tabular-nums"
@@ -2419,6 +2920,27 @@ function ThinkingBlock({
             {duration}s
           </span>
         )}
+        <button
+          type="button"
+          className="ml-1 inline-flex h-5 items-center gap-1 rounded px-1 text-[11px] hover:bg-[color:var(--bg-hover)]"
+          style={{ color: "var(--text-muted)" }}
+          title={copied ? "已复制思考" : "复制思考"}
+          aria-label={copied ? "已复制思考" : "复制思考"}
+          onClick={async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            try {
+              await navigator.clipboard.writeText(text);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1200);
+            } catch {
+              /* ignore */
+            }
+          }}
+        >
+          <Copy size={11} />
+          <span>{copied ? "已复制" : "复制"}</span>
+        </button>
       </summary>
       <div
         className="pl-4 pt-1 thinking-md"
@@ -2428,6 +2950,35 @@ function ThinkingBlock({
       </div>
     </details>
   );
+}
+
+function usePersistedDisclosure(
+  key: string,
+  defaultOpen: boolean
+): [boolean, (updater: boolean | ((value: boolean) => boolean)) => void] {
+  const storageKey = `diga:disclosure:${key}`;
+  const [open, setOpenState] = useState(defaultOpen);
+  useEffect(() => {
+    try {
+      const stored = window.sessionStorage.getItem(storageKey);
+      if (stored !== "1" && stored !== "0") return;
+      window.queueMicrotask(() => setOpenState(stored === "1"));
+    } catch {
+      /* sessionStorage can be unavailable in restricted contexts */
+    }
+  }, [storageKey]);
+  const setOpen = (updater: boolean | ((value: boolean) => boolean)) => {
+    setOpenState((current) => {
+      const next = typeof updater === "function" ? updater(current) : updater;
+      try {
+        window.sessionStorage.setItem(storageKey, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+  return [open, setOpen];
 }
 
 /**
