@@ -49,7 +49,12 @@ const inspectScript = `(() => ({
 }))()`;
 
 const extractScript = `(() => {
-  const visibleText = (document.body?.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 4000);
+  const rawText = (document.body?.innerText || "").replace(/\\s+/g, " ").trim();
+  const visibleText = rawText.slice(0, 3000);
+  const headings = Array.from(document.querySelectorAll("h1, h2, h3, [role='heading']")).slice(0, 24).map((el) => ({
+    level: Number(el.getAttribute("aria-level")) || Number(el.tagName.slice(1)) || 2,
+    text: (el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 160),
+  })).filter((x) => x.text);
   const selectorFor = (el, fallback) => {
     const id = el.getAttribute("id");
     if (id) return "#" + CSS.escape(id);
@@ -57,11 +62,11 @@ const extractScript = `(() => {
     if (name) return el.tagName.toLowerCase() + "[name=\\"" + CSS.escape(name) + "\\"]";
     return fallback;
   };
-  const links = Array.from(document.querySelectorAll("a")).slice(0, 30).map((a) => ({
+  const links = Array.from(document.querySelectorAll("a")).slice(0, 20).map((a) => ({
     text: (a.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 120),
     href: a.href,
   })).filter((x) => x.text || x.href);
-  const inputs = Array.from(document.querySelectorAll("input, textarea, select")).slice(0, 30).map((el) => {
+  const inputs = Array.from(document.querySelectorAll("input, textarea, select")).slice(0, 20).map((el) => {
     const id = el.id;
     const label = (id && document.querySelector("label[for=\\"" + CSS.escape(id) + "\\"]")?.textContent) ||
       el.getAttribute("aria-label") || el.name || "";
@@ -73,24 +78,34 @@ const extractScript = `(() => {
     };
   });
   const actions = [
-    ...Array.from(document.querySelectorAll("a")).slice(0, 20).map((el, index) => ({
+    ...Array.from(document.querySelectorAll("a")).slice(0, 12).map((el, index) => ({
       kind: "link",
       text: (el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 120),
       selectorHint: selectorFor(el, "a:nth-of-type(" + (index + 1) + ")"),
     })),
-    ...Array.from(document.querySelectorAll("button, [role='button']")).slice(0, 20).map((el, index) => ({
+    ...Array.from(document.querySelectorAll("button, [role='button']")).slice(0, 12).map((el, index) => ({
       kind: "button",
       text: (el.textContent || el.getAttribute("aria-label") || "").replace(/\\s+/g, " ").trim().slice(0, 120),
       selectorHint: selectorFor(el, "button:nth-of-type(" + (index + 1) + ")"),
     })),
-    ...Array.from(document.querySelectorAll("input, textarea, [role='textbox'], [role='searchbox']")).slice(0, 20).map((el, index) => ({
+    ...Array.from(document.querySelectorAll("input, textarea, [role='textbox'], [role='searchbox']")).slice(0, 12).map((el, index) => ({
       kind: "input",
       text: (el.getAttribute("aria-label") || el.getAttribute("placeholder") || el.getAttribute("name") || "")
         .replace(/\\s+/g, " ").trim().slice(0, 120),
       selectorHint: selectorFor(el, "input:nth-of-type(" + (index + 1) + ")"),
     })),
   ].filter((x) => x.text || x.selectorHint);
-  return { url: location.href, title: document.title, screenshotDataUrl: null, text: visibleText, links, inputs, actions };
+  return {
+    url: location.href,
+    title: document.title,
+    screenshotDataUrl: null,
+    text: visibleText,
+    partial: rawText.length > visibleText.length || document.querySelectorAll("a, button, input, textarea, select").length > 44,
+    headings,
+    links,
+    inputs,
+    actions,
+  };
 })()`;
 
 function hasTextScript(text: unknown, exact = false): string {

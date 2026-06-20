@@ -86,6 +86,35 @@ function textValue(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+function isBrowserSiteApproval(part: ApprovalPart): boolean {
+  return part.toolName === "browser:open_external_site";
+}
+
+function BrowserSiteApprovalPreview({ input }: { input: Record<string, unknown> }) {
+  const origin = textValue(input.origin);
+  const url = textValue(input.url);
+  return (
+    <div
+      className="rounded border px-2 py-2 text-xs space-y-1.5"
+      style={{
+        borderColor: "var(--border)",
+        background: "var(--bg-panel)",
+        color: "var(--text)",
+      }}
+    >
+      <div className="font-medium">{origin || "外部网站"}</div>
+      {url ? (
+        <div className="break-all" style={{ color: "var(--text-muted)" }}>
+          {url}
+        </div>
+      ) : null}
+      <div style={{ color: "var(--text-dim)" }}>
+        Agent 正在请求访问这个外部站点。允许后，本次会话可以继续打开该来源。
+      </div>
+    </div>
+  );
+}
+
 function MergeWorktreePreview({ input }: { input: Record<string, unknown> }) {
   const worktree =
     input.worktree && typeof input.worktree === "object"
@@ -283,7 +312,9 @@ export const ApprovalBubble = memo(function ApprovalBubble({
           {countdown}
         </span>
       </div>
-      {part.toolName === "workflow:merge_worktree" ? (
+      {isBrowserSiteApproval(part) ? (
+        <BrowserSiteApprovalPreview input={part.input} />
+      ) : part.toolName === "workflow:merge_worktree" ? (
         <MergeWorktreePreview input={part.input} />
       ) : (
         <pre

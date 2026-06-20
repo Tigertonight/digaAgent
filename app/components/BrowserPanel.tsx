@@ -174,6 +174,11 @@ export function BrowserPanel({
     selectedStep?.screenshotDataUrl ?? effectiveSnapshot.screenshotDataUrl;
   const displayUrl = selectedStep?.url ?? effectiveSnapshot.url;
   const displayTitle = selectedStep?.title ?? effectiveSnapshot.title;
+  const isChromeErrorPage =
+    typeof displayUrl === "string" && displayUrl.startsWith("chrome-error://");
+  const displayHeading = isChromeErrorPage
+    ? "页面加载失败"
+    : displayTitle || site?.origin || addressDraft;
   const displayPointer =
     selectedStep?.pointer ?? effectiveSnapshot.pointer ?? null;
   useEffect(() => {
@@ -731,7 +736,7 @@ export function BrowserPanel({
           {site?.decision ?? "···"}
         </span>
         <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text-muted)" }}>
-          {displayTitle || site?.origin || addressDraft}
+          {displayHeading}
         </span>
         {selectedStep && (
           <span
@@ -801,6 +806,19 @@ export function BrowserPanel({
           }}
         >
           {error ?? effectiveSnapshot.error}
+        </div>
+      )}
+
+      {isChromeErrorPage && (
+        <div
+          className="mx-2 mt-2 rounded border px-2 py-1.5 text-xs"
+          style={{
+            borderColor: "var(--color-warning)",
+            color: "var(--text)",
+            background: "var(--bg-panel-2)",
+          }}
+        >
+          当前页面是浏览器错误页，通常表示域名无法解析、网络失败或导航被浏览器拦截。
         </div>
       )}
 

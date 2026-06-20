@@ -18,6 +18,7 @@ import {
   browserVerify,
   browserWait,
   browserWaitFor,
+  isBrowserRuntimeError,
   listBrowserAnnotations,
   setBrowserAnnotationStatus,
 } from "./runtime";
@@ -208,6 +209,11 @@ type BrowserToolDetails = {
   evidence: BrowserToolEvidence;
 };
 
+type BrowserToolSdkResult = {
+  content: Array<{ type: "text"; text: string }>;
+  details: BrowserToolDetails;
+};
+
 /**
  * 阶段 B：把一次 browser tool 执行统一映射成 SDK 返回结构，并附带
  * 标准化的、机器可读的 evidence。
@@ -223,8 +229,12 @@ function toolResult(
   evidence: Partial<BrowserToolEvidence> & { tool: string }
 ) {
   const fullEvidence: BrowserToolEvidence = {
+    ok: evidence.ok ?? true,
     url: snapshot.url,
     title: snapshot.title,
+    finalUrl: snapshot.url,
+    finalTitle: snapshot.title,
+    browserStatus: snapshot.status,
     screenshotDataUrl: snapshot.screenshotDataUrl,
     ...evidence,
   };
@@ -232,6 +242,55 @@ function toolResult(
     content: [{ type: "text" as const, text: observation }],
     details: { snapshot, evidence: fullEvidence },
   };
+}
+
+function failedToolResult(
+  opts: BrowserExtensionOptions,
+  tool: string,
+  error: unknown
+): BrowserToolSdkResult {
+  const snapshot = isBrowserRuntimeError(error)
+    ? error.snapshot
+    : getBrowserSnapshot(agentBrowserId(opts.getAgentId()));
+  const message =
+    error instanceof Error ? error.message : String(error || "Browser command failed");
+  const errorCode = isBrowserRuntimeError(error)
+    ? error.code
+    : message.toLowerCase().includes("host is not connected")
+      ? "browser_host_disconnected"
+      : message.toLowerCase().includes("timed out")
+        ? "timeout"
+        : "browser_command_error";
+  const observation =
+    errorCode === "timeout"
+      ? `Browser command timed out: ${tool}; current page: ${snapshot.url ?? "(none)"}`
+      : errorCode === "chrome-error-page"
+        ? `Navigation failed: chrome-error-page; current page: ${snapshot.url ?? "(none)"}`
+        : message;
+  opts.onBrowserState(snapshot);
+  return toolResult(observation, snapshot, {
+    tool,
+    ok: false,
+    errorCode,
+    errorMessage: message,
+    finalUrl: snapshot.url,
+    finalTitle: snapshot.title,
+    browserStatus: snapshot.status,
+    durationMs: isBrowserRuntimeError(error) ? error.durationMs : undefined,
+    recoverable: isBrowserRuntimeError(error) ? error.recoverable : true,
+  });
+}
+
+async function runBrowserTool(
+  opts: BrowserExtensionOptions,
+  tool: string,
+  fn: () => Promise<BrowserToolSdkResult>
+): Promise<BrowserToolSdkResult> {
+  try {
+    return await fn();
+  } catch (error) {
+    return failedToolResult(opts, tool, error);
+  }
 }
 
 async function runWithBrowserState<T>(
@@ -342,6 +401,7 @@ The user can draw a region on the browser page and leave a comment. These page a
 - Visiting an external site for the first time requires user approval. browser_open may pause for the user to approve; once approved that origin is remembered for the session.
 - Sensitive actions (login, payment, file upload, form submit) require an extra confirmation. Only attempt them when the user clearly asked for it, and never enter credentials, card numbers, or other secrets on your own initiative — let the user take over for those.
 - If a navigation or action is denied, report it to the user instead of retrying in a loop.
+- If the same browser action for the same URL/selector fails twice, stop retrying and summarize the structured failure evidence (errorCode, finalUrl, title, and whether it is recoverable).
 `,
     }));
 
@@ -360,13 +420,15 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: OpenParams,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
-          await guardSite(opts, params.url);
-          const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserOpen(agentBrowserId(opts.getAgentId()), params.url)
-          );
-          opts.onBrowserState(snapshot);
-          return toolResult(`Opened ${result.url}`, snapshot, {
-            tool: "browser_open",
+          return runBrowserTool(opts, "browser_open", async () => {
+            await guardSite(opts, params.url);
+            const { result, snapshot } = await runWithBrowserState(opts, () =>
+              browserOpen(agentBrowserId(opts.getAgentId()), params.url)
+            );
+            opts.onBrowserState(snapshot);
+            return toolResult(`Opened ${result.url}`, snapshot, {
+              tool: "browser_open",
+            });
           });
         },
       })
@@ -381,15 +443,17 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: EmptyParams,
         executionMode: "sequential",
         async execute() {
-          const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserScreenshot(agentBrowserId(opts.getAgentId()))
-          );
-          opts.onBrowserState(snapshot);
-          return toolResult(
-            `Captured browser screenshot for ${result.url}`,
-            snapshot,
-            { tool: "browser_screenshot" }
-          );
+          return runBrowserTool(opts, "browser_screenshot", async () => {
+            const { result, snapshot } = await runWithBrowserState(opts, () =>
+              browserScreenshot(agentBrowserId(opts.getAgentId()))
+            );
+            opts.onBrowserState(snapshot);
+            return toolResult(
+              `Captured browser screenshot for ${result.url}`,
+              snapshot,
+              { tool: "browser_screenshot" }
+            );
+          });
         },
       })
     );
@@ -404,21 +468,23 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: ClickParams,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
-          await guardAction(opts, [
-            params.selector,
-            typeof params.x === "number" || typeof params.y === "number"
-              ? `${params.x ?? "?"},${params.y ?? "?"}`
-              : undefined,
-          ]);
-          const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserClick(agentBrowserId(opts.getAgentId()), params)
-          );
-          opts.onBrowserState(snapshot);
-          return toolResult(
-            `Clicked browser target; current URL ${result.url}`,
-            snapshot,
-            { tool: "browser_click" }
-          );
+          return runBrowserTool(opts, "browser_click", async () => {
+            await guardAction(opts, [
+              params.selector,
+              typeof params.x === "number" || typeof params.y === "number"
+                ? `${params.x ?? "?"},${params.y ?? "?"}`
+                : undefined,
+            ]);
+            const { result, snapshot } = await runWithBrowserState(opts, () =>
+              browserClick(agentBrowserId(opts.getAgentId()), params)
+            );
+            opts.onBrowserState(snapshot);
+            return toolResult(
+              `Clicked browser target; current URL ${result.url}`,
+              snapshot,
+              { tool: "browser_click" }
+            );
+          });
         },
       })
     );
@@ -437,16 +503,18 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: ClickTextParams,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
-          await guardAction(opts, [params.text]);
-          const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserClickText(agentBrowserId(opts.getAgentId()), params)
-          );
-          opts.onBrowserState(snapshot);
-          return toolResult(
-            `Clicked text "${params.text}"; current URL ${result.url}`,
-            snapshot,
-            { tool: "browser_click_text" }
-          );
+          return runBrowserTool(opts, "browser_click_text", async () => {
+            await guardAction(opts, [params.text]);
+            const { result, snapshot } = await runWithBrowserState(opts, () =>
+              browserClickText(agentBrowserId(opts.getAgentId()), params)
+            );
+            opts.onBrowserState(snapshot);
+            return toolResult(
+              `Clicked text "${params.text}"; current URL ${result.url}`,
+              snapshot,
+              { tool: "browser_click_text" }
+            );
+          });
         },
       })
     );
@@ -465,16 +533,18 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: FillParams,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
-          await guardAction(opts, [params.selector, params.text]);
-          const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserFill(agentBrowserId(opts.getAgentId()), params)
-          );
-          opts.onBrowserState(snapshot);
-          return toolResult(
-            `Filled browser input; current URL ${result.url}`,
-            snapshot,
-            { tool: "browser_fill" }
-          );
+          return runBrowserTool(opts, "browser_fill", async () => {
+            await guardAction(opts, [params.selector, params.text]);
+            const { result, snapshot } = await runWithBrowserState(opts, () =>
+              browserFill(agentBrowserId(opts.getAgentId()), params)
+            );
+            opts.onBrowserState(snapshot);
+            return toolResult(
+              `Filled browser input; current URL ${result.url}`,
+              snapshot,
+              { tool: "browser_fill" }
+            );
+          });
         },
       })
     );
@@ -489,16 +559,18 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: TypeParams,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
-          await guardAction(opts, [params.selector, params.text]);
-          const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserType(agentBrowserId(opts.getAgentId()), params)
-          );
-          opts.onBrowserState(snapshot);
-          return toolResult(
-            `Typed into browser; current URL ${result.url}`,
-            snapshot,
-            { tool: "browser_type" }
-          );
+          return runBrowserTool(opts, "browser_type", async () => {
+            await guardAction(opts, [params.selector, params.text]);
+            const { result, snapshot } = await runWithBrowserState(opts, () =>
+              browserType(agentBrowserId(opts.getAgentId()), params)
+            );
+            opts.onBrowserState(snapshot);
+            return toolResult(
+              `Typed into browser; current URL ${result.url}`,
+              snapshot,
+              { tool: "browser_type" }
+            );
+          });
         },
       })
     );
@@ -517,16 +589,18 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: SearchParams,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
-          await guardSite(opts, browserSearchUrl(params).url);
-          const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserSearch(agentBrowserId(opts.getAgentId()), params)
-          );
-          opts.onBrowserState(snapshot);
-          return toolResult(
-            `Searched ${params.engine ?? "baidu"} for "${params.query}"; current URL ${result.url}`,
-            snapshot,
-            { tool: "browser_search" }
-          );
+          return runBrowserTool(opts, "browser_search", async () => {
+            await guardSite(opts, browserSearchUrl(params).url);
+            const { result, snapshot } = await runWithBrowserState(opts, () =>
+              browserSearch(agentBrowserId(opts.getAgentId()), params)
+            );
+            opts.onBrowserState(snapshot);
+            return toolResult(
+              `Searched ${params.engine ?? "baidu"} for "${params.query}"; current URL ${result.url}`,
+              snapshot,
+              { tool: "browser_search" }
+            );
+          });
         },
       })
     );
@@ -541,15 +615,17 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: WaitParams,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
-          const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserWait(agentBrowserId(opts.getAgentId()), params)
-          );
-          opts.onBrowserState(snapshot);
-          return toolResult(
-            `Browser wait completed; current URL ${result.url}`,
-            snapshot,
-            { tool: "browser_wait" }
-          );
+          return runBrowserTool(opts, "browser_wait", async () => {
+            const { result, snapshot } = await runWithBrowserState(opts, () =>
+              browserWait(agentBrowserId(opts.getAgentId()), params)
+            );
+            opts.onBrowserState(snapshot);
+            return toolResult(
+              `Browser wait completed; current URL ${result.url}`,
+              snapshot,
+              { tool: "browser_wait" }
+            );
+          });
         },
       })
     );
@@ -569,23 +645,25 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: WaitForParams,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
-          const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserWaitFor(agentBrowserId(opts.getAgentId()), params)
-          );
-          opts.onBrowserState(snapshot);
-          const condition =
-            params.url
-              ? `url contains "${params.url}"`
-              : params.selector
-                ? `selector "${params.selector}" appeared`
-                : params.text
-                  ? `text "${params.text}" appeared`
-                  : "condition met";
-          return toolResult(
-            `Wait condition met (${condition}); current URL ${result.url}`,
-            snapshot,
-            { tool: "browser_wait_for", passed: true }
-          );
+          return runBrowserTool(opts, "browser_wait_for", async () => {
+            const { result, snapshot } = await runWithBrowserState(opts, () =>
+              browserWaitFor(agentBrowserId(opts.getAgentId()), params)
+            );
+            opts.onBrowserState(snapshot);
+            const condition =
+              params.url
+                ? `url contains "${params.url}"`
+                : params.selector
+                  ? `selector "${params.selector}" appeared`
+                  : params.text
+                    ? `text "${params.text}" appeared`
+                    : "condition met";
+            return toolResult(
+              `Wait condition met (${condition}); current URL ${result.url}`,
+              snapshot,
+              { tool: "browser_wait_for", passed: true }
+            );
+          });
         },
       })
     );
@@ -600,33 +678,43 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: EmptyParams,
         executionMode: "sequential",
         async execute() {
-          const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserExtract(agentBrowserId(opts.getAgentId()))
-          );
-          opts.onBrowserState(snapshot);
-          const extracted: BrowserExtractResult = result;
-          return toolResult(
-            [
-              `Title: ${extracted.title ?? "(untitled)"}`,
-              `URL: ${extracted.url ?? "(none)"}`,
-              extracted.actions.length
-                ? `Actions:\n${extracted.actions
-                    .slice(0, 20)
-                    .map(
-                      (a, i) =>
-                        `${i + 1}. [${a.kind}] ${a.text || "(no text)"} :: ${a.selectorHint}`
-                    )
-                    .join("\n")}`
-                : "Actions: (none)",
-              "",
-              extracted.text || "(no visible text)",
-            ].join("\n"),
-            snapshot,
-            {
-              tool: "browser_extract",
-              extractedText: extracted.text,
-            }
-          );
+          return runBrowserTool(opts, "browser_extract", async () => {
+            const { result, snapshot } = await runWithBrowserState(opts, () =>
+              browserExtract(agentBrowserId(opts.getAgentId()))
+            );
+            opts.onBrowserState(snapshot);
+            const extracted: BrowserExtractResult = result;
+            return toolResult(
+              [
+                `Title: ${extracted.title ?? "(untitled)"}`,
+                `URL: ${extracted.url ?? "(none)"}`,
+                extracted.partial ? "Partial: true" : "Partial: false",
+                extracted.headings?.length
+                  ? `Headings:\n${extracted.headings
+                      .slice(0, 12)
+                      .map((h) => `${"#".repeat(Math.min(Math.max(h.level, 1), 6))} ${h.text}`)
+                      .join("\n")}`
+                  : "Headings: (none)",
+                extracted.actions.length
+                  ? `Actions:\n${extracted.actions
+                      .slice(0, 20)
+                      .map(
+                        (a, i) =>
+                          `${i + 1}. [${a.kind}] ${a.text || "(no text)"} :: ${a.selectorHint}`
+                      )
+                      .join("\n")}`
+                  : "Actions: (none)",
+                "",
+                extracted.text || "(no visible text)",
+              ].join("\n"),
+              snapshot,
+              {
+                tool: "browser_extract",
+                extractedText: extracted.text,
+                partial: extracted.partial === true,
+              }
+            );
+          });
         },
       })
     );
@@ -646,16 +734,18 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: VerifyParams,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
-          const { result, snapshot } = await runWithBrowserState(opts, () =>
-            browserVerify(agentBrowserId(opts.getAgentId()), params)
-          );
-          opts.onBrowserState(snapshot);
-          const verified: BrowserVerifyResult = result;
-          return toolResult(
-            `${verified.passed ? "PASS" : "FAIL"}: ${verified.expectation}\n${verified.evidence}`,
-            snapshot,
-            { tool: "browser_verify", passed: verified.passed }
-          );
+          return runBrowserTool(opts, "browser_verify", async () => {
+            const { result, snapshot } = await runWithBrowserState(opts, () =>
+              browserVerify(agentBrowserId(opts.getAgentId()), params)
+            );
+            opts.onBrowserState(snapshot);
+            const verified: BrowserVerifyResult = result;
+            return toolResult(
+              `${verified.passed ? "PASS" : "FAIL"}: ${verified.expectation}\n${verified.evidence}`,
+              snapshot,
+              { tool: "browser_verify", passed: verified.passed }
+            );
+          });
         },
       })
     );
@@ -742,12 +832,14 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: EmptyParams,
         executionMode: "sequential",
         async execute() {
-          const snapshot = await runWithBrowserState(opts, () =>
-            browserClose(agentBrowserId(opts.getAgentId()))
-          );
-          opts.onBrowserState(snapshot);
-          return toolResult("Closed browser session.", snapshot, {
-            tool: "browser_close",
+          return runBrowserTool(opts, "browser_close", async () => {
+            const snapshot = await runWithBrowserState(opts, () =>
+              browserClose(agentBrowserId(opts.getAgentId()))
+            );
+            opts.onBrowserState(snapshot);
+            return toolResult("Closed browser session.", snapshot, {
+              tool: "browser_close",
+            });
           });
         },
       })

@@ -105,6 +105,7 @@ export interface ComposerProps {
   agentId: string | null;
   pendingMessages: PendingMessagesSnapshot;
   goal: AgentGoal | null;
+  statusHint?: string | null;
 
   // ===== 附件 =====
   pendingImages: ImageContentLite[];
@@ -186,6 +187,7 @@ export function Composer(props: ComposerProps) {
     agentId,
     pendingMessages,
     goal,
+    statusHint,
     pendingImages,
     pendingFiles,
     missingFilePaths,
@@ -633,6 +635,19 @@ export function Composer(props: ComposerProps) {
             onOpenProviderSetup={onOpenProviderSetup}
           />
         )}
+        {statusHint ? (
+          <div
+            className="mb-2 rounded-token-sm border px-3 py-1.5 text-token-sm"
+            style={{
+              borderColor: "var(--color-warning)",
+              background: "var(--color-warning-bg)",
+              color: "var(--color-warning)",
+            }}
+            role="status"
+          >
+            {statusHint}
+          </div>
+        ) : null}
         {/* 卡片：textarea + 内嵌 Send */}
         <div
           className="relative rounded-token-lg border transition-colors focus-within:border-[color:var(--accent)]"

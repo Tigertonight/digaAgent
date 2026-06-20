@@ -11,7 +11,7 @@ export interface BrowserActionLog {
   taskId?: string;
   action: string;
   label: string;
-  status: "running" | "done" | "error";
+  status: "running" | "done" | "error" | "timeout" | "partial";
   createdAt: number;
   completedAt?: number;
   error?: string;
@@ -30,13 +30,15 @@ export interface BrowserStepSnapshot {
   taskId?: string;
   action: string;
   label: string;
-  status: "done" | "error";
+  status: "done" | "error" | "timeout" | "partial";
   url: string | null;
   title: string | null;
   screenshotDataUrl: string | null;
   pointer: BrowserPointerState | null;
   createdAt: number;
   error?: string;
+  errorCode?: string;
+  durationMs?: number;
   /**
    * 阶段 C：验收结论。来自 browser_verify / browser_wait_for 的 evidence.passed。
    * - true  -> 该步是一次通过的验收
@@ -46,6 +48,7 @@ export interface BrowserStepSnapshot {
   passed?: boolean;
   /** 阶段 C：browser_extract 提取到的可见文本摘要，作为该步的证据正文。 */
   extractedText?: string;
+  partial?: boolean;
 }
 
 /**
@@ -109,6 +112,8 @@ export interface BrowserExtractResult {
   url: string | null;
   title: string | null;
   text: string;
+  partial?: boolean;
+  headings?: Array<{ level: number; text: string }>;
   links: Array<{ text: string; href: string }>;
   inputs: Array<{ label: string; type: string; name: string; placeholder: string }>;
   actions: Array<{
@@ -136,10 +141,28 @@ export interface BrowserVerifyResult {
 export interface BrowserToolEvidence {
   /** 触发该证据的工具名，如 "browser_open"。 */
   tool: string;
+  /** 工具是否成功完成业务目标；false 表示失败但仍有结构化证据。 */
+  ok?: boolean;
   /** 动作完成后的当前 URL。 */
   url: string | null;
   /** 动作完成后的页面标题。 */
   title: string | null;
+  /** 失败/超时后的最终 URL，便于识别 chrome-error 页面。 */
+  finalUrl?: string | null;
+  /** 失败/超时后的最终标题。 */
+  finalTitle?: string | null;
+  /** 浏览器运行状态。 */
+  browserStatus?: BrowserRuntimeStatus;
+  /** 结构化错误码，如 timeout / chrome-error-page / ERR_NAME_NOT_RESOLVED。 */
+  errorCode?: string;
+  /** 给模型和 UI 展示的短错误信息。 */
+  errorMessage?: string;
+  /** 本次工具耗时。 */
+  durationMs?: number;
+  /** 是否是降级/截断后的部分结果。 */
+  partial?: boolean;
+  /** 失败是否可通过重试/重新接管恢复。 */
+  recoverable?: boolean;
   /** 动作完成后的视口截图（data URL）。 */
   screenshotDataUrl?: string | null;
   /** browser_extract 提取到的可见文本摘要。 */

@@ -3382,6 +3382,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           agentId={agentId}
           pendingMessages={activeSnapshot.pendingMessages}
           goal={goal}
+          statusHint={
+            selectedSession?.waitingApprovalCount
+              ? "等待你确认访问站点或执行敏感操作。请在最新消息里的确认卡片选择 Allow 或 Deny。"
+              : null
+          }
           pendingImages={pendingImages}
           pendingFiles={pendingFiles}
           missingFilePaths={missingFilePaths}

@@ -88,6 +88,7 @@ export type InAppBrowserCommandResult = Record<string, unknown> & {
   screenshotDataUrl?: string | null;
   pointer?: BrowserPointerState | null;
   error?: string;
+  errorCode?: string;
 };
 
 interface InAppBrowserWaiter {
@@ -175,8 +176,12 @@ function pushLog(
   return log;
 }
 
-function finishLog(log: BrowserActionLog, error?: string) {
-  log.status = error ? "error" : "done";
+function finishLog(
+  log: BrowserActionLog,
+  error?: string,
+  status?: BrowserActionLog["status"]
+) {
+  log.status = status ?? (error ? "error" : "done");
   log.error = error;
   log.completedAt = Date.now();
 }
@@ -185,6 +190,81 @@ function finishLog(log: BrowserActionLog, error?: string) {
 interface StepEvidence {
   passed?: boolean;
   extractedText?: string;
+  partial?: boolean;
+  errorCode?: string;
+  durationMs?: number;
+}
+
+export class BrowserRuntimeError extends Error {
+  readonly code: string;
+  readonly snapshot: BrowserSnapshot;
+  readonly recoverable: boolean;
+  readonly durationMs?: number;
+
+  constructor(
+    message: string,
+    input: {
+      code: string;
+      snapshot: BrowserSnapshot;
+      recoverable?: boolean;
+      durationMs?: number;
+    }
+  ) {
+    super(message);
+    this.name = "BrowserRuntimeError";
+    this.code = input.code;
+    this.snapshot = input.snapshot;
+    this.recoverable = input.recoverable ?? true;
+    this.durationMs = input.durationMs;
+  }
+}
+
+export function isBrowserRuntimeError(error: unknown): error is BrowserRuntimeError {
+  return error instanceof BrowserRuntimeError;
+}
+
+function isChromeErrorUrl(url: string | null | undefined): boolean {
+  return typeof url === "string" && url.startsWith("chrome-error://");
+}
+
+function classifyBrowserError(
+  message: string,
+  snapshot: BrowserSnapshot,
+  action?: string
+): { code: string; message: string; recoverable: boolean } {
+  const lower = message.toLowerCase();
+  const url = snapshot.url ?? "";
+  if (isChromeErrorUrl(url)) {
+    return {
+      code: /name_not_resolved/i.test(message)
+        ? "ERR_NAME_NOT_RESOLVED"
+        : "chrome-error-page",
+      message: `Navigation failed: chrome-error-page; current page: ${url}`,
+      recoverable: false,
+    };
+  }
+  if (lower.includes("timed out") || lower.includes("timeout")) {
+    return {
+      code: "timeout",
+      message: `Browser command timed out: ${action ?? "unknown"}; current page: ${
+        snapshot.url ?? "(none)"
+      }`,
+      recoverable: true,
+    };
+  }
+  if (lower.includes("host is not connected")) {
+    return {
+      code: "browser_host_disconnected",
+      message:
+        "In-app browser host is not connected. Open the BrowserPanel and click Take over so the agent can drive the in-app page.",
+      recoverable: true,
+    };
+  }
+  return {
+    code: "browser_command_error",
+    message,
+    recoverable: true,
+  };
 }
 
 function pushStep(
@@ -198,17 +278,27 @@ function pushStep(
     taskId: log.taskId,
     action: log.action,
     label: log.label,
-    status: log.status === "error" ? "error" : "done",
+    status:
+      evidence?.partial === true
+        ? "partial"
+        : log.status === "timeout"
+          ? "timeout"
+          : log.status === "error"
+            ? "error"
+            : "done",
     url: snapshot.url,
     title: snapshot.title,
     screenshotDataUrl: snapshot.screenshotDataUrl,
     pointer: snapshot.pointer,
     createdAt: log.completedAt ?? Date.now(),
     error: log.error,
+    errorCode: evidence?.errorCode,
+    durationMs: evidence?.durationMs,
     ...(evidence?.passed !== undefined ? { passed: evidence.passed } : {}),
     ...(evidence?.extractedText !== undefined
       ? { extractedText: evidence.extractedText }
       : {}),
+    ...(evidence?.partial !== undefined ? { partial: evidence.partial } : {}),
   };
   rec.snapshot.steps = [step, ...rec.snapshot.steps].slice(0, 50);
 }
@@ -249,8 +339,8 @@ async function ensurePage(browserId: string): Promise<{ rec: BrowserRecord; page
     //   - 从未注册：要么打开 BrowserPanel（会注册 host），要么开 Playwright fallback
     const hadHost = !!rec.inAppHost;
     const staleHint = hadHost
-      ? "The in-app browser host was connected but its heartbeat expired (panel closed or backgrounded). Re-open or focus the BrowserPanel to reconnect it. "
-      : "No in-app browser host is connected. Open the BrowserPanel so the agent can drive the in-app page";
+      ? "The in-app browser host was connected but its heartbeat expired (panel closed or backgrounded). Re-open the BrowserPanel and click Take over to reconnect it. "
+      : "No in-app browser host is connected. Open the BrowserPanel and click Take over so the agent can drive the in-app page";
     throw new Error(
       `In-app browser host is not connected. ${staleHint}` +
         (hadHost ? "" : " (the panel registers a host when shown). ") +
@@ -371,6 +461,7 @@ async function runAction<T>(
 ): Promise<{ result: T; snapshot: BrowserSnapshot }> {
   const { rec, page } = await ensurePage(browserId);
   const log = pushLog(rec, action, label, opts);
+  const startedAt = Date.now();
   rec.snapshot.status = "busy";
   rec.snapshot.error = null;
   try {
@@ -380,13 +471,34 @@ async function runAction<T>(
     pushStep(rec, log, snapshot, evidenceOf?.(result));
     return { result, snapshot };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    finishLog(log, message);
-    rec.snapshot.status = "error";
-    rec.snapshot.error = message;
-    rec.snapshot.updatedAt = Date.now();
-    pushStep(rec, log, rec.snapshot);
-    throw err;
+    const rawMessage = err instanceof Error ? err.message : String(err);
+    const snapshot = await refreshSnapshot(rec, page).catch(() => ({
+      ...rec.snapshot,
+      updatedAt: Date.now(),
+    }));
+    const classified = classifyBrowserError(rawMessage, snapshot, action);
+    const durationMs = Date.now() - startedAt;
+    finishLog(
+      log,
+      classified.message,
+      classified.code === "timeout" ? "timeout" : "error"
+    );
+    rec.snapshot = {
+      ...snapshot,
+      status: "error",
+      error: classified.message,
+      updatedAt: Date.now(),
+    };
+    pushStep(rec, log, rec.snapshot, {
+      errorCode: classified.code,
+      durationMs,
+    });
+    throw new BrowserRuntimeError(classified.message, {
+      code: classified.code,
+      snapshot: rec.snapshot,
+      recoverable: classified.recoverable,
+      durationMs,
+    });
   }
 }
 
@@ -506,12 +618,6 @@ export function completeInAppBrowserCommand(
   const rec = getRecord(browserId);
   const host = ensureInAppHost(rec);
   const waiter = host.waiters.get(commandId);
-  if (waiter) {
-    clearTimeout(waiter.timeout);
-    host.waiters.delete(commandId);
-    if (result.error) waiter.reject(new Error(result.error));
-    else waiter.resolve(result);
-  }
   rec.snapshot = {
     ...rec.snapshot,
     url: result.url !== undefined ? result.url : rec.snapshot.url,
@@ -526,6 +632,26 @@ export function completeInAppBrowserCommand(
     error: result.error ?? null,
     updatedAt: Date.now(),
   };
+  if (waiter) {
+    clearTimeout(waiter.timeout);
+    host.waiters.delete(commandId);
+    if (result.error) {
+      const classified = classifyBrowserError(
+        result.error,
+        rec.snapshot,
+        result.action as string | undefined
+      );
+      waiter.reject(
+        new BrowserRuntimeError(classified.message, {
+          code: result.errorCode ?? classified.code,
+          snapshot: rec.snapshot,
+          recoverable: classified.recoverable,
+        })
+      );
+    } else {
+      waiter.resolve(result);
+    }
+  }
   return rec.snapshot;
 }
 
@@ -537,7 +663,23 @@ function dispatchInAppBrowserCommand(
 ): Promise<InAppBrowserCommandResult> {
   const rec = getRecord(browserId);
   if (!isInAppHostAlive(rec)) {
-    return Promise.reject(new Error("in-app browser host is not connected"));
+    const classified = classifyBrowserError(
+      "in-app browser host is not connected",
+      rec.snapshot,
+      action
+    );
+    return Promise.reject(
+      new BrowserRuntimeError(classified.message, {
+        code: classified.code,
+        snapshot: {
+          ...rec.snapshot,
+          status: "error",
+          error: classified.message,
+          updatedAt: Date.now(),
+        },
+        recoverable: true,
+      })
+    );
   }
   const host = ensureInAppHost(rec);
   const id = `iab_${Date.now().toString(36)}_${host.nextSeq++}`;
@@ -553,7 +695,23 @@ function dispatchInAppBrowserCommand(
     const timeout = setTimeout(() => {
       host.waiters.delete(id);
       host.pending = host.pending.filter((pending) => pending.id !== id);
-      reject(new Error(`in-app browser command timed out: ${action}`));
+      const snapshot = {
+        ...rec.snapshot,
+        status: "error" as const,
+        error: `Browser command timed out: ${action}; current page: ${
+          rec.snapshot.url ?? "(none)"
+        }`,
+        updatedAt: Date.now(),
+      };
+      rec.snapshot = snapshot;
+      reject(
+        new BrowserRuntimeError(snapshot.error ?? `Browser command timed out: ${action}`, {
+          code: "timeout",
+          snapshot,
+          recoverable: true,
+          durationMs: IN_APP_COMMAND_TIMEOUT_MS,
+        })
+      );
     }, IN_APP_COMMAND_TIMEOUT_MS);
     host.waiters.set(id, { resolve, reject, timeout });
   });
@@ -598,6 +756,7 @@ async function runInAppAction<T extends InAppBrowserCommandResult>(
 ): Promise<{ result: T; snapshot: BrowserSnapshot }> {
   const rec = getRecord(browserId);
   const log = pushLog(rec, action, label, opts);
+  const startedAt = Date.now();
   rec.snapshot.status = "busy";
   rec.snapshot.error = null;
   try {
@@ -612,19 +771,76 @@ async function runInAppAction<T extends InAppBrowserCommandResult>(
     pushStep(rec, log, snapshot, evidenceOf?.(result));
     return { result, snapshot };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    finishLog(log, message);
-    rec.snapshot.status = "error";
-    rec.snapshot.error = message;
-    rec.snapshot.updatedAt = Date.now();
-    pushStep(rec, log, rec.snapshot);
-    throw err;
+    const durationMs =
+      isBrowserRuntimeError(err) && err.durationMs !== undefined
+        ? err.durationMs
+        : Date.now() - startedAt;
+    const snapshot = isBrowserRuntimeError(err)
+      ? err.snapshot
+      : {
+          ...rec.snapshot,
+          updatedAt: Date.now(),
+        };
+    const rawMessage = err instanceof Error ? err.message : String(err);
+    const classified = isBrowserRuntimeError(err)
+      ? { code: err.code, message: err.message, recoverable: err.recoverable }
+      : classifyBrowserError(rawMessage, snapshot, action);
+    finishLog(
+      log,
+      classified.message,
+      classified.code === "timeout" ? "timeout" : "error"
+    );
+    rec.snapshot = {
+      ...snapshot,
+      status: "error",
+      error: classified.message,
+      updatedAt: Date.now(),
+    };
+    pushStep(rec, log, rec.snapshot, {
+      errorCode: classified.code,
+      durationMs,
+    });
+    throw new BrowserRuntimeError(classified.message, {
+      code: classified.code,
+      snapshot: rec.snapshot,
+      recoverable: classified.recoverable,
+      durationMs,
+    });
   }
 }
 
 export function getBrowserSnapshot(browserId: string): BrowserSnapshot {
   const rec = reg.browsers.get(browserId);
   return rec?.snapshot ?? { ...EMPTY_BROWSER_SNAPSHOT, logs: [], steps: [] };
+}
+
+export function clearInAppBrowserPendingCommands(
+  browserId: string,
+  reason = "Browser command was aborted."
+): BrowserSnapshot {
+  const rec = getRecord(browserId);
+  const host = rec.inAppHost;
+  if (host) {
+    for (const [id, waiter] of host.waiters.entries()) {
+      clearTimeout(waiter.timeout);
+      waiter.reject(
+        new BrowserRuntimeError(reason, {
+          code: "aborted",
+          snapshot: rec.snapshot,
+          recoverable: true,
+        })
+      );
+      host.waiters.delete(id);
+    }
+    host.pending = [];
+  }
+  rec.snapshot = {
+    ...rec.snapshot,
+    status: "error",
+    error: reason,
+    updatedAt: Date.now(),
+  };
+  return rec.snapshot;
 }
 
 /** 当前是否无头（前端用来决定"接管"按钮文案与行为） */
@@ -1018,17 +1234,29 @@ export async function browserExtract(
       "page summary",
       {},
       opts,
-      (result) => ({ extractedText: result.text })
+      (result) => ({
+        extractedText: result.text,
+        partial: result.partial === true,
+      })
     );
   }
   return runAction(browserId, "extract", "page summary", async (page) => {
     const result = await page.evaluate(() => {
-      const visibleText = (document.body?.innerText || "")
+      const rawText = (document.body?.innerText || "")
         .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 4000);
+        .trim();
+      const visibleText = rawText.slice(0, 3000);
+      const headings = Array.from(
+        document.querySelectorAll("h1, h2, h3, [role='heading']")
+      )
+        .slice(0, 24)
+        .map((el) => ({
+          level: Number(el.getAttribute("aria-level")) || Number(el.tagName.slice(1)) || 2,
+          text: (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 160),
+        }))
+        .filter((x) => x.text);
       const links = Array.from(document.querySelectorAll("a"))
-        .slice(0, 30)
+        .slice(0, 20)
         .map((a) => ({
           text: (a.textContent || "").replace(/\s+/g, " ").trim().slice(0, 120),
           href: (a as HTMLAnchorElement).href,
@@ -1037,7 +1265,7 @@ export async function browserExtract(
       const inputs = Array.from(
         document.querySelectorAll("input, textarea, select")
       )
-        .slice(0, 30)
+        .slice(0, 20)
         .map((el) => {
           const input = el as HTMLInputElement;
           const id = input.id;
@@ -1061,15 +1289,15 @@ export async function browserExtract(
         return fallback;
       };
       const actions = [
-        ...Array.from(document.querySelectorAll("a"))
-          .slice(0, 20)
+          ...Array.from(document.querySelectorAll("a"))
+          .slice(0, 12)
           .map((el, index) => ({
             kind: "link" as const,
             text: (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 120),
             selectorHint: selectorFor(el, `a:nth-of-type(${index + 1})`),
           })),
         ...Array.from(document.querySelectorAll("button, [role='button']"))
-          .slice(0, 20)
+          .slice(0, 12)
           .map((el, index) => ({
             kind: "button" as const,
             text:
@@ -1080,7 +1308,7 @@ export async function browserExtract(
             selectorHint: selectorFor(el, `button:nth-of-type(${index + 1})`),
           })),
         ...Array.from(document.querySelectorAll("input, textarea, [role='textbox'], [role='searchbox']"))
-          .slice(0, 20)
+          .slice(0, 12)
           .map((el, index) => ({
             kind: "input" as const,
             text:
@@ -1100,13 +1328,20 @@ export async function browserExtract(
         url: location.href,
         title: document.title,
         text: visibleText,
+        partial:
+          rawText.length > visibleText.length ||
+          document.querySelectorAll("a, button, input, textarea, select").length > 44,
+        headings,
         links,
         inputs,
         actions,
       };
     });
     return result as BrowserExtractResult;
-  }, opts, (result) => ({ extractedText: result.text }));
+  }, opts, (result) => ({
+    extractedText: result.text,
+    partial: result.partial === true,
+  }));
 }
 
 export async function browserVerify(

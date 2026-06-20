@@ -351,7 +351,9 @@ export function listAgentSummaries(): SessionRuntimeState[] {
     const runtimeState: SessionRuntimePhase =
       waitingApprovalCount + waitingClarificationCount > 0
         ? "waiting_user"
-        : rec.isStreaming
+        : rec.pendingToolCall
+          ? "running_tool"
+          : rec.isStreaming
           ? "streaming"
           : rec.nextSeq > 0
             ? "completed"

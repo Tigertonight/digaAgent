@@ -4,6 +4,7 @@ import {
   browserWait,
   browserSearchUrl,
   closeBrowsersForOwner,
+  clearInAppBrowserPendingCommands,
   completeInAppBrowserCommand,
   getBrowserSnapshot,
   pollInAppBrowserCommand,
@@ -54,7 +55,7 @@ describe("browser in-app runtime", () => {
 
     const pending = browserWait(browserId, { ms: 1000 });
     const rejection = expect(pending).rejects.toThrow(
-      "in-app browser command timed out: wait",
+      "Browser command timed out: wait",
     );
     await vi.advanceTimersByTimeAsync(45_000);
     await rejection;
@@ -62,7 +63,24 @@ describe("browser in-app runtime", () => {
     const { command } = pollInAppBrowserCommand(browserId);
     expect(command).toBeNull();
     expect(getBrowserSnapshot(browserId).error).toContain(
-      "in-app browser command timed out: wait",
+      "Browser command timed out: wait",
+    );
+    expect(getBrowserSnapshot(browserId).steps[0]?.status).toBe("timeout");
+    expect(getBrowserSnapshot(browserId).steps[0]?.errorCode).toBe("timeout");
+  });
+
+  it("clears pending in-app commands when the agent is aborted", async () => {
+    const browserId = `test-abort-${Date.now()}`;
+    registerInAppBrowserHost(browserId);
+
+    const pending = browserWait(browserId, { ms: 1000 });
+    clearInAppBrowserPendingCommands(browserId, "Browser command was aborted by the user.");
+
+    await expect(pending).rejects.toThrow("Browser command was aborted by the user.");
+    const { command } = pollInAppBrowserCommand(browserId);
+    expect(command).toBeNull();
+    expect(getBrowserSnapshot(browserId).error).toBe(
+      "Browser command was aborted by the user.",
     );
   });
 

@@ -54,6 +54,7 @@ export type SessionRuntimePhase =
   | "idle"
   | "loading"
   | "streaming"
+  | "running_tool"
   | "waiting_user"
   | "reconnecting"
   | "failed"

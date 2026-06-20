@@ -87,6 +87,8 @@ import {
 import { assertRemoteAuth } from "@/lib/remote/auth";
 import type { ProgressUpdateInput } from "@/lib/progress/types";
 import type { ThinkingLevel, ImageContentLite } from "@/lib/types";
+import { agentBrowserId } from "@/lib/browser/browser-id";
+import { clearInAppBrowserPendingCommands } from "@/lib/browser/runtime";
 
 const WORKFLOW_MODE_TOOL_NAMES = [
   "run_workflow_script",
@@ -801,6 +803,11 @@ export async function POST(
         const progress = failOpenProgress(id, "用户已中止当前任务。");
         await persistProgressForAgent(rec, progress);
         pushProgressEvent(rec, progress);
+        const browserSnapshot = clearInAppBrowserPendingCommands(
+          agentBrowserId(id),
+          "Browser command was aborted by the user."
+        );
+        pushExternalEvent(rec, { type: "browser_state", snapshot: browserSnapshot });
         await abortWorkflowsForParent(id);
         await abortSubagentsForParent(id);
         if (isLocalCodingAssistantAgent(rec))
