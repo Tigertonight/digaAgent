@@ -47,9 +47,14 @@ import {
 import { deleteInput } from "@/lib/composer/input-store";
 import { userFacingMessage } from "@/lib/user-facing-error";
 import { deriveSessionUnreadAt } from "@/lib/sessions/unread";
+import {
+  filterDeletedSessionTombstones,
+  rememberDeletedSessions,
+} from "@/lib/sessions/optimistic";
 
 const STORAGE_KEY = "sessionLastSeen";
 const POLL_INTERVAL_MS = 15_000;
+const LAST_SEEN_PERSIST_DEBOUNCE_MS = 1_500;
 
 function readLastSeenFromStorage(): Record<string, string> {
   if (typeof window === "undefined") return {};
@@ -99,14 +104,63 @@ function mergeServerLastSeen(
   return changed ? next : prev;
 }
 
+export function createLastSeenPersistScheduler(
+  fetcher: typeof fetch,
+  delayMs = LAST_SEEN_PERSIST_DEBOUNCE_MS
+) {
+  const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  const pending = new Map<string, number>();
+  const persisted = new Map<string, number>();
+
+  return {
+    schedule(sessionId: string, modifiedIso: string): void {
+      const lastSeenAt = Date.parse(modifiedIso);
+      if (!Number.isFinite(lastSeenAt)) return;
+      const alreadyPersisted = persisted.get(sessionId);
+      const alreadyPending = pending.get(sessionId);
+      if (
+        typeof alreadyPersisted === "number" &&
+        alreadyPersisted >= lastSeenAt &&
+        (typeof alreadyPending !== "number" || alreadyPending >= lastSeenAt)
+      ) {
+        return;
+      }
+      pending.set(sessionId, Math.max(alreadyPending ?? 0, lastSeenAt));
+      const existing = timers.get(sessionId);
+      if (existing) clearTimeout(existing);
+      timers.set(
+        sessionId,
+        setTimeout(() => {
+          timers.delete(sessionId);
+          const value = pending.get(sessionId);
+          pending.delete(sessionId);
+          if (typeof value !== "number") return;
+          void fetcher(`/api/sessions/${sessionId}/meta`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ lastSeenAt: value }),
+          })
+            .then(() => {
+              persisted.set(sessionId, value);
+            })
+            .catch(() => {});
+        }, delayMs)
+      );
+    },
+    flushForTests(): void {
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+      pending.clear();
+    },
+  };
+}
+
+const lastSeenPersistScheduler = createLastSeenPersistScheduler((...args) =>
+  fetch(...args)
+);
+
 function persistServerLastSeen(sessionId: string, modifiedIso: string): void {
-  const lastSeenAt = Date.parse(modifiedIso);
-  if (!Number.isFinite(lastSeenAt)) return;
-  void fetch(`/api/sessions/${sessionId}/meta`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ lastSeenAt }),
-  }).catch(() => {});
+  lastSeenPersistScheduler.schedule(sessionId, modifiedIso);
 }
 
 function withSessionLastSeen(
@@ -354,7 +408,7 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
       .then((r) => r.json())
       .then((d: { sessions?: SessionInfoLite[] }) => {
         const next = applyLastSeenMapToSessions(
-          d.sessions ?? [],
+          filterDeletedSessionTombstones(d.sessions ?? []),
           lastSeenMapRef.current
         );
         setSessions((prev) => (sameSessionList(prev, next) ? prev : next));
@@ -455,6 +509,17 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
         // 后端会级联删父+所有 fork 子 session，返回 deleted 列表；老接口没返就退化到只清自己
         const deletedIds = new Set<string>(
           data.deleted && data.deleted.length > 0 ? data.deleted : [id]
+        );
+        const deletedSessions = sessionsRef.current.filter((session) =>
+          deletedIds.has(session.id)
+        );
+        rememberDeletedSessions(
+          deletedSessions.length > 0
+            ? deletedSessions.map((session) => ({
+                id: session.id,
+                path: session.path,
+              }))
+            : [{ id, path: "" }]
         );
         // 把对应 runner 从 Map 里删掉（如果有），关其 SSE
         let activeWasDeleted = false;

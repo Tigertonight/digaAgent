@@ -13,6 +13,7 @@ const TEST_LOCAL_SECRET = "vitest-agent-new-secret";
 
 const sessionsMock = vi.hoisted(() => ({
   assertTrustedSessionPath: vi.fn(),
+  invalidateSessionListCache: vi.fn(),
   TrustedSessionPathError: class TrustedSessionPathError extends Error {
     constructor(message = "sessionPath not in trusted list") {
       super(message);
@@ -98,6 +99,7 @@ describe("POST /api/agent/new", () => {
     );
     expect(res.status).toBe(200);
     expect(sessionsMock.assertTrustedSessionPath).not.toHaveBeenCalled();
+    expect(sessionsMock.invalidateSessionListCache).toHaveBeenCalledOnce();
     expect(registryMock.createAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",

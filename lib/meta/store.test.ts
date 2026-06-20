@@ -190,6 +190,20 @@ describe("updateMeta (S1: atomic partial merge under per-id lock)", () => {
     expect(merged).toEqual({ id: "stale", title: "recovered" });
     await expect(fs.stat(lockDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it("serializes public writeMeta behind an in-flight update", async () => {
+    await writeMeta({ id: "write-race", title: "base", pinned: false });
+
+    const update = updateMeta("write-race", { pinned: true });
+    const overwrite = writeMeta({ id: "write-race", title: "overwrite" });
+
+    await Promise.all([update, overwrite]);
+
+    expect(await readMeta("write-race")).toEqual({
+      id: "write-race",
+      title: "overwrite",
+    });
+  });
 });
 
 describe("deleteMeta", () => {
@@ -201,5 +215,16 @@ describe("deleteMeta", () => {
 
   it("is idempotent (no throw when file does not exist)", async () => {
     await expect(deleteMeta("never-existed")).resolves.toBeUndefined();
+  });
+
+  it("serializes behind an in-flight update so delete is not resurrected", async () => {
+    await writeMeta({ id: "del-race", title: "base" });
+
+    const update = updateMeta("del-race", { title: "late" });
+    const deletion = deleteMeta("del-race");
+
+    await Promise.all([update, deletion]);
+
+    expect(await readMeta("del-race")).toBeNull();
   });
 });

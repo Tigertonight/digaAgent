@@ -36,6 +36,7 @@ import type {
   RunnerPatch,
 } from "@/lib/session-runner";
 import type { ThinkingLevel } from "@/lib/types";
+import { normalizeAgentProgress, normalizeMessageParts } from "@/lib/ui-shape/normalize";
 
 /** SSE event 的通用形状 —— 业务字段通过 cast 收窄 */
 type AgentEvent = { type: string; [k: string]: unknown };
@@ -53,10 +54,14 @@ export function shouldRefreshSidebarOnEvent(eventType: string): boolean {
   );
 }
 
-function settleProgressAfterAgentEnd(
+export function settleProgressAfterAgentEnd(
   progress: AgentProgress | null
 ): AgentProgress | null {
-  if (!progress) return progress;
+  const normalized = normalizeAgentProgress(progress, {
+    surface: "useAgentEvents.settleProgressAfterAgentEnd",
+    sourceEventType: "agent_end",
+  });
+  if (!normalized) return normalized;
   const t = Date.now();
   let changed = false;
   const closeStep = (step: AgentProgress["steps"][number]) => {
@@ -68,7 +73,7 @@ function settleProgressAfterAgentEnd(
       completedAt: step.completedAt ?? t,
     };
   };
-  const groups = (progress.groups ?? []).map((group) => ({
+  const groups = normalized.groups.map((group) => ({
     ...group,
     steps: group.steps.map(closeStep),
     endedAt:
@@ -82,9 +87,9 @@ function settleProgressAfterAgentEnd(
   const steps =
     groups.length > 0
       ? groups.at(-1)?.steps ?? []
-      : (progress.steps ?? []).map(closeStep);
-  if (!changed) return progress;
-  return { ...progress, groups, steps, updatedAt: t };
+      : normalized.steps.map(closeStep);
+  if (!changed) return normalized;
+  return { ...normalized, groups, steps, updatedAt: t };
 }
 
 export interface UseAgentEventsOptions {
@@ -223,6 +228,29 @@ function derivePhaseFromReducerEvent(
     return prevPhase;
   }
   return prevPhase;
+}
+
+function normalizeReducerChatState(
+  state: ReturnType<typeof applyEvent>,
+  eventType: string,
+  agentId: string
+): ReturnType<typeof applyEvent> {
+  return {
+    ...state,
+    messages: state.messages.map((message, index) =>
+      message.parts
+        ? {
+            ...message,
+            parts: normalizeMessageParts(message.parts, {
+              surface: "useAgentEvents.PostEventNormalize",
+              sourceEventType: eventType,
+              agentId,
+              fieldPath: `messages.${index}.parts`,
+            }),
+          }
+        : message
+    ),
+  };
 }
 
 export function useAgentEvents(
@@ -409,8 +437,14 @@ export function useAgentEvents(
         // ===== Goal progress：结构化计划节点 + evidence artifacts =====
         case "progress_updated": {
           updateRunner(ownerKey, {
-            progress:
+            progress: normalizeAgentProgress(
               (ev as { progress?: AgentProgress | null }).progress ?? null,
+              {
+                surface: "useAgentEvents.progress_updated",
+                sourceEventType: "progress_updated",
+                agentId: aidForEvents,
+              }
+            ),
           });
           return;
         }
@@ -424,7 +458,11 @@ export function useAgentEvents(
         case "tool_execution_update":
         case "tool_execution_end":
           updateRunner(ownerKey, (s) => ({
-            chatState: applyEvent(s.chatState, ev),
+            chatState: normalizeReducerChatState(
+              applyEvent(s.chatState, ev),
+              ev.type,
+              aidForEvents
+            ),
             agentPhase: derivePhaseFromReducerEvent(ev, s.agentPhase),
           }));
           return;
@@ -434,7 +472,11 @@ export function useAgentEvents(
         // 衰变为服务端最终要发出的 displayText。走与 reducer 质同的 patch-as-function。
         case "optimistic_user_ack":
           updateRunner(ownerKey, (s) => ({
-            chatState: applyEvent(s.chatState, ev),
+            chatState: normalizeReducerChatState(
+              applyEvent(s.chatState, ev),
+              ev.type,
+              aidForEvents
+            ),
           }));
           return;
 
@@ -456,7 +498,11 @@ export function useAgentEvents(
             return;
           }
           updateRunner(ownerKey, (s) => ({
-            chatState: applyEvent(s.chatState, ev),
+            chatState: normalizeReducerChatState(
+              applyEvent(s.chatState, ev),
+              ev.type,
+              aidForEvents
+            ),
           }));
           // 问题 2：sidebar “需确认”计数不再等 15s 轮询。
           scheduleRefreshSessions();
@@ -464,7 +510,11 @@ export function useAgentEvents(
         }
         case "approval_resolved":
           updateRunner(ownerKey, (s) => ({
-            chatState: applyEvent(s.chatState, ev),
+            chatState: normalizeReducerChatState(
+              applyEvent(s.chatState, ev),
+              ev.type,
+              aidForEvents
+            ),
           }));
           scheduleRefreshSessions();
           return;
@@ -473,7 +523,11 @@ export function useAgentEvents(
         case "clarification_request":
         case "clarification_resolved":
           updateRunner(ownerKey, (s) => ({
-            chatState: applyEvent(s.chatState, ev),
+            chatState: normalizeReducerChatState(
+              applyEvent(s.chatState, ev),
+              ev.type,
+              aidForEvents
+            ),
           }));
           // sidebar waiting_user / waitingClarificationCount 立即跟上。
           scheduleRefreshSessions();
@@ -487,7 +541,11 @@ export function useAgentEvents(
         case "subagent_task_end":
         case "subagent_batch_end":
           updateRunner(ownerKey, (s) => ({
-            chatState: applyEvent(s.chatState, ev),
+            chatState: normalizeReducerChatState(
+              applyEvent(s.chatState, ev),
+              ev.type,
+              aidForEvents
+            ),
           }));
           return;
 
@@ -498,7 +556,11 @@ export function useAgentEvents(
         case "workflow_artifact":
         case "workflow_end":
           updateRunner(ownerKey, (s) => ({
-            chatState: applyEvent(s.chatState, ev),
+            chatState: normalizeReducerChatState(
+              applyEvent(s.chatState, ev),
+              ev.type,
+              aidForEvents
+            ),
           }));
           return;
 

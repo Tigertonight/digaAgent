@@ -919,6 +919,34 @@ describe("runWorkflowScript", () => {
     expect(result.error).toBe("User denied writes.");
   });
 
+  it("marks capability approval timeout as resumable instead of a hard failure", async () => {
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-approval-timeout",
+        approveCapability: async () => ({
+          decision: "deny",
+          denyReason: "Workflow capability approval timed out: write_files",
+        }),
+        runSubagents: async () => ({ batchId: "unused", results: [] }),
+      },
+      {
+        objective: "Edit a file.",
+        rationale: "Verify approval timeout recovery.",
+        capabilities: ["spawn_agent", "read_files", "write_files"],
+        script: "return 'unreachable';",
+      },
+    );
+
+    expect(result.status).toBe("needs_continue");
+    expect(result.error).toContain(
+      "paused at a capability approval boundary",
+    );
+    expect(result.logs.at(-1)?.message).toContain(
+      "capability approval timed out",
+    );
+    expect(getWorkflowRun(result.workflowId)?.status).toBe("needs_continue");
+  });
+
   it("passes approved shell tools through to child agents", async () => {
     const allowedTools: Array<string[] | undefined> = [];
     const approvals: string[] = [];
@@ -1008,6 +1036,78 @@ describe("runWorkflowScript", () => {
     expect(approvals).toEqual(["browser"]);
     expect(allowedTools).toEqual([
       ["browser_open", "browser_extract", "browser_verify"],
+    ]);
+  });
+
+  it("passes the complete browser child-agent tool family through", async () => {
+    const allowedTools: Array<string[] | undefined> = [];
+    const result = await runWorkflowScript(
+      {
+        parentAgentId: "parent-browser-full-tools",
+        approveCapability: async () => ({ decision: "allow" }),
+        runSubagents: async (input) => {
+          allowedTools.push(input.tasks[0]?.allowedTools);
+          return {
+            batchId: "batch-browser-full-tools",
+            results: [
+              {
+                taskId: input.tasks[0]?.id ?? "task",
+                agentId: "agent-browser-full-tools",
+                status: "completed",
+                answer: "browser tools ok",
+                startedAt: Date.now(),
+              },
+            ],
+          };
+        },
+      },
+      {
+        objective: "Use browser tools.",
+        rationale: "Verify all public browser tools can be delegated by workflow.",
+        capabilities: ["spawn_agent", "browser"],
+        script: `
+          return await workflow.spawnAgent({
+            title: "Browser agent",
+            prompt: "Use all browser helpers",
+            allowedTools: [
+              "browser_open",
+              "browser_screenshot",
+              "browser_click",
+              "browser_click_text",
+              "browser_fill",
+              "browser_type",
+              "browser_search",
+              "browser_wait",
+              "browser_wait_for",
+              "browser_extract",
+              "browser_verify",
+              "browser_annotations",
+              "browser_resolve_annotation",
+              "browser_close"
+            ]
+          });
+        `,
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(allowedTools).toEqual([
+      [
+        "browser_open",
+        "browser_screenshot",
+        "browser_click",
+        "browser_click_text",
+        "browser_fill",
+        "browser_type",
+        "browser_search",
+        "browser_wait",
+        "browser_wait_for",
+        "browser_extract",
+        "browser_verify",
+        "browser_annotations",
+        "browser_resolve_annotation",
+        "browser_close",
+      ],
     ]);
   });
 

@@ -63,6 +63,132 @@ describe("finalizeAfterAbort", () => {
   });
 });
 
+describe("finishStreamingAfterPromptError", () => {
+  it("pushes agent_end when it closes a streaming run", async () => {
+    const mod = await import("./agent-registry");
+    const g = globalThis as unknown as {
+      __digaAgent: { agents: Map<string, unknown> };
+    };
+    const rec: StubRecord & {
+      id: string;
+      session: { dispose: () => void };
+      cwd: string;
+      events: Array<{ seq: number; event: { type: string } } | undefined>;
+      nextSeq: number;
+      listeners: Set<() => void>;
+      unsubscribe: () => void;
+      lastAgentEndAt: number | null;
+      recentClientRequests: Map<string, number>;
+    } = {
+      id: "agent-prompt-error",
+      session: { dispose: () => undefined },
+      cwd: "/tmp",
+      events: [],
+      nextSeq: 0,
+      listeners: new Set<() => void>(),
+      unsubscribe: () => undefined,
+      isStreaming: true,
+      updatedAt: 0,
+      lastAgentEndAt: null,
+      recentClientRequests: new Map(),
+      finishWatchdog: null,
+      pendingFinishMessage: null,
+      toolWatchdog: null,
+      pendingToolCall: null,
+    };
+    g.__digaAgent.agents.set("agent-prompt-error", rec);
+
+    try {
+      mod.finishStreamingAfterPromptError("agent-prompt-error");
+
+      expect(rec.isStreaming).toBe(false);
+      expect(rec.lastAgentEndAt).toEqual(expect.any(Number));
+      expect(rec.events.map((item) => item?.event)).toContainEqual({
+        type: "agent_end",
+      });
+    } finally {
+      g.__digaAgent.agents.delete("agent-prompt-error");
+    }
+  });
+
+  it("disposeAgent awaits parent workflow/subagent abort before deleting the record", async () => {
+    const source = await import("node:fs/promises").then((fs) =>
+      fs.readFile(new URL("./agent-registry.ts", import.meta.url), "utf8")
+    );
+
+    expect(source).toContain("export async function disposeAgent");
+    expect(source).toContain("await Promise.allSettled");
+    expect(source.indexOf("await Promise.allSettled")).toBeLessThan(
+      source.indexOf("reg.agents.delete(id)")
+    );
+  });
+});
+
+describe("finishStreamingAfterAbort", () => {
+  it("pushes agent_end when it closes a streaming run", async () => {
+    const mod = await import("./agent-registry");
+    const g = globalThis as unknown as {
+      __digaAgent: { agents: Map<string, unknown> };
+    };
+    const rec: StubRecord & {
+      id: string;
+      session: { dispose: () => void };
+      cwd: string;
+      events: Array<{ seq: number; event: { type: string } } | undefined>;
+      nextSeq: number;
+      listeners: Set<() => void>;
+      unsubscribe: () => void;
+      lastAgentEndAt: number | null;
+      recentClientRequests: Map<string, number>;
+    } = {
+      id: "agent-abort",
+      session: { dispose: () => undefined },
+      cwd: "/tmp",
+      events: [],
+      nextSeq: 0,
+      listeners: new Set<() => void>(),
+      unsubscribe: () => undefined,
+      isStreaming: true,
+      updatedAt: 0,
+      lastAgentEndAt: null,
+      recentClientRequests: new Map(),
+      finishWatchdog: null,
+      pendingFinishMessage: null,
+      toolWatchdog: null,
+      pendingToolCall: null,
+    };
+    g.__digaAgent.agents.set("agent-abort", rec);
+
+    try {
+      mod.finishStreamingAfterAbort("agent-abort");
+
+      expect(rec.isStreaming).toBe(false);
+      expect(rec.lastAgentEndAt).toEqual(expect.any(Number));
+      expect(rec.events.map((item) => item?.event)).toContainEqual({
+        type: "agent_end",
+      });
+    } finally {
+      g.__digaAgent.agents.delete("agent-abort");
+    }
+  });
+});
+
+describe("forceFinishStream contract", () => {
+  it("centralizes forced terminal paths that synthesize agent_end", async () => {
+    const source = await import("node:fs/promises").then((fs) =>
+      fs.readFile(new URL("./agent-registry.ts", import.meta.url), "utf8")
+    );
+
+    expect(source).toContain("function forceFinishStream");
+    expect(source).toContain("finishStreamingAfterPromptError(agentId: string)");
+    expect(source).toMatch(
+      /finishStreamingAfterPromptError[\s\S]*forceFinishStream\(rec/
+    );
+    expect(source).toMatch(/finishStreamingAfterAbort[\s\S]*forceFinishStream\(rec/);
+    expect(source).toMatch(/reason: "tool_timeout"[\s\S]*pushAgentEnd: true/);
+  });
+});
+
 describe("createAgent in-flight dedup（导出契约）", () => {
   it("createAgent 与 finalizeAfterAbort 都被正确导出", async () => {
     const mod = await import("./agent-registry");

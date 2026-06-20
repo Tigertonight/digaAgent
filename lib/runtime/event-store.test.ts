@@ -3,6 +3,7 @@ import {
   __MAX_EVENTS_PER_AGENT_FOR_TEST,
   __resetRuntimeEventStoreForTest,
   appendRuntimeEvent,
+  disposeRuntimeEventsForAgent,
   getRuntimeEvent,
   listRuntimeEvents,
 } from "./event-store";
@@ -96,5 +97,57 @@ describe("runtime event store", () => {
       __MAX_EVENTS_PER_AGENT_FOR_TEST
     );
     expect(getRuntimeEvent("agent-2-keeper")).not.toBeNull();
+  });
+
+  it("disposes events linked to an agent through related dimensions", () => {
+    appendRuntimeEvent({
+      id: "direct",
+      source: "agent",
+      type: "agent.start",
+      status: "running",
+      agentId: "agent-1",
+      payload: {},
+      createdAt: 1,
+    });
+    appendRuntimeEvent({
+      id: "browser",
+      source: "browser",
+      type: "browser.open",
+      status: "done",
+      browserId: "agent:agent-1",
+      payload: {},
+      createdAt: 2,
+    });
+    appendRuntimeEvent({
+      id: "child",
+      source: "subagent",
+      type: "subagent.task",
+      status: "running",
+      parentId: "agent-1",
+      payload: {},
+      createdAt: 3,
+    });
+    appendRuntimeEvent({
+      id: "workflow:agent-1:run-1",
+      source: "workflow",
+      type: "workflow.start",
+      status: "running",
+      workflowId: "run-1",
+      payload: {},
+      createdAt: 4,
+    });
+    appendRuntimeEvent({
+      id: "other",
+      source: "agent",
+      type: "agent.start",
+      status: "running",
+      agentId: "agent-2",
+      payload: {},
+      createdAt: 5,
+    });
+
+    expect(disposeRuntimeEventsForAgent("agent-1")).toBe(4);
+
+    expect(listRuntimeEvents().map((event) => event.id)).toEqual(["other"]);
   });
 });

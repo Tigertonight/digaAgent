@@ -69,8 +69,11 @@ const BROWSER_WORKFLOW_AGENT_TOOLS = new Set([
   "browser_type",
   "browser_search",
   "browser_wait",
+  "browser_wait_for",
   "browser_extract",
   "browser_verify",
+  "browser_annotations",
+  "browser_resolve_annotation",
   "browser_close",
 ]);
 const WORKFLOW_AGENT_TOOL_ALIASES = new Map<string, string>([
@@ -295,6 +298,10 @@ function artifactStringValue(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function isWorkflowCapabilityApprovalTimeout(error: string): boolean {
+  return /^Workflow capability approval timed out: /i.test(error);
 }
 
 /**
@@ -2487,21 +2494,26 @@ export async function runWorkflowScript(
       error.includes("timed out") ||
       (abortController.signal.aborted &&
         elapsedMs >= Math.max(0, manifest.timeoutMs - 1_000));
+    const approvalTimedOut = isWorkflowCapabilityApprovalTimeout(error);
     const status: WorkflowRunStatus =
-      likelyTimedOut && hasResumeProgress
+      approvalTimedOut || (likelyTimedOut && hasResumeProgress)
         ? "needs_continue"
         : abortController.signal.aborted
           ? "aborted"
           : "failed";
     const finalError =
-      status === "needs_continue"
+      approvalTimedOut
+        ? `${error}. Workflow is paused at a capability approval boundary; retry/resume the workflow after approving the required capability instead of restarting from scratch.`
+        : status === "needs_continue"
         ? `${error}. Workflow reached its time budget after recording progress; resume from the latest checkpoint to continue.`
         : error;
     if (status === "needs_continue") {
       const log = {
         level: "warn" as const,
         message:
-          "workflow needs_continue: time budget reached after checkpoint/artifact progress; resume from latest checkpoint.",
+          approvalTimedOut
+            ? "workflow needs_continue: capability approval timed out; retry/resume after approving the requested capability."
+            : "workflow needs_continue: time budget reached after checkpoint/artifact progress; resume from latest checkpoint.",
         createdAt: endedAt,
       };
       logs.push(log);

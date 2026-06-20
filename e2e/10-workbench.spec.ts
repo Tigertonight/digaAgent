@@ -90,6 +90,50 @@ test("workbench: Outputs 作为产物 inbox 展示 URL 和文件动作", async (
   await expect(page.getByText("打开 Files")).toBeVisible();
 });
 
+test("ui shape: malformed progress event does not crash chat surface", async ({
+  bootedPage: page,
+}) => {
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      __uiShapeViolations?: unknown[];
+    };
+    w.__uiShapeViolations = [];
+    window.addEventListener("diga:ui_shape_violation", (event) => {
+      w.__uiShapeViolations!.push((event as CustomEvent).detail);
+    });
+  });
+
+  await page.locator("textarea").first().fill("malformed progress");
+  await page.getByTitle("Send", { exact: true }).click();
+  const agentId = await activeAgentId(page);
+
+  await pushSseEvent(
+    page,
+    agentId,
+    {
+      type: "progress_updated",
+      progress: {
+        groups: { bad: true },
+        steps: undefined,
+        artifacts: "bad",
+        updatedAt: Date.now(),
+      },
+    },
+    "43"
+  );
+
+  await page.locator("textarea").first().fill("still editable");
+  await expect(page.locator("textarea").first()).toHaveValue("still editable");
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const w = window as unknown as { __uiShapeViolations?: unknown[] };
+        return w.__uiShapeViolations?.length ?? 0;
+      })
+    )
+    .toBeGreaterThan(0);
+});
+
 test("workbench: Tab OS 支持创建菜单、推荐项和本地 URL 过滤", async ({
   bootedPage: page,
 }) => {

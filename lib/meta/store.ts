@@ -167,7 +167,7 @@ export async function readMeta(sessionId: string): Promise<SessionMeta | null> {
  * 注意：调用方负责 merge（read → spread → write），本函数不做 partial merge。
  * 理由：明确语义比"自动合并"更可控，避免客户端 partial 字段意外覆盖。
  */
-export async function writeMeta(meta: SessionMeta): Promise<void> {
+async function writeMetaUnlocked(meta: SessionMeta): Promise<void> {
   if (!meta?.id) throw new Error("meta.id is required");
   const sanitized = sanitize(meta, meta.id);
   if (!sanitized) throw new Error("invalid meta payload");
@@ -225,6 +225,35 @@ export async function batchReadMeta(
 const metaUpdateChains = new Map<string, Promise<unknown>>();
 
 /**
+ * 写入单个 session 的 meta（覆盖式），并与 updateMeta/deleteMeta 使用同一条
+ * per-session 队列。这样直接调用 writeMeta 的旧代码也不会绕过锁。
+ */
+export async function writeMeta(meta: SessionMeta): Promise<void> {
+  if (!meta?.id) throw new Error("meta.id is required");
+  const sessionId = meta.id;
+  const prev = (metaUpdateChains.get(sessionId) ?? Promise.resolve()).catch(
+    () => undefined,
+  );
+  const run = prev.then(async () => {
+    const release = await acquireMetaFileLock(sessionId);
+    try {
+      await writeMetaUnlocked(meta);
+    } finally {
+      await release();
+    }
+  });
+  metaUpdateChains.set(sessionId, run);
+  void run
+    .catch(() => undefined)
+    .finally(() => {
+      if (metaUpdateChains.get(sessionId) === run) {
+        metaUpdateChains.delete(sessionId);
+      }
+    });
+  return run;
+}
+
+/**
  * 原子地对单个 session 的 meta 做 partial merge（read-merge-write 全程持锁）。
  * patch 中的字段覆盖现有值；其余字段保留。返回合并后的 meta。
  *
@@ -243,7 +272,7 @@ export async function updateMeta(
     try {
       const existing = (await readMeta(sessionId)) ?? { id: sessionId };
       const merged: SessionMeta = { ...existing, ...patch, id: sessionId };
-      await writeMeta(merged);
+      await writeMetaUnlocked(merged);
       return merged;
     } finally {
       await release();
@@ -266,10 +295,31 @@ export async function updateMeta(
  * 应在 DELETE /api/sessions/[id] 路由里联调。
  */
 export async function deleteMeta(sessionId: string): Promise<void> {
-  try {
-    await fs.unlink(metaFilePath(sessionId));
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw e;
-  }
+  const prev = (metaUpdateChains.get(sessionId) ?? Promise.resolve()).catch(
+    () => undefined,
+  );
+  const run = prev.then(async () => {
+    const release = await acquireMetaFileLock(sessionId);
+    try {
+      const fp = metaFilePath(sessionId);
+      try {
+        await fs.unlink(fp);
+        await fsyncDir(path.dirname(fp));
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw e;
+      }
+    } finally {
+      await release();
+    }
+  });
+  metaUpdateChains.set(sessionId, run);
+  void run
+    .catch(() => undefined)
+    .finally(() => {
+      if (metaUpdateChains.get(sessionId) === run) {
+        metaUpdateChains.delete(sessionId);
+      }
+    });
+  return run;
 }

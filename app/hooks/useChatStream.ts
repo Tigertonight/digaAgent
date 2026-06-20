@@ -45,6 +45,7 @@ import { userFacingMessage } from "@/lib/user-facing-error";
 import { applyEvent } from "@/lib/chat-reducer";
 import { CONTEXT_ASIDE_CLOSE, CONTEXT_ASIDE_OPEN } from "@/lib/context-aside";
 import { upsertOptimisticSession } from "@/lib/sessions/optimistic";
+import { normalizeAgentProgress } from "@/lib/ui-shape/normalize";
 import {
   deleteInput as deleteStoreInput,
   getInput as getStoreInput,
@@ -79,10 +80,14 @@ export function createSubmitGate() {
   };
 }
 
-function failOpenProgressSteps(
+export function failOpenProgressSteps(
   progress: AgentProgress | null,
 ): AgentProgress | null {
-  if (!progress) return progress;
+  const normalized = normalizeAgentProgress(progress, {
+    surface: "useChatStream.failOpenProgressSteps",
+    sourceEventType: "abort",
+  });
+  if (!normalized) return normalized;
   const now = Date.now();
   const closeStep = (step: ProgressStep): ProgressStep => {
     if (step.status !== "running" && step.status !== "pending") return step;
@@ -95,7 +100,7 @@ function failOpenProgressSteps(
       completedAt: now,
     };
   };
-  const groups = progress.groups.map((group) => ({
+  const groups = normalized.groups.map((group) => ({
     ...group,
     steps: group.steps.map(closeStep),
     endedAt:
@@ -107,8 +112,8 @@ function failOpenProgressSteps(
         : undefined),
   }));
   return {
-    ...progress,
-    steps: progress.steps.map(closeStep),
+    ...normalized,
+    steps: normalized.steps.map(closeStep),
     groups,
     updatedAt: now,
   };

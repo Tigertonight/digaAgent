@@ -13,6 +13,72 @@ export interface OptimisticSessionInput {
   parentSessionPath?: string;
 }
 
+const DEFAULT_DELETED_SESSION_TOMBSTONE_TTL_MS = 30_000;
+
+interface DeletedSessionTombstone {
+  id: string;
+  path?: string;
+  expiresAt: number;
+}
+
+const deletedSessionTombstones = new Map<string, DeletedSessionTombstone>();
+
+function nowMs(): number {
+  return Date.now();
+}
+
+function pruneDeletedSessionTombstones(now = nowMs()): void {
+  for (const [key, tombstone] of deletedSessionTombstones) {
+    if (tombstone.expiresAt <= now) deletedSessionTombstones.delete(key);
+  }
+}
+
+function tombstoneKeys(id: string, path?: string): string[] {
+  return [id ? `id:${id}` : "", path ? `path:${path}` : ""].filter(Boolean);
+}
+
+export function rememberDeletedSessions(
+  sessions: readonly Pick<SessionInfoLite, "id" | "path">[],
+  ttlMs = DEFAULT_DELETED_SESSION_TOMBSTONE_TTL_MS
+): void {
+  const expiresAt = nowMs() + Math.max(1, ttlMs);
+  pruneDeletedSessionTombstones();
+  for (const session of sessions) {
+    if (!session.id && !session.path) continue;
+    const tombstone: DeletedSessionTombstone = {
+      id: session.id,
+      path: session.path,
+      expiresAt,
+    };
+    for (const key of tombstoneKeys(session.id, session.path)) {
+      deletedSessionTombstones.set(key, tombstone);
+    }
+  }
+}
+
+export function isDeletedSessionTombstoned(
+  session: Pick<SessionInfoLite, "id" | "path">,
+  now = nowMs()
+): boolean {
+  pruneDeletedSessionTombstones(now);
+  return tombstoneKeys(session.id, session.path).some((key) =>
+    deletedSessionTombstones.has(key)
+  );
+}
+
+export function filterDeletedSessionTombstones<T extends Pick<SessionInfoLite, "id" | "path">>(
+  sessions: readonly T[],
+  now = nowMs()
+): T[] {
+  pruneDeletedSessionTombstones(now);
+  const next = sessions.filter((session) => !isDeletedSessionTombstoned(session, now));
+  return next.length === sessions.length ? (sessions as T[]) : next;
+}
+
+export function __resetDeletedSessionTombstonesForTests(): void {
+  deletedSessionTombstones.clear();
+}
+
 /**
  * 把"刚刚发出的新 session"立刻 upsert 进 sessions state 顶端。
  *
@@ -31,6 +97,9 @@ export function upsertOptimisticSession(
   input: OptimisticSessionInput
 ): SessionInfoLite[] {
   if (!input.id || !input.path) return list;
+  if (isDeletedSessionTombstoned({ id: input.id, path: input.path })) {
+    return filterDeletedSessionTombstones(list);
+  }
   const idx = list.findIndex((s) => s.id === input.id);
   const nowIso = new Date().toISOString();
   const trimmedFirst = (input.firstMessage ?? "").slice(0, 200);
@@ -47,7 +116,7 @@ export function upsertOptimisticSession(
         cur.name && cur.name !== "(empty)"
           ? cur.name
           : cur.firstMessage && cur.firstMessage.length > 0
-          ? cur.name
+          ? cur.firstMessage
           : trimmedFirst || cur.name,
       firstMessage:
         cur.firstMessage && cur.firstMessage.length > 0

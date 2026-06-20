@@ -14,9 +14,10 @@ import {
   browserScreenshot,
   browserType,
   browserVerify,
+  browserWait,
   browserWaitFor,
   clearBrowserAnnotations,
-  closeAllBrowsers,
+  closeBrowsersForOwner,
   completeInAppBrowserCommand,
   getBrowserSnapshot,
   getScreencastFrame,
@@ -82,8 +83,8 @@ export const POST = withRemoteAuth(async function (
       return NextResponse.json({ ok: true, snapshot });
     }
     if (type === "close_all") {
-      // 兜底：关闭所有 agent 的浏览器（清理残留窗口）
-      const closed = await closeAllBrowsers();
+      // 兜底：只关闭当前 browser owner 的实例，避免跨 session/agent 清理。
+      const closed = await closeBrowsersForOwner(id);
       const snapshot = getBrowserSnapshot(id);
       if (rec) pushExternalEvent(rec, { type: "browser_state", snapshot });
       return NextResponse.json({ ok: true, closed, snapshot });
@@ -123,6 +124,15 @@ export const POST = withRemoteAuth(async function (
         selector: typeof body.selector === "string" ? body.selector : undefined,
         text: typeof body.text === "string" ? body.text : undefined,
         timeoutMs: typeof body.timeoutMs === "number" ? body.timeoutMs : undefined,
+      });
+      if (rec) pushExternalEvent(rec, { type: "browser_state", snapshot });
+      return NextResponse.json({ ok: true, snapshot });
+    }
+    if (type === "wait") {
+      const { snapshot } = await browserWait(id, {
+        selector: typeof body.selector === "string" ? body.selector : undefined,
+        text: typeof body.text === "string" ? body.text : undefined,
+        ms: typeof body.ms === "number" ? body.ms : undefined,
       });
       if (rec) pushExternalEvent(rec, { type: "browser_state", snapshot });
       return NextResponse.json({ ok: true, snapshot });

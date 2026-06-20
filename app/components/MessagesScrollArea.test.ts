@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildCollapsedProcessItems,
@@ -95,5 +97,16 @@ describe("MessagesScrollArea process grouping", () => {
 
     const items = buildCollapsedProcessItems({ messages });
     expect(items.filter((item) => item.kind === "message")).toHaveLength(2);
+  });
+
+  it("keeps message rendering behind UI shape guards", () => {
+    const source = readFileSync(
+      path.join(process.cwd(), "app/components/MessagesScrollArea.tsx"),
+      "utf8"
+    );
+
+    expect(source).toContain("normalizeMessageParts");
+    expect(source).toContain("<UiFaultBoundary");
+    expect(source).toContain("消息渲染异常，已隔离该消息");
   });
 });

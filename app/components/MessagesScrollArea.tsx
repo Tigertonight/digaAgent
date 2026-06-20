@@ -4,6 +4,7 @@ import type { RefObject } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { MessageView } from "./MessageView";
+import { UiFaultBoundary } from "./UiFaultBoundary";
 import { ChatMinimap } from "../ChatMinimap";
 import type { ChatMessage } from "@/lib/types";
 import type { MessagePart } from "@/lib/types";
@@ -18,6 +19,7 @@ import {
   deriveTurnChromeState,
   isLastAssistantOfTurn,
 } from "@/lib/turn-state";
+import { normalizeMessageParts } from "@/lib/ui-shape/normalize";
 
 const INITIAL_RENDER_ITEM_WINDOW = 120;
 const RENDER_ITEM_WINDOW_STEP = 120;
@@ -164,8 +166,11 @@ export function MessagesScrollArea({
         const cached = prev[i];
         // 遇到新/变动的 user：重新计算 lastUserText，标记区间 dirty。
         const userChanged = !cached || cached.msgRef !== m;
-        const fromParts = m.parts
-          ?.map((part) => (part.kind === "text" ? part.text : ""))
+        const fromParts = normalizeMessageParts(m.parts, {
+          surface: "MessagesScrollArea.derived",
+          fieldPath: `messages.${i}.parts`,
+        })
+          .map((part) => (part.kind === "text" ? part.text : ""))
           .join(" ")
           .trim();
         lastUserText = (fromParts || m.text || "").trim();
@@ -280,51 +285,65 @@ export function MessagesScrollArea({
               const messageModelLabel = derived?.messageModelLabel;
               const stableKey = derived?.stableKey ?? `i${i}`;
               const questionContext = derived?.questionContext;
+              const safeMessage = m.parts
+                ? {
+                    ...m,
+                    parts: normalizeMessageParts(m.parts, {
+                      surface: "MessagesScrollArea.render",
+                      fieldPath: `messages.${i}.parts`,
+                    }),
+                  }
+                : m;
               const view = (
-                <MessageView
-                  msg={m}
-                  index={i}
-                  canFork={
-                    m.role === "user" &&
-                    !!m.entryId &&
-                    !streaming &&
-                    !forksCollapsed
-                  }
-                  isForking={forkingIndex === i}
-                  forkText={forkText}
-                  forkBusy={forkBusy}
-                  onStartFork={onStartFork}
-                  onCancelFork={onCancelFork}
-                  onChangeForkText={onChangeForkText}
-                  onSubmitFork={onSubmitFork}
-                  onForkToNewSession={onForkToNewSession}
-                  onOpenUrl={onOpenUrl}
-                  modelLabel={messageModelLabel}
-                  assistantChrome={assistantChrome}
-                  turnState={turnState}
-                  meta={messageMeta}
-                  streamingPhase={
-                    streaming &&
-                    (isActiveAssistant ||
-                      (m.role === "assistant" &&
-                        isLastAssistantOfTurn(messages, i)))
-                      ? agentPhase
-                      : undefined
-                  }
-                  isStreaming={isActiveAssistant && streaming}
-                  cwd={cwd}
-                  questionContext={questionContext}
-                  onApproveCall={onApproveCall}
-                  onDenyCall={onDenyCall}
-                  onChooseClarification={onChooseClarification}
-                  onRespondClarification={onRespondClarification}
-                  onResumeWorkflow={onResumeWorkflow}
-                  onRetryWorkflow={onRetryWorkflow}
-                  onWorkflowWorktreeAction={onWorkflowWorktreeAction}
-                  onRetrySubagentTask={onRetrySubagentTask}
-                  onResumeSubagentBatch={onResumeSubagentBatch}
-                  onOpenSubagentSession={onOpenSubagentSession}
-                />
+                <UiFaultBoundary
+                  surface={`message:${i}`}
+                  fallbackTitle="消息渲染异常，已隔离该消息"
+                >
+                  <MessageView
+                    msg={safeMessage}
+                    index={i}
+                    canFork={
+                      m.role === "user" &&
+                      !!m.entryId &&
+                      !streaming &&
+                      !forksCollapsed
+                    }
+                    isForking={forkingIndex === i}
+                    forkText={forkText}
+                    forkBusy={forkBusy}
+                    onStartFork={onStartFork}
+                    onCancelFork={onCancelFork}
+                    onChangeForkText={onChangeForkText}
+                    onSubmitFork={onSubmitFork}
+                    onForkToNewSession={onForkToNewSession}
+                    onOpenUrl={onOpenUrl}
+                    modelLabel={messageModelLabel}
+                    assistantChrome={assistantChrome}
+                    turnState={turnState}
+                    meta={messageMeta}
+                    streamingPhase={
+                      streaming &&
+                      (isActiveAssistant ||
+                        (m.role === "assistant" &&
+                          isLastAssistantOfTurn(messages, i)))
+                        ? agentPhase
+                        : undefined
+                    }
+                    isStreaming={isActiveAssistant && streaming}
+                    cwd={cwd}
+                    questionContext={questionContext}
+                    onApproveCall={onApproveCall}
+                    onDenyCall={onDenyCall}
+                    onChooseClarification={onChooseClarification}
+                    onRespondClarification={onRespondClarification}
+                    onResumeWorkflow={onResumeWorkflow}
+                    onRetryWorkflow={onRetryWorkflow}
+                    onWorkflowWorktreeAction={onWorkflowWorktreeAction}
+                    onRetrySubagentTask={onRetrySubagentTask}
+                    onResumeSubagentBatch={onResumeSubagentBatch}
+                    onOpenSubagentSession={onOpenSubagentSession}
+                  />
+                </UiFaultBoundary>
               );
               if (!isVisible)
                 return (

@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionInfoLite } from "@/lib/types";
-import { upsertOptimisticSession } from "./optimistic";
+import {
+  __resetDeletedSessionTombstonesForTests,
+  filterDeletedSessionTombstones,
+  rememberDeletedSessions,
+  upsertOptimisticSession,
+} from "./optimistic";
 
 const baseList = (): SessionInfoLite[] => [
   {
@@ -15,6 +20,14 @@ const baseList = (): SessionInfoLite[] => [
 ];
 
 describe("upsertOptimisticSession (sidebar 即时显示)", () => {
+  beforeEach(() => {
+    __resetDeletedSessionTombstonesForTests();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("不存在 → 插到列表顶部，runtimeState=loading, isRunning=true", () => {
     const next = upsertOptimisticSession(baseList(), {
       id: "new-1",
@@ -88,6 +101,29 @@ describe("upsertOptimisticSession (sidebar 即时显示)", () => {
     expect(next[0].name).toBe("刚发的");
   });
 
+  it("已存在 name 为空但 firstMessage 非空 → 用 firstMessage 补标题", () => {
+    const list: SessionInfoLite[] = [
+      {
+        id: "old-1",
+        path: "/p/old-1.jsonl",
+        cwd: "/p",
+        created: "2024-01-01T00:00:00Z",
+        modified: "2024-01-01T00:00:00Z",
+        messageCount: 1,
+        name: "",
+        firstMessage: "已有首问",
+      },
+    ];
+    const next = upsertOptimisticSession(list, {
+      id: "old-1",
+      path: "/p/old-1.jsonl",
+      cwd: "/p",
+      firstMessage: "刚发的",
+    });
+    expect(next[0].name).toBe("已有首问");
+    expect(next[0].firstMessage).toBe("已有首问");
+  });
+
   it("已存在但已经有 runtime（streaming）→ 不被打回 loading", () => {
     const list: SessionInfoLite[] = [
       {
@@ -131,6 +167,7 @@ describe("upsertOptimisticSession (sidebar 即时显示)", () => {
         created: "2024-01-01T00:00:00Z",
         modified: "2024-01-01T00:00:00Z",
         messageCount: 5,
+        name: "已有",
         firstMessage: "已有",
         isRunning: true,
         runtimeState: "streaming",
@@ -154,5 +191,38 @@ describe("upsertOptimisticSession (sidebar 即时显示)", () => {
       parentSessionPath: "/p/old-1.jsonl",
     });
     expect(next[0].parentSessionPath).toBe("/p/old-1.jsonl");
+  });
+
+  it("删除墓碑会阻止 refresh 里的旧 session 短暂复活", () => {
+    const list = baseList();
+    rememberDeletedSessions([{ id: "old-1", path: "/p/old-1.jsonl" }]);
+
+    expect(filterDeletedSessionTombstones(list)).toEqual([]);
+  });
+
+  it("删除墓碑会阻止同 id/path optimistic upsert 复活幽灵 session", () => {
+    const list = baseList();
+    rememberDeletedSessions([{ id: "ghost", path: "/p/ghost.jsonl" }]);
+
+    const next = upsertOptimisticSession(list, {
+      id: "ghost",
+      path: "/p/ghost.jsonl",
+      cwd: "/p",
+      firstMessage: "should not show",
+    });
+
+    expect(next).toEqual(list);
+  });
+
+  it("删除墓碑过期后允许服务端 session 再次出现", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-19T10:00:00.000Z"));
+    const list = baseList();
+    rememberDeletedSessions([{ id: "old-1", path: "/p/old-1.jsonl" }], 1000);
+
+    expect(filterDeletedSessionTombstones(list)).toEqual([]);
+
+    vi.setSystemTime(new Date("2026-06-19T10:00:02.000Z"));
+    expect(filterDeletedSessionTombstones(list)).toEqual(list);
   });
 });

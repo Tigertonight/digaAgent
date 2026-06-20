@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import type { AgentGoal } from "@/lib/goal/types";
 import { GoalTimeline } from "./GoalTimeline";
+import { UiFaultBoundary } from "./UiFaultBoundary";
 
 export interface GoalBarProps {
   goal: AgentGoal | null;
@@ -156,7 +157,14 @@ export function GoalBar({
         </div>
       )}
 
-      {agentId && <GoalTimeline agentId={agentId} open={expanded} />}
+      {agentId && (
+        <UiFaultBoundary
+          surface="GoalTimeline"
+          fallbackTitle="目标时间线异常，已隔离该模块"
+        >
+          <GoalTimeline agentId={agentId} open={expanded} />
+        </UiFaultBoundary>
+      )}
     </div>
   );
 }

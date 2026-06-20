@@ -25,6 +25,7 @@ import { getElectronApi } from "@/lib/electron-bridge";
 import type {
   PendingAttachment,
   PendingAttachmentKind,
+  RunnerKey,
 } from "@/lib/session-runner";
 import { userFacingMessage } from "@/lib/user-facing-error";
 
@@ -51,6 +52,15 @@ function kindFromName(
 export interface UseComposerAttachmentsParams {
   setPendingImages: (v: Updater<ImageContentLite[]>) => void;
   setPendingFiles: (v: Updater<PendingAttachment[]>) => void;
+  getOwnerKey?: () => RunnerKey;
+  setPendingImagesForOwner?: (
+    ownerKey: RunnerKey,
+    v: Updater<ImageContentLite[]>
+  ) => void;
+  setPendingFilesForOwner?: (
+    ownerKey: RunnerKey,
+    v: Updater<PendingAttachment[]>
+  ) => void;
   setError: (e: string | null) => void;
 }
 
@@ -74,11 +84,41 @@ export interface UseComposerAttachmentsReturn {
 export function useComposerAttachments(
   params: UseComposerAttachmentsParams
 ): UseComposerAttachmentsReturn {
-  const { setPendingImages, setPendingFiles, setError } = params;
+  const {
+    setPendingImages,
+    setPendingFiles,
+    getOwnerKey,
+    setPendingImagesForOwner,
+    setPendingFilesForOwner,
+    setError,
+  } = params;
+
+  const writePendingImages = useCallback(
+    (ownerKey: RunnerKey | undefined, v: Updater<ImageContentLite[]>) => {
+      if (ownerKey && setPendingImagesForOwner) {
+        setPendingImagesForOwner(ownerKey, v);
+      } else {
+        setPendingImages(v);
+      }
+    },
+    [setPendingImages, setPendingImagesForOwner]
+  );
+
+  const writePendingFiles = useCallback(
+    (ownerKey: RunnerKey | undefined, v: Updater<PendingAttachment[]>) => {
+      if (ownerKey && setPendingFilesForOwner) {
+        setPendingFilesForOwner(ownerKey, v);
+      } else {
+        setPendingFiles(v);
+      }
+    },
+    [setPendingFiles, setPendingFilesForOwner]
+  );
 
   /** 把一组 File 转 ImageContentLite 并 append 到 pendingImages */
   const addImageFiles = useCallback(
     async (files: File[] | FileList) => {
+      const ownerKey = getOwnerKey?.();
       const arr = Array.from(files).filter((f) =>
         f.type.startsWith("image/")
       );
@@ -87,19 +127,20 @@ export function useComposerAttachments(
         const converted = await Promise.all(
           arr.map((f) => fileToImageContent(f))
         );
-        setPendingImages((prev) => [...prev, ...converted]);
+        writePendingImages(ownerKey, (prev) => [...prev, ...converted]);
       } catch (e) {
         setError(userFacingMessage(e));
       }
     },
-    [setPendingImages, setError]
+    [getOwnerKey, writePendingImages, setError]
   );
 
   const removePendingImage = useCallback(
     (idx: number) => {
-      setPendingImages((prev) => prev.filter((_, i) => i !== idx));
+      const ownerKey = getOwnerKey?.();
+      writePendingImages(ownerKey, (prev) => prev.filter((_, i) => i !== idx));
     },
-    [setPendingImages]
+    [getOwnerKey, writePendingImages]
   );
 
   /**
@@ -112,6 +153,7 @@ export function useComposerAttachments(
    */
   const onDropFiles = useCallback(
     (files: File[]) => {
+      const ownerKey = getOwnerKey?.();
       const images = files.filter((f) => f.type.startsWith("image/"));
       const others = files.filter((f) => !f.type.startsWith("image/"));
 
@@ -144,7 +186,7 @@ export function useComposerAttachments(
         setError("无法获取拖入文件的路径。");
         return;
       }
-      setPendingFiles((prev) => {
+      writePendingFiles(ownerKey, (prev) => {
         const seen = new Set(prev.map((a) => a.path));
         return [
           ...prev,
@@ -152,23 +194,27 @@ export function useComposerAttachments(
         ];
       });
     },
-    [addImageFiles, setPendingFiles, setError]
+    [addImageFiles, getOwnerKey, writePendingFiles, setError]
   );
 
   const removePendingFile = useCallback(
     (path: string) => {
-      setPendingFiles((prev) => prev.filter((a) => a.path !== path));
+      const ownerKey = getOwnerKey?.();
+      writePendingFiles(ownerKey, (prev) =>
+        prev.filter((a) => a.path !== path)
+      );
     },
-    [setPendingFiles]
+    [getOwnerKey, writePendingFiles]
   );
 
   const addPathAttachment = useCallback<
     UseComposerAttachmentsReturn["addPathAttachment"]
   >(
     (absPath, opts) => {
+      const ownerKey = getOwnerKey?.();
       if (!absPath) return "duplicate";
       let result: "added" | "duplicate" = "added";
-      setPendingFiles((prev) => {
+      writePendingFiles(ownerKey, (prev) => {
         if (prev.some((a) => a.path === absPath)) {
           result = "duplicate";
           return prev;
@@ -189,7 +235,7 @@ export function useComposerAttachments(
       });
       return result;
     },
-    [setPendingFiles]
+    [getOwnerKey, writePendingFiles]
   );
 
   return {

@@ -12,6 +12,7 @@ import {
   getBrowserSnapshot,
   browserOpen,
   browserSearch,
+  browserSearchUrl,
   browserScreenshot,
   browserType,
   browserVerify,
@@ -131,13 +132,25 @@ const WaitForParams = Type.Object({
 const EmptyParams = Type.Object({});
 const DEFAULT_STANDALONE_BROWSER_ID = standaloneBrowserId("default");
 
-function annotationBrowserIds(agentId: string): string[] {
-  return [agentBrowserId(agentId), DEFAULT_STANDALONE_BROWSER_ID];
+export function annotationBrowserIds(
+  agentId: string,
+  extraBrowserIds: readonly string[] = []
+): string[] {
+  return [
+    ...new Set([
+      agentBrowserId(agentId),
+      ...extraBrowserIds.filter((id) => typeof id === "string" && id.trim()),
+      DEFAULT_STANDALONE_BROWSER_ID,
+    ]),
+  ];
 }
 
-function listOpenAnnotationsForAgent(agentId: string) {
+function listOpenAnnotationsForAgent(
+  agentId: string,
+  extraBrowserIds: readonly string[]
+) {
   const seen = new Set<string>();
-  return annotationBrowserIds(agentId)
+  return annotationBrowserIds(agentId, extraBrowserIds)
     .flatMap((browserId) =>
       listBrowserAnnotations(browserId).filter((a) => a.status !== "resolved")
     )
@@ -148,9 +161,13 @@ function listOpenAnnotationsForAgent(agentId: string) {
     });
 }
 
-function findAnnotationBrowserId(agentId: string, annotationId: string): string {
+function findAnnotationBrowserId(
+  agentId: string,
+  extraBrowserIds: readonly string[],
+  annotationId: string
+): string {
   return (
-    annotationBrowserIds(agentId).find((browserId) =>
+    annotationBrowserIds(agentId, extraBrowserIds).find((browserId) =>
       listBrowserAnnotations(browserId).some((a) => a.id === annotationId)
     ) ?? agentBrowserId(agentId)
   );
@@ -182,6 +199,7 @@ export interface BrowserExtensionOptions {
     detail: string;
     url: string | null;
   }) => Promise<boolean>;
+  getAnnotationBrowserIds?: () => readonly string[];
 }
 
 /** 所有 browser_* 工具统一的 details 形态（snapshot + 标准化 evidence）。 */
@@ -386,6 +404,12 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: ClickParams,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
+          await guardAction(opts, [
+            params.selector,
+            typeof params.x === "number" || typeof params.y === "number"
+              ? `${params.x ?? "?"},${params.y ?? "?"}`
+              : undefined,
+          ]);
           const { result, snapshot } = await runWithBrowserState(opts, () =>
             browserClick(agentBrowserId(opts.getAgentId()), params)
           );
@@ -493,6 +517,7 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: SearchParams,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
+          await guardSite(opts, browserSearchUrl(params).url);
           const { result, snapshot } = await runWithBrowserState(opts, () =>
             browserSearch(agentBrowserId(opts.getAgentId()), params)
           );
@@ -650,7 +675,10 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: EmptyParams,
         executionMode: "sequential",
         async execute() {
-          const open = listOpenAnnotationsForAgent(opts.getAgentId());
+          const open = listOpenAnnotationsForAgent(
+            opts.getAgentId(),
+            opts.getAnnotationBrowserIds?.() ?? []
+          );
           const pct = (n: number) => `${Math.round(n * 100)}%`;
           const text =
             open.length === 0
@@ -683,6 +711,7 @@ The user can draw a region on the browser page and leave a comment. These page a
         async execute(_toolCallId, params) {
           const browserId = findAnnotationBrowserId(
             opts.getAgentId(),
+            opts.getAnnotationBrowserIds?.() ?? [],
             params.annotationId
           );
           const snapshot = setBrowserAnnotationStatus(

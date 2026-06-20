@@ -41,6 +41,12 @@ import type {
 import { stripContextAside } from "./context-aside";
 import { isFalseGrepNoMatch } from "./narration/false-error";
 import { diagnoseToolTruncation } from "./tool-recovery/truncation-diagnosis";
+import {
+  normalizeMessageParts,
+  normalizeSubagentBatchPayload,
+  normalizeWorkflowUiPayload,
+  safeArray,
+} from "./ui-shape/normalize";
 
 /* SDK 事件的最小化类型（用 any-ish 但 narrow 到必要字段） */
 interface AnyEvent {
@@ -627,6 +633,10 @@ function subagentBatchPartFromToolResult(params: {
 function subagentBatchPartFromPersistedBatch(
   batch: SubagentBatch
 ): Extract<MessagePart, { kind: "subagent_batch" }> {
+  const normalized = normalizeSubagentBatchPayload(batch, {
+    surface: "chat-reducer.restored-subagent-batch",
+  });
+  const tasks = normalized.tasks as SubagentBatch["tasks"];
   return {
     kind: "subagent_batch",
     id: batch.id,
@@ -638,7 +648,7 @@ function subagentBatchPartFromPersistedBatch(
     verification: batch.verification,
     synthesis: batch.synthesis,
     auditEvents: batch.auditEvents,
-    tasks: batch.tasks.map((task) => ({
+    tasks: tasks.map((task) => ({
       id: task.id,
       title: task.title,
       role: task.role,
@@ -706,15 +716,12 @@ function workflowRunPartFromToolResult(params: {
   const details = asRecord(params.details) ?? asRecord(asRecord(params.result)?.details);
   if (!details || typeof details.workflowId !== "string") return null;
   const args = asRecord(params.args);
-  const artifacts = Array.isArray(details.artifacts)
-    ? (details.artifacts as WorkflowArtifact[])
-    : [];
-  const checkpoints = Array.isArray(details.checkpoints)
-    ? (details.checkpoints as WorkflowCheckpoint[])
-    : [];
-  const logs = Array.isArray(details.logs)
-    ? (details.logs as WorkflowScriptLog[])
-    : [];
+  const normalized = normalizeWorkflowUiPayload(details, {
+    surface: "chat-reducer.workflow-tool-result",
+  });
+  const artifacts = normalized.artifacts as WorkflowArtifact[];
+  const checkpoints = normalized.checkpoints as WorkflowCheckpoint[];
+  const logs = normalized.logs as WorkflowScriptLog[];
   const manifest = asRecord(details.manifest) as WorkflowManifest | null;
   return {
     kind: "workflow_run",
@@ -740,11 +747,7 @@ function workflowRunPartFromToolResult(params: {
     endedAt: typeof details.endedAt === "number" ? details.endedAt : undefined,
     returnValue: details.returnValue,
     error: typeof details.error === "string" ? details.error : undefined,
-    warnings: Array.isArray(details.warnings)
-      ? (details.warnings as unknown[]).filter(
-          (w): w is string => typeof w === "string"
-        )
-      : undefined,
+    warnings: normalized.warnings.length > 0 ? normalized.warnings : undefined,
   };
 }
 
@@ -1703,7 +1706,10 @@ export function ctxToMessages(
       });
     }
     if (m.role === "tool") {
-      for (const c of m.content ?? []) {
+      for (const c of safeArray<NonNullable<typeof m.content>[number]>(m.content, {
+        surface: "chat-reducer.ctxToMessages",
+        fieldPath: "message.content",
+      })) {
         if (c.type === "tool_result" && c.tool_use_id) {
           toolResults.set(c.tool_use_id, {
             result: c.content,
@@ -1719,7 +1725,10 @@ export function ctxToMessages(
     if (m.role === "user") {
       const parts: MessagePart[] = [];
       let textJoined = "";
-      for (const c of m.content ?? []) {
+      for (const c of safeArray<NonNullable<typeof m.content>[number]>(m.content, {
+        surface: "chat-reducer.ctxToMessages",
+        fieldPath: "message.content",
+      })) {
         if (c.type === "text" && c.text) {
           // 历史还原同样剥离「上下文 aside」标记，只显示用户原话。
           const visible = stripContextAside(c.text);
@@ -1744,7 +1753,10 @@ export function ctxToMessages(
       });
     } else if (m.role === "assistant") {
       const parts: MessagePart[] = [];
-      for (const c of m.content ?? []) {
+      for (const c of safeArray<NonNullable<typeof m.content>[number]>(m.content, {
+        surface: "chat-reducer.ctxToMessages",
+        fieldPath: "message.content",
+      })) {
         if (c.type === "text" && c.text) {
           parts.push({ kind: "text", text: c.text });
         } else if (c.type === "thinking" && c.thinking) {
@@ -1809,7 +1821,10 @@ export function ctxToMessages(
       const finalParts = appendAssistantErrorFallback(parts, m);
       out.push({
         role: "assistant",
-        parts: finalParts,
+        parts: normalizeMessageParts(finalParts, {
+          surface: "chat-reducer.ctxToMessages",
+          fieldPath: "assistant.parts",
+        }),
         timestamp: m.timestamp,
         stopReason: m.stopReason,
         meta: metaFromMessage({ ...m, role: "assistant" }),

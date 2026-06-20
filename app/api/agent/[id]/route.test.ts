@@ -12,6 +12,7 @@ const agentRegistryMock = vi.hoisted(() => ({
   clearClientRequest: vi.fn(),
   createAgent: vi.fn(),
   disposeAgent: vi.fn(),
+  finishStreamingAfterAbort: vi.fn(),
   finishStreamingAfterPromptError: vi.fn(),
   getAgent: vi.fn(),
   getModelRegistry: vi.fn(),
@@ -225,5 +226,79 @@ describe("POST /api/agent/[id] workflow mode tools", () => {
     expect(session.prompt).toHaveBeenCalledWith("audit", undefined);
     expect(session.setActiveToolsByName).not.toHaveBeenCalled();
     expect(listRuntimeEvents({ source: "workflow" })).toEqual([]);
+  });
+});
+
+describe("DELETE /api/agent/[id]", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("requires remote auth before disposing an agent", async () => {
+    const { assertRemoteAuth } = await import("@/lib/remote/auth");
+    vi.mocked(assertRemoteAuth).mockResolvedValueOnce(
+      Response.json({ error: "unauthorized" }, { status: 401 }) as never,
+    );
+    const { DELETE } = await import("./route");
+
+    const res = await DELETE(
+      new Request("http://localhost:3000/api/agent/agent-1", {
+        method: "DELETE",
+      }),
+      { params: Promise.resolve({ id: "agent-1" }) },
+    );
+
+    expect(res.status).toBe(401);
+    expect(agentRegistryMock.disposeAgent).not.toHaveBeenCalled();
+  });
+
+  it("awaits dispose after auth succeeds", async () => {
+    const { assertRemoteAuth } = await import("@/lib/remote/auth");
+    vi.mocked(assertRemoteAuth).mockResolvedValueOnce(null);
+    agentRegistryMock.disposeAgent.mockResolvedValueOnce(undefined);
+    const { DELETE } = await import("./route");
+
+    const res = await DELETE(
+      new Request("http://localhost:3000/api/agent/agent-1", {
+        method: "DELETE",
+      }),
+      { params: Promise.resolve({ id: "agent-1" }) },
+    );
+
+    expect(res.status).toBe(200);
+    expect(agentRegistryMock.disposeAgent).toHaveBeenCalledWith("agent-1");
+  });
+});
+
+describe("POST /api/agent/[id] abort", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("uses the unified forced finish path after aborting work", async () => {
+    const session = makeSession();
+    const abort = vi.fn(async () => undefined);
+    Object.assign(session, { abort });
+    agentRegistryMock.getAgent.mockReturnValue({
+      ...makeAgent(session),
+      isStreaming: true,
+    });
+    const { POST } = await import("./route");
+
+    const res = await POST(localReq({ type: "abort" }), {
+      params: Promise.resolve({ id: "agent-1" }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(agentRegistryMock.abortWorkflowsForParent).toHaveBeenCalledWith(
+      "agent-1"
+    );
+    expect(agentRegistryMock.abortSubagentsForParent).toHaveBeenCalledWith(
+      "agent-1"
+    );
+    expect(abort).toHaveBeenCalled();
+    expect(agentRegistryMock.finishStreamingAfterAbort).toHaveBeenCalledWith(
+      "agent-1"
+    );
   });
 });

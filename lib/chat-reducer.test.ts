@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   appendRestoredSubagentBatches,
   applyEvent,
@@ -6,6 +6,10 @@ import {
   ctxToMessages,
 } from "./chat-reducer";
 import type { ChatMessage, MessagePart } from "./types";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("createInitialState", () => {
   it("默认返回空 messages 和 activeAssistantIndex=-1", () => {
@@ -43,6 +47,31 @@ describe("ctxToMessages", () => {
         parts: [{ kind: "text", text: "hello" }],
         text: "hello",
         timestamp: 1000,
+      },
+    ]);
+  });
+
+  it("malformed content fields are treated as empty arrays", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const out = ctxToMessages([
+      {
+        role: "user",
+        content: { type: "text", text: "not-array" },
+      },
+      {
+        role: "assistant",
+        content: undefined,
+      },
+    ] as never);
+
+    expect(out).toEqual([
+      {
+        role: "assistant",
+        parts: [],
+        timestamp: undefined,
+        stopReason: undefined,
+        meta: undefined,
       },
     ]);
   });
@@ -424,6 +453,24 @@ describe("appendRestoredSubagentBatches", () => {
       },
     ]);
     expect(out).toBe(seed);
+  });
+
+  it("restores malformed persisted batch task arrays as empty", () => {
+    const out = appendRestoredSubagentBatches([], [
+      {
+        id: "batch-malformed",
+        parentAgentId: "agent-1",
+        status: "failed",
+        reason: "bad history",
+        createdAt: 100,
+        tasks: undefined,
+      } as never,
+    ]);
+
+    const restored = out[0].parts?.[0];
+    expect(restored?.kind).toBe("subagent_batch");
+    if (restored?.kind !== "subagent_batch") throw new Error("type narrow");
+    expect(restored.tasks).toEqual([]);
   });
 });
 

@@ -17,6 +17,7 @@ import {
   type BrowserVerifyResult,
 } from "./types";
 import { assertBrowserSiteAllowed } from "./policy";
+import { parseBrowserId } from "./browser-id";
 
 type PlaywrightModule = typeof import("playwright");
 
@@ -511,22 +512,20 @@ export function completeInAppBrowserCommand(
     if (result.error) waiter.reject(new Error(result.error));
     else waiter.resolve(result);
   }
-  if (result.url !== undefined || result.title !== undefined) {
-    rec.snapshot = {
-      ...rec.snapshot,
-      url: result.url !== undefined ? result.url : rec.snapshot.url,
-      title: result.title !== undefined ? result.title : rec.snapshot.title,
-      screenshotDataUrl:
-        result.screenshotDataUrl !== undefined
-          ? result.screenshotDataUrl
-          : rec.snapshot.screenshotDataUrl,
-      pointer:
-        result.pointer !== undefined ? result.pointer : rec.snapshot.pointer,
-      status: result.error ? "error" : "ready",
-      error: result.error ?? null,
-      updatedAt: Date.now(),
-    };
-  }
+  rec.snapshot = {
+    ...rec.snapshot,
+    url: result.url !== undefined ? result.url : rec.snapshot.url,
+    title: result.title !== undefined ? result.title : rec.snapshot.title,
+    screenshotDataUrl:
+      result.screenshotDataUrl !== undefined
+        ? result.screenshotDataUrl
+        : rec.snapshot.screenshotDataUrl,
+    pointer:
+      result.pointer !== undefined ? result.pointer : rec.snapshot.pointer,
+    status: result.error ? "error" : "ready",
+    error: result.error ?? null,
+    updatedAt: Date.now(),
+  };
   return rec.snapshot;
 }
 
@@ -553,6 +552,7 @@ function dispatchInAppBrowserCommand(
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       host.waiters.delete(id);
+      host.pending = host.pending.filter((pending) => pending.id !== id);
       reject(new Error(`in-app browser command timed out: ${action}`));
     }, IN_APP_COMMAND_TIMEOUT_MS);
     host.waiters.set(id, { resolve, reject, timeout });
@@ -877,14 +877,7 @@ export async function browserSearch(
   input: { query: string; engine?: "baidu" | "google" | "bing" },
   opts: BrowserActionOptions = {}
 ) {
-  const engine = input.engine ?? "baidu";
-  const q = encodeURIComponent(input.query);
-  const url =
-    engine === "google"
-      ? `https://www.google.com/search?q=${q}`
-      : engine === "bing"
-        ? `https://www.bing.com/search?q=${q}`
-        : `https://www.baidu.com/s?wd=${q}`;
+  const { engine, url } = browserSearchUrl(input);
   const rec = reg.browsers.get(browserId);
   if (rec && isInAppHostAlive(rec)) {
     await assertBrowserSiteAllowed(url);
@@ -912,6 +905,21 @@ export async function browserSearch(
       .catch(() => {});
     return { url: page.url(), engine, query: input.query };
   }, opts);
+}
+
+export function browserSearchUrl(input: {
+  query: string;
+  engine?: "baidu" | "google" | "bing";
+}) {
+  const engine = input.engine ?? "baidu";
+  const q = encodeURIComponent(input.query);
+  const url =
+    engine === "google"
+      ? `https://www.google.com/search?q=${q}`
+      : engine === "bing"
+        ? `https://www.bing.com/search?q=${q}`
+        : `https://www.baidu.com/s?wd=${q}`;
+  return { engine, url };
 }
 
 export async function browserWait(
@@ -1219,9 +1227,26 @@ export async function disposeBrowser(browserId: string) {
   reg.browsers.delete(browserId);
 }
 
+function sameBrowserOwner(left: string, right: string): boolean {
+  const a = parseBrowserId(left);
+  const b = parseBrowserId(right);
+  return a.kind === b.kind && a.id === b.id;
+}
+
 /**
- * 兜底：关闭所有 agent 的浏览器实例。
- * 用于"全部关闭"入口，清理因异常残留的多余窗口。
+ * 兜底：关闭当前 browser owner 下的浏览器实例。
+ * 这保留"清理残留"能力，但不会跨 agent/session/task 关闭其它工作区。
+ */
+export async function closeBrowsersForOwner(browserId: string): Promise<number> {
+  const ids = [...reg.browsers.keys()].filter((id) =>
+    sameBrowserOwner(id, browserId)
+  );
+  await Promise.all(ids.map((id) => browserClose(id).catch(() => {})));
+  return ids.length;
+}
+
+/**
+ * 测试/维护入口：全局关闭所有实例。不要从用户可触发的 API 直接调用。
  */
 export async function closeAllBrowsers(): Promise<number> {
   const ids = [...reg.browsers.keys()];

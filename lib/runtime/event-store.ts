@@ -117,8 +117,24 @@ export function removeRuntimeEvent(id: string): boolean {
  */
 export function disposeRuntimeEventsForAgent(agentId: string): number {
   let cleared = 0;
+  const browserIds = new Set([`agent:${agentId}`, agentId]);
+  const idPrefixes = [
+    `${agentId}:`,
+    `agent:${agentId}:`,
+    `workflow:${agentId}:`,
+    `subagent:${agentId}:`,
+    `goal-turn:${agentId}:`,
+    `approval:${agentId}:`,
+    `progress:${agentId}:`,
+  ];
   for (const [id, event] of store.byId) {
-    if (event.agentId === agentId) {
+    if (
+      event.agentId === agentId ||
+      event.parentId === agentId ||
+      event.browserId === agentId ||
+      (event.browserId ? browserIds.has(event.browserId) : false) ||
+      idPrefixes.some((prefix) => id.startsWith(prefix))
+    ) {
       store.byId.delete(id);
       cleared += 1;
     }

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { shouldRefreshSidebarOnEvent } from "./useAgentEvents";
+import {
+  settleProgressAfterAgentEnd,
+  shouldRefreshSidebarOnEvent,
+} from "./useAgentEvents";
 
 describe("shouldRefreshSidebarOnEvent", () => {
   it("approval_request / approval_resolved / clarification_request / clarification_resolved 触发 sidebar 刷新", () => {
@@ -35,5 +38,22 @@ describe("shouldRefreshSidebarOnEvent", () => {
   it("未知事件类型默认不触发", () => {
     expect(shouldRefreshSidebarOnEvent("anything-else")).toBe(false);
     expect(shouldRefreshSidebarOnEvent("")).toBe(false);
+  });
+});
+
+describe("settleProgressAfterAgentEnd", () => {
+  it("normalizes malformed group steps before settling", () => {
+    const out = settleProgressAfterAgentEnd({
+      groups: [{ id: "g1", index: 1 }],
+      steps: undefined,
+      artifacts: undefined,
+      updatedAt: 1,
+    } as never);
+
+    expect(out?.groups).toEqual([
+      expect.objectContaining({ id: "g1", steps: [] }),
+    ]);
+    expect(out?.steps).toEqual([]);
+    expect(out?.artifacts).toEqual([]);
   });
 });

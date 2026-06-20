@@ -700,7 +700,7 @@ export function BrowserPanel({
                   setTakeover(false);
                 });
             }}
-            title="关闭所有浏览器窗口（清理残留）"
+            title="关闭当前浏览器窗口（清理残留）"
           >
             <Square size={12} />
           </IconBtn>

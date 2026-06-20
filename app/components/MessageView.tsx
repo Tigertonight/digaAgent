@@ -49,6 +49,7 @@ import {
   summarizeToolTarget,
 } from "@/lib/narration/tool";
 import { dedupeToolLabels } from "@/lib/narration/summary";
+import { normalizeMessageParts, safeArray } from "@/lib/ui-shape/normalize";
 import Markdown from "./Markdown";
 import ToolRender from "./ToolRender";
 import { ApprovalBubble } from "./ApprovalBubble";
@@ -365,7 +366,10 @@ function MessageViewInner({
 
   // assistant：左侧，按 parts 顺序渲染
   // 兼容老 message（只有 thinking/text 字段，没有 parts）
-  let parts: MessagePart[] = msg.parts ? [...msg.parts] : [];
+  let parts: MessagePart[] = normalizeMessageParts(msg.parts, {
+    surface: "MessageView.render",
+    fieldPath: `message.${index}.parts`,
+  });
   // Some restored / provider-specific messages can contain structured parts for
   // tool calls while the final assistant text still lives on the legacy `text`
   // field. Do not drop that text just because parts already exist.
@@ -1415,17 +1419,24 @@ function summarizeProcessIssue(
 
 function extractPlainText(parts: MessagePart[]): string {
   const out: string[] = [];
-  for (const p of parts) {
+  for (const p of safeArray<MessagePart>(parts, {
+    surface: "MessageView.extractPlainText",
+    fieldPath: "parts",
+  })) {
     if (p.kind === "text") out.push(p.text);
     else if (p.kind === "thinking") {
       // 不复制 thinking 内容
     } else if (p.kind === "clarification") {
       out.push([p.title, p.question].filter(Boolean).join("\n"));
     } else if (p.kind === "subagent_batch") {
+      const tasks = safeArray<typeof p.tasks[number]>(p.tasks, {
+        surface: "MessageView.extractPlainText",
+        fieldPath: "subagent_batch.tasks",
+      });
       out.push(
         [
           `Subagents: ${p.reason}`,
-          ...p.tasks.map(
+          ...tasks.map(
             (task) =>
               [
                 `${task.status} ${task.role ?? "general"} ${task.title}`,
@@ -1442,8 +1453,14 @@ function extractPlainText(parts: MessagePart[]): string {
           `Workflow: ${p.objective}`,
           `Status: ${p.status}`,
           p.error ? `Error: ${p.error}` : "",
-          ...p.checkpoints.map((checkpoint) => `Checkpoint: ${checkpoint.name}`),
-          ...p.artifacts.map((artifact) => `Artifact: ${artifact.name}`),
+          ...safeArray<typeof p.checkpoints[number]>(p.checkpoints, {
+            surface: "MessageView.extractPlainText",
+            fieldPath: "workflow_run.checkpoints",
+          }).map((checkpoint) => `Checkpoint: ${checkpoint.name}`),
+          ...safeArray<typeof p.artifacts[number]>(p.artifacts, {
+            surface: "MessageView.extractPlainText",
+            fieldPath: "workflow_run.artifacts",
+          }).map((artifact) => `Artifact: ${artifact.name}`),
         ]
           .filter(Boolean)
           .join("\n")

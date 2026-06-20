@@ -30,15 +30,19 @@ const subagentStoreMock = vi.hoisted(() => ({
   removeBatchesByParentSessionPath: vi.fn(),
 }));
 
+const agentRegistryMock = vi.hoisted(() => ({
+  disposeAgent: vi.fn<(agentId: string) => Promise<void>>(),
+  listAgentSummaries: vi.fn<
+    () => Array<{ agentId: string; sessionFile: string | null }>
+  >(() => []),
+}));
+
 vi.mock("@/lib/sessions", () => sessionsMock);
 vi.mock("node:fs", () => ({ promises: fsMock }));
 vi.mock("@/lib/meta/store", () => metaStoreMock);
 vi.mock("@/lib/progress/file-store", () => progressStoreMock);
 vi.mock("@/lib/subagents/server-store", () => subagentStoreMock);
-vi.mock("@/lib/agent-registry", () => ({
-  disposeAgent: vi.fn(),
-  listAgentSummaries: vi.fn(() => []),
-}));
+vi.mock("@/lib/agent-registry", () => agentRegistryMock);
 vi.mock("@earendil-works/pi-coding-agent", () => ({
   SessionManager: sessionManagerMock,
 }));
@@ -81,6 +85,8 @@ describe("/api/sessions/[id]", () => {
     fsMock.unlink.mockResolvedValue(undefined);
     metaStoreMock.deleteMeta.mockResolvedValue(undefined);
     progressStoreMock.deletePersistedProgress.mockResolvedValue(undefined);
+    agentRegistryMock.disposeAgent.mockResolvedValue(undefined);
+    agentRegistryMock.listAgentSummaries.mockReturnValue([]);
   });
 
   it("rejects overlong rename requests before opening the session", async () => {
@@ -102,6 +108,10 @@ describe("/api/sessions/[id]", () => {
       { id: "ok", path: "/tmp/ok.jsonl" },
       { id: "busy", path: "/tmp/busy.jsonl" },
     ]);
+    agentRegistryMock.listAgentSummaries.mockReturnValue([
+      { agentId: "agent-ok", sessionFile: "/tmp/ok.jsonl" },
+      { agentId: "agent-busy", sessionFile: "/tmp/busy.jsonl" },
+    ]);
     fsMock.unlink.mockImplementation(async (path: string) => {
       if (path.includes("busy")) {
         const err = new Error("busy") as NodeJS.ErrnoException;
@@ -119,6 +129,7 @@ describe("/api/sessions/[id]", () => {
     await expect(res.json()).resolves.toMatchObject({
       ok: true,
       partial: true,
+      inMemoryDisposed: true,
       deleted: ["ok"],
       failed: [{ id: "busy", error: "EBUSY" }],
     });
@@ -128,6 +139,40 @@ describe("/api/sessions/[id]", () => {
     expect(progressStoreMock.deletePersistedProgress).not.toHaveBeenCalledWith(
       "busy"
     );
+    expect(agentRegistryMock.disposeAgent).toHaveBeenCalledWith("agent-ok");
+    expect(agentRegistryMock.disposeAgent).not.toHaveBeenCalledWith("agent-busy");
+    errorSpy.mockRestore();
+  });
+
+  it("keeps in-memory agents when every session file delete fails", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    sessionsMock.collectSessionDescendants.mockResolvedValue([
+      { id: "busy", path: "/tmp/busy.jsonl" },
+    ]);
+    agentRegistryMock.listAgentSummaries.mockReturnValue([
+      { agentId: "agent-busy", sessionFile: "/tmp/busy.jsonl" },
+    ]);
+    fsMock.unlink.mockImplementation(async () => {
+      const err = new Error("busy") as NodeJS.ErrnoException;
+      err.code = "EBUSY";
+      throw err;
+    });
+
+    const { DELETE } = await import("./route");
+    const res = await DELETE(localReq("DELETE"), {
+      params: Promise.resolve({ id: "session-1" }),
+    });
+
+    expect(res.status).toBe(500);
+    await expect(res.json()).resolves.toMatchObject({
+      error: "some sessions failed to delete",
+      inMemoryDisposed: false,
+      failed: [{ id: "busy", error: "EBUSY" }],
+      deleted: [],
+    });
+    expect(metaStoreMock.deleteMeta).not.toHaveBeenCalled();
+    expect(progressStoreMock.deletePersistedProgress).not.toHaveBeenCalled();
+    expect(agentRegistryMock.disposeAgent).not.toHaveBeenCalled();
     errorSpy.mockRestore();
   });
 });

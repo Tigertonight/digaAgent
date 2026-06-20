@@ -36,7 +36,7 @@ import {
   LOCAL_CODING_ASSISTANT_MODELS,
   LOCAL_CODING_ASSISTANT_PROVIDER_ID,
   finishStreamingAfterPromptError,
-  finalizeAfterAbort,
+  finishStreamingAfterAbort,
 } from "@/lib/agent-registry";
 import {
   clearGoal,
@@ -806,9 +806,9 @@ export async function POST(
         if (isLocalCodingAssistantAgent(rec))
           await abortLocalCodingAssistantAgent(rec);
         else await rec.session.abort();
-        // T1.2：abort 顺序调 finalizeAfterAbort：先清 finish/tool watchdog（避免 1.5s
-        // 后 ghost run）再置 isStreaming=false。同时 sidebar 黄点也会随该位置扯低。
-        finalizeAfterAbort(rec);
+        // T1.2：abort 也走统一强制收尾，保证 watchdog 清理、isStreaming=false
+        // 与 agent_end 合成语义一致，避免前端 loading 卡住。
+        finishStreamingAfterAbort(id);
         return NextResponse.json({ ok: true, progress });
       }
 
@@ -853,7 +853,7 @@ export async function POST(
               cwd: rec.cwd,
               thinkingLevel: rec.session.thinkingLevel,
             });
-            disposeAgent(id);
+            await disposeAgent(id);
             return NextResponse.json({
               ok: true,
               replacementAgent: replacement,
@@ -901,7 +901,7 @@ export async function POST(
             cwd: rec.cwd,
             thinkingLevel: rec.session.thinkingLevel,
           });
-          disposeAgent(id);
+          await disposeAgent(id);
           return NextResponse.json({
             ok: true,
             replacementAgent: replacement,
@@ -990,10 +990,12 @@ export async function POST(
 
 /** DELETE: dispose agent */
 export async function DELETE(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const auth = await assertRemoteAuth(req);
+  if (auth) return auth;
   const { id } = await params;
-  disposeAgent(id);
+  await disposeAgent(id);
   return NextResponse.json({ ok: true });
 }

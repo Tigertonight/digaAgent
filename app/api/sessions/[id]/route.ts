@@ -86,20 +86,14 @@ export const DELETE = withRemoteAuth(async function (
       return NextResponse.json({ error: "session not found" }, { status: 404 });
     }
 
-    // 先 dispose 还跑在内存里的 agent record（包括 child agents），否则
-    // SSE / streaming 会继续往已删的文件写入。同一 sessionFile 可能被多个
-    // hidden child agent 占着，dispose 需按 sessionFile 全量扫描。
-    const targetPaths = new Set(targets.map((t) => t.path));
-    const summaries = listAgentSummaries();
-    for (const summary of summaries) {
+    // sessionFile 可能被多个 hidden child agent 占着。等对应 jsonl 成功
+    // unlink 后再 dispose 内存 record；若 unlink 失败，保留 record 让用户重试仍有意义。
+    const summariesByPath = new Map<string, string[]>();
+    for (const summary of listAgentSummaries()) {
       if (!summary.sessionFile) continue;
-      if (targetPaths.has(summary.sessionFile)) {
-        try {
-          disposeAgent(summary.agentId);
-        } catch {
-          // dispose 是 best-effort，删除本身不应被这里阻断
-        }
-      }
+      const current = summariesByPath.get(summary.sessionFile) ?? [];
+      current.push(summary.agentId);
+      summariesByPath.set(summary.sessionFile, current);
     }
 
     // 删 jsonl + meta + progress；三者都是幂等，任何一个不存在都忽略。
@@ -125,6 +119,13 @@ export const DELETE = withRemoteAuth(async function (
       }
       await deleteMeta(t.id);
       await deletePersistedProgress(t.id);
+      for (const agentId of summariesByPath.get(t.path) ?? []) {
+        try {
+          await disposeAgent(agentId);
+        } catch {
+          // dispose 是 best-effort，删除本身不应被这里阻断
+        }
+      }
       // M1：清掉以该 session 为父的 subagent batches，避免孤儿记录。
       // 索引按 parentSessionPath（= session 文件路径），用 t.path。
       try {
@@ -148,7 +149,7 @@ export const DELETE = withRemoteAuth(async function (
             ok: true,
             partial: true,
             // T3.2：让前端详细判别是「请稍后重试 (EBUSY)」还是「修权限 (EACCES)」。
-            // 内存中 agent record 已经 dispose，UI 应提示“已停止，但磁盘未能删除”。
+            // 只有 jsonl 已成功删除的 target 会 dispose 内存 record；失败 target 保留给重试。
             inMemoryDisposed: true,
             deleted,
             failed: errors,
@@ -159,7 +160,7 @@ export const DELETE = withRemoteAuth(async function (
       return NextResponse.json(
         {
           error: "some sessions failed to delete",
-          inMemoryDisposed: true,
+          inMemoryDisposed: false,
           failed: errors,
           deleted,
         },

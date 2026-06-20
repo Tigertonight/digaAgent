@@ -4,6 +4,7 @@ import { assertRemoteAuth } from "@/lib/remote/auth";
 import { assertPathAllowed } from "@/lib/files/policy";
 import {
   assertTrustedSessionPath,
+  invalidateSessionListCache,
   TrustedSessionPathError,
 } from "@/lib/sessions";
 import { internalErrorResponse } from "@/lib/api/error-response";
@@ -65,6 +66,7 @@ export async function POST(req: Request) {
       sessionPath,
       thinkingLevel,
     });
+    invalidateSessionListCache();
 
     // 把当前 agent 的 thinking 元数据一起返回，省一次往返
     const rec = getAgent(result.id);

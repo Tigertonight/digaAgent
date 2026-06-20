@@ -84,6 +84,7 @@ import { Sidebar } from "./components/Sidebar";
 import { SidebarSearch } from "./components/SidebarSearch";
 import { TopHeader } from "./components/TopHeader";
 import { MessagesScrollArea } from "./components/MessagesScrollArea";
+import { UiFaultBoundary } from "./components/UiFaultBoundary";
 import type { WorkflowWorktreeAction } from "./components/MessageView";
 import {
   WorkbenchSidebar,
@@ -1414,10 +1415,24 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       updateActive((s) => ({ pendingImages: resolve(s.pendingImages, v) })),
     [resolve, updateActive]
   );
+  const setPendingImagesForOwner = useCallback(
+    (ownerKey: RunnerKey, v: Updater<ImageContentLite[]>) =>
+      updateRunner(ownerKey, (s) => ({
+        pendingImages: resolve(s.pendingImages, v),
+      })),
+    [resolve, updateRunner]
+  );
   const setPendingFiles = useCallback(
     (v: Updater<PendingAttachment[]>) =>
       updateActive((s) => ({ pendingFiles: resolve(s.pendingFiles, v) })),
     [resolve, updateActive]
+  );
+  const setPendingFilesForOwner = useCallback(
+    (ownerKey: RunnerKey, v: Updater<PendingAttachment[]>) =>
+      updateRunner(ownerKey, (s) => ({
+        pendingFiles: resolve(s.pendingFiles, v),
+      })),
+    [resolve, updateRunner]
   );
   const setComposerMode = useCallback(
     (
@@ -1445,6 +1460,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   } = useComposerAttachments({
     setPendingImages,
     setPendingFiles,
+    getOwnerKey: () => activeKeyRef.current,
+    setPendingImagesForOwner,
+    setPendingFilesForOwner,
     setError,
   });
 
@@ -3293,42 +3311,44 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             }}
           />
         ) : (
-          <MessagesScrollArea
-            messages={messages}
-            error={error}
-            currentProvider={currentProvider}
-            modelId={modelId}
-            activeAssistantIndex={chatState.activeAssistantIndex}
-            agentPhase={agentPhase}
-            cwd={cwd}
-            streaming={streaming}
-            compacting={compacting}
-            compactError={compactError}
-            forksCollapsed={forksCollapsed}
-            forkingIndex={forkingIndex}
-            forkText={forkText}
-            forkBusy={forkBusy}
-            messagesScrollRef={messagesScrollRef}
-            messagesEndRef={messagesEndRef}
-            messageRefs={messageRefs}
-            onScroll={handleMessagesScroll}
-            onStartFork={startFork}
-            onCancelFork={cancelFork}
-            onChangeForkText={setForkText}
-            onSubmitFork={submitFork}
-            onForkToNewSession={forkToNewSession}
-            onOpenUrl={openUrlInBrowserPanel}
-            onApproveCall={approveCall}
-            onDenyCall={denyCall}
-            onChooseClarification={chooseClarification}
-            onRespondClarification={respondClarification}
-            onResumeWorkflow={resumeWorkflowFromCard}
-            onRetryWorkflow={retryWorkflowFromCard}
-            onWorkflowWorktreeAction={handleWorkflowWorktreeAction}
-            onRetrySubagentTask={retrySubagentTaskFromCard}
-            onResumeSubagentBatch={resumeSubagentBatchFromCard}
-            onOpenSubagentSession={openSubagentSessionFromCard}
-          />
+          <UiFaultBoundary surface="MessagesScrollArea">
+            <MessagesScrollArea
+              messages={messages}
+              error={error}
+              currentProvider={currentProvider}
+              modelId={modelId}
+              activeAssistantIndex={chatState.activeAssistantIndex}
+              agentPhase={agentPhase}
+              cwd={cwd}
+              streaming={streaming}
+              compacting={compacting}
+              compactError={compactError}
+              forksCollapsed={forksCollapsed}
+              forkingIndex={forkingIndex}
+              forkText={forkText}
+              forkBusy={forkBusy}
+              messagesScrollRef={messagesScrollRef}
+              messagesEndRef={messagesEndRef}
+              messageRefs={messageRefs}
+              onScroll={handleMessagesScroll}
+              onStartFork={startFork}
+              onCancelFork={cancelFork}
+              onChangeForkText={setForkText}
+              onSubmitFork={submitFork}
+              onForkToNewSession={forkToNewSession}
+              onOpenUrl={openUrlInBrowserPanel}
+              onApproveCall={approveCall}
+              onDenyCall={denyCall}
+              onChooseClarification={chooseClarification}
+              onRespondClarification={respondClarification}
+              onResumeWorkflow={resumeWorkflowFromCard}
+              onRetryWorkflow={retryWorkflowFromCard}
+              onWorkflowWorktreeAction={handleWorkflowWorktreeAction}
+              onRetrySubagentTask={retrySubagentTaskFromCard}
+              onResumeSubagentBatch={resumeSubagentBatchFromCard}
+              onOpenSubagentSession={openSubagentSessionFromCard}
+            />
+          </UiFaultBoundary>
         )}
 
         <div className="relative shrink-0">
@@ -3419,56 +3439,58 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         </div>
       </main>
 
-      <WorkbenchSidebar
-        open={workbenchOpen}
-        view={workbenchView}
-        cwd={cwd}
-        width={filesContainerWidth}
-        isResizing={rightPanelResizing}
-        agentId={agentId}
-        runtimeIdentity={runtimeIdentity}
-        progress={progress}
-        browserSnapshot={activeSnapshot.browser}
-        browserOpenRequest={browserOpenRequest}
-        stats={stats}
-        budgetStatus={budgetStatus}
-        providerLabel={currentProvider?.provider ?? providerId}
-        modelLabel={modelId}
-        thinkingLabel={thinkingLevel}
-        toolsCount={toolsCount?.active ?? 0}
-        pendingFileCount={pendingFiles.length}
-        pendingImageCount={pendingImages.length}
-        filesLayout={filesLayout}
-        onSplitterMouseDown={onSplitterMouseDown}
-        onOpenView={openWorkbench}
-        onPickPath={(absPath) => {
-          // 把路径加到输入框末尾（用 @ 前缀，pi-coding-agent 约定的引用语法）
-          setInput((cur) => {
-            const sep = cur.length === 0 || cur.endsWith(" ") ? "" : " ";
-            return `${cur}${sep}@${absPath} `;
-          });
-        }}
-        onFilesLayoutChange={setFilesLayout}
-        onOpenProgressUrl={openUrlInBrowserPanel}
-        onAnnotate={(annotations: BrowserAnnotation[]) => {
-          if (annotations.length === 0) return;
-          // 把结构化批注组装成给 agent 的视觉任务文本（含定位区域、URL、留言）。
-          const text =
-            annotations.length === 1
-              ? formatBrowserAnnotation(annotations[0])
-              : [
-                  `请处理以下 ${annotations.length} 条页面批注：`,
-                  ...annotations.map(
-                    (a, i) => `\n${i + 1}. ${formatBrowserAnnotation(a)}`
-                  ),
-                ].join("\n");
-          setComposerInput((cur) => {
-            const sep = cur.trim() ? "\n\n" : "";
-            return `${cur}${sep}${text}`;
-          });
-          requestAnimationFrame(() => inputRef.current?.focus());
-        }}
-      />
+      <UiFaultBoundary surface="WorkbenchSidebar">
+        <WorkbenchSidebar
+          open={workbenchOpen}
+          view={workbenchView}
+          cwd={cwd}
+          width={filesContainerWidth}
+          isResizing={rightPanelResizing}
+          agentId={agentId}
+          runtimeIdentity={runtimeIdentity}
+          progress={progress}
+          browserSnapshot={activeSnapshot.browser}
+          browserOpenRequest={browserOpenRequest}
+          stats={stats}
+          budgetStatus={budgetStatus}
+          providerLabel={currentProvider?.provider ?? providerId}
+          modelLabel={modelId}
+          thinkingLabel={thinkingLevel}
+          toolsCount={toolsCount?.active ?? 0}
+          pendingFileCount={pendingFiles.length}
+          pendingImageCount={pendingImages.length}
+          filesLayout={filesLayout}
+          onSplitterMouseDown={onSplitterMouseDown}
+          onOpenView={openWorkbench}
+          onPickPath={(absPath) => {
+            // 把路径加到输入框末尾（用 @ 前缀，pi-coding-agent 约定的引用语法）
+            setInput((cur) => {
+              const sep = cur.length === 0 || cur.endsWith(" ") ? "" : " ";
+              return `${cur}${sep}@${absPath} `;
+            });
+          }}
+          onFilesLayoutChange={setFilesLayout}
+          onOpenProgressUrl={openUrlInBrowserPanel}
+          onAnnotate={(annotations: BrowserAnnotation[]) => {
+            if (annotations.length === 0) return;
+            // 把结构化批注组装成给 agent 的视觉任务文本（含定位区域、URL、留言）。
+            const text =
+              annotations.length === 1
+                ? formatBrowserAnnotation(annotations[0])
+                : [
+                    `请处理以下 ${annotations.length} 条页面批注：`,
+                    ...annotations.map(
+                      (a, i) => `\n${i + 1}. ${formatBrowserAnnotation(a)}`
+                    ),
+                  ].join("\n");
+            setComposerInput((cur) => {
+              const sep = cur.trim() ? "\n\n" : "";
+              return `${cur}${sep}${text}`;
+            });
+            requestAnimationFrame(() => inputRef.current?.focus());
+          }}
+        />
+      </UiFaultBoundary>
       {showWorkflowHistory && (
         <WorkflowHistoryPanel
           items={workflowHistory}

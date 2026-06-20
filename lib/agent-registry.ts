@@ -34,7 +34,7 @@ import { getCommunicationSettings } from "./communication/settings";
 import { createClarificationExtension } from "./clarification/extension";
 import { createBrowserExtension } from "./browser/extension";
 import { disposeBrowser } from "./browser/runtime";
-import { agentBrowserId } from "./browser/browser-id";
+import { agentBrowserId, standaloneBrowserId } from "./browser/browser-id";
 import { createClipboardExtension } from "./clipboard/extension";
 import { createGoalExtension } from "./goal/extension";
 import { createProgressExtension } from "./progress/extension";
@@ -691,6 +691,43 @@ function finishStreamingRun(rec: AgentRecord): void {
   maybeContinueGoal(rec);
 }
 
+function forceFinishStream(
+  rec: AgentRecord,
+  params: {
+    reason:
+      | "prompt_error"
+      | "tool_timeout"
+      | "local_abort"
+      | "local_exit"
+      | "user_abort";
+    goalStatus?: "failed" | "completed";
+    blockedReason?: string;
+    pushAgentEnd?: boolean;
+    continueGoal?: boolean;
+  }
+): void {
+  clearFinishWatchdog(rec);
+  clearToolWatchdog(rec);
+  const wasStreaming = rec.isStreaming;
+  rec.isStreaming = false;
+  const now = Date.now();
+  rec.updatedAt = now;
+  rec.lastAgentEndAt = now;
+  const goal = getGoal(rec.id);
+  if (goal && params.goalStatus) {
+    finishGoalTurn(rec.id, {
+      status: params.goalStatus,
+      ...(params.blockedReason ? { blockedReason: params.blockedReason } : {}),
+    });
+  }
+  if (params.continueGoal) {
+    maybeContinueGoal(rec);
+  }
+  if (params.pushAgentEnd && wasStreaming) {
+    pushAgentEvent(rec, { type: "agent_end" } as RingBufferEvent);
+  }
+}
+
 function scheduleFinishWatchdog(rec: AgentRecord, message: unknown): void {
   clearFinishWatchdog(rec);
   rec.pendingFinishMessage = message;
@@ -739,9 +776,12 @@ function scheduleToolWatchdog(
       result: `Tool execution timed out after ${elapsedSeconds}s without a terminal event.`,
       isError: true,
     } as RingBufferEvent);
-    finishStreamingRun(rec);
-    rec.updatedAt = Date.now();
-    pushAgentEvent(rec, { type: "agent_end" } as RingBufferEvent);
+    forceFinishStream(rec, {
+      reason: "tool_timeout",
+      goalStatus: "failed",
+      blockedReason: "Tool execution timed out before the agent produced a terminal event.",
+      pushAgentEnd: true,
+    });
   }, toolWatchdogMs());
 }
 
@@ -983,10 +1023,12 @@ export async function promptLocalCodingAssistantAgent(
       responseId,
       `自研 Coding 助手启动失败：${err instanceof Error ? err.message : String(err)}`
     );
-    rec.isStreaming = false;
-    rec.updatedAt = Date.now();
-    rec.lastAgentEndAt = rec.updatedAt;
-    pushAgentEvent(rec, { type: "agent_end" } as RingBufferEvent);
+    forceFinishStream(rec, {
+      reason: "prompt_error",
+      goalStatus: "failed",
+      blockedReason: "Local coding assistant failed to start.",
+      pushAgentEnd: true,
+    });
     return;
   }
 
@@ -1034,11 +1076,16 @@ export async function promptLocalCodingAssistantAgent(
         stopReason: code === 0 ? "stop" : "error",
       },
     } as RingBufferEvent);
-    rec.isStreaming = false;
-    rec.updatedAt = Date.now();
-    rec.lastAgentEndAt = rec.updatedAt;
     if (rec.external) rec.external.child = null;
-    pushAgentEvent(rec, { type: "agent_end" } as RingBufferEvent);
+    forceFinishStream(rec, {
+      reason: "local_exit",
+      goalStatus: code === 0 ? "completed" : "failed",
+      ...(code === 0
+        ? {}
+        : { blockedReason: "Local coding assistant exited with an error." }),
+      pushAgentEnd: true,
+      continueGoal: code === 0,
+    });
   });
   child.on("error", (err) => {
     emitLocalCodingAssistantText(rec, responseId, `自研 Coding 助手启动失败：${err.message}`);
@@ -1052,10 +1099,12 @@ export async function abortLocalCodingAssistantAgent(rec: AgentRecord): Promise<
     rec.external.child = null;
   }
   if (rec.isStreaming) {
-    rec.isStreaming = false;
-    rec.updatedAt = Date.now();
-    rec.lastAgentEndAt = rec.updatedAt;
-    pushAgentEvent(rec, { type: "agent_end" } as RingBufferEvent);
+    forceFinishStream(rec, {
+      reason: "local_abort",
+      goalStatus: "failed",
+      blockedReason: "Local coding assistant run was aborted.",
+      pushAgentEnd: true,
+    });
   }
 }
 
@@ -1792,6 +1841,11 @@ async function createAgentImpl(opts: CreateOptions): Promise<{
 
   const browserExtension = createBrowserExtension({
     getAgentId: () => id,
+    getAnnotationBrowserIds: () => {
+      const rec = recordHolder.current;
+      const sessionId = rec?.session.sessionId;
+      return sessionId ? [standaloneBrowserId(`session:${sessionId}`)] : [];
+    },
     onBrowserState: (snapshot) => {
       const rec = recordHolder.current;
       if (!rec) return;
@@ -2301,20 +2355,23 @@ export async function abortWorkflowsForParent(parentAgentId: string): Promise<vo
 export function finishStreamingAfterPromptError(agentId: string): void {
   const rec = reg.agents.get(agentId);
   if (!rec) return;
-  clearFinishWatchdog(rec);
-  clearToolWatchdog(rec);
-  if (rec.isStreaming) {
-    rec.isStreaming = false;
-    rec.lastAgentEndAt = Date.now();
-    const goal = getGoal(rec.id);
-    if (goal) {
-      finishGoalTurn(rec.id, {
-        status: "failed",
-        blockedReason: "Prompt failed before the agent produced a terminal event.",
-      });
-    }
-  }
-  rec.updatedAt = Date.now();
+  forceFinishStream(rec, {
+    reason: "prompt_error",
+    goalStatus: "failed",
+    blockedReason: "Prompt failed before the agent produced a terminal event.",
+    pushAgentEnd: true,
+  });
+}
+
+export function finishStreamingAfterAbort(agentId: string): void {
+  const rec = reg.agents.get(agentId);
+  if (!rec) return;
+  forceFinishStream(rec, {
+    reason: "user_abort",
+    goalStatus: "failed",
+    blockedReason: "Run was aborted by the user.",
+    pushAgentEnd: true,
+  });
 }
 
 export async function retryWorkflowScriptForParent(
@@ -2404,12 +2461,14 @@ export async function retryWorkflowScriptForParent(
   );
 }
 
-export function disposeAgent(id: string) {
+export async function disposeAgent(id: string): Promise<void> {
   const rec = reg.agents.get(id);
   if (!rec) return;
   if (!rec.hidden) {
-    void abortSubagentsForParent(id).catch(() => undefined);
-    void abortWorkflowsForParent(id).catch(() => undefined);
+    await Promise.allSettled([
+      abortSubagentsForParent(id),
+      abortWorkflowsForParent(id),
+    ]);
   }
   clearFinishWatchdog(rec);
   clearToolWatchdog(rec);

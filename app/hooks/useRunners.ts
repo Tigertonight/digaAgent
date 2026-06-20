@@ -7,8 +7,8 @@
  *   - 唯一持有 runnersRef（Map<RunnerKey, RunnerState>）—— 所有会话工作面的"权威存储"
  *   - 暴露 updateRunner / updateActive / switchTo 三个写入入口
  *   - 暴露 activeKey / activeSnapshot 用于触发渲染（UI 从 activeSnapshot 读当前会话）
- *   - LRU 淘汰：runners > MAX_RUNNERS 时优先踢掉最久未触达的非活跃/非流式/非压缩 runner；
- *     若全部被保护，也会释放最久未触达的后台 runner，避免连接池无上限增长
+ *   - LRU 淘汰：runners > MAX_RUNNERS 时只踢掉最久未触达的非活跃/非流式/非压缩 runner；
+ *     若全部被保护，允许软超限并保留后台任务，避免复杂并发任务被前端状态层误释放
  *
  * 设计要点：
  *   - 通过 onEvict 回调通知外部（用于关 SSE 等外部副作用），不在 hook 内直接操作 SSE
@@ -34,6 +34,11 @@ import {
 
 const DEFAULT_MAX_RUNNERS = 8;
 
+export interface RunnerEvictionPlan {
+  evict: RunnerKey[];
+  softLimitExceeded: boolean;
+}
+
 /**
  * M3: runner 是否处于“等待用户操作”态——chatState 里存在未决的 approval 或
  * clarification（agent 已阻塞等用户响应）。这类 runner 不应被 LRU 淘汰，否则关闭
@@ -53,6 +58,34 @@ function hasPendingUserAction(r: RunnerState): boolean {
     }
   }
   return false;
+}
+
+export function planRunnerEviction(params: {
+  runners: ReadonlyMap<RunnerKey, RunnerState>;
+  activeKey: RunnerKey;
+  maxRunners: number;
+}): RunnerEvictionPlan {
+  const { runners, activeKey, maxRunners } = params;
+  if (runners.size <= maxRunners) return { evict: [], softLimitExceeded: false };
+  const candidates: { key: RunnerKey; touched: number }[] = [];
+  for (const [key, r] of runners) {
+    if (key === DRAFT_KEY) continue;
+    if (key === activeKey) continue;
+    if (r.streaming) continue;
+    if (r.compacting) continue;
+    if (r.pendingImages.length > 0 || r.pendingFiles.length > 0) continue;
+    if (hasPendingUserAction(r)) continue;
+    candidates.push({ key, touched: r.lastTouched });
+  }
+  candidates.sort((a, b) => a.touched - b.touched);
+  const need = runners.size - maxRunners;
+  if (candidates.length === 0) {
+    return { evict: [], softLimitExceeded: true };
+  }
+  return {
+    evict: candidates.slice(0, need).map((item) => item.key),
+    softLimitExceeded: candidates.length < need,
+  };
 }
 
 export interface UseRunnersOptions {
@@ -212,10 +245,9 @@ export function useRunners(opts: UseRunnersOptions = {}): UseRunnersReturn {
   }, []);
 
   /**
-   * LRU 淘汰：runners > maxRunners 时，优先挑出"最久未触达"的
-   * 非活跃/非流式/非压缩 runner 踢掉。若所有后台 runner 都被豁免，
-   * 仍释放最久未触达的后台 runner 来维持硬上限；后端 agent 不会被 abort，
-   * 用户切回该 session 时会走历史加载/续连。
+   * LRU 淘汰：runners > maxRunners 时，只挑出"最久未触达"的
+   * 非活跃/非流式/非压缩 runner 踢掉。若所有后台 runner 都被保护，允许软超限；
+   * 否则复杂 workflow/subagent 并发下会出现“后台任务还在跑，但前端状态被释放”的错觉。
    *
    * 踢的语义：
    *   - 先调 onEvict(key) 通知外部清理（如关 SSE）
@@ -225,47 +257,17 @@ export function useRunners(opts: UseRunnersOptions = {}): UseRunnersReturn {
    */
   const lruEvict = useCallback(() => {
     const map = runnersRef.current;
-    if (map.size <= maxRunners) return;
-    const candidates: { key: RunnerKey; touched: number }[] = [];
-    for (const [key, r] of map) {
-      if (key === DRAFT_KEY) continue;
-      if (key === activeKeyRef.current) continue;
-      if (r.streaming) continue;
-      if (r.compacting) continue;
-      if (r.pendingImages.length > 0 || r.pendingFiles.length > 0) continue;
-      // M3：等待用户操作的 runner 不能被淘汰——否则 SSE 被关、approval 气泡可能
-      // 丢失/迟到（loadPendingApprovals 只在重启时跑）。包括：
-      //   - chatState 里有未决的 approval / clarification（agent 阻塞等输入）
-      if (hasPendingUserAction(r)) continue;
-      candidates.push({ key, touched: r.lastTouched });
-    }
-    candidates.sort((a, b) => a.touched - b.touched);
-    const need = map.size - maxRunners;
-    if (candidates.length === 0) {
-      const fallback: { key: RunnerKey; touched: number }[] = [];
-      for (const [key, r] of map) {
-        if (key === DRAFT_KEY) continue;
-        if (key === activeKeyRef.current) continue;
-        fallback.push({ key, touched: r.lastTouched });
-      }
-      fallback.sort((a, b) => a.touched - b.touched);
-      if (fallback.length === 0) return;
+    const plan = planRunnerEviction({
+      runners: map,
+      activeKey: activeKeyRef.current,
+      maxRunners,
+    });
+    if (plan.softLimitExceeded) {
       console.warn(
-        `[runners] LRU hard limit reached (${map.size}/${maxRunners}); releasing the coldest protected background runner.`
+        `[runners] LRU soft limit exceeded (${map.size}/${maxRunners}); protected background runners were kept.`
       );
-      for (let i = 0; i < Math.min(need, fallback.length); i++) {
-        const key = fallback[i].key;
-        try {
-          onEvict?.(key);
-        } catch {
-          // 外部清理失败不影响 runner 淘汰
-        }
-        map.delete(key);
-      }
-      return;
     }
-    for (let i = 0; i < Math.min(need, candidates.length); i++) {
-      const key = candidates[i].key;
+    for (const key of plan.evict) {
       try {
         onEvict?.(key);
       } catch {
