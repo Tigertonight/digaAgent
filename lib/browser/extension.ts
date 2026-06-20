@@ -14,6 +14,10 @@ import {
   browserSearch,
   browserSearchUrl,
   browserScreenshot,
+  browserScroll,
+  browserTabOpen,
+  browserTabs,
+  browserTabSwitch,
   browserType,
   browserVerify,
   browserWait,
@@ -45,13 +49,22 @@ const OpenParams = Type.Object({
   }),
 });
 
-const ClickParams = Type.Object({
-  selector: Type.Optional(
-    Type.String({ description: "CSS selector to click. Prefer this over x/y." })
-  ),
-  x: Type.Optional(Type.Number({ description: "Viewport x coordinate." })),
-  y: Type.Optional(Type.Number({ description: "Viewport y coordinate." })),
-});
+const ClickParams = Type.Union(
+  [
+    Type.Object({
+      selector: Type.String({
+        description: "CSS selector to click. Do not include x/y when selector is provided.",
+      }),
+    }),
+    Type.Object({
+      x: Type.Number({ description: "Viewport x coordinate." }),
+      y: Type.Number({ description: "Viewport y coordinate." }),
+    }),
+  ],
+  {
+    description: "Provide either selector OR both x and y, but not both.",
+  }
+);
 
 const TypeParams = Type.Object({
   selector: Type.Optional(
@@ -86,18 +99,29 @@ const ClickTextParams = Type.Object({
 const SearchParams = Type.Object({
   query: Type.String({ description: "Search query." }),
   engine: Type.Optional(
-    Type.Union([
-      Type.Literal("baidu"),
-      Type.Literal("google"),
-      Type.Literal("bing"),
-    ])
+    Type.Union(
+      [
+        Type.Literal("baidu"),
+        Type.Literal("google"),
+        Type.Literal("bing"),
+      ],
+      {
+        description:
+          "Search engine. Default is baidu. Use google or bing when an English/global query is more appropriate.",
+      }
+    )
   ),
 });
 
 const WaitParams = Type.Object({
   selector: Type.Optional(Type.String({ description: "CSS selector to wait for." })),
   text: Type.Optional(Type.String({ description: "Visible text to wait for." })),
-  ms: Type.Optional(Type.Number({ description: "Milliseconds to wait." })),
+  ms: Type.Optional(
+    Type.Number({
+      description:
+        "Milliseconds to wait. If selector/text/ms are all omitted, browser_wait sleeps for 1000ms.",
+    })
+  ),
 });
 
 const VerifyParams = Type.Object({
@@ -112,26 +136,80 @@ const VerifyParams = Type.Object({
   ),
 });
 
-const WaitForParams = Type.Object({
-  url: Type.Optional(
-    Type.String({
-      description:
-        "Wait until the current URL contains this substring. Use this to confirm a navigation/redirect finished.",
-    })
+const WaitForParams = Type.Union(
+  [
+    Type.Object({
+      url: Type.String({
+        description:
+          "Wait until the current URL contains this substring. Use this to confirm a navigation/redirect finished.",
+      }),
+      timeoutMs: Type.Optional(
+        Type.Number({ description: "Max time to wait, in milliseconds (default 10000)." })
+      ),
+    }),
+    Type.Object({
+      selector: Type.String({ description: "Wait until this CSS selector appears." }),
+      timeoutMs: Type.Optional(
+        Type.Number({ description: "Max time to wait, in milliseconds (default 10000)." })
+      ),
+    }),
+    Type.Object({
+      text: Type.String({ description: "Wait until this visible text appears." }),
+      timeoutMs: Type.Optional(
+        Type.Number({ description: "Max time to wait, in milliseconds (default 10000)." })
+      ),
+    }),
+  ],
+  {
+    description:
+      "Wait for one condition: url, selector, or text. Empty input is invalid.",
+  }
+);
+
+const ScrollParams = Type.Object({
+  direction: Type.Optional(
+    Type.Union([
+      Type.Literal("up"),
+      Type.Literal("down"),
+      Type.Literal("left"),
+      Type.Literal("right"),
+    ])
   ),
+  pixels: Type.Optional(Type.Number({ description: "Pixels to scroll. Default 700." })),
   selector: Type.Optional(
-    Type.String({ description: "Wait until this CSS selector appears." })
+    Type.String({ description: "CSS selector to scroll into view." })
   ),
   text: Type.Optional(
-    Type.String({ description: "Wait until this visible text appears." })
+    Type.String({ description: "Visible text to scroll into view." })
   ),
-  timeoutMs: Type.Optional(
-    Type.Number({ description: "Max time to wait, in milliseconds (default 10000)." })
+});
+
+const TabOpenParams = Type.Object({
+  url: Type.String({ description: "URL to open in a new browser tab slot." }),
+  switchTo: Type.Optional(
+    Type.Boolean({
+      description:
+        "Switch to the new tab immediately. Default true. If false, the returned snapshot remains the current active tab; call browser_tab_switch before reading the new tab.",
+    })
+  ),
+});
+
+const TabSwitchParams = Type.Object({
+  tabId: Type.Optional(
+    Type.String({ description: "Stable tab id returned by browser_tabs. Prefer this over index." })
+  ),
+  index: Type.Optional(
+    Type.Number({ description: "Zero-based tab index exactly as shown by browser_tabs. Prefer tabId when possible." })
   ),
 });
 
 const EmptyParams = Type.Object({});
 const DEFAULT_STANDALONE_BROWSER_ID = standaloneBrowserId("default");
+const browserFailureCounts = new Map<string, number>();
+
+export function __clearBrowserFailureCountsForTest(): void {
+  browserFailureCounts.clear();
+}
 
 export function annotationBrowserIds(
   agentId: string,
@@ -162,16 +240,21 @@ function listOpenAnnotationsForAgent(
     });
 }
 
-function findAnnotationBrowserId(
+export function findAnnotationBrowserId(
   agentId: string,
   extraBrowserIds: readonly string[],
   annotationId: string
 ): string {
-  return (
-    annotationBrowserIds(agentId, extraBrowserIds).find((browserId) =>
-      listBrowserAnnotations(browserId).some((a) => a.id === annotationId)
-    ) ?? agentBrowserId(agentId)
+  const browserId = annotationBrowserIds(agentId, extraBrowserIds).find(
+    (candidate) =>
+      listBrowserAnnotations(candidate).some((a) => a.id === annotationId)
   );
+  if (!browserId) {
+    throw new Error(
+      `Annotation ${annotationId} was not found for the current browser session. Refresh annotations and retry with an id returned by browser_annotations.`
+    );
+  }
+  return browserId;
 }
 
 const ResolveAnnotationParams = Type.Object({
@@ -284,11 +367,41 @@ function failedToolResult(
 async function runBrowserTool(
   opts: BrowserExtensionOptions,
   tool: string,
-  fn: () => Promise<BrowserToolSdkResult>
+  fn: () => Promise<BrowserToolSdkResult>,
+  retryKey?: string
 ): Promise<BrowserToolSdkResult> {
+  const agentId = opts.getAgentId();
+  const failureKey = retryKey ? `${agentId}:${tool}:${retryKey}` : "";
+  if (failureKey && (browserFailureCounts.get(failureKey) ?? 0) >= 2) {
+    const snapshot = getBrowserSnapshot(agentBrowserId(agentId));
+    opts.onBrowserState(snapshot);
+    return toolResult(
+      `Stopped retrying ${tool} for the same target after 2 failures. Summarize the current failure evidence instead of trying the same action again.`,
+      snapshot,
+      {
+        tool,
+        ok: false,
+        errorCode: "repeated_browser_action_failed",
+        errorMessage:
+          "The same browser action and target failed twice in this session.",
+        finalUrl: snapshot.url,
+        finalTitle: snapshot.title,
+        browserStatus: snapshot.status,
+        recoverable: true,
+      }
+    );
+  }
   try {
-    return await fn();
+    const result = await fn();
+    if (failureKey) browserFailureCounts.delete(failureKey);
+    return result;
   } catch (error) {
+    if (failureKey) {
+      browserFailureCounts.set(
+        failureKey,
+        (browserFailureCounts.get(failureKey) ?? 0) + 1,
+      );
+    }
     return failedToolResult(opts, tool, error);
   }
 }
@@ -316,9 +429,10 @@ async function guardSite(
   opts: BrowserExtensionOptions,
   url: string
 ): Promise<void> {
+  const scope = `agent:${opts.getAgentId()}`;
   let check;
   try {
-    check = await checkBrowserSite(url);
+    check = await checkBrowserSite(url, scope);
   } catch {
     // URL 无法规范化时交给后续 runtime 抛更具体的错
     return;
@@ -343,7 +457,7 @@ async function guardSite(
     throw new Error(`用户拒绝访问外部站点：${check.origin}`);
   }
   // 用户批准 → 落库为 allowed，后续同源不再询问
-  await allowBrowserSite(check.origin).catch(() => {});
+  await allowBrowserSite(check.origin, scope).catch(() => {});
 }
 
 /**
@@ -386,8 +500,10 @@ Operate the browser step by step, observing between steps:
 1. browser_open / browser_search to navigate.
 2. browser_extract / browser_screenshot to observe the current page.
 3. browser_click / browser_click_text / browser_fill / browser_type to interact.
-4. browser_wait_for (url/selector/text) after any action that triggers navigation or async content, to confirm the page settled before observing again.
-5. browser_verify to produce an objective pass/fail result against an expectation, selector, or text.
+4. browser_scroll to move through long pages or scroll a selector/text into view.
+5. browser_tabs / browser_tab_open / browser_tab_switch when the user asks to compare or switch between multiple pages. Prefer tabId over index. In the in-app browser host, switching a tab slot may reload that tab's URL instead of preserving form/scroll/history state.
+6. browser_wait_for (url/selector/text) after any action that triggers navigation or async content, to confirm the page settled before observing again.
+7. browser_verify to produce an objective pass/fail result against an expectation, selector, or text.
 
 Do not merely describe browser steps when a browser action is requested. Actually call the tools, then report the observed evidence (URL, title, and pass/fail).
 
@@ -402,6 +518,7 @@ The user can draw a region on the browser page and leave a comment. These page a
 - Sensitive actions (login, payment, file upload, form submit) require an extra confirmation. Only attempt them when the user clearly asked for it, and never enter credentials, card numbers, or other secrets on your own initiative — let the user take over for those.
 - If a navigation or action is denied, report it to the user instead of retrying in a loop.
 - If the same browser action for the same URL/selector fails twice, stop retrying and summarize the structured failure evidence (errorCode, finalUrl, title, and whether it is recoverable).
+- browser_wait with empty input is only a short 1000ms sleep. Prefer browser_wait_for with url, selector, or text for real readiness checks.
 `,
     }));
 
@@ -429,7 +546,7 @@ The user can draw a region on the browser page and leave a comment. These page a
             return toolResult(`Opened ${result.url}`, snapshot, {
               tool: "browser_open",
             });
-          });
+          }, params.url.trim());
         },
       })
     );
@@ -468,12 +585,11 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: ClickParams,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
+          const clickTarget =
+            "selector" in params ? params.selector : `${params.x},${params.y}`;
           return runBrowserTool(opts, "browser_click", async () => {
             await guardAction(opts, [
-              params.selector,
-              typeof params.x === "number" || typeof params.y === "number"
-                ? `${params.x ?? "?"},${params.y ?? "?"}`
-                : undefined,
+              clickTarget,
             ]);
             const { result, snapshot } = await runWithBrowserState(opts, () =>
               browserClick(agentBrowserId(opts.getAgentId()), params)
@@ -484,7 +600,7 @@ The user can draw a region on the browser page and leave a comment. These page a
               snapshot,
               { tool: "browser_click" }
             );
-          });
+          }, clickTarget);
         },
       })
     );
@@ -514,7 +630,7 @@ The user can draw a region on the browser page and leave a comment. These page a
               snapshot,
               { tool: "browser_click_text" }
             );
-          });
+          }, params.text);
         },
       })
     );
@@ -544,7 +660,7 @@ The user can draw a region on the browser page and leave a comment. These page a
               snapshot,
               { tool: "browser_fill" }
             );
-          });
+          }, `${params.selector ?? "(first-editable)"}:${params.text}`);
         },
       })
     );
@@ -570,7 +686,7 @@ The user can draw a region on the browser page and leave a comment. These page a
               snapshot,
               { tool: "browser_type" }
             );
-          });
+          }, `${params.selector ?? "(focused)"}:${params.text}`);
         },
       })
     );
@@ -589,8 +705,9 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: SearchParams,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
+          const search = browserSearchUrl(params);
           return runBrowserTool(opts, "browser_search", async () => {
-            await guardSite(opts, browserSearchUrl(params).url);
+            await guardSite(opts, search.url);
             const { result, snapshot } = await runWithBrowserState(opts, () =>
               browserSearch(agentBrowserId(opts.getAgentId()), params)
             );
@@ -600,7 +717,7 @@ The user can draw a region on the browser page and leave a comment. These page a
               snapshot,
               { tool: "browser_search" }
             );
-          });
+          }, `${search.engine}:${params.query}`);
         },
       })
     );
@@ -645,23 +762,146 @@ The user can draw a region on the browser page and leave a comment. These page a
         parameters: WaitForParams,
         executionMode: "sequential",
         async execute(_toolCallId, params) {
+          const waitParams = params as {
+            url?: string;
+            selector?: string;
+            text?: string;
+            timeoutMs?: number;
+          };
+          const retryKey =
+            waitParams.url ??
+            waitParams.selector ??
+            waitParams.text ??
+            "(empty)";
           return runBrowserTool(opts, "browser_wait_for", async () => {
             const { result, snapshot } = await runWithBrowserState(opts, () =>
-              browserWaitFor(agentBrowserId(opts.getAgentId()), params)
+              browserWaitFor(agentBrowserId(opts.getAgentId()), waitParams)
             );
             opts.onBrowserState(snapshot);
             const condition =
-              params.url
-                ? `url contains "${params.url}"`
-                : params.selector
-                  ? `selector "${params.selector}" appeared`
-                  : params.text
-                    ? `text "${params.text}" appeared`
+              waitParams.url
+                ? `url contains "${waitParams.url}"`
+                : waitParams.selector
+                  ? `selector "${waitParams.selector}" appeared`
+                  : waitParams.text
+                    ? `text "${waitParams.text}" appeared`
                     : "condition met";
             return toolResult(
               `Wait condition met (${condition}); current URL ${result.url}`,
               snapshot,
               { tool: "browser_wait_for", passed: true }
+            );
+          }, retryKey);
+        },
+      })
+    );
+
+    pi.registerTool(
+      defineTool<typeof ScrollParams, BrowserToolDetails>({
+        name: "browser_scroll",
+        label: "Browser Scroll",
+        description:
+          "Scroll the local browser by direction/pixels, or scroll a CSS selector or visible text into view. Use this for long pages and anchored sections.",
+        promptSnippet: "Scroll the browser page or bring a target into view.",
+        promptGuidelines: [
+          "Use selector or text when the user asks to find a section on a long page.",
+          "Use direction/pixels for incremental page reading.",
+          "After scrolling, call browser_extract or browser_screenshot if you need visible evidence.",
+        ],
+        parameters: ScrollParams,
+        executionMode: "sequential",
+        async execute(_toolCallId, params) {
+          const retryKey =
+            params.selector ??
+            params.text ??
+            params.direction ??
+            String(params.pixels ?? "(default)");
+          return runBrowserTool(opts, "browser_scroll", async () => {
+            const { result, snapshot } = await runWithBrowserState(opts, () =>
+              browserScroll(agentBrowserId(opts.getAgentId()), params)
+            );
+            opts.onBrowserState(snapshot);
+            return toolResult(
+              `Scrolled browser; current URL ${result.url}`,
+              snapshot,
+              { tool: "browser_scroll" }
+            );
+          }, retryKey);
+        },
+      })
+    );
+
+    pi.registerTool(
+      defineTool<typeof EmptyParams, BrowserToolDetails>({
+        name: "browser_tabs",
+        label: "Browser Tabs",
+        description:
+          "List browser tab slots known to the local browser runtime, including active tab id, URL, and title.",
+        promptSnippet: "List current browser tab slots.",
+        parameters: EmptyParams,
+        executionMode: "sequential",
+        async execute() {
+          return runBrowserTool(opts, "browser_tabs", async () => {
+            const { result, snapshot } = await runWithBrowserState(opts, () =>
+              browserTabs(agentBrowserId(opts.getAgentId()))
+            );
+            opts.onBrowserState(snapshot);
+            return toolResult(result.text, snapshot, { tool: "browser_tabs" });
+          });
+        },
+      })
+    );
+
+    pi.registerTool(
+      defineTool<typeof TabOpenParams, BrowserToolDetails>({
+        name: "browser_tab_open",
+        label: "Browser Tab Open",
+        description:
+          "Open a URL in a new browser tab slot and optionally switch to it. Use this when comparing multiple pages.",
+        promptSnippet: "Open a new browser tab slot.",
+        promptGuidelines: [
+          "Use browser_tab_open instead of overwriting the current page when the user asks to compare pages.",
+          "Call browser_tabs after opening multiple tab slots so you can switch by tabId.",
+          "When switchTo=false, do not assume the active snapshot is the new page; switch to that tab before extracting it.",
+        ],
+        parameters: TabOpenParams,
+        executionMode: "sequential",
+        async execute(_toolCallId, params) {
+          return runBrowserTool(opts, "browser_tab_open", async () => {
+            await guardSite(opts, params.url);
+            const { result, snapshot } = await runWithBrowserState(opts, () =>
+              browserTabOpen(agentBrowserId(opts.getAgentId()), params)
+            );
+            opts.onBrowserState(snapshot);
+            return toolResult(
+              `Opened browser tab ${String((result as { tabId?: unknown }).tabId ?? snapshot.activeTabId)} at ${result.url}`,
+              snapshot,
+              { tool: "browser_tab_open" }
+            );
+          }, params.url.trim());
+        },
+      })
+    );
+
+    pi.registerTool(
+      defineTool<typeof TabSwitchParams, BrowserToolDetails>({
+        name: "browser_tab_switch",
+        label: "Browser Tab Switch",
+        description:
+          "Switch to a browser tab slot by tabId or zero-based index from browser_tabs.",
+        promptSnippet: "Switch browser tab slot.",
+        parameters: TabSwitchParams,
+        executionMode: "sequential",
+        async execute(_toolCallId, params) {
+          return runBrowserTool(opts, "browser_tab_switch", async () => {
+            const { result, snapshot } = await runWithBrowserState(opts, () =>
+              browserTabSwitch(agentBrowserId(opts.getAgentId()), params)
+            );
+            opts.onBrowserState(snapshot);
+            return toolResult(
+              `Switched browser tab; current URL ${result.url}`,
+              snapshot,
+              { tool: "browser_tab_switch" }
             );
           });
         },

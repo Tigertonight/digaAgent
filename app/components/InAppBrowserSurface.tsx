@@ -120,6 +120,50 @@ function selectorExistsScript(selector: unknown): string {
   return `(() => !!document.querySelector(${q(String(selector ?? ""))}))()`;
 }
 
+function scrollScript(payload: Record<string, unknown>): string {
+  return `(() => {
+    const selector = ${q(payload.selector)};
+    const text = ${q(payload.text)};
+    const direction = ${q(payload.direction ?? "down")};
+    const pixels = Math.min(Math.max(Number(${q(payload.pixels ?? 700)}) || 700, 1), 10000);
+    let pointer = null;
+    const describe = (el, label) => {
+      const box = el.getBoundingClientRect();
+      pointer = {
+        x: (box.left + box.width / 2) / Math.max(innerWidth, 1),
+        y: (box.top + box.height / 2) / Math.max(innerHeight, 1),
+        action: "scroll",
+        label,
+        updatedAt: Date.now(),
+      };
+    };
+    if (typeof selector === "string" && selector) {
+      const el = document.querySelector(selector);
+      if (!el) throw new Error("selector not found: " + selector);
+      el.scrollIntoView({ block: "center", inline: "nearest" });
+      describe(el, selector);
+    } else if (typeof text === "string" && text) {
+      const candidates = Array.from(document.querySelectorAll("body, body *"));
+      const el = candidates.find((node) => (node.innerText || node.textContent || "").includes(text));
+      if (!el) throw new Error("text target not found: " + text);
+      el.scrollIntoView({ block: "center", inline: "nearest" });
+      describe(el, text);
+    } else {
+      const x = direction === "left" ? -pixels : direction === "right" ? pixels : 0;
+      const y = direction === "up" ? -pixels : direction === "down" ? pixels : 0;
+      window.scrollBy({ left: x, top: y, behavior: "instant" });
+    }
+    return {
+      url: location.href,
+      title: document.title,
+      screenshotDataUrl: null,
+      pointer,
+      scrollX,
+      scrollY,
+    };
+  })()`;
+}
+
 function firstEditableScript(): string {
   return `document.querySelector("input:not([type=hidden]):not([disabled]), textarea:not([disabled]), [contenteditable='true'], [role='textbox'], [role='searchbox']")`;
 }
@@ -294,6 +338,18 @@ export function InAppBrowserSurface({
         await loadEmbeddedUrl(el, target, api?.webviewPoc, wcId);
         return inspect();
       }
+      case "tab_open": {
+        const target = String(payload.url ?? "");
+        if (!target) throw new Error("url required");
+        await loadEmbeddedUrl(el, target, api?.webviewPoc, wcId);
+        return { ...(await inspect()), tabId: payload.tabId ?? null };
+      }
+      case "tab_switch": {
+        const target = String(payload.url ?? "");
+        if (!target) throw new Error("tab url required");
+        await loadEmbeddedUrl(el, target, api?.webviewPoc, wcId);
+        return { ...(await inspect()), tabId: payload.tabId ?? null };
+      }
       case "refresh":
         return inspect();
       case "screenshot": {
@@ -417,6 +473,8 @@ export function InAppBrowserSurface({
       case "wait_for":
         await waitForCondition(runJs, payload);
         return inspect();
+      case "scroll":
+        return runJs<Record<string, unknown>>(scrollScript(payload));
       case "extract":
         return runJs<Record<string, unknown>>(extractScript);
       case "verify": {

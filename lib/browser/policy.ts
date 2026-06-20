@@ -8,12 +8,29 @@ import type {
   BrowserSitePolicy,
 } from "./types";
 
-const POLICY_PATH = join(os.homedir(), ".pi", "agent", "browser-sites.json");
+let policyPath = join(os.homedir(), ".pi", "agent", "browser-sites.json");
+
+export function __setBrowserSitePolicyPathForTest(path: string | null): void {
+  policyPath = path ?? join(os.homedir(), ".pi", "agent", "browser-sites.json");
+}
 
 const DEFAULT_POLICY: BrowserSitePolicy = {
   allowedOrigins: [],
   blockedOrigins: [],
+  allowedScopedOrigins: [],
+  blockedScopedOrigins: [],
 };
+
+function normalizeScope(raw: string | null | undefined): string | undefined {
+  const value = raw?.trim();
+  if (!value) return undefined;
+  return value.slice(0, 180);
+}
+
+function scopedOriginKey(scope: string | null | undefined, origin: string) {
+  const normalizedScope = normalizeScope(scope);
+  return normalizedScope ? `${normalizedScope}|${origin}` : origin;
+}
 
 function normalizePolicy(raw: unknown): BrowserSitePolicy {
   if (!raw || typeof raw !== "object") return { ...DEFAULT_POLICY };
@@ -24,9 +41,17 @@ function normalizePolicy(raw: unknown): BrowserSitePolicy {
   const blockedOrigins = Array.isArray(obj.blockedOrigins)
     ? obj.blockedOrigins.filter((x): x is string => typeof x === "string")
     : [];
+  const allowedScopedOrigins = Array.isArray(obj.allowedScopedOrigins)
+    ? obj.allowedScopedOrigins.filter((x): x is string => typeof x === "string")
+    : [];
+  const blockedScopedOrigins = Array.isArray(obj.blockedScopedOrigins)
+    ? obj.blockedScopedOrigins.filter((x): x is string => typeof x === "string")
+    : [];
   return {
     allowedOrigins: [...new Set(allowedOrigins)].sort(),
     blockedOrigins: [...new Set(blockedOrigins)].sort(),
+    allowedScopedOrigins: [...new Set(allowedScopedOrigins)].sort(),
+    blockedScopedOrigins: [...new Set(blockedScopedOrigins)].sort(),
   };
 }
 
@@ -66,7 +91,7 @@ function isLocalOrigin(origin: string): boolean {
 
 export async function loadBrowserSitePolicy(): Promise<BrowserSitePolicy> {
   try {
-    const raw = await readFile(POLICY_PATH, "utf8");
+    const raw = await readFile(policyPath, "utf8");
     return normalizePolicy(JSON.parse(raw));
   } catch {
     return { ...DEFAULT_POLICY };
@@ -77,54 +102,129 @@ async function saveBrowserSitePolicy(
   policy: BrowserSitePolicy
 ): Promise<BrowserSitePolicy> {
   const normalized = normalizePolicy(policy);
-  await mkdir(dirname(POLICY_PATH), { recursive: true });
-  await writeFile(POLICY_PATH, JSON.stringify(normalized, null, 2), "utf8");
+  await mkdir(dirname(policyPath), { recursive: true });
+  await writeFile(policyPath, JSON.stringify(normalized, null, 2), "utf8");
   return normalized;
 }
 
-export async function checkBrowserSite(url: string): Promise<BrowserSiteCheck> {
+export async function checkBrowserSite(
+  url: string,
+  scope?: string | null,
+): Promise<BrowserSiteCheck> {
   const origin = originForBrowserUrl(url);
+  const normalizedScope = normalizeScope(scope);
+  const scopedKey = scopedOriginKey(normalizedScope, origin);
   const policy = await loadBrowserSitePolicy();
   let decision: BrowserSiteDecision = "unknown";
   if (isLocalOrigin(origin)) decision = "local";
-  else if (policy.blockedOrigins.includes(origin)) decision = "blocked";
-  else if (policy.allowedOrigins.includes(origin)) decision = "allowed";
-  return { origin, decision, policy };
+  else if (
+    (normalizedScope &&
+      (policy.blockedScopedOrigins ?? []).includes(scopedKey)) ||
+    policy.blockedOrigins.includes(origin)
+  )
+    decision = "blocked";
+  else if (
+    normalizedScope &&
+    (policy.allowedScopedOrigins ?? []).includes(scopedKey)
+  )
+    decision = "allowed";
+  else if (!normalizedScope && policy.allowedOrigins.includes(origin))
+    decision = "allowed";
+  return { origin, decision, policy, scope: normalizedScope };
 }
 
-export async function allowBrowserSite(originOrUrl: string) {
+export async function allowBrowserSite(
+  originOrUrl: string,
+  scope?: string | null,
+) {
   const origin = originForBrowserUrl(originOrUrl);
+  const normalizedScope = normalizeScope(scope);
   const policy = await loadBrowserSitePolicy();
-  const next = await saveBrowserSitePolicy({
-    allowedOrigins: [...policy.allowedOrigins.filter((x) => x !== origin), origin],
-    blockedOrigins: policy.blockedOrigins.filter((x) => x !== origin),
-  });
-  return { origin, policy: next };
+  const scopedKey = scopedOriginKey(normalizedScope, origin);
+  const next = normalizedScope
+    ? await saveBrowserSitePolicy({
+        ...policy,
+        allowedScopedOrigins: [
+          ...(policy.allowedScopedOrigins ?? []).filter((x) => x !== scopedKey),
+          scopedKey,
+        ],
+        blockedScopedOrigins: (policy.blockedScopedOrigins ?? []).filter(
+          (x) => x !== scopedKey,
+        ),
+      })
+    : await saveBrowserSitePolicy({
+        ...policy,
+        allowedOrigins: [
+          ...policy.allowedOrigins.filter((x) => x !== origin),
+          origin,
+        ],
+        blockedOrigins: policy.blockedOrigins.filter((x) => x !== origin),
+      });
+  return { origin, scope: normalizedScope, policy: next };
 }
 
-export async function blockBrowserSite(originOrUrl: string) {
+export async function blockBrowserSite(
+  originOrUrl: string,
+  scope?: string | null,
+) {
   const origin = originForBrowserUrl(originOrUrl);
+  const normalizedScope = normalizeScope(scope);
   const policy = await loadBrowserSitePolicy();
-  const next = await saveBrowserSitePolicy({
-    allowedOrigins: policy.allowedOrigins.filter((x) => x !== origin),
-    blockedOrigins: [...policy.blockedOrigins.filter((x) => x !== origin), origin],
-  });
-  return { origin, policy: next };
+  const scopedKey = scopedOriginKey(normalizedScope, origin);
+  const next = normalizedScope
+    ? await saveBrowserSitePolicy({
+        ...policy,
+        allowedScopedOrigins: (policy.allowedScopedOrigins ?? []).filter(
+          (x) => x !== scopedKey,
+        ),
+        blockedScopedOrigins: [
+          ...(policy.blockedScopedOrigins ?? []).filter((x) => x !== scopedKey),
+          scopedKey,
+        ],
+      })
+    : await saveBrowserSitePolicy({
+        ...policy,
+        allowedOrigins: policy.allowedOrigins.filter((x) => x !== origin),
+        blockedOrigins: [
+          ...policy.blockedOrigins.filter((x) => x !== origin),
+          origin,
+        ],
+      });
+  return { origin, scope: normalizedScope, policy: next };
 }
 
-export async function removeBrowserSitePolicy(originOrUrl: string) {
+export async function removeBrowserSitePolicy(
+  originOrUrl: string,
+  scope?: string | null,
+) {
   const origin = originForBrowserUrl(originOrUrl);
+  const normalizedScope = normalizeScope(scope);
   const policy = await loadBrowserSitePolicy();
-  const next = await saveBrowserSitePolicy({
-    allowedOrigins: policy.allowedOrigins.filter((x) => x !== origin),
-    blockedOrigins: policy.blockedOrigins.filter((x) => x !== origin),
-  });
-  return { origin, policy: next };
+  const scopedKey = scopedOriginKey(normalizedScope, origin);
+  const next = normalizedScope
+    ? await saveBrowserSitePolicy({
+        ...policy,
+        allowedScopedOrigins: (policy.allowedScopedOrigins ?? []).filter(
+          (x) => x !== scopedKey,
+        ),
+        blockedScopedOrigins: (policy.blockedScopedOrigins ?? []).filter(
+          (x) => x !== scopedKey,
+        ),
+      })
+    : await saveBrowserSitePolicy({
+        ...policy,
+        allowedOrigins: policy.allowedOrigins.filter((x) => x !== origin),
+        blockedOrigins: policy.blockedOrigins.filter((x) => x !== origin),
+      });
+  return { origin, scope: normalizedScope, policy: next };
 }
 
-export async function assertBrowserSiteAllowed(url: string): Promise<string> {
+export async function assertBrowserSiteAllowed(
+  url: string,
+  scope?: string | null,
+): Promise<string> {
   const normalized = normalizeBrowserUrl(url);
-  const check = await checkBrowserSite(normalized);
+  const check = await checkBrowserSite(normalized, scope);
   if (check.decision === "blocked") {
     throw new Error(`Browser site is blocked: ${check.origin}`);
   }

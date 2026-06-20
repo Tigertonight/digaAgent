@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addBrowserAnnotation,
+  browserScroll,
+  browserClick,
   browserWait,
+  browserWaitFor,
+  browserTabOpen,
+  browserTabs,
+  browserTabSwitch,
   browserSearchUrl,
   closeBrowsersForOwner,
   clearInAppBrowserPendingCommands,
@@ -10,6 +16,15 @@ import {
   pollInAppBrowserCommand,
   registerInAppBrowserHost,
 } from "./runtime";
+
+async function nextInAppCommand(browserId: string) {
+  for (let i = 0; i < 20; i++) {
+    const { command } = pollInAppBrowserCommand(browserId);
+    if (command) return command;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  return null;
+}
 
 describe("browser in-app runtime", () => {
   afterEach(() => {
@@ -84,6 +99,34 @@ describe("browser in-app runtime", () => {
     );
   });
 
+  it("rejects invalid browser_click inputs before dispatching to the host", async () => {
+    const browserId = `test-click-invalid-${Date.now()}`;
+    registerInAppBrowserHost(browserId);
+
+    await expect(browserClick(browserId, {})).rejects.toMatchObject({
+      code: "invalid_params",
+    });
+    await expect(browserClick(browserId, { x: 1 })).rejects.toMatchObject({
+      code: "invalid_params",
+    });
+    await expect(
+      browserClick(browserId, { selector: "button", x: 1, y: 2 })
+    ).rejects.toMatchObject({
+      code: "invalid_params",
+    });
+    expect(pollInAppBrowserCommand(browserId).command).toBeNull();
+  });
+
+  it("rejects empty browser_wait_for before dispatching to the host", async () => {
+    const browserId = `test-wait-for-invalid-${Date.now()}`;
+    registerInAppBrowserHost(browserId);
+
+    await expect(browserWaitFor(browserId, {})).rejects.toMatchObject({
+      code: "invalid_params",
+    });
+    expect(pollInAppBrowserCommand(browserId).command).toBeNull();
+  });
+
   it("builds deterministic search URLs for the supported engines", () => {
     expect(browserSearchUrl({ query: "hello world" })).toEqual({
       engine: "baidu",
@@ -97,6 +140,103 @@ describe("browser in-app runtime", () => {
       engine: "bing",
       url: "https://www.bing.com/search?q=hello%20world",
     });
+  });
+
+  it("tracks in-app browser tab slots and switches by tab id", async () => {
+    const browserId = `test-tabs-${Date.now()}`;
+    registerInAppBrowserHost(browserId);
+
+    const first = browserTabOpen(browserId, {
+      url: "http://localhost:3000/one",
+    });
+    const firstCommand = await nextInAppCommand(browserId);
+    expect(firstCommand?.action).toBe("tab_open");
+    expect(firstCommand?.payload.url).toBe("http://localhost:3000/one");
+    completeInAppBrowserCommand(browserId, firstCommand!.id, {
+      url: "http://localhost:3000/one",
+      title: "One",
+      tabId: firstCommand!.payload.tabId as string,
+    });
+    await first;
+
+    const second = browserTabOpen(browserId, {
+      url: "http://localhost:3000/two",
+    });
+    const secondCommand = await nextInAppCommand(browserId);
+    completeInAppBrowserCommand(browserId, secondCommand!.id, {
+      url: "http://localhost:3000/two",
+      title: "Two",
+      tabId: secondCommand!.payload.tabId as string,
+    });
+    await second;
+
+    const listed = await browserTabs(browserId);
+    expect(listed.result.tabs).toHaveLength(2);
+    expect(listed.result.tabs.map((tab) => tab.title)).toEqual(["One", "Two"]);
+    expect(listed.result.text).toContain("0.   ");
+    expect(listed.result.text).toContain("1. * ");
+    expect(listed.result.activeTabId).toBe(secondCommand!.payload.tabId);
+
+    const switched = browserTabSwitch(browserId, {
+      tabId: firstCommand!.payload.tabId as string,
+    });
+    const switchCommand = await nextInAppCommand(browserId);
+    expect(switchCommand?.action).toBe("tab_switch");
+    expect(switchCommand?.payload.url).toBe("http://localhost:3000/one");
+    completeInAppBrowserCommand(browserId, switchCommand!.id, {
+      url: "http://localhost:3000/one",
+      title: "One",
+      tabId: firstCommand!.payload.tabId as string,
+    });
+    await switched;
+
+    expect(getBrowserSnapshot(browserId).activeTabId).toBe(firstCommand!.payload.tabId);
+    expect(getBrowserSnapshot(browserId).tabs.find((tab) => tab.active)?.title).toBe("One");
+  });
+
+  it("registers an in-app background tab without pretending it loaded", async () => {
+    const browserId = `test-tabs-background-${Date.now()}`;
+    registerInAppBrowserHost(browserId);
+    completeInAppBrowserCommand(browserId, "snapshot", {
+      url: "http://localhost:3000/current",
+      title: "Current",
+    });
+
+    const { result, snapshot } = await browserTabOpen(browserId, {
+      url: "http://localhost:3000/background",
+      switchTo: false,
+    });
+
+    expect(result.url).toBe("http://localhost:3000/current");
+    expect(snapshot.url).toBe("http://localhost:3000/current");
+    expect(snapshot.tabs).toHaveLength(2);
+    expect(snapshot.tabs.find((tab) => tab.id === result.tabId)?.active).toBe(false);
+    expect(pollInAppBrowserCommand(browserId).command).toBeNull();
+  });
+
+  it("dispatches explicit scroll commands to the in-app host", async () => {
+    const browserId = `test-scroll-${Date.now()}`;
+    registerInAppBrowserHost(browserId);
+
+    const pending = browserScroll(browserId, { text: "Guides" });
+    const { command } = pollInAppBrowserCommand(browserId);
+    expect(command?.action).toBe("scroll");
+    expect(command?.payload.text).toBe("Guides");
+    completeInAppBrowserCommand(browserId, command!.id, {
+      url: "http://localhost:3000/docs",
+      title: "Docs",
+      pointer: {
+        x: 0.5,
+        y: 0.5,
+        action: "scroll",
+        label: "Guides",
+        updatedAt: Date.now(),
+      },
+    });
+
+    const { snapshot } = await pending;
+    expect(snapshot.steps[0]?.action).toBe("scroll");
+    expect(snapshot.pointer?.label).toBe("Guides");
   });
 
   it("closes only browser records that belong to the same owner", async () => {

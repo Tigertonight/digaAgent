@@ -13,6 +13,7 @@ import {
   type BrowserPointerState,
   type BrowserSnapshot,
   type BrowserStepSnapshot,
+  type BrowserTabSnapshot,
   type BrowserTaskState,
   type BrowserVerifyResult,
 } from "./types";
@@ -44,6 +45,8 @@ interface BrowserRecord {
   browser: Browser | null;
   context: BrowserContext | null;
   page: Page | null;
+  tabPages: Map<string, Page>;
+  nextTabSeq: number;
   snapshot: BrowserSnapshot;
   screencast: ScreencastState;
   /** 启动锁：避免并发 ensurePage 同时 launch 出多个浏览器窗口 */
@@ -53,6 +56,11 @@ interface BrowserRecord {
 
 interface BrowserActionOptions {
   taskId?: string;
+}
+
+function browserPolicyScope(browserId: string): string | undefined {
+  const owner = parseBrowserId(browserId);
+  return owner.kind === "agent" ? `agent:${owner.id}` : undefined;
 }
 
 interface GlobalBrowserRegistry {
@@ -71,6 +79,9 @@ export type InAppBrowserCommandAction =
   | "wait_for"
   | "extract"
   | "verify"
+  | "scroll"
+  | "tab_open"
+  | "tab_switch"
   | "input"
   | "close";
 
@@ -85,6 +96,8 @@ export interface InAppBrowserCommand {
 export type InAppBrowserCommandResult = Record<string, unknown> & {
   url?: string | null;
   title?: string | null;
+  tabId?: string | null;
+  switchTo?: boolean;
   screenshotDataUrl?: string | null;
   pointer?: BrowserPointerState | null;
   error?: string;
@@ -142,6 +155,8 @@ function emptyRecord(): BrowserRecord {
     browser: null,
     context: null,
     page: null,
+    tabPages: new Map(),
+    nextTabSeq: 1,
     snapshot: { ...EMPTY_BROWSER_SNAPSHOT, logs: [], steps: [] },
     screencast: { cdp: null, latest: null, seq: 0, lastPullAt: 0 },
     launching: null,
@@ -156,6 +171,120 @@ function getRecord(browserId: string): BrowserRecord {
     reg.browsers.set(browserId, rec);
   }
   return rec;
+}
+
+function newTabId(rec: BrowserRecord): string {
+  return `tab-${rec.nextTabSeq++}`;
+}
+
+function ensureActiveTab(rec: BrowserRecord): BrowserTabSnapshot {
+  const now = Date.now();
+  const activeId = rec.snapshot.activeTabId;
+  const existing =
+    (activeId && rec.snapshot.tabs.find((tab) => tab.id === activeId)) ||
+    rec.snapshot.tabs.find((tab) => tab.active);
+  if (existing) return existing;
+  const tab: BrowserTabSnapshot = {
+    id: newTabId(rec),
+    url: rec.snapshot.url,
+    title: rec.snapshot.title,
+    active: true,
+    createdAt: now,
+    updatedAt: now,
+  };
+  rec.snapshot = {
+    ...rec.snapshot,
+    activeTabId: tab.id,
+    tabs: [tab],
+  };
+  return tab;
+}
+
+function upsertBrowserTab(
+  rec: BrowserRecord,
+  input: {
+    id?: string | null;
+    url?: string | null;
+    title?: string | null;
+    active?: boolean;
+  }
+): BrowserTabSnapshot {
+  const now = Date.now();
+  const id = input.id || rec.snapshot.activeTabId || newTabId(rec);
+  const previous = rec.snapshot.tabs.find((tab) => tab.id === id);
+  const next: BrowserTabSnapshot = {
+    id,
+    url: input.url !== undefined ? input.url : previous?.url ?? null,
+    title: input.title !== undefined ? input.title : previous?.title ?? null,
+    active: input.active ?? previous?.active ?? false,
+    createdAt: previous?.createdAt ?? now,
+    updatedAt: now,
+  };
+  const tabs = rec.snapshot.tabs.some((tab) => tab.id === id)
+    ? rec.snapshot.tabs.map((tab) => (tab.id === id ? next : tab))
+    : [...rec.snapshot.tabs, next];
+  rec.snapshot = {
+    ...rec.snapshot,
+    activeTabId: next.active ? id : rec.snapshot.activeTabId,
+    tabs: tabs.map((tab) =>
+      input.active ? { ...tab, active: tab.id === id } : tab
+    ),
+  };
+  return next;
+}
+
+function updateActiveBrowserTab(
+  rec: BrowserRecord,
+  snapshot: Pick<BrowserSnapshot, "url" | "title">
+): void {
+  const active = ensureActiveTab(rec);
+  upsertBrowserTab(rec, {
+    id: active.id,
+    url: snapshot.url,
+    title: snapshot.title,
+    active: true,
+  });
+}
+
+function validateWaitForInput(input: {
+  url?: string;
+  selector?: string;
+  text?: string;
+}, browserId: string): void {
+  if (!input.url && !input.selector && !input.text) {
+    throw invalidParamsError(
+      browserId,
+      "wait_for requires at least one of url/selector/text"
+    );
+  }
+}
+
+function validateClickInput(
+  input: { selector?: string; x?: number; y?: number },
+  browserId: string
+): void {
+  const hasSelector = typeof input.selector === "string" && input.selector.length > 0;
+  const hasX = typeof input.x === "number";
+  const hasY = typeof input.y === "number";
+  const hasPoint = hasX && hasY;
+  if ((hasSelector && hasPoint) || (!hasSelector && !hasPoint) || hasX !== hasY) {
+    throw invalidParamsError(
+      browserId,
+      "browser_click requires either selector OR both x and y, but not both"
+    );
+  }
+}
+
+function formatBrowserTabs(snapshot: BrowserSnapshot): string {
+  if (snapshot.tabs.length === 0) return "No browser tabs are registered.";
+  return snapshot.tabs
+    .map(
+      (tab, index) =>
+        `${index}. ${tab.active ? "*" : " "} ${tab.id} ${tab.title ?? "(untitled)"} ${
+          tab.url ?? "(no url)"
+        }`
+    )
+    .join("\n");
 }
 
 function pushLog(
@@ -221,6 +350,19 @@ export class BrowserRuntimeError extends Error {
 
 export function isBrowserRuntimeError(error: unknown): error is BrowserRuntimeError {
   return error instanceof BrowserRuntimeError;
+}
+
+function invalidParamsError(browserId: string, message: string): BrowserRuntimeError {
+  return new BrowserRuntimeError(message, {
+    code: "invalid_params",
+    snapshot: {
+      ...getBrowserSnapshot(browserId),
+      status: "error",
+      error: message,
+      updatedAt: Date.now(),
+    },
+    recoverable: true,
+  });
 }
 
 function isChromeErrorUrl(url: string | null | undefined): boolean {
@@ -390,6 +532,13 @@ async function ensurePage(browserId: string): Promise<{ rec: BrowserRecord; page
     });
     rec.context = context;
     const page = await context.newPage();
+    const tab = upsertBrowserTab(rec, {
+      id: rec.snapshot.activeTabId || newTabId(rec),
+      url: null,
+      title: null,
+      active: true,
+    });
+    rec.tabPages.set(tab.id, page);
     page.setDefaultTimeout(10_000);
     // 页面被关时同步清理（headed 下用户可能只关标签页）
     page.on("close", () => {
@@ -444,6 +593,7 @@ async function refreshSnapshot(rec: BrowserRecord, page: Page | null) {
     updatedAt: Date.now(),
     error: null,
   };
+  updateActiveBrowserTab(rec, rec.snapshot);
   return rec.snapshot;
 }
 
@@ -632,6 +782,16 @@ export function completeInAppBrowserCommand(
     error: result.error ?? null,
     updatedAt: Date.now(),
   };
+  if (result.tabId) {
+    upsertBrowserTab(rec, {
+      id: result.tabId,
+      url: rec.snapshot.url,
+      title: rec.snapshot.title,
+      active: result.switchTo !== false,
+    });
+  } else {
+    updateActiveBrowserTab(rec, rec.snapshot);
+  }
   if (waiter) {
     clearTimeout(waiter.timeout);
     host.waiters.delete(commandId);
@@ -743,6 +903,16 @@ function applyInAppSnapshot(
         : rec.snapshot.pointer,
     updatedAt: Date.now(),
   };
+  if (result.tabId) {
+    upsertBrowserTab(rec, {
+      id: result.tabId,
+      url: rec.snapshot.url,
+      title: rec.snapshot.title,
+      active: result.switchTo !== false,
+    });
+  } else {
+    updateActiveBrowserTab(rec, rec.snapshot);
+  }
   return rec.snapshot;
 }
 
@@ -921,7 +1091,10 @@ export async function browserOpen(
   url: string,
   opts: BrowserActionOptions = {}
 ) {
-  const normalized = await assertBrowserSiteAllowed(url);
+  const normalized = await assertBrowserSiteAllowed(
+    url,
+    browserPolicyScope(browserId),
+  );
   const rec = reg.browsers.get(browserId);
   if (rec && isInAppHostAlive(rec)) {
     return runInAppAction(
@@ -953,6 +1126,7 @@ export async function browserClick(
   browserId: string,
   input: { selector?: string; x?: number; y?: number }
 ) {
+  validateClickInput(input, browserId);
   const rec = reg.browsers.get(browserId);
   if (rec && isInAppHostAlive(rec)) {
     return runInAppAction(browserId, "click", input.selector ?? `${input.x},${input.y}`, input);
@@ -1096,7 +1270,7 @@ export async function browserSearch(
   const { engine, url } = browserSearchUrl(input);
   const rec = reg.browsers.get(browserId);
   if (rec && isInAppHostAlive(rec)) {
-    await assertBrowserSiteAllowed(url);
+    await assertBrowserSiteAllowed(url, browserPolicyScope(browserId));
     return runInAppAction(
       browserId,
       "open",
@@ -1107,7 +1281,7 @@ export async function browserSearch(
   }
   return runAction(browserId, "search", `${engine}: ${input.query}`, async (page, rec) => {
     rec.snapshot.pointer = null;
-    await assertBrowserSiteAllowed(url);
+    await assertBrowserSiteAllowed(url, browserPolicyScope(browserId));
     await page.goto(url, { waitUntil: "domcontentloaded" });
     // 搜索结果是异步渲染的：等结果容器出现再返回，否则 extract 抓到的全是顶部导航。
     const resultSelector =
@@ -1172,6 +1346,7 @@ export async function browserWaitFor(
   input: { url?: string; selector?: string; text?: string; timeoutMs?: number },
   opts: BrowserActionOptions = {}
 ) {
+  validateWaitForInput(input, browserId);
   const label =
     input.url
       ? `url~="${input.url}"`
@@ -1197,9 +1372,6 @@ export async function browserWaitFor(
     "wait_for",
     label,
     async (page) => {
-      if (!input.url && !input.selector && !input.text) {
-        throw new Error("wait_for requires at least one of url/selector/text");
-      }
       if (input.url) {
         const target = input.url;
         await page.waitForFunction(
@@ -1220,6 +1392,218 @@ export async function browserWaitFor(
     // 成功到达即视为一次通过的等待验收。
     () => ({ passed: true })
   );
+}
+
+export async function browserScroll(
+  browserId: string,
+  input: {
+    direction?: "up" | "down" | "left" | "right";
+    pixels?: number;
+    selector?: string;
+    text?: string;
+  },
+  opts: BrowserActionOptions = {}
+) {
+  const target =
+    input.selector ??
+    (input.text ? `text~="${input.text}"` : `${input.direction ?? "down"} ${input.pixels ?? 700}px`);
+  const rec = reg.browsers.get(browserId);
+  if (rec && isInAppHostAlive(rec)) {
+    return runInAppAction(
+      browserId,
+      "scroll",
+      target,
+      input,
+      opts
+    );
+  }
+  return runAction(browserId, "scroll", target, async (page, rec) => {
+    if (input.selector) {
+      const locator = targetLocator(page, input.selector);
+      await locator.scrollIntoViewIfNeeded();
+      const pointer = await pointerFromLocator(page, locator, "scroll", input.selector);
+      if (pointer) rec.snapshot.pointer = pointer;
+    } else if (input.text) {
+      const locator = page.getByText(input.text).first();
+      await locator.scrollIntoViewIfNeeded();
+      const pointer = await pointerFromLocator(page, locator, "scroll", input.text);
+      if (pointer) rec.snapshot.pointer = pointer;
+    } else {
+      const amount = Math.min(Math.max(input.pixels ?? 700, 1), 10_000);
+      const x =
+        input.direction === "left" ? -amount : input.direction === "right" ? amount : 0;
+      const y =
+        input.direction === "up" ? -amount : input.direction === "down" || !input.direction ? amount : 0;
+      await page.evaluate(
+        ({ x, y }) => window.scrollBy({ left: x, top: y, behavior: "instant" }),
+        { x, y }
+      );
+    }
+    return { url: page.url() };
+  }, opts);
+}
+
+export async function browserTabs(browserId: string) {
+  const rec = getRecord(browserId);
+  ensureActiveTab(rec);
+  const snapshot =
+    rec.page && !rec.page.isClosed()
+      ? await refreshSnapshot(rec, rec.page)
+      : { ...rec.snapshot, updatedAt: Date.now() };
+  return {
+    result: {
+      activeTabId: snapshot.activeTabId,
+      tabs: snapshot.tabs,
+      text: formatBrowserTabs(snapshot),
+    },
+    snapshot,
+  };
+}
+
+export async function browserTabOpen(
+  browserId: string,
+  input: { url: string; switchTo?: boolean },
+  opts: BrowserActionOptions = {}
+) {
+  const normalized = await assertBrowserSiteAllowed(
+    input.url,
+    browserPolicyScope(browserId),
+  );
+  const rec = getRecord(browserId);
+  const tabId = newTabId(rec);
+  if (rec && isInAppHostAlive(rec)) {
+    if (input.switchTo === false) {
+      const log = pushLog(rec, "tab_open", normalized, opts);
+      upsertBrowserTab(rec, {
+        id: tabId,
+        url: normalized,
+        title: null,
+        active: false,
+      });
+      finishLog(log);
+      pushStep(rec, log, rec.snapshot);
+      return {
+        result: {
+          url: rec.snapshot.url,
+          tabId,
+          openedUrl: normalized,
+          switchTo: false,
+        },
+        snapshot: {
+          ...rec.snapshot,
+          updatedAt: Date.now(),
+        },
+      };
+    }
+    return runInAppAction(
+      browserId,
+      "tab_open",
+      normalized,
+      { url: normalized, tabId, switchTo: true },
+      opts
+    );
+  }
+  const { rec: ensuredRec } = await ensurePage(browserId);
+  const context = rec.context;
+  if (!context) throw new Error("browser context is not available");
+  const targetPage = await context.newPage();
+  targetPage.setDefaultTimeout(10_000);
+  const log = pushLog(ensuredRec, "tab_open", normalized, opts);
+  ensuredRec.snapshot.status = "busy";
+  ensuredRec.snapshot.error = null;
+  try {
+    await targetPage.goto(normalized, { waitUntil: "domcontentloaded" });
+    rec.tabPages.set(tabId, targetPage);
+    if (input.switchTo !== false) {
+      rec.page = targetPage;
+      await targetPage.bringToFront().catch(() => {});
+    }
+    const title = await targetPage.title().catch(() => null);
+    finishLog(log);
+    upsertBrowserTab(rec, {
+      id: tabId,
+      url: targetPage.url() || normalized,
+      title,
+      active: input.switchTo !== false,
+    });
+    const snapshot =
+      input.switchTo !== false
+        ? await refreshSnapshot(rec, targetPage)
+        : {
+            ...rec.snapshot,
+            status: "ready" as const,
+            error: null,
+            updatedAt: Date.now(),
+          };
+    pushStep(rec, log, snapshot);
+    return {
+      result: { url: targetPage.url(), tabId },
+      snapshot,
+    };
+  } catch (err) {
+    await targetPage.close().catch(() => {});
+    const rawMessage = err instanceof Error ? err.message : String(err);
+    const classified = classifyBrowserError(rawMessage, rec.snapshot, "tab_open");
+    finishLog(log, classified.message, "error");
+    rec.snapshot = {
+      ...rec.snapshot,
+      status: "error",
+      error: classified.message,
+      updatedAt: Date.now(),
+    };
+    pushStep(rec, log, rec.snapshot, { errorCode: classified.code });
+    throw new BrowserRuntimeError(classified.message, {
+      code: classified.code,
+      snapshot: rec.snapshot,
+      recoverable: classified.recoverable,
+    });
+  }
+}
+
+export async function browserTabSwitch(
+  browserId: string,
+  input: { tabId?: string; index?: number },
+  opts: BrowserActionOptions = {}
+) {
+  const rec = getRecord(browserId);
+  const target =
+    (input.tabId && rec.snapshot.tabs.find((tab) => tab.id === input.tabId)) ||
+    (typeof input.index === "number" ? rec.snapshot.tabs[input.index] : null);
+  if (!target) {
+    throw new Error("browser_tab_switch requires an existing tabId or zero-based index");
+  }
+  upsertBrowserTab(rec, {
+    id: target.id,
+    url: target.url,
+    title: target.title,
+    active: true,
+  });
+  if (isInAppHostAlive(rec)) {
+    if (!target.url) throw new Error(`tab ${target.id} has no URL to restore`);
+    return runInAppAction(
+      browserId,
+      "tab_switch",
+      target.id,
+      { tabId: target.id, url: target.url },
+      opts
+    );
+  }
+  const page = rec.tabPages.get(target.id);
+  if (!page || page.isClosed()) {
+    throw new Error(`tab ${target.id} is not available`);
+  }
+  rec.page = page;
+  await page.bringToFront().catch(() => {});
+  return runAction(browserId, "tab_switch", target.id, async () => {
+    const title = await page.title().catch(() => null);
+    upsertBrowserTab(rec, {
+      id: target.id,
+      url: page.url() || target.url,
+      title,
+      active: true,
+    });
+    return { url: page.url(), tabId: target.id };
+  }, opts);
 }
 
 export async function browserExtract(
@@ -1418,8 +1802,11 @@ export async function browserClose(browserId: string): Promise<BrowserSnapshot> 
       url: null,
       title: null,
       screenshotDataUrl: null,
+      activeTabId: null,
+      tabs: [],
       updatedAt: Date.now(),
     };
+    rec.tabPages.clear();
     return rec.snapshot;
   }
   const log = pushLog(rec, "close", "close browser");
@@ -1447,18 +1834,35 @@ export async function browserClose(browserId: string): Promise<BrowserSnapshot> 
   rec.browser = null;
   rec.context = null;
   rec.page = null;
+  rec.tabPages.clear();
   rec.launching = null;
   rec.snapshot = {
     ...rec.snapshot,
     status: "closed",
     updatedAt: Date.now(),
     screenshotDataUrl: null,
+    activeTabId: null,
+    tabs: [],
   };
   return rec.snapshot;
 }
 
 export async function disposeBrowser(browserId: string) {
-  await browserClose(browserId).catch(() => {});
+  try {
+    await browserClose(browserId);
+  } catch (error) {
+    if (
+      isBrowserRuntimeError(error) &&
+      error.code === "browser_host_disconnected"
+    ) {
+      // Expected when an in-app panel is already gone.
+    } else {
+      console.warn(
+        "[browser] dispose failed",
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
   reg.browsers.delete(browserId);
 }
 

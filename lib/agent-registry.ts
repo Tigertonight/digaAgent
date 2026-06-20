@@ -283,6 +283,10 @@ const DEFAULT_BROWSER_TOOL_NAMES = [
   "browser_search",
   "browser_wait",
   "browser_wait_for",
+  "browser_scroll",
+  "browser_tabs",
+  "browser_tab_open",
+  "browser_tab_switch",
   "browser_extract",
   "browser_verify",
   "browser_annotations",
@@ -2497,7 +2501,7 @@ export async function disposeAgent(id: string): Promise<void> {
   // 按 agentId 扫一遍释放。dispose 是低频操作，O(N) 扫可接受。
   disposeRuntimeEventsForAgent(id);
   disposeEvidenceForAgent(id);
-  void disposeBrowser(agentBrowserId(id));
+  await disposeBrowser(agentBrowserId(id));
 }
 
 /**

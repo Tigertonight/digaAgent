@@ -99,8 +99,19 @@ export interface BrowserSnapshot {
   task: BrowserTaskState | null;
   logs: BrowserActionLog[];
   steps: BrowserStepSnapshot[];
+  activeTabId: string | null;
+  tabs: BrowserTabSnapshot[];
   /** 阶段 D：当前浏览器上的页面批注（持久化，随 SSE 同步）。 */
   annotations: BrowserAnnotation[];
+}
+
+export interface BrowserTabSnapshot {
+  id: string;
+  url: string | null;
+  title: string | null;
+  active: boolean;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface BrowserStateEvent {
@@ -189,12 +200,15 @@ export type BrowserSiteDecision = "local" | "allowed" | "blocked" | "unknown";
 export interface BrowserSitePolicy {
   allowedOrigins: string[];
   blockedOrigins: string[];
+  allowedScopedOrigins?: string[];
+  blockedScopedOrigins?: string[];
 }
 
 export interface BrowserSiteCheck {
   origin: string;
   decision: BrowserSiteDecision;
   policy: BrowserSitePolicy;
+  scope?: string;
 }
 
 export const EMPTY_BROWSER_SNAPSHOT: BrowserSnapshot = {
@@ -208,5 +222,7 @@ export const EMPTY_BROWSER_SNAPSHOT: BrowserSnapshot = {
   task: null,
   logs: [],
   steps: [],
+  activeTabId: null,
+  tabs: [],
   annotations: [],
 };
