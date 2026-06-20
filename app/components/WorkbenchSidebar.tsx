@@ -133,12 +133,8 @@ export function WorkbenchSidebar({
       }`,
     [agentId, cwd, runtimeIdentity.sessionId]
   );
-  const [tabs, setTabs] = useState<WorkbenchTab[]>(() =>
-    loadStoredWorkbenchTabs(storageKey).tabs
-  );
-  const [activeTabId, setActiveTabId] = useState(
-    () => loadStoredWorkbenchTabs(storageKey).activeTabId
-  );
+  const [tabs, setTabs] = useState<WorkbenchTab[]>(() => [homeTab()]);
+  const [activeTabId, setActiveTabId] = useState("home");
   const [loadedStorageKey, setLoadedStorageKey] = useState(storageKey);
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const viewRequestKey = `${view.type}:${"url" in view ? view.url ?? "" : ""}:${
