@@ -44,13 +44,31 @@ describe("MessageView CoT/toolchain UX safeguards", () => {
 
     expect(text).toContain("AgentTeamRunCard");
     expect(text).toContain("data-testid=\"agent-team-run-card\"");
-    expect(text).toContain("查看团队进展");
+    expect(text).toContain("打开右侧面板");
     expect(text).toContain("团队协作");
+    expect(text).toContain("进度");
+    expect(text).toContain("自动处理");
+    expect(text).toContain("需要你");
+    expect(text).toContain("关键任务进度");
+    expect(text).toContain("agent-team-inline-progress");
+    expect(text).toContain("当前进展");
+    expect(text).toContain("你要做什么");
+    expect(text).toContain("agentTeamTaskCardStatus");
+    expect(text).toContain("agentTeamCardSummary");
+    expect(text).toContain("打开右侧面板");
     expect(text).toContain("生成总结");
     expect(text).toContain("agentTeamLeadStateLabel");
     expect(text).toContain("openChallenges");
     expect(text).toContain("acceptedFindings");
     expect(text).toContain("onAction?.(run.id, \"finalize\")");
     expect(text).toContain("p.kind === \"agent_team_run\"");
+  });
+
+  it("hides Agent Team internal final-summary markers from visible/copy text", () => {
+    const text = source();
+
+    expect(text).toContain("stripAgentTeamInternalMarkers");
+    expect(text).toContain("agent-team-final:");
+    expect(text).toContain("text={visibleText}");
   });
 });

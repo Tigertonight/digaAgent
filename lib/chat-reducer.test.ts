@@ -53,6 +53,25 @@ describe("ctxToMessages", () => {
     ]);
   });
 
+  it("restores legacy string user content as a visible user bubble", () => {
+    const out = ctxToMessages([
+      {
+        role: "user",
+        timestamp: 1000,
+        content: "/team 调研当前项目的 Team 体验",
+      },
+    ]);
+
+    expect(out).toEqual([
+      {
+        role: "user",
+        parts: [{ kind: "text", text: "/team 调研当前项目的 Team 体验" }],
+        text: "/team 调研当前项目的 Team 体验",
+        timestamp: 1000,
+      },
+    ]);
+  });
+
   it("malformed content fields are treated as empty arrays", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -1656,6 +1675,127 @@ describe("applyEvent — agent team local events", () => {
     expect(part?.kind).toBe("agent_team_run");
     if (part?.kind !== "agent_team_run") throw new Error("type narrow");
     expect(part.run.id).toBe(run.id);
+  });
+
+  it("restores completed Team runs with a final summary message", () => {
+    const run = createInitialAgentTeamRun("restored final team");
+    const completed = {
+      ...run,
+      status: "completed" as const,
+      board: {
+        ...run.board,
+        decisions: [
+          {
+            id: "decision-1",
+            title: "最终判断",
+            rationale: "这是可展示给用户的最终综合。",
+            acceptedFindingIds: [],
+            rejectedFindingIds: [],
+            resolvedChallengeIds: [],
+            artifactIds: [],
+            createdAt: run.updatedAt,
+            leadAgentId: run.leadAgentId,
+            madeByAgentId: run.leadAgentId,
+          },
+        ],
+      },
+    };
+    const out = appendRestoredAgentTeamRuns([], [completed]);
+
+    expect(out).toHaveLength(2);
+    expect(out[1].parts?.[0]).toMatchObject({
+      kind: "text",
+      text: expect.stringContaining("结论"),
+    });
+    expect(out[1].parts?.[0]).toMatchObject({
+      kind: "text",
+      text: expect.stringContaining("这是可展示给用户的最终综合。"),
+    });
+  });
+
+  it("adds a final summary when a restored message already contains a completed Team card", () => {
+    const run = createInitialAgentTeamRun("existing completed team");
+    const completed = {
+      ...run,
+      status: "completed" as const,
+      board: {
+        ...run.board,
+        decisions: [
+          {
+            id: "decision-1",
+            title: "最终判断",
+            rationale: "已有卡片也应该恢复最终回答。",
+            acceptedFindingIds: [],
+            rejectedFindingIds: [],
+            resolvedChallengeIds: [],
+            artifactIds: [],
+            createdAt: run.updatedAt,
+            leadAgentId: run.leadAgentId,
+            madeByAgentId: run.leadAgentId,
+          },
+        ],
+      },
+    };
+    const out = appendRestoredAgentTeamRuns(
+      [
+        {
+          role: "assistant",
+          parts: [{ kind: "agent_team_run", run: completed }],
+          timestamp: completed.createdAt,
+        },
+      ],
+      undefined
+    );
+
+    expect(out).toHaveLength(2);
+    expect(out[1].parts?.[0]).toMatchObject({
+      kind: "text",
+      text: expect.stringContaining("已有卡片也应该恢复最终回答。"),
+    });
+  });
+
+  it("updates an existing Team card from the latest restored run", () => {
+    const run = createInitialAgentTeamRun("updated restored team");
+    const completed = {
+      ...run,
+      status: "completed" as const,
+      board: {
+        ...run.board,
+        decisions: [
+          {
+            id: "decision-1",
+            title: "最终判断",
+            rationale: "最新 run 应该覆盖旧卡片。",
+            acceptedFindingIds: [],
+            rejectedFindingIds: [],
+            resolvedChallengeIds: [],
+            artifactIds: [],
+            createdAt: run.updatedAt,
+            leadAgentId: run.leadAgentId,
+            madeByAgentId: run.leadAgentId,
+          },
+        ],
+      },
+    };
+    const out = appendRestoredAgentTeamRuns(
+      [
+        {
+          role: "assistant",
+          parts: [{ kind: "agent_team_run", run }],
+          timestamp: run.createdAt,
+        },
+      ],
+      [completed]
+    );
+    const part = out[0].parts?.[0];
+
+    expect(part?.kind).toBe("agent_team_run");
+    if (part?.kind !== "agent_team_run") throw new Error("type narrow");
+    expect(part.run.status).toBe("completed");
+    expect(out[1].parts?.[0]).toMatchObject({
+      kind: "text",
+      text: expect.stringContaining("最新 run 应该覆盖旧卡片。"),
+    });
   });
 });
 

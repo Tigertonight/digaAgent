@@ -22,6 +22,7 @@ import { ArrowDown, CheckCircle2, Download, FileText, Loader2, RotateCcw, Users,
 import type {
   SessionInfoLite,
   ChatMessage,
+  MessagePart,
   ImageContentLite,
   ForkableUserMessage,
 } from "@/lib/types";
@@ -142,7 +143,13 @@ function teamOperationErrorMessage(
   const raw = typeof error === "string" ? error : "";
   const normalized = raw.toLowerCase();
   if (normalized.includes("no runnable task or teammate")) {
-    return "当前没有可以继续推进的任务。你可以先查看任务细节，或直接生成总结。";
+    return "团队暂时没有可自动推进的事项。可以补充目标，或等当前成员结果返回后再推进。";
+  }
+  if (normalized.includes("waiting for dependencies")) {
+    return "团队在等待前置证据或成员结果。可以点击“让团队自动推进”，负责人会优先处理可继续的部分。";
+  }
+  if (normalized.includes("no dispatch plan") || normalized.includes("no runnable")) {
+    return "团队暂时没有可继续分派的事项。可以补充目标，或等当前成员结果返回后再推进。";
   }
   if (normalized.includes("team run not found")) {
     return "这次团队协作已不可用，请重新启动一次。";
@@ -1679,13 +1686,14 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
   const messageRenderState = useMemo(() => {
     const shouldAttachForkIds = forkableUserMessages.length > 0;
-    const renderedMessages: ChatMessage[] = shouldAttachForkIds ? [] : chatState.messages;
+    const renderSourceMessages = appendRestoredAgentTeamRuns(chatState.messages, undefined);
+    const renderedMessages: ChatMessage[] = shouldAttachForkIds ? [] : renderSourceMessages;
     let forkCursor = 0;
     let visibleMessageCount = 0;
     let userMessageCount = 0;
     let lastUserVisibleIndex = -1;
 
-    for (const m of chatState.messages) {
+    for (const m of renderSourceMessages) {
       let next = m;
       if (shouldAttachForkIds && m.role === "user" && forkCursor < forkableUserMessages.length) {
         next = { ...m, entryId: forkableUserMessages[forkCursor].entryId };
@@ -1991,9 +1999,62 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             });
           } else {
             // 已有实时消息——只补 forkable / progress 这种仅供辅助 UI 用途的字段。
+            const agentTeamRunsFromContext = Array.isArray(ctx.agentTeamRuns)
+              ? (ctx.agentTeamRuns as AgentTeamRun[])
+              : undefined;
+            const contextMessages = ctxToMessages(
+              ctx.messages ?? [],
+              restoreToolOptions
+            );
+            const hasTeamFinalMarker = (message: ChatMessage) =>
+              (message.parts ?? []).some(
+                (part) =>
+                  part.kind === "text" && part.text.includes("agent-team-final:")
+              );
+            const existingTeamFinalMarkers = new Set(
+              cur.chatState.messages.flatMap((message) =>
+                (message.parts ?? [])
+                  .filter(
+                    (part): part is Extract<MessagePart, { kind: "text" }> =>
+                      part.kind === "text" && part.text.includes("agent-team-final:")
+                  )
+                  .map((part) => {
+                    const match = part.text.match(/agent-team-final:[^\\s>]+/);
+                    return match?.[0] ?? part.text;
+                  })
+              )
+            );
+            let mergedMessages = cur.chatState.messages;
+            for (const message of contextMessages) {
+              if (!hasTeamFinalMarker(message)) continue;
+              const marker = (message.parts ?? [])
+                .filter(
+                  (part): part is Extract<MessagePart, { kind: "text" }> =>
+                    part.kind === "text"
+                )
+                .map((part) => part.text.match(/agent-team-final:[^\\s>]+/)?.[0])
+                .find(Boolean);
+              if (marker && existingTeamFinalMarkers.has(marker)) continue;
+              mergedMessages = [...mergedMessages, message];
+              if (marker) existingTeamFinalMarkers.add(marker);
+            }
+            const restoredTeamMessages = agentTeamRunsFromContext?.length
+              ? appendRestoredAgentTeamRuns(
+                  mergedMessages,
+                  agentTeamRunsFromContext
+                )
+              : appendRestoredAgentTeamRuns(mergedMessages, undefined);
             updateRunner(key, {
               contextLoading: false,
               contextError: null,
+              ...(restoredTeamMessages !== cur.chatState.messages
+                ? {
+                    chatState: {
+                      ...cur.chatState,
+                      messages: restoredTeamMessages,
+                    },
+                  }
+                : {}),
               ...(Array.isArray(ctx.forkableUserMessages)
                 ? {
                     forkableUserMessages:

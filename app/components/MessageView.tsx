@@ -35,7 +35,6 @@ import {
   Play,
   RotateCcw,
   ShieldCheck,
-  Users,
   XCircle,
 } from "lucide-react";
 import type {
@@ -464,6 +463,8 @@ function MessageViewInner({
             );
           }
           if (p.kind === "text") {
+            const visibleText = stripAgentTeamInternalMarkers(p.text);
+            if (!visibleText) return null;
             return (
               <div
                 key={i}
@@ -475,7 +476,7 @@ function MessageViewInner({
                 }}
               >
                 <Markdown
-                  text={p.text}
+                  text={visibleText}
                   streaming={i === tailTextIdx}
                   cwd={cwd}
                   onOpenUrl={onOpenUrl}
@@ -1483,13 +1484,17 @@ function summarizeProcessIssue(
   return text.length > 84 ? `${text.slice(0, 83)}…` : text;
 }
 
+function stripAgentTeamInternalMarkers(text: string): string {
+  return text.replace(/\n?<!--\s*agent-team-final:[^>]+-->\s*/g, "").trimEnd();
+}
+
 function extractPlainText(parts: MessagePart[]): string {
   const out: string[] = [];
   for (const p of safeArray<MessagePart>(parts, {
     surface: "MessageView.extractPlainText",
     fieldPath: "parts",
   })) {
-    if (p.kind === "text") out.push(p.text);
+    if (p.kind === "text") out.push(stripAgentTeamInternalMarkers(p.text));
     else if (p.kind === "thinking") {
       // 不复制 thinking 内容
     } else if (p.kind === "clarification") {
@@ -2381,12 +2386,22 @@ function AgentTeamRunCard({
   ).length;
   const requiredTasks = tasks.filter((task) => task.required);
   const completedRequired = requiredTasks.filter((task) => task.status === "completed").length;
-  const primaryStatus =
-    openChallenges > 0
-      ? "有问题需要确认"
-      : openTasks > 0
-        ? "团队正在推进"
-        : "可以整理结果";
+  const blockedTasks = tasks.filter((task) => task.status === "blocked");
+  const workingTasks = tasks.filter(
+    (task) => task.status === "claimed" || task.status === "running"
+  );
+  const progressTotal = Math.max(requiredTasks.length, 1);
+  const progressPercent = Math.round((completedRequired / progressTotal) * 100);
+  const cardSummary = agentTeamCardSummary({
+    acceptedFindings,
+    blockedTasks,
+    completedRequired,
+    now: run.updatedAt ?? run.createdAt,
+    openChallenges,
+    openTasks,
+    requiredTotal: requiredTasks.length,
+    workingTasks,
+  });
   const running = run.status === "running" || run.status === "finalizing";
   const paused = run.status === "paused";
   const terminal =
@@ -2395,6 +2410,15 @@ function AgentTeamRunCard({
     run.status === "aborted";
   const leadLabel = agentTeamLeadStateLabel(run.leadState);
   const statusLabel = agentTeamStatusLabel(run.status);
+  const finalDecision =
+    run.status === "completed"
+      ? run.board.decisions
+          .slice()
+          .reverse()
+          .find((decision) => decision.title.includes("最终") || decision.acceptedFindingIds.length > 0)
+        ?? run.board.decisions.at(-1)
+      : undefined;
+  const finalRationale = finalDecision?.rationale?.trim();
 
   return (
     <div
@@ -2444,29 +2468,119 @@ function AgentTeamRunCard({
       </div>
 
       <div className="grid gap-2 sm:grid-cols-3">
-        <AgentTeamMetric icon={<Users size={13} />} label="成员" value={run.members.length} />
-        <AgentTeamMetric icon={<Circle size={13} />} label="关键任务" value={completedRequired} suffix={`/${requiredTasks.length}`} />
-        <AgentTeamMetric icon={<ShieldCheck size={13} />} label="待确认" value={openChallenges} tone={openChallenges > 0 ? "warn" : "muted"} />
+        <AgentTeamMetric icon={<Circle size={13} />} label="进度" value={completedRequired} suffix={`/${requiredTasks.length}`} />
+        <AgentTeamMetric icon={<Network size={13} />} label="自动处理" value={openTasks} tone={blockedTasks.length > 0 ? "warn" : "muted"} />
+        <AgentTeamMetric icon={<ShieldCheck size={13} />} label="需要你" value={openChallenges} tone={openChallenges > 0 ? "warn" : "muted"} />
+      </div>
+
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between text-token-xs">
+          <span style={{ color: "var(--text-muted)" }}>关键任务进度</span>
+          <span className="font-medium tabular-nums" style={{ color: "var(--text)" }}>
+            {progressPercent}%
+          </span>
+        </div>
+        <div className="h-1.5 overflow-hidden rounded-full" style={{ background: "var(--bg-subtle)" }}>
+          <div
+            className="h-full rounded-full"
+            style={{
+              width: `${progressPercent}%`,
+              background:
+                openChallenges > 0 || blockedTasks.length > 0
+                  ? "var(--color-warning)"
+                  : "var(--accent)",
+            }}
+          />
+        </div>
       </div>
 
       <div
-        className="rounded border px-2.5 py-2 text-token-xs"
+        className="w-full rounded border px-2.5 py-2 text-left text-token-xs"
         style={{
-          borderColor: openChallenges > 0 ? "var(--color-warning)" : "var(--border-soft)",
+          borderColor: cardSummary.tone === "warn" ? "var(--color-warning)" : "var(--border-soft)",
           background: "var(--bg-subtle)",
           color: "var(--text-muted)",
         }}
       >
-        <span className="font-medium" style={{ color: openChallenges > 0 ? "var(--color-warning)" : "var(--text)" }}>
-          {primaryStatus}
+        <span className="font-medium" style={{ color: cardSummary.tone === "warn" ? "var(--color-warning)" : "var(--text)" }}>
+          {cardSummary.title}
         </span>
-        <span className="ml-1 inline-block">
-          {openChallenges > 0
-            ? "。团队发现了需要你判断的问题。"
-            : openTasks > 0
-              ? `。还有 ${openTasks} 个任务在处理中。`
-              : `。已采纳 ${acceptedFindings} 条发现，可以进入总结。`}
+        <span className="ml-1 inline">
+          {cardSummary.body}
         </span>
+        <span className="mt-1 block" style={{ color: "var(--fg-faint)" }}>
+          {cardSummary.nextStep}
+        </span>
+      </div>
+
+      {finalRationale ? (
+        <div
+          className="space-y-1 rounded border px-2.5 py-2 text-token-sm"
+          style={{
+            borderColor: "var(--border-soft)",
+            background: "var(--bg)",
+            color: "var(--text)",
+          }}
+          data-testid="agent-team-final-summary"
+        >
+          <div className="text-token-xs font-semibold" style={{ color: "var(--text-muted)" }}>
+            结论
+          </div>
+          <div className="whitespace-pre-wrap leading-relaxed">
+            {humanizeAgentTeamCardText(finalRationale)}
+          </div>
+        </div>
+      ) : null}
+
+      <div
+        className="space-y-2 rounded border px-2.5 py-2 text-token-xs"
+        style={{ borderColor: "var(--border-soft)", background: "var(--bg-subtle)" }}
+        data-testid="agent-team-inline-progress"
+      >
+        <div className="flex items-start gap-2">
+          <span className="mt-0.5 font-medium" style={{ color: "var(--text)" }}>
+            当前进展
+          </span>
+          <span className="min-w-0 flex-1" style={{ color: "var(--text-muted)" }}>
+            已完成 {completedRequired}/{requiredTasks.length} 个关键任务；
+            {openChallenges > 0
+              ? `有 ${openChallenges} 个问题需要判断。`
+              : openTasks > 0
+                ? `还有 ${openTasks} 个事项由团队自动处理。`
+                : "可以进入最终总结。"}
+          </span>
+        </div>
+        <div className="flex items-start gap-2">
+          <span className="mt-0.5 font-medium" style={{ color: "var(--text)" }}>
+            你要做什么
+          </span>
+          <span className="min-w-0 flex-1" style={{ color: "var(--text-muted)" }}>
+            {cardSummary.nextStep}
+          </span>
+        </div>
+        <div className="space-y-1">
+          {tasks.slice(0, 4).map((task) => (
+            <div key={task.id} className="flex min-w-0 items-center gap-2">
+              <span
+                className="h-1.5 w-1.5 shrink-0 rounded-full"
+                style={{
+                  background:
+                    task.status === "completed"
+                      ? "var(--color-success)"
+                      : task.status === "blocked"
+                        ? "var(--color-warning)"
+                        : "var(--accent)",
+                }}
+              />
+              <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text-muted)" }}>
+                {task.title}
+              </span>
+              <span className="shrink-0" style={{ color: "var(--fg-faint)" }}>
+                {agentTeamTaskCardStatus(task.status)}
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">
@@ -2478,7 +2592,7 @@ function AgentTeamRunCard({
           data-testid="open-agent-team-workspace"
         >
           <PanelRightOpen size={13} />
-          查看团队进展
+          打开右侧面板
         </button>
         {!terminal && (
           <button
@@ -2518,6 +2632,102 @@ function AgentTeamRunCard({
       </div>
     </div>
   );
+}
+
+function agentTeamCardSummary({
+  acceptedFindings,
+  blockedTasks,
+  completedRequired,
+  now,
+  openChallenges,
+  openTasks,
+  requiredTotal,
+  workingTasks,
+}: {
+  acceptedFindings: number;
+  blockedTasks: Array<{ blocker?: string; description?: string; title?: string }>;
+  completedRequired: number;
+  now: number;
+  openChallenges: number;
+  openTasks: number;
+  requiredTotal: number;
+  workingTasks: Array<{
+    blocker?: string;
+    claimedAt?: number;
+    description?: string;
+    title?: string;
+  }>;
+}): { title: string; body: string; nextStep: string; tone: "muted" | "warn" } {
+  const waitingForTeammate = workingTasks.find((task) =>
+    /structured teammate result|成员返回|teammate result/i.test(
+      `${task.blocker || ""} ${task.description || ""} ${task.title || ""}`
+    )
+  );
+  if (waitingForTeammate) {
+    const waitedMinutes = waitingForTeammate.claimedAt
+      ? Math.max(1, Math.floor((now - waitingForTeammate.claimedAt) / 60_000))
+      : undefined;
+    return {
+      title: "等待成员返回证据",
+      body: waitedMinutes
+        ? ` 已等待 ${waitedMinutes} 分钟。`
+        : " 成员任务已派出，还没有回写结果。",
+      nextStep: "你现在不用操作；系统会在自动推进时重试或重派这个任务。",
+      tone: "warn",
+    };
+  }
+  if (openChallenges > 0) {
+    return {
+      title: "需要你确认",
+      body: ` 有 ${openChallenges} 个结论需要判断。`,
+      nextStep: "下一步：打开进度面板，查看团队到底在问什么；不需要你手动分配成员。",
+      tone: "warn",
+    };
+  }
+  if (blockedTasks.length > 0) {
+    const reason = humanizeAgentTeamCardText(
+      blockedTasks[0]?.blocker || blockedTasks[0]?.description || blockedTasks[0]?.title
+    );
+    return {
+      title: "团队在等前置结果",
+      body: reason ? ` ${reason}` : " 有任务要等证据或成员结果返回。",
+      nextStep: "你现在不用操作；如果想催一下，打开进度面板点“让团队自动推进”。",
+      tone: "warn",
+    };
+  }
+  if (openTasks > 0) {
+    return {
+      title: "团队正在自动推进",
+      body: ` 已完成 ${completedRequired}/${requiredTotal} 个关键任务，${workingTasks.length || openTasks} 个事项还在处理。`,
+      nextStep: "你现在不用操作；等需要你拍板或可以总结时，卡片会明确提示。",
+      tone: "muted",
+    };
+  }
+  return {
+    title: "可以生成总结",
+    body: ` 已采纳 ${acceptedFindings} 条发现，关键任务已处理完。`,
+    nextStep: "下一步：可以生成最终总结，或打开进度面板回看依据。",
+    tone: "muted",
+  };
+}
+
+function humanizeAgentTeamCardText(text: string | undefined): string {
+  if (!text) return "";
+  return text
+    .replaceAll("Waiting for dependencies:", "等待前置事项完成：")
+    .replaceAll("Waiting for dependencies", "等待前置事项完成")
+    .replaceAll("Waiting for structured teammate result.", "等待成员返回结果。")
+    .replaceAll("required task", "关键任务")
+    .replaceAll("required tasks", "关键任务");
+}
+
+function agentTeamTaskCardStatus(status: string): string {
+  if (status === "completed") return "已完成";
+  if (status === "running" || status === "claimed") return "处理中";
+  if (status === "blocked") return "等待前置";
+  if (status === "pending") return "待安排";
+  if (status === "needs_plan") return "等负责人";
+  return status;
 }
 
 function AgentTeamMetric({

@@ -492,6 +492,43 @@ function findAgentTeamRunPartIndex(
   return -1;
 }
 
+function agentTeamFinalSummaryMarker(runId: string): string {
+  return `agent-team-final:${runId}`;
+}
+
+function agentTeamFinalSummaryText(run: AgentTeamRun): string | null {
+  if (run.status !== "completed") return null;
+  const decision = run.board.decisions.at(-1);
+  const rationale = decision?.rationale?.trim();
+  if (!rationale) return null;
+  return [
+    "结论",
+    "",
+    rationale,
+    "",
+    `<!-- ${agentTeamFinalSummaryMarker(run.id)} -->`,
+  ].join("\n");
+}
+
+function hasAgentTeamFinalSummary(messages: ChatMessage[], runId: string): boolean {
+  const marker = agentTeamFinalSummaryMarker(runId);
+  return messages.some((message) =>
+    (message.parts ?? []).some((part) => part.kind === "text" && part.text.includes(marker))
+  );
+}
+
+function appendAgentTeamFinalSummary(state: ReducerState, run: AgentTeamRun): void {
+  if (hasAgentTeamFinalSummary(state.messages, run.id)) return;
+  const text = agentTeamFinalSummaryText(run);
+  if (!text) return;
+  state.messages.push({
+    role: "assistant",
+    parts: [{ kind: "text", text }],
+    timestamp: run.updatedAt ?? Date.now(),
+    stopReason: "stop",
+  });
+}
+
 function previewSubagentAnswer(text: string | undefined): string | undefined {
   if (!text) return undefined;
   const oneLine = text.replace(/\s+/g, " ").trim();
@@ -740,28 +777,43 @@ export function appendRestoredAgentTeamRuns(
   messages: ChatMessage[],
   runs: AgentTeamRun[] | undefined
 ): ChatMessage[] {
-  if (!runs?.length) return messages;
+  const sortedRuns = (runs ?? []).slice().sort((a, b) => a.createdAt - b.createdAt);
+  const latestById = new Map(sortedRuns.map((run) => [run.id, run]));
   const existing = new Set<string>();
-  for (const message of messages) {
-    for (const part of message.parts ?? []) {
-      if (part.kind === "agent_team_run") existing.add(part.run.id);
-    }
-  }
-  const restored = runs
+  const next = messages.map((message) => {
+    let changed = false;
+    const parts = (message.parts ?? []).map((part) => {
+      if (part.kind !== "agent_team_run") return part;
+      existing.add(part.run.id);
+      const latest = latestById.get(part.run.id);
+      if (!latest || latest === part.run) return part;
+      changed = true;
+      return { kind: "agent_team_run" as const, run: latest };
+    });
+    return changed ? { ...message, parts } : message;
+  });
+  const restored = sortedRuns
     .filter((run) => !existing.has(run.id))
-    .sort((a, b) => a.createdAt - b.createdAt)
     .map((run): MessagePart => ({ kind: "agent_team_run", run }));
-  if (restored.length === 0) return messages;
-  return [
-    ...messages,
-    {
+  if (restored.length > 0) {
+    next.push({
       role: "assistant",
       parts: restored,
       timestamp: restored[0]?.kind === "agent_team_run"
         ? restored[0].run.createdAt
         : Date.now(),
-    },
-  ];
+    });
+  }
+  const state: ReducerState = { messages: next, activeAssistantIndex: -1 };
+  const summaryRuns = new Map<string, AgentTeamRun>();
+  for (const message of state.messages) {
+    for (const part of message.parts ?? []) {
+      if (part.kind === "agent_team_run") summaryRuns.set(part.run.id, part.run);
+    }
+  }
+  for (const run of sortedRuns) summaryRuns.set(run.id, run);
+  for (const run of summaryRuns.values()) appendAgentTeamFinalSummary(state, run);
+  return state.messages;
 }
 
 function workflowStatus(value: unknown): WorkflowRunStatus | undefined {
@@ -957,6 +1009,15 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         state.messages[mi] = { ...m, parts };
         break;
       }
+      if (patch.status === "completed") {
+        const runPart = state.messages
+          .flatMap((message) => message.parts ?? [])
+          .find(
+            (part): part is Extract<MessagePart, { kind: "agent_team_run" }> =>
+              part.kind === "agent_team_run" && part.run.id === patch.id
+          );
+        if (runPart) appendAgentTeamFinalSummary(state, runPart.run);
+      }
       return state;
     }
 
@@ -991,6 +1052,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         state.messages[mi] = { ...m, parts };
         break;
       }
+      appendAgentTeamFinalSummary(state, run);
       return state;
     }
 
@@ -1848,7 +1910,9 @@ export function ctxToMessages(
     toolName?: string;
     details?: unknown;
     isError?: boolean;
-    content?: Array<{
+    content?:
+      | string
+      | Array<{
       type: string;
       text?: string;
       thinking?: string;
@@ -1873,6 +1937,17 @@ export function ctxToMessages(
 ): ChatMessage[] {
   const unfinishedToolStatus = opts.unfinishedToolStatus ?? "running";
   const out: ChatMessage[] = [];
+  type CtxContentPart = Exclude<NonNullable<(typeof ctxMessages)[number]["content"]>, string>[number];
+  const contentParts = (
+    content: (typeof ctxMessages)[number]["content"],
+    fieldPath: string
+  ): CtxContentPart[] => {
+    if (typeof content === "string") return [{ type: "text", text: content }];
+    return safeArray<CtxContentPart>(content, {
+      surface: "chat-reducer.ctxToMessages",
+      fieldPath,
+    });
+  };
   // 把 tool_result 按 tool_use_id 索引，到 assistant 遇到 tool_use 时回填
   const toolResults = new Map<
     string,
@@ -1888,10 +1963,7 @@ export function ctxToMessages(
       });
     }
     if (m.role === "tool") {
-      for (const c of safeArray<NonNullable<typeof m.content>[number]>(m.content, {
-        surface: "chat-reducer.ctxToMessages",
-        fieldPath: "message.content",
-      })) {
+      for (const c of contentParts(m.content, "message.content")) {
         if (c.type === "tool_result" && c.tool_use_id) {
           toolResults.set(c.tool_use_id, {
             result: c.content,
@@ -1907,10 +1979,7 @@ export function ctxToMessages(
     if (m.role === "user") {
       const parts: MessagePart[] = [];
       let textJoined = "";
-      for (const c of safeArray<NonNullable<typeof m.content>[number]>(m.content, {
-        surface: "chat-reducer.ctxToMessages",
-        fieldPath: "message.content",
-      })) {
+      for (const c of contentParts(m.content, "message.content")) {
         if (c.type === "text" && c.text) {
           // 历史还原同样剥离「上下文 aside」标记，只显示用户原话。
           const visible = stripContextAside(c.text);
@@ -1935,10 +2004,7 @@ export function ctxToMessages(
       });
     } else if (m.role === "assistant") {
       const parts: MessagePart[] = [];
-      for (const c of safeArray<NonNullable<typeof m.content>[number]>(m.content, {
-        surface: "chat-reducer.ctxToMessages",
-        fieldPath: "message.content",
-      })) {
+      for (const c of contentParts(m.content, "message.content")) {
         if (c.type === "text" && c.text) {
           parts.push({ kind: "text", text: c.text });
         } else if (c.type === "thinking" && c.thinking) {
@@ -2009,7 +2075,14 @@ export function ctxToMessages(
         }),
         timestamp: m.timestamp,
         stopReason: m.stopReason,
-        meta: metaFromMessage({ ...m, role: "assistant" }),
+        meta: metaFromMessage({
+          ...m,
+          role: "assistant",
+          content:
+            typeof m.content === "string"
+              ? [{ type: "text", text: m.content }]
+              : m.content,
+        }),
       });
     }
     // 跳过 role=tool 的独立 message，它们已经被合并到 assistant 的 tool part 里
