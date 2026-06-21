@@ -916,12 +916,16 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
     case "__agent_team_start": {
       const run = (ev as unknown as { teamRun?: AgentTeamRun }).teamRun;
       if (!run) return state;
-      replaceActive((msg) => {
-        const parts = (msg.parts ?? []).slice();
-        if (findAgentTeamRunPartIndex(parts, run.id) >= 0) return msg;
-        sealLastThinkingIfOpen(parts);
-        parts.push({ kind: "agent_team_run", run });
-        return { ...msg, parts };
+      if (state.messages.some((msg) => findAgentTeamRunPartIndex(msg.parts ?? [], run.id) >= 0)) {
+        return applyEvent(state, {
+          type: "__agent_team_update",
+          teamRun: run,
+        });
+      }
+      state.messages.push({
+        role: "assistant",
+        parts: [{ kind: "agent_team_run", run }],
+        timestamp: run.createdAt,
       });
       return state;
     }
@@ -959,12 +963,16 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
     case "agent_team_run_start": {
       const run = (ev as unknown as { run?: AgentTeamRun }).run;
       if (!run) return state;
-      replaceActive((msg) => {
-        const parts = (msg.parts ?? []).slice();
-        if (findAgentTeamRunPartIndex(parts, run.id) >= 0) return msg;
-        sealLastThinkingIfOpen(parts);
-        parts.push({ kind: "agent_team_run", run });
-        return { ...msg, parts };
+      if (state.messages.some((msg) => findAgentTeamRunPartIndex(msg.parts ?? [], run.id) >= 0)) {
+        return applyEvent(state, {
+          type: "agent_team_run_update",
+          run,
+        } as unknown as AnyEvent);
+      }
+      state.messages.push({
+        role: "assistant",
+        parts: [{ kind: "agent_team_run", run }],
+        timestamp: run.createdAt,
       });
       return state;
     }

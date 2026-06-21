@@ -884,6 +884,7 @@ function AgentTeamWorkspace({
   onCommand?: WorkbenchSidebarProps["onAgentTeamCommand"];
 }) {
   const [teamMessage, setTeamMessage] = useState("");
+  const [activeTranscriptMemberId, setActiveTranscriptMemberId] = useState<string | null>(null);
   const [memberFollowUps, setMemberFollowUps] = useState<Record<string, string>>({});
   const [resultDrafts, setResultDrafts] = useState<Record<string, string>>({});
   const [planDrafts, setPlanDrafts] = useState<Record<string, string>>({});
@@ -914,6 +915,9 @@ function AgentTeamWorkspace({
     (lock) => lock.status === "active"
   );
   const lead = run.members.find((member) => member.id === run.leadAgentId) ?? run.members[0];
+  const activeTranscriptMember = activeTranscriptMemberId
+    ? run.members.find((member) => member.id === activeTranscriptMemberId)
+    : null;
 
   return (
     <div className="space-y-3 p-2.5" data-testid="agent-team-workspace">
@@ -1161,7 +1165,7 @@ function AgentTeamWorkspace({
                 {member.sessionFile && onOpenMember ? (
                   <button
                     type="button"
-                    onClick={() => onOpenMember(member.sessionFile!)}
+                    onClick={() => setActiveTranscriptMemberId(member.id)}
                     className="ml-auto inline-flex h-6 items-center gap-1 rounded px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
                     style={{ color: "var(--text-muted)" }}
                   >
@@ -1187,14 +1191,13 @@ function AgentTeamWorkspace({
                         type: "promote_member",
                         memberId: member.id,
                       });
-                      if (member.sessionFile && onOpenMember) onOpenMember(member.sessionFile);
                     }}
                     className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)] disabled:opacity-40"
                     style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
                     disabled={!member.agentId && !member.sessionFile}
                     title="Promote teammate to sidebar"
                   >
-                    {member.sidebarVisible ? "promoted" : "promote"}
+                    {member.sidebarVisible ? "promoted to sidebar" : "promote to sidebar"}
                   </button>
                   {member.status === "blocked" ? (
                     <button
@@ -1482,6 +1485,41 @@ function AgentTeamWorkspace({
               </div>
             </div>
           ))}
+          {activeTranscriptMember ? (
+            <div
+              className="rounded border px-2 py-2"
+              style={{ borderColor: "var(--color-info)", background: "var(--bg-panel)" }}
+              data-testid="agent-team-member-transcript-detail"
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="truncate text-xs font-semibold">
+                  {activeTranscriptMember.name} transcript
+                </span>
+                <TeamStatusBadge
+                  label={teamMemberStatusText(activeTranscriptMember.status)}
+                  tone={activeTranscriptMember.status === "working" ? "running" : activeTranscriptMember.status === "blocked" ? "warn" : activeTranscriptMember.status === "done" ? "done" : "muted"}
+                />
+              </div>
+              <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
+                {activeTranscriptMember.sessionFile ?? "No teammate transcript file yet."}
+              </div>
+              {activeTranscriptMember.latestOutput ? (
+                <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--fg-faint)" }}>
+                  {activeTranscriptMember.latestOutput}
+                </div>
+              ) : null}
+              {activeTranscriptMember.sessionFile && onOpenMember ? (
+                <button
+                  type="button"
+                  onClick={() => onOpenMember(activeTranscriptMember.sessionFile!)}
+                  className="mt-2 h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+                  style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+                >
+                  open session
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </TeamWorkspaceSection>
 

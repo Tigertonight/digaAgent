@@ -401,6 +401,16 @@ export function evaluateAgentTeamFinalize(run: AgentTeamRun): AgentTeamFinalizeC
   };
 }
 
+function refreshAgentTeamQualityGates(run: AgentTeamRun): AgentTeamRun {
+  const check = evaluateAgentTeamFinalize(run);
+  return patchAgentTeamRun(run, {
+    board: {
+      ...run.board,
+      qualityGates: check.gates,
+    },
+  });
+}
+
 export function patchAgentTeamRun(
   run: AgentTeamRun,
   patch: Partial<AgentTeamRun>
@@ -634,7 +644,7 @@ export function claimAgentTeamTask(
       : item
   );
   return {
-    run: patchAgentTeamRun(run, {
+    run: refreshAgentTeamQualityGates(patchAgentTeamRun(run, {
       board: {
         ...run.board,
         tasks: nextTasks,
@@ -672,7 +682,7 @@ export function claimAgentTeamTask(
         ],
       },
       members: nextMembers,
-    }),
+    })),
   };
 }
 
@@ -759,7 +769,7 @@ export function recordAgentTeamToolWrite(
     new Set([...(task.writePaths ?? []), ...requestedWritePaths])
   );
   return {
-    run: patchAgentTeamRun(run, {
+    run: refreshAgentTeamQualityGates(patchAgentTeamRun(run, {
       board: {
         ...run.board,
         fileLocks: [...(run.board.fileLocks ?? []), ...newLocks],
@@ -796,7 +806,7 @@ export function recordAgentTeamToolWrite(
             }
           : item
       ),
-    }),
+    })),
   };
 }
 
@@ -944,7 +954,7 @@ export function completeAgentTeamTask(
       taskId,
     }));
   return {
-    run: patchAgentTeamRun(run, {
+    run: refreshAgentTeamQualityGates(patchAgentTeamRun(run, {
       board: {
         ...run.board,
         tasks: nextTasks,
@@ -989,7 +999,7 @@ export function completeAgentTeamTask(
         acceptedFindings({ ...run, board: { ...run.board, findings: finding ? [...run.board.findings, finding] : run.board.findings } }).length > 0
           ? "ready_to_synthesize"
           : run.leadState,
-    }),
+    })),
   };
 }
 
@@ -1338,7 +1348,7 @@ export function resolveAgentTeamChallenge(
   if (!resolution.trim()) return { run, error: "challenge resolution is required" };
   const now = Date.now();
   return {
-    run: patchAgentTeamRun(run, {
+    run: refreshAgentTeamQualityGates(patchAgentTeamRun(run, {
       board: {
         ...run.board,
         challenges: run.board.challenges.map((item) =>
@@ -1365,7 +1375,7 @@ export function resolveAgentTeamChallenge(
           },
         ],
       },
-    }),
+    })),
   };
 }
 
@@ -1380,7 +1390,7 @@ export function dismissAgentTeamChallenge(
   if (!reason.trim()) return { run, error: "dismiss reason is required" };
   const now = Date.now();
   return {
-    run: patchAgentTeamRun(run, {
+    run: refreshAgentTeamQualityGates(patchAgentTeamRun(run, {
       board: {
         ...run.board,
         challenges: run.board.challenges.map((item) =>
@@ -1405,7 +1415,7 @@ export function dismissAgentTeamChallenge(
           },
         ],
       },
-    }),
+    })),
   };
 }
 

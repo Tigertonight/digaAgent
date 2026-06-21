@@ -20,6 +20,7 @@ import {
   followUpStoredAgentTeamMember,
   getAgentTeamRun,
   listAgentTeamRuns,
+  listAgentTeamRunsByParentSessionPath,
   markStoredAgentTeamIdle,
   planStoredAgentTeamDispatches,
   planStoredAgentTeamDispatch,
@@ -61,6 +62,30 @@ interface AgentTeamDispatchRequest {
   dispatchMode: "single" | "batch" | "until_idle";
 }
 
+function canAccessTeamRun(
+  run: AgentTeamRun | undefined,
+  agentId: string,
+  rec: AgentRecord
+): run is AgentTeamRun {
+  if (!run) return false;
+  if (run.parentAgentId === agentId) return true;
+  return Boolean(rec.session.sessionFile && run.parentSessionPath === rec.session.sessionFile);
+}
+
+function listAccessibleTeamRuns(agentId: string, rec: AgentRecord): AgentTeamRun[] {
+  const seen = new Set<string>();
+  const bySession = rec.session.sessionFile
+    ? listAgentTeamRunsByParentSessionPath(rec.session.sessionFile)
+    : [];
+  return [...listAgentTeamRuns(agentId), ...bySession]
+    .filter((run) => {
+      if (seen.has(run.id)) return false;
+      seen.add(run.id);
+      return true;
+    })
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
 export const GET = withRemoteAuth(async function (
   req: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -72,12 +97,12 @@ export const GET = withRemoteAuth(async function (
   const teamId = url.searchParams.get("id") ?? url.searchParams.get("teamId");
   if (teamId) {
     const run = getAgentTeamRun(teamId);
-    if (!run || run.parentAgentId !== id) {
+    if (!canAccessTeamRun(run, id, rec)) {
       return NextResponse.json({ error: "team run not found" }, { status: 404 });
     }
     return NextResponse.json({ run });
   }
-  return NextResponse.json({ runs: listAgentTeamRuns(id) });
+  return NextResponse.json({ runs: listAccessibleTeamRuns(id, rec) });
 });
 
 export const POST = withRemoteAuth(async function (
@@ -132,7 +157,7 @@ export const POST = withRemoteAuth(async function (
       );
     }
     const existing = getAgentTeamRun(teamId);
-    if (!existing || existing.parentAgentId !== id) {
+    if (!canAccessTeamRun(existing, id, rec)) {
       return NextResponse.json({ error: "team run not found" }, { status: 404 });
     }
     if (status === "aborted") {
@@ -160,7 +185,7 @@ export const POST = withRemoteAuth(async function (
     const taskId = typeof body.taskId === "string" ? body.taskId : "";
     const memberId = typeof body.memberId === "string" ? body.memberId : "";
     const existing = getAgentTeamRun(teamId);
-    if (!existing || existing.parentAgentId !== id) {
+    if (!canAccessTeamRun(existing, id, rec)) {
       return NextResponse.json({ error: "team run not found" }, { status: 404 });
     }
     const writePaths = Array.isArray(body.writePaths)
@@ -179,7 +204,7 @@ export const POST = withRemoteAuth(async function (
     const taskId = typeof body.taskId === "string" ? body.taskId : "";
     const memberId = typeof body.memberId === "string" ? body.memberId : "";
     const existing = getAgentTeamRun(teamId);
-    if (!existing || existing.parentAgentId !== id) {
+    if (!canAccessTeamRun(existing, id, rec)) {
       return NextResponse.json({ error: "team run not found" }, { status: 404 });
     }
     const evidenceRefs = Array.isArray(body.evidenceRefs)
@@ -210,7 +235,7 @@ export const POST = withRemoteAuth(async function (
     const memberId = typeof body.memberId === "string" ? body.memberId : "";
     const rawText = typeof body.rawText === "string" ? body.rawText.trim() : "";
     const existing = getAgentTeamRun(teamId);
-    if (!existing || existing.parentAgentId !== id) {
+    if (!canAccessTeamRun(existing, id, rec)) {
       return NextResponse.json({ error: "team run not found" }, { status: 404 });
     }
     if (!rawText) {
@@ -239,7 +264,7 @@ export const POST = withRemoteAuth(async function (
     const findingId = typeof body.findingId === "string" ? body.findingId : "";
     const actorAgentId = typeof body.actorAgentId === "string" ? body.actorAgentId : "";
     const existing = getAgentTeamRun(teamId);
-    if (!existing || existing.parentAgentId !== id) {
+    if (!canAccessTeamRun(existing, id, rec)) {
       return NextResponse.json({ error: "team run not found" }, { status: 404 });
     }
     const result =
@@ -261,7 +286,7 @@ export const POST = withRemoteAuth(async function (
   if (type === "create_challenge" || type === "resolve_challenge" || type === "dismiss_challenge") {
     const teamId = typeof body.teamId === "string" ? body.teamId : "";
     const existing = getAgentTeamRun(teamId);
-    if (!existing || existing.parentAgentId !== id) {
+    if (!canAccessTeamRun(existing, id, rec)) {
       return NextResponse.json({ error: "team run not found" }, { status: 404 });
     }
     const actorAgentId =
@@ -313,7 +338,7 @@ export const POST = withRemoteAuth(async function (
   if (type === "record_decision") {
     const teamId = typeof body.teamId === "string" ? body.teamId : "";
     const existing = getAgentTeamRun(teamId);
-    if (!existing || existing.parentAgentId !== id) {
+    if (!canAccessTeamRun(existing, id, rec)) {
       return NextResponse.json({ error: "team run not found" }, { status: 404 });
     }
     const result = recordStoredAgentTeamDecision(teamId, {
@@ -356,7 +381,7 @@ export const POST = withRemoteAuth(async function (
   if (type === "submit_plan" || type === "approve_plan" || type === "reject_plan") {
     const teamId = typeof body.teamId === "string" ? body.teamId : "";
     const existing = getAgentTeamRun(teamId);
-    if (!existing || existing.parentAgentId !== id) {
+    if (!canAccessTeamRun(existing, id, rec)) {
       return NextResponse.json({ error: "team run not found" }, { status: 404 });
     }
     const actorAgentId =
@@ -399,7 +424,7 @@ export const POST = withRemoteAuth(async function (
     const fromAgentId = typeof body.fromAgentId === "string" ? body.fromAgentId : "";
     const bodyText = typeof body.body === "string" ? body.body.trim() : "";
     const existing = getAgentTeamRun(teamId);
-    if (!existing || existing.parentAgentId !== id) {
+    if (!canAccessTeamRun(existing, id, rec)) {
       return NextResponse.json({ error: "team run not found" }, { status: 404 });
     }
     if (!bodyText) {
@@ -426,7 +451,7 @@ export const POST = withRemoteAuth(async function (
     const fromAgentId = typeof body.fromAgentId === "string" ? body.fromAgentId : "";
     const bodyText = typeof body.body === "string" ? body.body.trim() : "";
     const existing = getAgentTeamRun(teamId);
-    if (!existing || existing.parentAgentId !== id) {
+    if (!canAccessTeamRun(existing, id, rec)) {
       return NextResponse.json({ error: "team run not found" }, { status: 404 });
     }
     if (!bodyText) {
@@ -481,7 +506,7 @@ export const POST = withRemoteAuth(async function (
     const teamId = typeof body.teamId === "string" ? body.teamId : "";
     const memberId = typeof body.memberId === "string" ? body.memberId : "";
     const existing = getAgentTeamRun(teamId);
-    if (!existing || existing.parentAgentId !== id) {
+    if (!canAccessTeamRun(existing, id, rec)) {
       return NextResponse.json({ error: "team run not found" }, { status: 404 });
     }
     const member = existing.members.find((item) => item.id === memberId);
@@ -509,7 +534,7 @@ export const POST = withRemoteAuth(async function (
     const teamId = typeof body.teamId === "string" ? body.teamId : "";
     const hookId = typeof body.hookId === "string" ? body.hookId : "";
     const existing = getAgentTeamRun(teamId);
-    if (!existing || existing.parentAgentId !== id) {
+    if (!canAccessTeamRun(existing, id, rec)) {
       return NextResponse.json({ error: "team run not found" }, { status: 404 });
     }
     const severity =
@@ -533,7 +558,7 @@ export const POST = withRemoteAuth(async function (
     const teamId = typeof body.teamId === "string" ? body.teamId : "";
     const taskId = typeof body.taskId === "string" ? body.taskId : "";
     const existing = getAgentTeamRun(teamId);
-    if (!existing || existing.parentAgentId !== id) {
+    if (!canAccessTeamRun(existing, id, rec)) {
       return NextResponse.json({ error: "team run not found" }, { status: 404 });
     }
     const result = retryStoredAgentTeamTask(teamId, taskId);
@@ -548,7 +573,7 @@ export const POST = withRemoteAuth(async function (
     const teamId = typeof body.teamId === "string" ? body.teamId : "";
     const memberId = typeof body.memberId === "string" ? body.memberId : "";
     const existing = getAgentTeamRun(teamId);
-    if (!existing || existing.parentAgentId !== id) {
+    if (!canAccessTeamRun(existing, id, rec)) {
       return NextResponse.json({ error: "team run not found" }, { status: 404 });
     }
     const member = existing.members.find((item) => item.id === memberId);
@@ -583,7 +608,7 @@ export const POST = withRemoteAuth(async function (
   if (type === "run_next" || type === "run_batch" || type === "run_until_idle") {
     const teamId = typeof body.teamId === "string" ? body.teamId : "";
     const existing = getAgentTeamRun(teamId);
-    if (!existing || existing.parentAgentId !== id) {
+    if (!canAccessTeamRun(existing, id, rec)) {
       return NextResponse.json({ error: "team run not found" }, { status: 404 });
     }
     const maxDispatches =

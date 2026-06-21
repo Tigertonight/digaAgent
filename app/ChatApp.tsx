@@ -1691,6 +1691,39 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const agentTeamRuns = useMemo(() => collectAgentTeamRuns(messages), [messages]);
   const messageRefs = useMessageRefs(visibleMessageCount);
 
+  useEffect(() => {
+    if (!agentId) return;
+    let cancelled = false;
+    void fetch(`/api/agent/${agentId}/teams`)
+      .then((response) => response.json())
+      .then((data) => {
+        if (cancelled || !Array.isArray(data?.runs) || data.runs.length === 0) {
+          return;
+        }
+        const runs = data.runs as AgentTeamRun[];
+        const ownerKey = activeKeyRef.current;
+        updateRunner(ownerKey, (state) => {
+          let chatState = {
+            ...state.chatState,
+            messages: appendRestoredAgentTeamRuns(state.chatState.messages, runs),
+          };
+          for (const run of runs) {
+            chatState = applyEvent(chatState, {
+              type: "__agent_team_update",
+              teamRun: run,
+            });
+          }
+          return { chatState };
+        });
+      })
+      .catch((err) => {
+        console.warn("[diga-agent] failed to restore Agent Team runs", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeKeyRef, agentId, updateRunner]);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   // 用户是否"贴底"：贴底时新内容自动跟随，往上滚一旦离开底部 64px 就停止跟随。
@@ -3212,11 +3245,13 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         body: JSON.stringify({ ...command, teamId }),
       });
       const data = await response.json().catch(() => ({}));
+      if (data?.run) {
+        updateAgentTeamRun(data.run as AgentTeamRun);
+      }
       if (!response.ok || !data?.run) {
         setError(data?.error ?? `Team 操作失败: HTTP ${response.status}`);
         return;
       }
-      updateAgentTeamRun(data.run as AgentTeamRun);
       if (data.error) {
         setError(String(data.error));
       } else {

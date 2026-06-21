@@ -61,6 +61,25 @@ async function listAllSdkSessions(): Promise<SessionInfo[]> {
   return inflight;
 }
 
+async function listTrustedSessionCandidates(): Promise<
+  Array<{ id?: string | null; path: string }>
+> {
+  const sdkSessions = await listAllSdkSessions();
+  const candidates: Array<{ id?: string | null; path: string }> =
+    sdkSessions.map((session) => ({ id: session.id, path: session.path }));
+  try {
+    const { listAgentSummaries } = await import("./agent-registry");
+    for (const agent of listAgentSummaries()) {
+      if (agent.hidden || !agent.sessionFile) continue;
+      candidates.push({ id: agent.sessionId, path: agent.sessionFile });
+    }
+  } catch {
+    // Registry is a secondary trust source for freshly-created/runtime sessions.
+    // If it is unavailable, the SDK list remains the authoritative baseline.
+  }
+  return candidates;
+}
+
 export function __clearSessionListCacheForTests(): void {
   // 释话：vitest 默认 NODE_ENV 为 'production'。过去在 'test' 下才生效导致该
   // 函数在封存环境中是 no-op，lib/sessions.test.ts 的第三个 case 会从上一个
@@ -190,7 +209,7 @@ export async function resolveTrustedSessionPath(
   expectedId: string,
 ): Promise<string | null> {
   if (!sessionPath || !expectedId) return null;
-  const all = await listAllSdkSessions();
+  const all = await listTrustedSessionCandidates();
   const hit = all.find((s) => s.id === expectedId && s.path === sessionPath);
   return hit?.path ?? null;
 }
@@ -220,7 +239,7 @@ export async function assertTrustedSessionPath(
   }
   const path = await import("node:path");
   const resolved = path.resolve(sessionPath);
-  const all = await listAllSdkSessions();
+  const all = await listTrustedSessionCandidates();
   const hit = all.find((s) => path.resolve(s.path) === resolved);
   if (!hit) {
     throw new TrustedSessionPathError();

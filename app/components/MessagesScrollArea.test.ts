@@ -109,4 +109,14 @@ describe("MessagesScrollArea process grouping", () => {
     expect(source).toContain("<UiFaultBoundary");
     expect(source).toContain("消息渲染异常，已隔离该消息");
   });
+
+  it("keeps Agent Team run cards visible instead of folding them into process groups", () => {
+    const source = readFileSync(
+      path.join(process.cwd(), "app/components/MessagesScrollArea.tsx"),
+      "utf8"
+    );
+
+    expect(source).toContain('part.kind === "agent_team_run"');
+    expect(source).toContain("return false");
+  });
 });

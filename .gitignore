@@ -14,6 +14,7 @@ tsconfig.tsbuildinfo
 --full-page
 # agent 工作产物（imagegen 输出 / debug dump 等）,不入仓
 output/
+.pi/
 
 # Codewiz 工具工作目录,不入仓
 .codewiz/

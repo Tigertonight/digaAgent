@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLastSeenPersistScheduler } from "./useSessions";
 
@@ -55,5 +57,19 @@ describe("createLastSeenPersistScheduler", () => {
       }),
     });
     scheduler.flushForTests();
+  });
+});
+
+describe("useSessions selected session persistence", () => {
+  it("remembers the selected session so Team workspaces can restore after reload", () => {
+    const source = readFileSync(
+      path.join(process.cwd(), "app/hooks/useSessions.ts"),
+      "utf8"
+    );
+
+    expect(source).toContain("pi-selected-session-id");
+    expect(source).toContain("readSelectedSessionFromStorage(initialSessions)");
+    expect(source).toContain("writeSelectedSessionToStorage(selectedId)");
+    expect(source).toContain("readSelectedSessionFromStorage(next)");
   });
 });

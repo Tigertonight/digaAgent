@@ -53,6 +53,7 @@ import {
 } from "@/lib/sessions/optimistic";
 
 const STORAGE_KEY = "sessionLastSeen";
+const SELECTED_SESSION_STORAGE_KEY = "pi-selected-session-id";
 const POLL_INTERVAL_MS = 15_000;
 const LAST_SEEN_PERSIST_DEBOUNCE_MS = 1_500;
 
@@ -74,6 +75,32 @@ function readLastSeenFromStorage(): Record<string, string> {
 function writeLastSeenToStorage(map: Record<string, string>): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    // ignore (private mode / quota)
+  }
+}
+
+function readSelectedSessionFromStorage(
+  sessions: SessionInfoLite[],
+): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const stored = localStorage.getItem(SELECTED_SESSION_STORAGE_KEY);
+    if (!stored) return null;
+    return sessions.some((session) => session.id === stored) ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSelectedSessionToStorage(sessionId: string | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (sessionId) {
+      localStorage.setItem(SELECTED_SESSION_STORAGE_KEY, sessionId);
+    } else {
+      localStorage.removeItem(SELECTED_SESSION_STORAGE_KEY);
+    }
   } catch {
     // ignore (private mode / quota)
   }
@@ -286,8 +313,8 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
     opts;
 
   const [sessions, setSessions] = useState<SessionInfoLite[]>(initialSessions);
-  const [selectedId, setSelectedId] = useState<string | null>(
-    initialSessions[0]?.id ?? null
+  const [selectedId, setSelectedId] = useState<string | null>(() =>
+    readSelectedSessionFromStorage(initialSessions) ?? initialSessions[0]?.id ?? null
   );
 
   /**
@@ -309,6 +336,7 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
   const selectedIdRef = useRef<string | null>(selectedId);
   useEffect(() => {
     selectedIdRef.current = selectedId;
+    writeSelectedSessionToStorage(selectedId);
   }, [selectedId]);
 
   const lastSeenMapRef = useRef<Record<string, string>>(lastSeenMap);
@@ -418,6 +446,9 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
         const currentActiveKey = activeKeyRef.current;
         if (currentSelectedId && !nextIds.has(currentSelectedId)) {
           setSelectedId(null);
+        } else if (!currentSelectedId) {
+          const storedSelectedId = readSelectedSessionFromStorage(next);
+          if (storedSelectedId) setSelectedId(storedSelectedId);
         }
         if (currentActiveKey !== DRAFT_KEY && !nextPaths.has(currentActiveKey)) {
           const orphaned = runnersRef.current.get(currentActiveKey);

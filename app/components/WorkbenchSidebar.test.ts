@@ -208,7 +208,10 @@ describe("Workbench overview model", () => {
     expect(source).toContain("Run next");
     expect(source).toContain("Run batch");
     expect(source).toContain("Auto run");
-    expect(source).toContain("promote");
+    expect(source).toContain("setActiveTranscriptMemberId(member.id)");
+    expect(source).toContain("agent-team-member-transcript-detail");
+    expect(source).toContain("promote to sidebar");
+    expect(source).toContain("promoted to sidebar");
     expect(source).toContain("retry");
     expect(source).toContain("replace");
     expect(source).toContain("Broadcast to team");
@@ -240,5 +243,7 @@ describe("Workbench overview model", () => {
     expect(source).toContain("body: JSON.stringify({ type: \"start\", objective: text, settings })");
     expect(source).toContain("const checked = event.currentTarget.checked");
     expect(source).not.toContain("[key]: event.currentTarget.checked");
+    expect(source).toContain("fetch(`/api/agent/${agentId}/teams`)");
+    expect(source).toContain("appendRestoredAgentTeamRuns(state.chatState.messages, runs)");
   });
 });

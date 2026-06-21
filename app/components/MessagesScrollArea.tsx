@@ -792,6 +792,7 @@ function isCollapsibleProcessAssistant(
   // assistant messages creates the repeated “GPT-5.5 + token row” whitespace; in
   // the conversation hierarchy they are part of the surrounding execution trace.
   if (parts.length === 0) return Boolean(message.meta?.usage || message.meta?.model);
+  if (parts.some((part) => part.kind === "agent_team_run")) return false;
   return !parts.some((part) => part.kind === "text" && part.text.trim().length > 0);
 }
 
