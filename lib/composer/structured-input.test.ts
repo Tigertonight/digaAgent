@@ -39,4 +39,13 @@ describe("extractStructuredInput", () => {
       changed: false,
     });
   });
+
+  it("extracts /team as a structured mode", () => {
+    expect(extractStructuredInput("/team research naming", null)).toEqual({
+      mode: "team",
+      paths: [],
+      text: "research naming",
+      changed: true,
+    });
+  });
 });

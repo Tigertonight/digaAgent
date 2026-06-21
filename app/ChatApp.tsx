@@ -18,7 +18,7 @@ import {
   deleteInput as deleteStoreInput,
 } from "@/lib/composer/input-store";
 import { parseSlashCommand } from "@/lib/slash-command";
-import { ArrowDown, CheckCircle2, Download, FileText, Loader2, RotateCcw, X } from "lucide-react";
+import { ArrowDown, CheckCircle2, Download, FileText, Loader2, RotateCcw, Users, X } from "lucide-react";
 import type {
   SessionInfoLite,
   ChatMessage,
@@ -43,10 +43,13 @@ import { useAudio } from "@/lib/use-audio";
 import { useDragDrop } from "@/lib/use-drag-drop";
 import { previewStore } from "@/lib/preview-store";
 import {
+  appendRestoredAgentTeamRuns,
   appendRestoredSubagentBatches,
+  applyEvent,
   createInitialState,
   ctxToMessages,
 } from "@/lib/chat-reducer";
+import type { AgentTeamRun, AgentTeamSettings } from "@/lib/agent-team/types";
 import { userFacingMessage } from "@/lib/user-facing-error";
 import type { SubagentBatch } from "@/lib/subagents/types";
 import {
@@ -104,6 +107,33 @@ interface Props {
 type Theme = "dark" | "light";
 const INPUT_HISTORY_KEY = "diga:composer:history:v1";
 const INPUT_HISTORY_LIMIT = 100;
+const DEFAULT_TEAM_LAUNCH_SETTINGS: AgentTeamSettings = {
+  memberScale: "standard",
+  allowNetwork: false,
+  allowWrite: false,
+  allowWorktree: false,
+  allowChallenges: true,
+  requirePlanApproval: true,
+  displayMode: "workspace",
+  stopConditions: {
+    requiredTasksComplete: true,
+    noOpenBlockingChallenges: true,
+    leadFinalSynthesis: true,
+  },
+};
+
+function createDefaultTeamLaunchSettings(): AgentTeamSettings {
+  return {
+    ...DEFAULT_TEAM_LAUNCH_SETTINGS,
+    stopConditions: { ...DEFAULT_TEAM_LAUNCH_SETTINGS.stopConditions },
+  };
+}
+
+function describeTeamMemberScale(scale: AgentTeamSettings["memberScale"]): string {
+  if (scale === "small") return "小队 3";
+  if (scale === "deep") return "深度 8+";
+  return "标准 5";
+}
 
 // SLASH_COMMANDS / SlashName / detectAutocompleteToken 已搬到 hooks/useAutocomplete.ts（RFC-1 阶段 C2）。
 
@@ -119,6 +149,19 @@ function formatWorkflowTime(ms: number | undefined): string {
   } catch {
     return "";
   }
+}
+
+function collectAgentTeamRuns(messages: ChatMessage[]): AgentTeamRun[] {
+  const runs: AgentTeamRun[] = [];
+  const seen = new Set<string>();
+  for (const message of messages) {
+    for (const part of message.parts ?? []) {
+      if (part.kind !== "agent_team_run" || seen.has(part.run.id)) continue;
+      seen.add(part.run.id);
+      runs.push(part.run);
+    }
+  }
+  return runs.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 function shortWorkflowJson(value: unknown, maxChars = 5000): string {
@@ -859,7 +902,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         stored === "outputs" ||
         stored === "files" ||
         stored === "context" ||
-        stored === "browser"
+        stored === "browser" ||
+        stored === "team"
       ) {
         return { type: stored };
       }
@@ -1042,6 +1086,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   /** RFC-2 Phase A3：Budget 命中后由 useBudgetEnforcer 设置；非 null 时弹 BudgetExceededModal */
   const [budgetPausedTrigger, setBudgetPausedTrigger] =
     useState<BudgetTrigger | null>(null);
+  const [pendingTeamLaunch, setPendingTeamLaunch] = useState<{
+    objective: string;
+  } | null>(null);
+  const [teamLaunchSettings, setTeamLaunchSettings] =
+    useState<AgentTeamSettings>(() => createDefaultTeamLaunchSettings());
   // sseStatus 已挪到 RunnerState(每个会话独立的 SSE 状态)。
   // forksCollapsed / toggleForks 已挪到 useForkable hook（C1）
   /** 当前打开 ⋯ 菜单的 session id；renaming 时存 inline edit 状态 */
@@ -1639,6 +1688,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
   const messages = messageRenderState.messages;
   const visibleMessageCount = messageRenderState.visibleMessageCount;
+  const agentTeamRuns = useMemo(() => collectAgentTeamRuns(messages), [messages]);
   const messageRefs = useMessageRefs(visibleMessageCount);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1860,10 +1910,15 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
               contextLoading: false,
               contextError: null,
               chatState: createInitialState(
-                appendRestoredSubagentBatches(
-                  ctxToMessages(ctx.messages ?? [], restoreToolOptions),
-                  Array.isArray(ctx.subagentBatches)
-                    ? (ctx.subagentBatches as SubagentBatch[])
+                appendRestoredAgentTeamRuns(
+                  appendRestoredSubagentBatches(
+                    ctxToMessages(ctx.messages ?? [], restoreToolOptions),
+                    Array.isArray(ctx.subagentBatches)
+                      ? (ctx.subagentBatches as SubagentBatch[])
+                      : undefined
+                  ),
+                  Array.isArray(ctx.agentTeamRuns)
+                    ? (ctx.agentTeamRuns as AgentTeamRun[])
                     : undefined
                 )
               ),
@@ -2015,10 +2070,15 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           : undefined;
       updateRunner(ownerKeyAtStart, {
         chatState: createInitialState(
-          appendRestoredSubagentBatches(
-            ctxToMessages(ctx.messages ?? [], restoreToolOptions),
-            Array.isArray(ctx.subagentBatches)
-              ? (ctx.subagentBatches as SubagentBatch[])
+          appendRestoredAgentTeamRuns(
+            appendRestoredSubagentBatches(
+              ctxToMessages(ctx.messages ?? [], restoreToolOptions),
+              Array.isArray(ctx.subagentBatches)
+                ? (ctx.subagentBatches as SubagentBatch[])
+                : undefined
+            ),
+            Array.isArray(ctx.agentTeamRuns)
+              ? (ctx.agentTeamRuns as AgentTeamRun[])
               : undefined
           )
         ),
@@ -2100,6 +2160,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         const subagentBatches = Array.isArray(ctx.subagentBatches)
           ? (ctx.subagentBatches as SubagentBatch[])
           : undefined;
+        const agentTeamRunsFromContext = Array.isArray(ctx.agentTeamRuns)
+          ? (ctx.agentTeamRuns as AgentTeamRun[])
+          : undefined;
         const forkable = Array.isArray(ctx.forkableUserMessages)
           ? (ctx.forkableUserMessages as ForkableUserMessage[])
           : undefined;
@@ -2108,9 +2171,12 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
             ? {}
             : {
                 chatState: createInitialState(
-                  appendRestoredSubagentBatches(
-                    ctxToMessages(ctx.messages ?? [], restoreToolOptions),
-                    subagentBatches
+                  appendRestoredAgentTeamRuns(
+                    appendRestoredSubagentBatches(
+                      ctxToMessages(ctx.messages ?? [], restoreToolOptions),
+                      subagentBatches
+                    ),
+                    agentTeamRunsFromContext
                   )
                 ),
               }),
@@ -2331,6 +2397,91 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     refreshStats,
     refreshToolsCount,
   });
+
+  const updateAgentTeamRun = useCallback(
+    (run: Partial<AgentTeamRun> & { id: string }) => {
+      const ownerKey = activeKeyRef.current;
+      updateRunner(ownerKey, (state) => ({
+        chatState: applyEvent(state.chatState, {
+          type: "__agent_team_update",
+          teamRun: run,
+        }),
+      }));
+    },
+    [activeKeyRef, updateRunner]
+  );
+
+  const startTeam = useCallback(
+    async (objective: string, settings: AgentTeamSettings) => {
+      const text = objective.trim();
+      if (!text) return;
+      const ensured = await ensureAgent();
+      if (!ensured) return;
+      updateRunner(ensured.ownerKey, (state) => ({
+        chatState: applyEvent(state.chatState, {
+          type: "__optimistic_user",
+          text,
+          composerMode: "team",
+          pending: false,
+        }),
+      }));
+      const response = await fetch(`/api/agent/${ensured.aid}/teams`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "start", objective: text, settings }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.run) {
+        setError(data?.error ?? `启动 Team 失败: HTTP ${response.status}`);
+        return;
+      }
+      const run = data.run as AgentTeamRun;
+      updateRunner(ensured.ownerKey, (state) => ({
+        chatState: applyEvent(state.chatState, {
+          type: "__agent_team_start",
+          teamRun: run,
+        }),
+      }));
+      setError(null);
+      setWorkbenchView({ type: "team", teamId: run.id });
+      setWorkbenchOpen(true);
+      persistWorkbench(true, { type: "team", teamId: run.id });
+    },
+    [ensureAgent, persistWorkbench, setError, updateRunner]
+  );
+
+  const requestTeamLaunch = useCallback(
+    (objective: string) => {
+      const text = objective.trim();
+      if (!text) {
+        setError("请输入 Team 目标描述");
+        return;
+      }
+      setTeamLaunchSettings(createDefaultTeamLaunchSettings());
+      setPendingTeamLaunch({ objective: text });
+      setError(null);
+    },
+    [setError]
+  );
+
+  const cancelTeamLaunch = useCallback(() => {
+    setPendingTeamLaunch(null);
+  }, []);
+
+  const confirmTeamLaunch = useCallback(async () => {
+    if (!pendingTeamLaunch) return;
+    const objective = pendingTeamLaunch.objective;
+    setPendingTeamLaunch(null);
+    setInput("");
+    setComposerMode(null);
+    await startTeam(objective, teamLaunchSettings);
+  }, [
+    pendingTeamLaunch,
+    setComposerMode,
+    setInput,
+    startTeam,
+    teamLaunchSettings,
+  ]);
 
   // RFC-2 Phase A3：Budget 触发后执行 abort/pause
   useBudgetEnforcer({
@@ -2592,10 +2743,12 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     // Workflow chip + "/goal"），优先尊重新的显式命令，避免把 /goal 当成
     // workflow 目标原文发给模型。
     if (composerMode) {
-      const parsedMode = parseSlashCommand(current, ["goal", "workflow"]);
+      const parsedMode = parseSlashCommand(current, ["goal", "workflow", "team"]);
       if (
         parsedMode &&
-        (parsedMode.name === "goal" || parsedMode.name === "workflow") &&
+        (parsedMode.name === "goal" ||
+          parsedMode.name === "workflow" ||
+          parsedMode.name === "team") &&
         parsedMode.name !== composerMode
       ) {
         setComposerMode(parsedMode.name);
@@ -2629,9 +2782,30 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       await startWorkflow(current);
       return;
     }
+    if (composerMode === "team") {
+      if (!current.trim()) {
+        setError("请输入 Team 目标描述");
+        return;
+      }
+      rememberComposerInput(current);
+      requestTeamLaunch(current);
+      return;
+    }
     // 兑底路径：老习惯“/goal foo” “/workflow bar” 还能走。
     if (await runGoalCommand(current)) return;
     if (await runWorkflowCommand(current)) return;
+    const parsedTeam = parseSlashCommand(current, ["team"]);
+    if (parsedTeam?.name === "team") {
+      if (!parsedTeam.rest.trim()) {
+        setError("请输入 Team 目标描述");
+        return;
+      }
+      rememberComposerInput(parsedTeam.rest);
+      setInput(parsedTeam.rest);
+      setComposerMode("team");
+      requestTeamLaunch(parsedTeam.rest);
+      return;
+    }
     rememberComposerInput(current);
     await send();
   }, [
@@ -2647,6 +2821,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     setInput,
     startGoal,
     startWorkflow,
+    requestTeamLaunch,
   ]);
 
   const steerWithHistory = useCallback(async () => {
@@ -2951,6 +3126,107 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       setSelectedId(target.id);
     },
     [refreshSessions, sessions, setSelectedId]
+  );
+
+  const openAgentTeamWorkspace = useCallback(
+    (teamId: string) => {
+      openWorkbench({ type: "team", teamId });
+    },
+    [openWorkbench]
+  );
+
+  const handleAgentTeamAction = useCallback(
+    async (teamId: string, action: "pause" | "resume" | "finalize" | "stop") => {
+      const ensured = await ensureAgent();
+      if (!ensured) {
+        setError("当前没有可用的 agent，无法操作 Team");
+        return;
+      }
+      const statusByAction = {
+        pause: "paused",
+        resume: "running",
+        finalize: "completed",
+        stop: "aborted",
+      } as const;
+      const response = await fetch(`/api/agent/${ensured.aid}/teams`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "transition",
+          teamId,
+          status: statusByAction[action],
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.run) {
+        setError(data?.error ?? `Team 操作失败: HTTP ${response.status}`);
+        return;
+      }
+      updateAgentTeamRun(data.run as AgentTeamRun);
+      const blockedReasons = Array.isArray(data.blockedReasons)
+        ? (data.blockedReasons as string[])
+        : [];
+      if (blockedReasons.length > 0) {
+        setError(`Team 暂不能 finalize：${blockedReasons.join("；")}`);
+      } else {
+        setError(null);
+      }
+    },
+    [ensureAgent, setError, updateAgentTeamRun]
+  );
+
+  const handleAgentTeamCommand = useCallback(
+    async (
+      teamId: string,
+      command:
+        | { type: "claim_task"; taskId: string; memberId: string; writePaths?: string[] }
+        | { type: "complete_task"; taskId: string; memberId: string; findingClaim?: string }
+        | { type: "submit_result"; taskId: string; memberId: string; rawText: string; dispatchMode?: "single" | "batch" | "until_idle" }
+        | { type: "accept_finding"; findingId: string; actorAgentId?: string }
+        | { type: "reject_finding"; findingId: string; actorAgentId?: string; reason?: string }
+        | { type: "create_challenge"; findingId: string; actorAgentId?: string; reason?: string; severity?: "low" | "medium" | "high"; requiredEvidenceRefs?: string[] }
+        | { type: "resolve_challenge"; challengeId: string; actorAgentId?: string; resolution?: string; resolutionFindingIds?: string[] }
+        | { type: "dismiss_challenge"; challengeId: string; actorAgentId?: string; reason?: string }
+        | { type: "record_decision"; title?: string; rationale?: string; madeByAgentId?: string; acceptedFindingIds: string[]; rejectedFindingIds?: string[]; challengeIds?: string[]; evidenceRefs?: string[]; sourceResultIds?: string[]; confidence?: "low" | "medium" | "high" }
+        | { type: "submit_plan"; taskId: string; actorAgentId?: string; body: string; criteria?: string[] }
+        | { type: "approve_plan"; planId: string; actorAgentId?: string }
+        | { type: "reject_plan"; planId: string; actorAgentId?: string; reason?: string }
+        | { type: "send_message"; fromAgentId: string; toAgentId?: string; body: string }
+        | { type: "follow_up_member"; fromAgentId: string; memberId: string; body: string }
+        | { type: "promote_member"; memberId: string }
+        | { type: "configure_hook"; hookId: string; enabled?: boolean; severity?: "info" | "warning" | "blocking" }
+        | { type: "retry_task"; taskId: string }
+        | { type: "replace_member"; memberId: string }
+        | { type: "run_next" }
+        | { type: "run_batch"; maxDispatches?: number }
+        | { type: "run_until_idle"; maxDispatches?: number; maxRounds?: number }
+    ) => {
+      const ensured = await ensureAgent();
+      if (!ensured) {
+        setError("当前没有可用的 agent，无法操作 Team");
+        return;
+      }
+      const response = await fetch(`/api/agent/${ensured.aid}/teams`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...command, teamId }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.run) {
+        setError(data?.error ?? `Team 操作失败: HTTP ${response.status}`);
+        return;
+      }
+      updateAgentTeamRun(data.run as AgentTeamRun);
+      if (data.error) {
+        setError(String(data.error));
+      } else {
+        setError(null);
+      }
+      if (command.type === "promote_member") {
+        refreshSessions();
+      }
+    },
+    [ensureAgent, refreshSessions, setError, updateAgentTeamRun]
   );
 
   // ===== Autocomplete + Slash 命令（RFC-1 阶段 C2，已抽到 useAutocomplete） =====
@@ -3348,6 +3624,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
               onRetrySubagentTask={retrySubagentTaskFromCard}
               onResumeSubagentBatch={resumeSubagentBatchFromCard}
               onOpenSubagentSession={openSubagentSessionFromCard}
+              onOpenAgentTeamWorkspace={openAgentTeamWorkspace}
+              onAgentTeamAction={handleAgentTeamAction}
             />
           </UiFaultBoundary>
         )}
@@ -3477,6 +3755,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           }}
           onFilesLayoutChange={setFilesLayout}
           onOpenProgressUrl={openUrlInBrowserPanel}
+          agentTeamRuns={agentTeamRuns}
+          onOpenAgentTeamMember={openSubagentSessionFromCard}
+          onAgentTeamCommand={handleAgentTeamCommand}
           onAnnotate={(annotations: BrowserAnnotation[]) => {
             if (annotations.length === 0) return;
             // 把结构化批注组装成给 agent 的视觉任务文本（含定位区域、URL、留言）。
@@ -3514,6 +3795,214 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           }}
         />
       )}
+      {pendingTeamLaunch ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6"
+          style={{ background: "var(--color-overlay)" }}
+          onClick={cancelTeamLaunch}
+        >
+          <section
+            className="flex max-h-[88vh] w-full max-w-[640px] flex-col overflow-hidden rounded-lg border shadow-modal"
+            style={{
+              background: "var(--bg)",
+              borderColor: "var(--border)",
+              color: "var(--text)",
+            }}
+            aria-label="Team launch confirmation"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div
+              className="flex items-start gap-3 border-b px-5 py-4"
+              style={{ borderColor: "var(--border)" }}
+            >
+              <span
+                className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+                style={{
+                  borderColor: "var(--border)",
+                  background: "var(--bg-panel)",
+                  color: "var(--accent)",
+                }}
+              >
+                <Users size={18} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-token-ui font-semibold">启动 Agent Team</div>
+                <p
+                  className="mt-1 text-token-sm leading-5"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  Team 会打开独立协作室，成员共享任务板、发现、挑战和决策；主聊天只保留摘要。
+                </p>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+              <div
+                className="rounded-md border p-3"
+                style={{
+                  borderColor: "var(--border)",
+                  background: "var(--bg-panel)",
+                }}
+              >
+                <div
+                  className="text-token-xs font-medium uppercase tracking-wide"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  目标
+                </div>
+                <div className="mt-1 break-words text-token-ui">
+                  {pendingTeamLaunch.objective}
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
+                <div>
+                  <div className="text-token-sm font-semibold">成员规模</div>
+                  <div className="mt-2 grid grid-cols-3 gap-2">
+                    {(["small", "standard", "deep"] as const).map((scale) => (
+                      <button
+                        key={scale}
+                        type="button"
+                        className="rounded-md border px-2 py-2 text-token-sm transition-colors"
+                        style={{
+                          borderColor:
+                            teamLaunchSettings.memberScale === scale
+                              ? "var(--accent)"
+                              : "var(--border)",
+                          background:
+                            teamLaunchSettings.memberScale === scale
+                              ? "color-mix(in srgb, var(--accent) 12%, var(--bg-panel))"
+                              : "var(--bg-panel)",
+                          color: "var(--text)",
+                        }}
+                        onClick={() =>
+                          setTeamLaunchSettings((prev) => ({
+                            ...prev,
+                            memberScale: scale,
+                          }))
+                        }
+                      >
+                        {describeTeamMemberScale(scale)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-token-sm font-semibold">协作策略</div>
+                  <label className="mt-2 flex items-center gap-2 text-token-sm">
+                    <input
+                      type="checkbox"
+                      checked={teamLaunchSettings.allowChallenges}
+                      onChange={(event) =>
+                        setTeamLaunchSettings((prev) => ({
+                          ...prev,
+                          allowChallenges: event.currentTarget.checked,
+                        }))
+                      }
+                    />
+                    允许成员互相挑战发现
+                  </label>
+                  <label className="mt-2 flex items-center gap-2 text-token-sm">
+                    <input
+                      type="checkbox"
+                      checked={teamLaunchSettings.requirePlanApproval}
+                      onChange={(event) =>
+                        setTeamLaunchSettings((prev) => ({
+                          ...prev,
+                          requirePlanApproval: event.currentTarget.checked,
+                        }))
+                      }
+                    />
+                    Lead 先形成任务板再推进
+                  </label>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <div className="text-token-sm font-semibold">权限边界</div>
+                <div className="mt-2 grid gap-2 md:grid-cols-3">
+                  {([
+                    ["allowNetwork", "允许网络"],
+                    ["allowWrite", "允许写入"],
+                    ["allowWorktree", "允许 worktree"],
+                  ] as const).map(([key, label]) => (
+                    <label
+                      key={key}
+                      className="flex items-center gap-2 rounded-md border px-3 py-2 text-token-sm"
+                      style={{
+                        borderColor: "var(--border)",
+                        background: "var(--bg-panel)",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={teamLaunchSettings[key]}
+                        onChange={(event) =>
+                          setTeamLaunchSettings((prev) => ({
+                            ...prev,
+                            [key]: event.currentTarget.checked,
+                          }))
+                        }
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <div className="text-token-sm font-semibold">停止条件</div>
+                <div className="mt-2 grid gap-2">
+                  {([
+                    ["requiredTasksComplete", "全部关键任务完成"],
+                    ["noOpenBlockingChallenges", "没有开放阻塞挑战"],
+                    ["leadFinalSynthesis", "Lead 给出最终综合"],
+                  ] as const).map(([key, label]) => (
+                    <label key={key} className="flex items-center gap-2 text-token-sm">
+                      <input
+                        type="checkbox"
+                        checked={teamLaunchSettings.stopConditions[key]}
+                        onChange={(event) =>
+                          setTeamLaunchSettings((prev) => ({
+                            ...prev,
+                            stopConditions: {
+                              ...prev.stopConditions,
+                              [key]: event.currentTarget.checked,
+                            },
+                          }))
+                        }
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div
+              className="flex flex-col gap-2 border-t px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
+              style={{ borderColor: "var(--border)" }}
+            >
+              <div className="text-token-xs" style={{ color: "var(--text-muted)" }}>
+                普通聊天、Subagents、Workflow 不会自动升级到 Team。
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="ghost" onClick={cancelTeamLaunch}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="solid"
+                  tone="accent"
+                  leading={<Users size={15} />}
+                  onClick={() => {
+                    void confirmTeamLaunch();
+                  }}
+                >
+                  Start Team
+                </Button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
       <ChatModals
         cwd={cwd}
         agentId={agentId}

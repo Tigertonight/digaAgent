@@ -145,11 +145,11 @@ export interface RunnerState {
   pendingFiles: PendingAttachment[];
   /**
    * 结构化 Composer 第一版：“mode chip”。
-   *  - 用户输入 "/goal " 或 "/workflow " 后，前端提取为 chip，textarea 只留正文。
-   *  - send 时根据 mode 走 startGoal / startWorkflow / 普通 send。
+   *  - 用户输入 "/goal "、"/workflow " 或 "/team " 后，前端提取为 chip，textarea 只留正文。
+   *  - send 时根据 mode 走 startGoal / startWorkflow / startTeam / 普通 send。
  *  - per-runner：切 session 不串台；重启丢失（transient，不需持久化）。
    */
-  composerMode: "goal" | "workflow" | null;
+  composerMode: "goal" | "workflow" | "team" | null;
 
   // SSE
   sseStatus: SseStatus;

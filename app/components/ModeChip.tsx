@@ -13,9 +13,9 @@
  * 视觉：参考用户给的规格（24px 高，6px 圆角，克制）。
  */
 
-import { Flag, Workflow, X } from "lucide-react";
+import { Flag, Network, Workflow, X } from "lucide-react";
 
-export type ComposerMode = "goal" | "workflow";
+export type ComposerMode = "goal" | "workflow" | "team";
 
 const MODE_META: Record<
   ComposerMode,
@@ -35,6 +35,11 @@ const MODE_META: Record<
     label: "Workflow",
     Icon: Workflow,
     accent: "var(--accent)",
+  },
+  team: {
+    label: "Team",
+    Icon: Network,
+    accent: "var(--color-info)",
   },
 };
 

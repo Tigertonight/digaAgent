@@ -38,6 +38,7 @@ import type {
   WorkflowScriptLog,
   WorkflowTraceEvent,
 } from "./workflows/types";
+import type { AgentTeamRun, AgentTeamRunStatus } from "./agent-team/types";
 import { stripContextAside } from "./context-aside";
 import { isFalseGrepNoMatch } from "./narration/false-error";
 import { diagnoseToolTruncation } from "./tool-recovery/truncation-diagnosis";
@@ -153,6 +154,7 @@ interface AnyEvent {
   results?: SubagentResult[];
   // workflow_* custom events
   run?: WorkflowRun;
+  teamRun?: AgentTeamRun | (Partial<AgentTeamRun> & { id: string });
   workflowId?: string;
   log?: WorkflowScriptLog;
   checkpoint?: WorkflowCheckpoint;
@@ -169,12 +171,13 @@ interface AnyEvent {
   text?: string;
   images?: Array<{ data: string; mimeType: string }>;
   attachments?: string[];
+  pending?: boolean;
   reason?: "timeout" | "failed" | "manual";
   // F-A5 optimistic_user_ack：后端调 SDK prompt 之前发，带上服务端最终
   // 要发出的 displayText（去 mention/aside 之后的文本）。
   displayText?: string;
   // 结构化 Composer A6：optimistic_user 事件可携带 mode，reducer 写到 message.composerMeta。
-  composerMode?: "goal" | "workflow";
+  composerMode?: "goal" | "workflow" | "team";
 }
 
 export interface ReducerState {
@@ -478,6 +481,17 @@ function findWorkflowRunPartIndex(
   return -1;
 }
 
+function findAgentTeamRunPartIndex(
+  parts: MessagePart[],
+  id: string
+): number {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i];
+    if (p.kind === "agent_team_run" && p.run.id === id) return i;
+  }
+  return -1;
+}
+
 function previewSubagentAnswer(text: string | undefined): string | undefined {
   if (!text) return undefined;
   const oneLine = text.replace(/\s+/g, " ").trim();
@@ -722,12 +736,52 @@ export function appendRestoredSubagentBatches(
   ];
 }
 
+export function appendRestoredAgentTeamRuns(
+  messages: ChatMessage[],
+  runs: AgentTeamRun[] | undefined
+): ChatMessage[] {
+  if (!runs?.length) return messages;
+  const existing = new Set<string>();
+  for (const message of messages) {
+    for (const part of message.parts ?? []) {
+      if (part.kind === "agent_team_run") existing.add(part.run.id);
+    }
+  }
+  const restored = runs
+    .filter((run) => !existing.has(run.id))
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .map((run): MessagePart => ({ kind: "agent_team_run", run }));
+  if (restored.length === 0) return messages;
+  return [
+    ...messages,
+    {
+      role: "assistant",
+      parts: restored,
+      timestamp: restored[0]?.kind === "agent_team_run"
+        ? restored[0].run.createdAt
+        : Date.now(),
+    },
+  ];
+}
+
 function workflowStatus(value: unknown): WorkflowRunStatus | undefined {
   return value === "pending" ||
     value === "running" ||
     value === "completed" ||
     value === "completed_with_warnings" ||
     value === "needs_continue" ||
+    value === "failed" ||
+    value === "aborted"
+    ? value
+    : undefined;
+}
+
+function agentTeamRunStatus(value: unknown): AgentTeamRunStatus | undefined {
+  return value === "draft" ||
+    value === "running" ||
+    value === "paused" ||
+    value === "finalizing" ||
+    value === "completed" ||
     value === "failed" ||
     value === "aborted"
     ? value
@@ -837,7 +891,7 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         }
       }
       // 结构化 Composer Phase A6：将 mode + refs 写到气泡上，MessageView 用于渲染 metadata strip。
-      const composerMode = (ev as { composerMode?: "goal" | "workflow" }).composerMode;
+      const composerMode = (ev as { composerMode?: "goal" | "workflow" | "team" }).composerMode;
       const composerMeta =
         composerMode || attachments.length > 0
           ? {
@@ -850,12 +904,85 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         parts,
         text: visibleText,
         timestamp: Date.now(),
-        pending: true,
+        pending: (ev as { pending?: boolean }).pending === false ? false : true,
         clientRequestId: ev.clientRequestId,
         // attachment refs 不进气泡文本，仅供 UI 提示。
         ...(attachments.length > 0 ? { raw: { attachments } } : {}),
         ...(composerMeta ? { composerMeta } : {}),
       });
+      return state;
+    }
+
+    case "__agent_team_start": {
+      const run = (ev as unknown as { teamRun?: AgentTeamRun }).teamRun;
+      if (!run) return state;
+      replaceActive((msg) => {
+        const parts = (msg.parts ?? []).slice();
+        if (findAgentTeamRunPartIndex(parts, run.id) >= 0) return msg;
+        sealLastThinkingIfOpen(parts);
+        parts.push({ kind: "agent_team_run", run });
+        return { ...msg, parts };
+      });
+      return state;
+    }
+
+    case "__agent_team_update": {
+      const patch = (ev as unknown as {
+        teamRun?: Partial<AgentTeamRun> & { id: string };
+      }).teamRun;
+      if (!patch?.id) return state;
+      for (let mi = state.messages.length - 1; mi >= 0; mi--) {
+        const m = state.messages[mi];
+        if (m.role !== "assistant" || !m.parts) continue;
+        const pi = findAgentTeamRunPartIndex(m.parts, patch.id);
+        if (pi < 0) continue;
+        const parts = m.parts.slice();
+        const cur = parts[pi];
+        if (cur.kind !== "agent_team_run") break;
+        parts[pi] = {
+          kind: "agent_team_run",
+          run: {
+            ...cur.run,
+            ...patch,
+            status: agentTeamRunStatus(patch.status) ?? cur.run.status,
+            board: patch.board ?? cur.run.board,
+            members: patch.members ?? cur.run.members,
+            updatedAt: patch.updatedAt ?? Date.now(),
+          },
+        };
+        state.messages[mi] = { ...m, parts };
+        break;
+      }
+      return state;
+    }
+
+    case "agent_team_run_start": {
+      const run = (ev as unknown as { run?: AgentTeamRun }).run;
+      if (!run) return state;
+      replaceActive((msg) => {
+        const parts = (msg.parts ?? []).slice();
+        if (findAgentTeamRunPartIndex(parts, run.id) >= 0) return msg;
+        sealLastThinkingIfOpen(parts);
+        parts.push({ kind: "agent_team_run", run });
+        return { ...msg, parts };
+      });
+      return state;
+    }
+
+    case "agent_team_run_update":
+    case "agent_team_run_finalized": {
+      const run = (ev as unknown as { run?: AgentTeamRun }).run;
+      if (!run?.id) return state;
+      for (let mi = state.messages.length - 1; mi >= 0; mi--) {
+        const m = state.messages[mi];
+        if (m.role !== "assistant" || !m.parts) continue;
+        const pi = findAgentTeamRunPartIndex(m.parts, run.id);
+        if (pi < 0) continue;
+        const parts = m.parts.slice();
+        parts[pi] = { kind: "agent_team_run", run };
+        state.messages[mi] = { ...m, parts };
+        break;
+      }
       return state;
     }
 

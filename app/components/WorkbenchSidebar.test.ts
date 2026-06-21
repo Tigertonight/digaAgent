@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import type { BrowserSnapshot } from "@/lib/browser/types";
 import type { AgentProgress } from "@/lib/progress/types";
@@ -119,6 +121,7 @@ describe("Workbench overview model", () => {
       { type: "files", path: "/tmp/a.txt" },
       { type: "context" },
       { type: "browser", url: "https://example.com" },
+      { type: "team", teamId: "team-1" },
     ];
 
     for (const view of views) {
@@ -152,5 +155,88 @@ describe("Workbench overview model", () => {
       tabs: [tabFromView({ type: "overview" })],
       activeTabId: "home",
     });
+  });
+
+  it("restores stored Team workspace tabs with their parent run id", () => {
+    const key = "workbench-team-tabs";
+    localStorage.setItem(
+      key,
+      JSON.stringify({
+        activeTabId: "team:team-restore",
+        tabs: [
+          { id: "home", kind: "home", title: "概览", closable: false },
+          {
+            id: "team:team-restore",
+            kind: "team",
+            title: "Team",
+            closable: true,
+            teamId: "team-restore",
+          },
+        ],
+      })
+    );
+
+    const stored = loadStoredWorkbenchTabs(key);
+    expect(stored.activeTabId).toBe("team:team-restore");
+    expect(viewFromTab(stored.tabs[1])).toEqual({
+      type: "team",
+      teamId: "team-restore",
+    });
+  });
+
+  it("keeps Agent Team workspace controls and parity surfaces visible", () => {
+    const source = readFileSync(
+      path.join(process.cwd(), "app/components/WorkbenchSidebar.tsx"),
+      "utf8"
+    );
+
+    expect(source).toContain("Quality Gates");
+    expect(source).toContain("Hooks");
+    expect(source).toContain("File Locks");
+    expect(source).toContain("Claude Parity");
+    expect(source).toContain("type: \"claim_task\"");
+    expect(source).toContain("type: \"complete_task\"");
+    expect(source).toContain("type: \"send_message\"");
+    expect(source).toContain("type: \"follow_up_member\"");
+    expect(source).toContain("type: \"promote_member\"");
+    expect(source).toContain("type: \"configure_hook\"");
+    expect(source).toContain("type: \"retry_task\"");
+    expect(source).toContain("type: \"replace_member\"");
+    expect(source).toContain("type: \"run_next\"");
+    expect(source).toContain("type: \"run_batch\"");
+    expect(source).toContain("type: \"run_until_idle\"");
+    expect(source).toContain("Run next");
+    expect(source).toContain("Run batch");
+    expect(source).toContain("Auto run");
+    expect(source).toContain("promote");
+    expect(source).toContain("retry");
+    expect(source).toContain("replace");
+    expect(source).toContain("Broadcast to team");
+    expect(source).toContain("Ask ${member.name}");
+    expect(source).toContain("Send follow-up");
+    expect(source).toContain("fileLocks");
+    expect(source).toContain("run.board.hooks");
+    expect(source).toContain("hook.enabled ? \"on\" : \"off\"");
+  });
+
+  it("keeps Agent Team launch explicit with a confirmation panel", () => {
+    const source = readFileSync(
+      path.join(process.cwd(), "app/ChatApp.tsx"),
+      "utf8"
+    );
+
+    expect(source).toContain("pendingTeamLaunch");
+    expect(source).toContain("requestTeamLaunch");
+    expect(source).toContain("confirmTeamLaunch");
+    expect(source).toContain("启动 Agent Team");
+    expect(source).toContain("成员规模");
+    expect(source).toContain("权限边界");
+    expect(source).toContain("停止条件");
+    expect(source).toContain("allowNetwork");
+    expect(source).toContain("allowWrite");
+    expect(source).toContain("allowWorktree");
+    expect(source).toContain("stopConditions");
+    expect(source).toContain("普通聊天、Subagents、Workflow 不会自动升级到 Team");
+    expect(source).toContain("body: JSON.stringify({ type: \"start\", objective: text, settings })");
   });
 });

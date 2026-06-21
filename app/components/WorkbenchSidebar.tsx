@@ -19,15 +19,19 @@ import {
   Globe,
   LayoutDashboard,
   MessageSquare,
+  Network,
   Plus,
+  ShieldCheck,
   Terminal,
   X,
+  Users,
 } from "lucide-react";
 import type { BrowserAnnotation, BrowserSnapshot } from "@/lib/browser/types";
 import type { BudgetStatus } from "@/lib/budget/types";
 import type { RuntimeIdentity } from "@/lib/runtime/identity";
 import type { StatsSnapshot } from "@/lib/session-runner";
 import type { AgentProgress, ProgressArtifact, ProgressGroup } from "@/lib/progress/types";
+import type { AgentTeamRun } from "@/lib/agent-team/types";
 import FileBrowser from "./FileBrowser";
 import { BrowserPanel } from "./BrowserPanel";
 import { ProgressPopover } from "./ProgressPopover";
@@ -39,7 +43,8 @@ export type WorkbenchView =
   | { type: "outputs" }
   | { type: "files"; path?: string }
   | { type: "context" }
-  | { type: "browser"; url?: string };
+  | { type: "browser"; url?: string }
+  | { type: "team"; teamId?: string };
 
 export type WorkbenchTabKind =
   | "home"
@@ -48,6 +53,7 @@ export type WorkbenchTabKind =
   | "files"
   | "context"
   | "browser"
+  | "team"
   | "terminal"
   | "sidechat";
 
@@ -59,6 +65,7 @@ export interface WorkbenchTab {
   closable: boolean;
   url?: string;
   path?: string;
+  teamId?: string;
 }
 
 type WorkbenchRecommendationKind = "url" | "file" | "output";
@@ -107,6 +114,33 @@ export interface WorkbenchSidebarProps {
   onFilesLayoutChange: Dispatch<SetStateAction<FilesLayout>>;
   onOpenProgressUrl?: (url: string) => void;
   onAnnotate: (annotations: BrowserAnnotation[]) => void;
+  agentTeamRuns?: AgentTeamRun[];
+  onOpenAgentTeamMember?: (sessionFile: string) => void;
+  onAgentTeamCommand?: (
+    teamId: string,
+    command:
+      | { type: "claim_task"; taskId: string; memberId: string; writePaths?: string[] }
+      | { type: "complete_task"; taskId: string; memberId: string; findingClaim?: string }
+      | { type: "submit_result"; taskId: string; memberId: string; rawText: string; dispatchMode?: "single" | "batch" | "until_idle" }
+      | { type: "accept_finding"; findingId: string; actorAgentId?: string }
+      | { type: "reject_finding"; findingId: string; actorAgentId?: string; reason?: string }
+      | { type: "create_challenge"; findingId: string; actorAgentId?: string; reason?: string; severity?: "low" | "medium" | "high"; requiredEvidenceRefs?: string[] }
+      | { type: "resolve_challenge"; challengeId: string; actorAgentId?: string; resolution?: string; resolutionFindingIds?: string[] }
+      | { type: "dismiss_challenge"; challengeId: string; actorAgentId?: string; reason?: string }
+      | { type: "record_decision"; title?: string; rationale?: string; madeByAgentId?: string; acceptedFindingIds: string[]; rejectedFindingIds?: string[]; challengeIds?: string[]; evidenceRefs?: string[]; sourceResultIds?: string[]; confidence?: "low" | "medium" | "high" }
+      | { type: "submit_plan"; taskId: string; actorAgentId?: string; body: string; criteria?: string[] }
+      | { type: "approve_plan"; planId: string; actorAgentId?: string }
+      | { type: "reject_plan"; planId: string; actorAgentId?: string; reason?: string }
+      | { type: "send_message"; fromAgentId: string; toAgentId?: string; body: string }
+      | { type: "follow_up_member"; fromAgentId: string; memberId: string; body: string }
+      | { type: "promote_member"; memberId: string }
+      | { type: "configure_hook"; hookId: string; enabled?: boolean; severity?: "info" | "warning" | "blocking" }
+      | { type: "retry_task"; taskId: string }
+      | { type: "replace_member"; memberId: string }
+      | { type: "run_next" }
+      | { type: "run_batch"; maxDispatches?: number }
+      | { type: "run_until_idle"; maxDispatches?: number; maxRounds?: number }
+  ) => Promise<void> | void;
 }
 
 export function WorkbenchSidebar({
@@ -135,6 +169,9 @@ export function WorkbenchSidebar({
   onFilesLayoutChange,
   onOpenProgressUrl,
   onAnnotate,
+  agentTeamRuns = [],
+  onOpenAgentTeamMember,
+  onAgentTeamCommand,
 }: WorkbenchSidebarProps) {
   const storageKey = useMemo(
     () =>
@@ -150,7 +187,7 @@ export function WorkbenchSidebar({
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const viewRequestKey = `${view.type}:${"url" in view ? view.url ?? "" : ""}:${
     "path" in view ? view.path ?? "" : ""
-  }`;
+  }:${"teamId" in view ? view.teamId ?? "" : ""}`;
   const lastViewRequestRef = useRef(viewRequestKey);
   const recommendations = useMemo(
     () =>
@@ -402,6 +439,14 @@ export function WorkbenchSidebar({
           )}
           {activeTab.kind === "terminal" && <TerminalLauncherPanel cwd={cwd} />}
           {activeTab.kind === "sidechat" && <SidechatPlaceholder />}
+          {activeTab.kind === "team" && (
+            <AgentTeamWorkspace
+              runs={agentTeamRuns}
+              teamId={activeTab.teamId}
+              onOpenMember={onOpenAgentTeamMember}
+              onCommand={onAgentTeamCommand}
+            />
+          )}
         </div>
       </aside>
     </>
@@ -506,6 +551,11 @@ function WorkbenchCreateMenu({
           icon={<MessageSquare size={14} />}
           label="侧边聊天"
           onClick={onOpenSidechat}
+        />
+        <CreateMenuButton
+          icon={<Network size={14} />}
+          label="Team"
+          onClick={() => onOpenView({ type: "team" })}
         />
       </div>
       <div className="my-2 h-px" style={{ background: "var(--border-soft)" }} />
@@ -815,6 +865,1015 @@ function SidechatPlaceholder() {
       />
     </div>
   );
+}
+
+function AgentTeamWorkspace({
+  runs,
+  teamId,
+  onOpenMember,
+  onCommand,
+}: {
+  runs: AgentTeamRun[];
+  teamId?: string;
+  onOpenMember?: (sessionFile: string) => void;
+  onCommand?: WorkbenchSidebarProps["onAgentTeamCommand"];
+}) {
+  const [teamMessage, setTeamMessage] = useState("");
+  const [memberFollowUps, setMemberFollowUps] = useState<Record<string, string>>({});
+  const [resultDrafts, setResultDrafts] = useState<Record<string, string>>({});
+  const [planDrafts, setPlanDrafts] = useState<Record<string, string>>({});
+  const run =
+    runs.find((item) => item.id === teamId) ?? runs[0] ?? null;
+  if (!run) {
+    return (
+      <div className="p-2.5" data-testid="agent-team-workspace-empty">
+        <EmptyDetail
+          title="暂无 Agent Team"
+          body="使用 /team 启动一个共享白板协作室后，任务、发现、挑战和决策会在这里汇总。"
+        />
+      </div>
+    );
+  }
+
+  const openChallenges = run.board.challenges.filter(
+    (challenge) =>
+      challenge.status === "open" || challenge.status === "needs_evidence"
+  );
+  const acceptedFindings = run.board.findings.filter(
+    (finding) => finding.status === "accepted"
+  );
+  const resolvedChallenges = run.board.challenges.filter(
+    (challenge) => challenge.status === "resolved" || challenge.status === "dismissed"
+  );
+  const activeFileLocks = (run.board.fileLocks ?? []).filter(
+    (lock) => lock.status === "active"
+  );
+  const lead = run.members.find((member) => member.id === run.leadAgentId) ?? run.members[0];
+
+  return (
+    <div className="space-y-3 p-2.5" data-testid="agent-team-workspace">
+      <section className="rounded border p-3" style={{ borderColor: "var(--border-soft)", background: "var(--bg-panel-2)" }}>
+        <div className="flex min-w-0 items-start gap-2">
+          <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded" style={{ background: "var(--bg-selected)", color: "var(--color-info)" }}>
+            <Network size={17} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="truncate text-sm font-semibold">Team Workspace</span>
+              <span className="rounded border px-1.5 py-0.5 text-token-xs" style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}>
+                {agentTeamStatusText(run.status)}
+              </span>
+            </div>
+            <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--text-muted)" }}>
+              {run.objective}
+            </div>
+          </div>
+        </div>
+        <div className="mt-3 grid grid-cols-4 gap-2">
+          <TeamMiniStat label="成员" value={run.members.length} />
+          <TeamMiniStat label="采纳" value={acceptedFindings.length} />
+          <TeamMiniStat label="挑战" value={openChallenges.length} tone={openChallenges.length > 0 ? "warn" : "muted"} />
+          <TeamMiniStat label="锁" value={activeFileLocks.length} tone={activeFileLocks.length > 0 ? "warn" : "muted"} />
+        </div>
+        {onCommand && run.status === "running" ? (
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              onClick={() => onCommand(run.id, { type: "run_next" })}
+              className="inline-flex h-7 items-center gap-1.5 rounded border px-2 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
+              style={{ borderColor: "var(--border-soft)", color: "var(--text)" }}
+            >
+              <Network size={13} />
+              Run next
+            </button>
+            <button
+              type="button"
+              onClick={() => onCommand(run.id, { type: "run_batch", maxDispatches: 4 })}
+              className="inline-flex h-7 items-center gap-1.5 rounded border px-2 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
+              style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+            >
+              <Network size={13} />
+              Run batch
+            </button>
+            <button
+              type="button"
+              onClick={() => onCommand(run.id, { type: "run_until_idle", maxDispatches: 4, maxRounds: 6 })}
+              className="inline-flex h-7 items-center gap-1.5 rounded border px-2 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
+              style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+            >
+              <Network size={13} />
+              Auto run
+            </button>
+          </div>
+        ) : null}
+      </section>
+
+      <TeamWorkspaceSection
+        title="Board"
+        summary={run.board.summary}
+        icon={<LayoutDashboard size={13} />}
+      >
+        <div className="space-y-1.5">
+          {run.board.tasks.map((task) => {
+            const owner = task.ownerAgentId
+              ? run.members.find((member) => member.id === task.ownerAgentId)
+              : null;
+            return (
+              <div
+                key={task.id}
+                className="rounded border px-2 py-2"
+                style={{
+                  borderColor: task.status === "blocked" ? "var(--color-warning)" : "var(--border-soft)",
+                  background: "var(--bg-subtle)",
+                }}
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium">{task.title}</span>
+                  <TeamStatusBadge label={teamTaskStatusText(task.status)} tone={task.status === "completed" ? "done" : task.status === "blocked" ? "warn" : "muted"} />
+                </div>
+                <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--text-muted)" }}>
+                  {task.description}
+                </div>
+                <div className="mt-1 flex flex-wrap gap-1 text-token-xs" style={{ color: "var(--fg-faint)" }}>
+                  <span>{task.required ? "required" : "optional"}</span>
+                  <span>priority {task.priority}</span>
+                  {owner ? <span>owner {owner.name}</span> : <span>unclaimed</span>}
+                </div>
+                {lead && onCommand ? (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {(task.status === "pending" || task.status === "blocked") && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onCommand(run.id, {
+                            type: "claim_task",
+                            taskId: task.id,
+                            memberId: lead.id,
+                          })
+                        }
+                        className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+                        style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+                      >
+                        claim
+                      </button>
+                    )}
+                    {task.status === "blocked" && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onCommand(run.id, {
+                            type: "retry_task",
+                            taskId: task.id,
+                          })
+                        }
+                        className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+                        style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+                      >
+                        retry
+                      </button>
+                    )}
+                    {(task.status === "claimed" || task.status === "running") && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onCommand(run.id, {
+                            type: "complete_task",
+                            taskId: task.id,
+                            memberId: task.ownerAgentId ?? lead.id,
+                            findingClaim: `${task.title} completed.`,
+                          })
+                        }
+                        className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+                        style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+                      >
+                        complete
+                      </button>
+                    )}
+                  </div>
+                ) : null}
+                {onCommand && (task.status === "claimed" || task.status === "running" || task.status === "blocked") ? (
+                  <div className="mt-2 space-y-1.5">
+                    <textarea
+                      value={resultDrafts[task.id] ?? ""}
+                      onChange={(event) =>
+                        setResultDrafts((current) => ({
+                          ...current,
+                          [task.id]: event.target.value,
+                        }))
+                      }
+                      placeholder="Paste TEAM_RESULT_JSON"
+                      rows={3}
+                      className="w-full resize-none rounded border px-2 py-1 text-token-xs outline-none"
+                      style={{
+                        borderColor: "var(--border-soft)",
+                        background: "var(--bg-panel)",
+                        color: "var(--text)",
+                      }}
+                    />
+                    <button
+                      type="button"
+                      disabled={!(resultDrafts[task.id] ?? "").trim()}
+                      onClick={async () => {
+                        const rawText = (resultDrafts[task.id] ?? "").trim();
+                        if (!rawText) return;
+                        setResultDrafts((current) => ({ ...current, [task.id]: "" }));
+                        await onCommand(run.id, {
+                          type: "submit_result",
+                          taskId: task.id,
+                          memberId: task.ownerAgentId ?? lead?.id ?? run.leadAgentId,
+                          rawText,
+                        });
+                      }}
+                      className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)] disabled:opacity-40"
+                      style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+                    >
+                      submit result
+                    </button>
+                  </div>
+                ) : null}
+                {onCommand && run.settings.requirePlanApproval && task.status === "needs_plan" ? (
+                  <div className="mt-2 space-y-1.5">
+                    <textarea
+                      value={planDrafts[task.id] ?? ""}
+                      onChange={(event) =>
+                        setPlanDrafts((current) => ({
+                          ...current,
+                          [task.id]: event.target.value,
+                        }))
+                      }
+                      placeholder="Plan for lead approval"
+                      rows={2}
+                      className="w-full resize-none rounded border px-2 py-1 text-token-xs outline-none"
+                      style={{
+                        borderColor: "var(--border-soft)",
+                        background: "var(--bg-panel)",
+                        color: "var(--text)",
+                      }}
+                    />
+                    <button
+                      type="button"
+                      disabled={!(planDrafts[task.id] ?? "").trim()}
+                      onClick={async () => {
+                        const body = (planDrafts[task.id] ?? "").trim();
+                        if (!body) return;
+                        setPlanDrafts((current) => ({ ...current, [task.id]: "" }));
+                        await onCommand(run.id, {
+                          type: "submit_plan",
+                          taskId: task.id,
+                          actorAgentId: task.ownerAgentId ?? lead?.id ?? run.leadAgentId,
+                          body,
+                          criteria: task.acceptanceCriteria,
+                        });
+                      }}
+                      className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)] disabled:opacity-40"
+                      style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+                    >
+                      submit plan
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </TeamWorkspaceSection>
+
+      <TeamWorkspaceSection
+        title="Members"
+        summary="成员 transcript 默认留在协作室里，不进入主聊天。"
+        icon={<Users size={13} />}
+      >
+        <div className="grid gap-1.5">
+          {run.members.map((member) => (
+            <div
+              key={member.id}
+              className="rounded border px-2 py-2"
+              style={{ borderColor: "var(--border-soft)", background: "var(--bg-subtle)" }}
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="truncate text-xs font-medium">{member.name}</span>
+                <TeamStatusBadge label={teamMemberStatusText(member.status)} tone={member.status === "working" ? "running" : member.status === "blocked" ? "warn" : member.status === "done" ? "done" : "muted"} />
+                {member.sessionFile && onOpenMember ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenMember(member.sessionFile!)}
+                    className="ml-auto inline-flex h-6 items-center gap-1 rounded px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+                    style={{ color: "var(--text-muted)" }}
+                  >
+                    <ExternalLink size={11} />
+                    transcript
+                  </button>
+                ) : null}
+              </div>
+              <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
+                {member.role}
+              </div>
+              {member.latestOutput ? (
+                <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--fg-faint)" }}>
+                  {member.latestOutput}
+                </div>
+              ) : null}
+              {onCommand && member.id !== run.leadAgentId ? (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await onCommand(run.id, {
+                        type: "promote_member",
+                        memberId: member.id,
+                      });
+                      if (member.sessionFile && onOpenMember) onOpenMember(member.sessionFile);
+                    }}
+                    className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)] disabled:opacity-40"
+                    style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+                    disabled={!member.agentId && !member.sessionFile}
+                    title="Promote teammate to sidebar"
+                  >
+                    {member.sidebarVisible ? "promoted" : "promote"}
+                  </button>
+                  {member.status === "blocked" ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onCommand(run.id, {
+                          type: "replace_member",
+                          memberId: member.id,
+                        })
+                      }
+                      className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+                      style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+                    >
+                      replace
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+              {lead && onCommand && member.id !== run.leadAgentId ? (
+                <div className="mt-2 flex gap-1.5">
+                  <input
+                    value={memberFollowUps[member.id] ?? ""}
+                    onChange={(event) =>
+                      setMemberFollowUps((current) => ({
+                        ...current,
+                        [member.id]: event.target.value,
+                      }))
+                    }
+                    placeholder={`Ask ${member.name}`}
+                    className="min-w-0 flex-1 rounded border px-2 text-token-xs outline-none"
+                    style={{
+                      borderColor: "var(--border-soft)",
+                      background: "var(--bg-panel)",
+                      color: "var(--text)",
+                    }}
+                  />
+                  <button
+                    type="button"
+                    disabled={!(memberFollowUps[member.id] ?? "").trim()}
+                    onClick={async () => {
+                      const body = (memberFollowUps[member.id] ?? "").trim();
+                      if (!body) return;
+                      setMemberFollowUps((current) => ({ ...current, [member.id]: "" }));
+                      await onCommand(run.id, {
+                        type: "follow_up_member",
+                        fromAgentId: lead.id,
+                        memberId: member.id,
+                        body,
+                      });
+                    }}
+                    className="inline-flex h-7 w-7 items-center justify-center rounded border hover:bg-[color:var(--bg-hover)] disabled:opacity-40"
+                    style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+                    title="Send follow-up"
+                    aria-label="Send follow-up"
+                  >
+                    <MessageSquare size={13} />
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+        {lead && onCommand ? (
+          <div className="mt-2 flex gap-1.5">
+            <input
+              value={teamMessage}
+              onChange={(event) => setTeamMessage(event.target.value)}
+              placeholder="Broadcast to team"
+              className="min-w-0 flex-1 rounded border px-2 text-token-xs outline-none"
+              style={{
+                borderColor: "var(--border-soft)",
+                background: "var(--bg-panel)",
+                color: "var(--text)",
+              }}
+            />
+            <button
+              type="button"
+              disabled={!teamMessage.trim()}
+              onClick={async () => {
+                const body = teamMessage.trim();
+                if (!body) return;
+                setTeamMessage("");
+                await onCommand(run.id, {
+                  type: "send_message",
+                  fromAgentId: lead.id,
+                  body,
+                });
+              }}
+              className="inline-flex h-7 w-7 items-center justify-center rounded border hover:bg-[color:var(--bg-hover)] disabled:opacity-40"
+              style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+              title="Broadcast"
+              aria-label="Broadcast"
+            >
+              <MessageSquare size={13} />
+            </button>
+          </div>
+        ) : null}
+      </TeamWorkspaceSection>
+
+      {activeFileLocks.length > 0 ? (
+        <TeamWorkspaceSection
+          title="File Locks"
+          summary="成员写入同一路径前会先经过 board 锁，避免并发覆盖。"
+          icon={<FileText size={13} />}
+        >
+          <div className="space-y-1.5">
+            {activeFileLocks.map((lock) => {
+              const owner = run.members.find((member) => member.id === lock.ownerAgentId);
+              return (
+                <div
+                  key={lock.id}
+                  className="rounded border px-2 py-2"
+                  style={{ borderColor: "var(--color-warning)", background: "var(--bg-subtle)" }}
+                >
+                  <div className="truncate text-xs font-medium">{lock.path}</div>
+                  <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
+                    {owner?.name ?? lock.ownerAgentId} · {lock.taskId}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </TeamWorkspaceSection>
+      ) : null}
+
+      <TeamWorkspaceSection
+        title="Results"
+        summary={`${(run.board.results ?? []).length} structured teammate results`}
+        icon={<FileText size={13} />}
+      >
+        <div className="space-y-1.5">
+          {(run.board.results ?? []).length === 0 ? (
+            <div className="text-token-xs" style={{ color: "var(--text-muted)" }}>
+              No submitted teammate results yet.
+            </div>
+          ) : (
+            (run.board.results ?? []).map((result) => {
+              const author = run.members.find((member) => member.id === result.authorAgentId);
+              return (
+                <div
+                  key={result.id}
+                  className="rounded border px-2 py-2"
+                  style={{
+                    borderColor: result.status === "needs_review" ? "var(--color-warning)" : "var(--border-soft)",
+                    background: "var(--bg-subtle)",
+                  }}
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-xs font-medium">{result.summary}</span>
+                    <TeamStatusBadge label={result.status} tone={result.status === "parsed" ? "done" : "warn"} />
+                  </div>
+                  <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
+                    {author?.name ?? result.authorAgentId} · findings {result.findingIds.length}
+                  </div>
+                  {result.parseWarnings.length > 0 ? (
+                    <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--color-warning)" }}>
+                      {result.parseWarnings.join("；")}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </TeamWorkspaceSection>
+
+      <TeamWorkspaceSection
+        title="Plans"
+        summary={`${(run.board.plans ?? []).length} submitted plans`}
+        icon={<LayoutDashboard size={13} />}
+      >
+        <div className="space-y-1.5">
+          {(run.board.plans ?? []).length === 0 ? (
+            <div className="text-token-xs" style={{ color: "var(--text-muted)" }}>
+              No plans submitted for approval.
+            </div>
+          ) : (
+            (run.board.plans ?? []).map((plan) => {
+              const author = run.members.find((member) => member.id === plan.authorAgentId);
+              return (
+                <div
+                  key={plan.id}
+                  className="rounded border px-2 py-2"
+                  style={{
+                    borderColor:
+                      plan.status === "approved"
+                        ? "var(--color-success)"
+                        : plan.status === "rejected"
+                          ? "var(--color-danger)"
+                          : "var(--border-soft)",
+                    background: "var(--bg-subtle)",
+                  }}
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                      {run.board.tasks.find((task) => task.id === plan.taskId)?.title ?? plan.taskId}
+                    </span>
+                    <TeamStatusBadge
+                      label={plan.status}
+                      tone={plan.status === "approved" ? "done" : plan.status === "rejected" ? "danger" : "muted"}
+                    />
+                  </div>
+                  <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
+                    {author?.name ?? plan.authorAgentId}
+                  </div>
+                  <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--fg-faint)" }}>
+                    {plan.body}
+                  </div>
+                  {onCommand && plan.status === "submitted" ? (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onCommand(run.id, {
+                            type: "approve_plan",
+                            planId: plan.id,
+                            actorAgentId: lead?.id ?? run.leadAgentId,
+                          })
+                        }
+                        className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+                        style={{ borderColor: "var(--border-soft)", color: "var(--color-success)" }}
+                      >
+                        approve
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onCommand(run.id, {
+                            type: "reject_plan",
+                            planId: plan.id,
+                            actorAgentId: lead?.id ?? run.leadAgentId,
+                          })
+                        }
+                        className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+                        style={{ borderColor: "var(--border-soft)", color: "var(--color-danger)" }}
+                      >
+                        reject
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </TeamWorkspaceSection>
+
+      <TeamWorkspaceSection
+        title="Quality Gates"
+        summary="结束前必须通过的验收条件。"
+        icon={<ShieldCheck size={13} />}
+      >
+        <div className="space-y-1.5">
+          {run.board.qualityGates.map((gate) => (
+            <div
+              key={gate.id}
+              className="rounded border px-2 py-2"
+              style={{
+                borderColor:
+                  gate.status === "failed"
+                    ? "var(--color-danger)"
+                    : gate.status === "passed"
+                      ? "var(--color-success)"
+                      : "var(--border-soft)",
+                background: "var(--bg-subtle)",
+              }}
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                  {gate.title}
+                </span>
+                <TeamStatusBadge
+                  label={gate.status}
+                  tone={
+                    gate.status === "passed"
+                      ? "done"
+                      : gate.status === "failed"
+                        ? "danger"
+                        : "muted"
+                  }
+                />
+              </div>
+              <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--text-muted)" }}>
+                {gate.message}
+              </div>
+            </div>
+          ))}
+        </div>
+      </TeamWorkspaceSection>
+
+      <TeamWorkspaceSection
+        title="Hooks"
+        summary="运行中阻止或提示低质量状态迁移的规则。"
+        icon={<ShieldCheck size={13} />}
+      >
+        <div className="space-y-1.5">
+          {(run.board.hooks ?? []).map((hook) => (
+            <div
+              key={hook.id}
+              className="rounded border px-2 py-2"
+              style={{
+                borderColor:
+                  hook.status === "failed"
+                    ? hook.severity === "blocking"
+                      ? "var(--color-danger)"
+                      : "var(--color-warning)"
+                    : hook.status === "passed"
+                      ? "var(--color-success)"
+                      : "var(--border-soft)",
+                background: "var(--bg-subtle)",
+              }}
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="min-w-0 flex-1 truncate text-xs font-medium">{hook.title}</span>
+                {onCommand ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onCommand(run.id, {
+                        type: "configure_hook",
+                        hookId: hook.id,
+                        enabled: !hook.enabled,
+                      })
+                    }
+                    className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+                    style={{ borderColor: "var(--border-soft)", color: hook.enabled ? "var(--text-muted)" : "var(--fg-faint)" }}
+                  >
+                    {hook.enabled ? "on" : "off"}
+                  </button>
+                ) : null}
+                <TeamStatusBadge
+                  label={hook.status}
+                  tone={
+                    hook.status === "passed"
+                      ? "done"
+                      : hook.status === "failed"
+                        ? hook.severity === "blocking"
+                          ? "danger"
+                          : "warn"
+                        : "muted"
+                  }
+                />
+              </div>
+              <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
+                {hook.trigger} · {hook.severity}
+              </div>
+              <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--fg-faint)" }}>
+                {hook.lastFailure ?? hook.message}
+              </div>
+            </div>
+          ))}
+        </div>
+      </TeamWorkspaceSection>
+
+      <TeamWorkspaceSection
+        title="Claude Parity"
+        summary="持续对照 Claude Agent Teams 能力。"
+        icon={<CheckDecisionIcon />}
+      >
+        <div className="space-y-1.5">
+          {run.board.capabilityAudit.map((item) => (
+            <div
+              key={item.id}
+              className="rounded border px-2 py-2"
+              style={{ borderColor: "var(--border-soft)", background: "var(--bg-subtle)" }}
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                  {item.title}
+                </span>
+                <TeamStatusBadge
+                  label={item.digaStatus}
+                  tone={
+                    item.digaStatus === "implemented"
+                      ? "done"
+                      : item.digaStatus === "partial"
+                        ? "warn"
+                        : item.digaStatus === "blocked"
+                          ? "danger"
+                          : "muted"
+                  }
+                />
+              </div>
+              <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--text-muted)" }}>
+                {item.gap ?? item.claudeCapability}
+              </div>
+              {item.nextStep ? (
+                <div className="mt-1 text-token-xs" style={{ color: "var(--fg-faint)" }}>
+                  next: {item.nextStep}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </TeamWorkspaceSection>
+
+      <TeamWorkspaceSection
+        title="Findings & Challenges"
+        summary={`${run.board.findings.length} findings · ${run.board.challenges.length} challenges`}
+        icon={<ShieldCheck size={13} />}
+      >
+        <div className="space-y-1.5">
+          {run.board.findings.map((finding) => {
+            const author = run.members.find((member) => member.id === finding.authorAgentId);
+            return (
+              <div key={finding.id} className="rounded border px-2 py-2" style={{ borderColor: finding.status === "challenged" ? "var(--color-warning)" : "var(--border-soft)", background: "var(--bg-subtle)" }}>
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="truncate text-xs font-medium">{finding.claim}</span>
+                  <TeamStatusBadge label={finding.status} tone={finding.status === "accepted" ? "done" : finding.status === "challenged" ? "warn" : finding.status === "rejected" ? "danger" : "muted"} />
+                </div>
+                <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
+                  {author?.name ?? finding.authorAgentId} · confidence {finding.confidence}
+                </div>
+                {finding.evidenceRefs.length > 0 ? (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {finding.evidenceRefs.map((ref) => (
+                      <span key={ref} className="rounded border px-1.5 py-0.5 text-[10px]" style={{ borderColor: "var(--border-soft)", color: "var(--fg-faint)" }}>
+                        {ref}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                {onCommand ? (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {finding.status !== "accepted" ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onCommand(run.id, {
+                            type: "accept_finding",
+                            findingId: finding.id,
+                            actorAgentId: lead?.id ?? run.leadAgentId,
+                          })
+                        }
+                        className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+                        style={{ borderColor: "var(--border-soft)", color: "var(--color-success)" }}
+                      >
+                        accept
+                      </button>
+                    ) : null}
+                    {finding.status !== "rejected" ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onCommand(run.id, {
+                            type: "reject_finding",
+                            findingId: finding.id,
+                            actorAgentId: lead?.id ?? run.leadAgentId,
+                          })
+                        }
+                        className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+                        style={{ borderColor: "var(--border-soft)", color: "var(--color-danger)" }}
+                      >
+                        reject
+                      </button>
+                    ) : null}
+                    {run.settings.allowChallenges ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onCommand(run.id, {
+                            type: "create_challenge",
+                            findingId: finding.id,
+                            actorAgentId: lead?.id ?? run.leadAgentId,
+                          })
+                        }
+                        className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+                        style={{ borderColor: "var(--border-soft)", color: "var(--color-warning)" }}
+                      >
+                        challenge
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+          {run.board.challenges.map((challenge) => {
+            const target = run.board.findings.find((finding) => finding.id === challenge.targetFindingId);
+            return (
+              <div key={challenge.id} className="rounded border px-2 py-2" style={{ borderColor: "var(--color-warning)", background: "var(--bg-subtle)" }}>
+                <div className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium">{challenge.reason}</span>
+                  <TeamStatusBadge label={challenge.status} tone={challenge.status === "resolved" || challenge.status === "dismissed" ? "done" : "warn"} />
+                </div>
+                <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
+                  target: {target?.claim ?? challenge.targetFindingId}
+                </div>
+                {onCommand && (challenge.status === "open" || challenge.status === "needs_evidence") ? (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onCommand(run.id, {
+                          type: "resolve_challenge",
+                          challengeId: challenge.id,
+                          actorAgentId: lead?.id ?? run.leadAgentId,
+                          resolutionFindingIds: target ? [target.id] : [],
+                        })
+                      }
+                      className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+                      style={{ borderColor: "var(--border-soft)", color: "var(--color-success)" }}
+                    >
+                      resolve
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onCommand(run.id, {
+                          type: "dismiss_challenge",
+                          challengeId: challenge.id,
+                          actorAgentId: lead?.id ?? run.leadAgentId,
+                        })
+                      }
+                      className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+                      style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+                    >
+                      dismiss
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </TeamWorkspaceSection>
+
+      <TeamWorkspaceSection
+        title="Decisions"
+        summary="Lead 的裁决会把最终结论绑定到发现与挑战。"
+        icon={<CheckDecisionIcon />}
+      >
+        {onCommand && acceptedFindings.length > 0 ? (
+          <button
+            type="button"
+            onClick={() =>
+              onCommand(run.id, {
+                type: "record_decision",
+                title: "Lead synthesis decision",
+                rationale: "Accepted findings and resolved challenges support this synthesis.",
+                madeByAgentId: lead?.id ?? run.leadAgentId,
+                acceptedFindingIds: acceptedFindings.map((finding) => finding.id),
+                rejectedFindingIds: run.board.findings
+                  .filter((finding) => finding.status === "rejected")
+                  .map((finding) => finding.id),
+                challengeIds: resolvedChallenges.map((challenge) => challenge.id),
+                evidenceRefs: Array.from(
+                  new Set(acceptedFindings.flatMap((finding) => finding.evidenceRefs))
+                ),
+                sourceResultIds: Array.from(
+                  new Set(
+                    acceptedFindings
+                      .map((finding) => finding.sourceResultId)
+                      .filter((item): item is string => Boolean(item))
+                  )
+                ),
+              })
+            }
+            className="mb-2 h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+            style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+          >
+            record lead decision
+          </button>
+        ) : null}
+        <div className="space-y-1.5">
+          {run.board.decisions.map((decision) => (
+            <div key={decision.id} className="rounded border px-2 py-2" style={{ borderColor: "var(--border-soft)", background: "var(--bg-subtle)" }}>
+              <div className="text-xs font-medium">{decision.title}</div>
+              <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--text-muted)" }}>
+                {decision.rationale}
+              </div>
+              <div className="mt-1 text-token-xs" style={{ color: "var(--fg-faint)" }}>
+                accepted {decision.acceptedFindingIds.length} · rejected {decision.rejectedFindingIds.length}
+              </div>
+            </div>
+          ))}
+        </div>
+      </TeamWorkspaceSection>
+    </div>
+  );
+}
+
+function TeamWorkspaceSection({
+  title,
+  summary,
+  icon,
+  children,
+}: {
+  title: string;
+  summary: string;
+  icon: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="space-y-2 rounded border p-2.5" style={{ borderColor: "var(--border-soft)" }}>
+      <div className="flex items-start gap-2">
+        <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center" style={{ color: "var(--accent)" }}>
+          {icon}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-xs font-semibold">{title}</span>
+          <span className="block text-token-xs leading-snug" style={{ color: "var(--text-muted)" }}>
+            {summary}
+          </span>
+        </span>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function TeamMiniStat({
+  label,
+  value,
+  tone = "muted",
+}: {
+  label: string;
+  value: number;
+  tone?: "muted" | "warn";
+}) {
+  return (
+    <div className="rounded border px-2 py-1.5" style={{ borderColor: "var(--border-soft)", background: "var(--bg-subtle)" }}>
+      <div className="text-token-xs" style={{ color: tone === "warn" ? "var(--color-warning)" : "var(--text-muted)" }}>
+        {label}
+      </div>
+      <div className="text-token-lg font-semibold tabular-nums">{value}</div>
+    </div>
+  );
+}
+
+function TeamStatusBadge({
+  label,
+  tone,
+}: {
+  label: string;
+  tone: "muted" | "running" | "done" | "warn" | "danger";
+}) {
+  const color =
+    tone === "running"
+      ? "var(--accent)"
+      : tone === "done"
+        ? "var(--color-success)"
+        : tone === "warn"
+          ? "var(--color-warning)"
+          : tone === "danger"
+            ? "var(--color-danger)"
+            : "var(--text-muted)";
+  return (
+    <span className="shrink-0 rounded border px-1.5 py-0.5 text-[10px]" style={{ borderColor: "var(--border-soft)", color }}>
+      {label}
+    </span>
+  );
+}
+
+function agentTeamStatusText(status: string): string {
+  if (status === "running") return "协作中";
+  if (status === "paused") return "已暂停";
+  if (status === "finalizing") return "综合中";
+  if (status === "completed") return "已完成";
+  if (status === "aborted") return "已中止";
+  if (status === "failed") return "失败";
+  return "待确认";
+}
+
+function teamTaskStatusText(status: string): string {
+  if (status === "pending") return "待认领";
+  if (status === "needs_plan") return "待计划审批";
+  if (status === "claimed") return "已认领";
+  if (status === "running") return "进行中";
+  if (status === "blocked") return "阻塞";
+  if (status === "completed") return "完成";
+  return status;
+}
+
+function teamMemberStatusText(status: string): string {
+  if (status === "idle") return "空闲";
+  if (status === "working") return "工作中";
+  if (status === "blocked") return "阻塞";
+  if (status === "done") return "完成";
+  return status;
+}
+
+function CheckDecisionIcon() {
+  return <ShieldCheck size={13} />;
 }
 
 function OverviewPanel({
@@ -1527,6 +2586,7 @@ function viewTitle(type: WorkbenchView["type"]) {
   if (type === "outputs") return "Outputs";
   if (type === "files") return "Files";
   if (type === "context") return "Context";
+  if (type === "team") return "Team";
   return "Browser";
 }
 
@@ -1600,6 +2660,16 @@ export function tabFromView(view: WorkbenchView): WorkbenchTab {
       closable: true,
     };
   }
+  if (view.type === "team") {
+    return {
+      id: view.teamId ? `team:${view.teamId}` : "team",
+      kind: "team",
+      title: "Team",
+      subtitle: view.teamId ?? "共享白板",
+      teamId: view.teamId,
+      closable: true,
+    };
+  }
   const url = view.url?.trim();
   return {
     id: url ? `browser:${url}` : "browser:launcher",
@@ -1618,6 +2688,7 @@ export function viewFromTab(tab: WorkbenchTab): WorkbenchView {
   if (tab.kind === "files") return { type: "files", path: tab.path };
   if (tab.kind === "context") return { type: "context" };
   if (tab.kind === "browser") return { type: "browser", url: tab.url };
+  if (tab.kind === "team") return { type: "team", teamId: tab.teamId };
   return { type: "overview" };
 }
 
@@ -1675,6 +2746,7 @@ function normalizeStoredTab(tab: Partial<WorkbenchTab> | null | undefined): Work
     closable: tab.kind === "home" ? false : tab.closable !== false,
     url: tab.url,
     path: tab.path,
+    teamId: tab.teamId,
   };
 }
 
@@ -1686,6 +2758,7 @@ function isWorkbenchTabKind(kind: string): kind is WorkbenchTabKind {
     "files",
     "context",
     "browser",
+    "team",
     "terminal",
     "sidechat",
   ].includes(kind);
@@ -1705,6 +2778,7 @@ function tabIcon(kind: WorkbenchTabKind) {
   if (kind === "files") return FolderOpen;
   if (kind === "context") return FileText;
   if (kind === "browser") return Globe;
+  if (kind === "team") return Network;
   if (kind === "terminal") return Terminal;
   return MessageSquare;
 }

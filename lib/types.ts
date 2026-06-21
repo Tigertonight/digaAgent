@@ -20,6 +20,7 @@ import type {
   WorkflowScriptLog,
   WorkflowTraceEvent,
 } from "./workflows/types";
+import type { AgentTeamRun } from "./agent-team/types";
 import type { ToolTruncationDiagnosis } from "./tool-recovery/truncation-diagnosis";
 
 export interface SessionInfoLite {
@@ -123,6 +124,16 @@ export type MessagePart =
       /** 离开 thinking（出现 text/tool）时记的墙钟时间（ms） */
       endedAt?: number;
       endedReason?: "ok" | "aborted" | "error";
+    }
+  | {
+      /**
+       * Agent Team 协作室状态卡。
+       *
+       * 与 subagent_batch 不同：这里展示共享白板的摘要和决策状态，
+       * 详细任务/发现/挑战/成员 transcript 进入 Team Workspace。
+       */
+      kind: "agent_team_run";
+      run: AgentTeamRun;
     }
   | {
       kind: "image";
@@ -331,7 +342,7 @@ export interface ChatMessage {
 }
 
 export interface ChatMessageComposerMeta {
-  mode?: "goal" | "workflow";
+  mode?: "goal" | "workflow" | "team";
   /** 引用的文件/目录路径。UI 只用于计数与 tooltip，不代表发送是否含它们。 */
   refs?: string[];
 }

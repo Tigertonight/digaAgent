@@ -40,6 +40,7 @@ export const SLASH_COMMANDS = [
   { name: "auth", hint: "凭证管理" },
   { name: "goal", hint: "设置长期目标" },
   { name: "workflow", hint: "用 dynamic workflow 执行一个目标" },
+  { name: "team", hint: "开启 Agent Team 协作室" },
   { name: "help", hint: "查看支持的命令" },
 ] as const;
 
@@ -309,6 +310,9 @@ export function useAutocomplete(
           return;
         case "workflow":
           setInput("/workflow ");
+          return;
+        case "team":
+          setInput("/team ");
           return;
         case "help":
           setInput(

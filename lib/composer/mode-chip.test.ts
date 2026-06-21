@@ -16,6 +16,13 @@ describe("extractModeFromInput", () => {
     });
   });
 
+  it("命中 /team + 空格", () => {
+    expect(extractModeFromInput("/team 调研命名")).toEqual({
+      mode: "team",
+      text: "调研命名",
+    });
+  });
+
   it("命中后保留所有空白（不 trim 用户在意的尾随空格）", () => {
     // 用户敲完 "/goal " 还没继续打，正文 = ""
     expect(extractModeFromInput("/goal ")).toEqual({ mode: "goal", text: "" });
@@ -64,5 +71,6 @@ describe("serializeModeAndText", () => {
   it("有 mode → 拼回 /<mode>", () => {
     expect(serializeModeAndText("goal", "实现 X")).toBe("/goal 实现 X");
     expect(serializeModeAndText("workflow", "")).toBe("/workflow");
+    expect(serializeModeAndText("team", "调研")).toBe("/team 调研");
   });
 });

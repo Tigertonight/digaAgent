@@ -83,6 +83,13 @@ interface MessagesScrollAreaProps {
   onResumeSubagentBatch?: (batchId: string) => Promise<void> | void;
   /** Multi-agent：打开某个 child subagent session 继续追问 */
   onOpenSubagentSession?: (sessionFile: string) => void;
+  /** Agent Team：打开共享白板工作区 */
+  onOpenAgentTeamWorkspace?: (teamId: string) => void;
+  /** Agent Team：轻量运行控制 */
+  onAgentTeamAction?: (
+    teamId: string,
+    action: "pause" | "resume" | "finalize" | "stop"
+  ) => void;
 }
 
 export function MessagesScrollArea({
@@ -121,6 +128,8 @@ export function MessagesScrollArea({
   onRetrySubagentTask,
   onResumeSubagentBatch,
   onOpenSubagentSession,
+  onOpenAgentTeamWorkspace,
+  onAgentTeamAction,
 }: MessagesScrollAreaProps) {
   const [visibleItemLimit, setVisibleItemLimit] = useState(
     INITIAL_RENDER_ITEM_WINDOW
@@ -347,6 +356,8 @@ export function MessagesScrollArea({
                     onRetrySubagentTask={onRetrySubagentTask}
                     onResumeSubagentBatch={onResumeSubagentBatch}
                     onOpenSubagentSession={onOpenSubagentSession}
+                    onOpenAgentTeamWorkspace={onOpenAgentTeamWorkspace}
+                    onAgentTeamAction={onAgentTeamAction}
                   />
                 </UiFaultBoundary>
               );

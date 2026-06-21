@@ -30,9 +30,13 @@ import {
   GitBranch,
   Lightbulb,
   Loader2,
+  Network,
+  PanelRightOpen,
   Play,
   RotateCcw,
   ShieldCheck,
+  Square,
+  Users,
   XCircle,
 } from "lucide-react";
 import type {
@@ -135,6 +139,13 @@ export interface MessageViewProps {
   ) => Promise<void> | void;
   /** Multi-agent：打开某个 child subagent session 继续追问 */
   onOpenSubagentSession?: (sessionFile: string) => void;
+  /** Agent Team：打开共享白板工作区 */
+  onOpenAgentTeamWorkspace?: (teamId: string) => void;
+  /** Agent Team：轻量运行控制 */
+  onAgentTeamAction?: (
+    teamId: string,
+    action: "pause" | "resume" | "finalize" | "stop"
+  ) => void;
 }
 
 export interface WorkflowWorktreeAction {
@@ -175,6 +186,8 @@ function MessageViewInner({
   onRetrySubagentTask,
   onResumeSubagentBatch,
   onOpenSubagentSession,
+  onOpenAgentTeamWorkspace,
+  onAgentTeamAction,
 }: MessageViewProps) {
   // user：右侧气泡（支持 text + image parts 混合）
   if (msg.role === "user") {
@@ -514,6 +527,16 @@ function MessageViewInner({
               />
             );
           }
+          if (p.kind === "agent_team_run") {
+            return (
+              <AgentTeamRunCard
+                key={i}
+                part={p}
+                onOpenWorkspace={onOpenAgentTeamWorkspace}
+                onAction={onAgentTeamAction}
+              />
+            );
+          }
           if (p.kind === "workflow_run") {
             return (
               <WorkflowRunCard
@@ -654,6 +677,8 @@ function areMessageViewPropsEqual(
   if (prev.onRetrySubagentTask !== next.onRetrySubagentTask) return false;
   if (prev.onResumeSubagentBatch !== next.onResumeSubagentBatch) return false;
   if (prev.onOpenSubagentSession !== next.onOpenSubagentSession) return false;
+  if (prev.onOpenAgentTeamWorkspace !== next.onOpenAgentTeamWorkspace) return false;
+  if (prev.onAgentTeamAction !== next.onAgentTeamAction) return false;
   return true;
 }
 
@@ -2325,6 +2350,208 @@ function WorkflowValueContent({
   );
 }
 
+function AgentTeamRunCard({
+  part,
+  onOpenWorkspace,
+  onAction,
+}: {
+  part: Extract<MessagePart, { kind: "agent_team_run" }>;
+  onOpenWorkspace?: (teamId: string) => void;
+  onAction?: (
+    teamId: string,
+    action: "pause" | "resume" | "finalize" | "stop"
+  ) => void;
+}) {
+  const { run } = part;
+  const tasks = run.board.tasks;
+  const findings = run.board.findings;
+  const challenges = run.board.challenges;
+  const openTasks = tasks.filter(
+    (task) =>
+      task.status === "pending" ||
+      task.status === "claimed" ||
+      task.status === "running" ||
+      task.status === "blocked"
+  ).length;
+  const openChallenges = challenges.filter(
+    (challenge) =>
+      challenge.status === "open" || challenge.status === "needs_evidence"
+  ).length;
+  const acceptedFindings = findings.filter(
+    (finding) => finding.status === "accepted"
+  ).length;
+  const running = run.status === "running" || run.status === "finalizing";
+  const paused = run.status === "paused";
+  const terminal =
+    run.status === "completed" ||
+    run.status === "failed" ||
+    run.status === "aborted";
+  const leadLabel = agentTeamLeadStateLabel(run.leadState);
+  const statusLabel = agentTeamStatusLabel(run.status);
+
+  return (
+    <div
+      className="space-y-3 rounded-token-md border p-3"
+      style={{
+        borderColor: "var(--border-soft)",
+        background: "var(--bg-panel)",
+        color: "var(--text)",
+      }}
+      data-testid="agent-team-run-card"
+    >
+      <div className="flex min-w-0 items-start gap-2">
+        <span
+          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-token-sm"
+          style={{ background: "var(--bg-selected)", color: "var(--color-info)" }}
+        >
+          <Network size={17} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <span className="text-token-sm font-semibold">Agent Team</span>
+            {running ? <Loader2 size={13} className="animate-spin" /> : null}
+            <span
+              className="rounded border px-1.5 py-0.5 text-token-xs"
+              style={{
+                borderColor: "var(--border-soft)",
+                color:
+                  run.status === "completed"
+                    ? "var(--color-success)"
+                    : run.status === "aborted" || run.status === "failed"
+                      ? "var(--color-danger)"
+                      : run.status === "paused"
+                        ? "var(--color-warning)"
+                        : "var(--text-muted)",
+              }}
+            >
+              {statusLabel}
+            </span>
+            <span className="text-token-xs" style={{ color: "var(--text-muted)" }}>
+              Lead: {leadLabel}
+            </span>
+          </div>
+          <div className="mt-1 truncate text-token-sm" title={run.objective}>
+            {run.objective}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-4">
+        <AgentTeamMetric icon={<Users size={13} />} label="成员" value={run.members.length} />
+        <AgentTeamMetric icon={<Circle size={13} />} label="开放任务" value={openTasks} />
+        <AgentTeamMetric icon={<Lightbulb size={13} />} label="采纳发现" value={acceptedFindings} />
+        <AgentTeamMetric icon={<ShieldCheck size={13} />} label="开放挑战" value={openChallenges} tone={openChallenges > 0 ? "warn" : "muted"} />
+      </div>
+
+      <div
+        className="rounded border px-2.5 py-2 text-token-xs"
+        style={{
+          borderColor: openChallenges > 0 ? "var(--color-warning)" : "var(--border-soft)",
+          background: "var(--bg-subtle)",
+          color: "var(--text-muted)",
+        }}
+      >
+        {run.board.summary}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => onOpenWorkspace?.(run.id)}
+          className="inline-flex h-7 items-center gap-1.5 rounded-token-sm border px-2 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
+          style={{ borderColor: "var(--border-soft)", color: "var(--text)" }}
+          data-testid="open-agent-team-workspace"
+        >
+          <PanelRightOpen size={13} />
+          Open Team Workspace
+        </button>
+        {!terminal && (
+          <button
+            type="button"
+            onClick={() => onAction?.(run.id, paused ? "resume" : "pause")}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-token-sm border hover:bg-[color:var(--bg-hover)]"
+            style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+            title={paused ? "Resume Team" : "Pause Team"}
+            aria-label={paused ? "Resume Team" : "Pause Team"}
+          >
+            {paused ? <Play size={13} /> : <Circle size={13} />}
+          </button>
+        )}
+        {!terminal && (
+          <button
+            type="button"
+            onClick={() => onAction?.(run.id, "finalize")}
+            className="inline-flex h-7 items-center gap-1 rounded-token-sm border px-2 text-token-xs hover:bg-[color:var(--bg-hover)]"
+            style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+          >
+            <CheckCircle2 size={13} />
+            Finalize
+          </button>
+        )}
+        {!terminal && (
+          <button
+            type="button"
+            onClick={() => onAction?.(run.id, "stop")}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-token-sm border hover:bg-[color:var(--bg-hover)]"
+            style={{ borderColor: "var(--border-soft)", color: "var(--color-danger)" }}
+            title="Stop Team"
+            aria-label="Stop Team"
+          >
+            <Square size={12} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AgentTeamMetric({
+  icon,
+  label,
+  value,
+  tone = "muted",
+}: {
+  icon: ReactNode;
+  label: string;
+  value: number;
+  tone?: "muted" | "warn";
+}) {
+  return (
+    <div
+      className="min-w-0 rounded border px-2 py-1.5"
+      style={{
+        borderColor: "var(--border-soft)",
+        background: "var(--bg-subtle)",
+      }}
+    >
+      <div className="flex items-center gap-1 text-token-xs" style={{ color: tone === "warn" ? "var(--color-warning)" : "var(--text-muted)" }}>
+        {icon}
+        <span className="truncate">{label}</span>
+      </div>
+      <div className="mt-0.5 text-token-lg font-semibold tabular-nums">{value}</div>
+    </div>
+  );
+}
+
+function agentTeamStatusLabel(status: string): string {
+  if (status === "draft") return "待确认";
+  if (status === "running") return "协作中";
+  if (status === "paused") return "已暂停";
+  if (status === "finalizing") return "综合中";
+  if (status === "completed") return "已完成";
+  if (status === "failed") return "失败";
+  if (status === "aborted") return "已中止";
+  return status;
+}
+
+function agentTeamLeadStateLabel(state: string): string {
+  if (state === "exploring") return "继续探索";
+  if (state === "needs_decision") return "需要裁决";
+  if (state === "ready_to_synthesize") return "可综合";
+  if (state === "finalized") return "已综合";
+  return state;
+}
+
 function SubagentBatchCard({
   part,
   cwd,
@@ -2998,9 +3225,17 @@ function UserComposerMetaStrip({ meta }: { meta: ChatMessageComposerMeta }) {
       ? "var(--color-warning)"
       : meta.mode === "workflow"
         ? "var(--accent)"
+        : meta.mode === "team"
+          ? "var(--color-info)"
         : "var(--text-muted)";
   const modeLabel =
-    meta.mode === "goal" ? "Goal" : meta.mode === "workflow" ? "Workflow" : null;
+    meta.mode === "goal"
+      ? "Goal"
+      : meta.mode === "workflow"
+        ? "Workflow"
+        : meta.mode === "team"
+          ? "Team"
+          : null;
   const refsTooltip =
     refsCount > 0 && meta.refs
       ? meta.refs.map((p) => `@${p}`).join("\n")

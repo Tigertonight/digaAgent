@@ -1,16 +1,16 @@
 /**
  * Composer mode chip 解析 helper。
  *
- * 设计原则（用户规格）：用户敲 "/goal " 或 "/workflow " 后，前端立即把这个
+ * 设计原则（用户规格）：用户敲 "/goal "、"/workflow " 或 "/team " 后，前端立即把这个
  * 意图提到独立的 chip，textarea 只保留正文。这让用户气泡 / sidebar /
  * session jsonl 都看到用户原话，不会以 "/goal …" 形式留下机器友好文本。
  *
  * 此 helper 只负责字符串到结构的转换；状态写入由调用方完成。
  */
 
-export type ComposerMode = "goal" | "workflow";
+export type ComposerMode = "goal" | "workflow" | "team";
 
-export const COMPOSER_MODES: readonly ComposerMode[] = ["goal", "workflow"];
+export const COMPOSER_MODES: readonly ComposerMode[] = ["goal", "workflow", "team"];
 
 export interface ModeExtractionResult {
   mode: ComposerMode | null;
@@ -19,7 +19,7 @@ export interface ModeExtractionResult {
 }
 
 /**
- * 在用户键入时识别 mode：仅当**文本以 "/goal " 或 "/workflow " 开头**时（注意
+ * 在用户键入时识别 mode：仅当**文本以 "/goal "、"/workflow " 或 "/team " 开头**时（注意
  * 命令名后要有至少一个空白字符），把命令名提为 mode、剩余作为正文返回。
  *
  * 严格匹配 "/goalXXX" 之类不识别（与 lib/slash-command 保持一致）。

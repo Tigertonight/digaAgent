@@ -38,4 +38,17 @@ describe("MessageView CoT/toolchain UX safeguards", () => {
     expect(text).toContain("rawLabel.length > 64");
     expect(text).toContain("1px solid var(--border-soft)");
   });
+
+  it("renders Agent Team runs as a dedicated card with workspace actions", () => {
+    const text = source();
+
+    expect(text).toContain("AgentTeamRunCard");
+    expect(text).toContain("data-testid=\"agent-team-run-card\"");
+    expect(text).toContain("Open Team Workspace");
+    expect(text).toContain("agentTeamLeadStateLabel");
+    expect(text).toContain("openChallenges");
+    expect(text).toContain("acceptedFindings");
+    expect(text).toContain("onAction?.(run.id, \"finalize\")");
+    expect(text).toContain("p.kind === \"agent_team_run\"");
+  });
 });

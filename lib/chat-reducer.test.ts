@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
+  appendRestoredAgentTeamRuns,
   appendRestoredSubagentBatches,
   applyEvent,
   createInitialState,
   ctxToMessages,
 } from "./chat-reducer";
+import { createInitialAgentTeamRun } from "./agent-team/mock";
 import type { ChatMessage, MessagePart } from "./types";
 
 afterEach(() => {
@@ -1582,6 +1584,78 @@ describe("applyEvent — workflow script events", () => {
     if (part.kind !== "workflow_run") throw new Error("type narrow");
     expect(part.status).toBe("needs_continue");
     expect(part.checkpoints[0].name).toBe("scan-done");
+  });
+});
+
+describe("applyEvent — agent team local events", () => {
+  it("starts a Team run as its own assistant card, not a subagent batch", () => {
+    const run = createInitialAgentTeamRun("研究 Agent Team UX");
+    const state = applyEvent(createInitialState(), {
+      type: "__agent_team_start",
+      teamRun: run,
+    });
+
+    expect(state.messages).toHaveLength(1);
+    const part = state.messages[0].parts?.[0];
+    expect(part?.kind).toBe("agent_team_run");
+    if (part?.kind !== "agent_team_run") throw new Error("type narrow");
+    expect(part.run.id).toBe(run.id);
+    expect(part.run.objective).toBe("研究 Agent Team UX");
+    expect(part.run.status).toBe("running");
+    expect(part.run.board.findings[0]?.status).toBe("accepted");
+  });
+
+  it("patches an existing Team run without losing board state", () => {
+    const run = createInitialAgentTeamRun("收敛方案");
+    let state = applyEvent(createInitialState(), {
+      type: "__agent_team_start",
+      teamRun: run,
+    });
+
+    state = applyEvent(state, {
+      type: "__agent_team_update",
+      teamRun: {
+        id: run.id,
+        status: "paused",
+        leadState: "needs_decision",
+        updatedAt: run.updatedAt + 1,
+      },
+    });
+
+    const part = state.messages[0].parts?.[0];
+    expect(part?.kind).toBe("agent_team_run");
+    if (part?.kind !== "agent_team_run") throw new Error("type narrow");
+    expect(part.run.status).toBe("paused");
+    expect(part.run.leadState).toBe("needs_decision");
+    expect(part.run.board.tasks).toHaveLength(run.board.tasks.length);
+  });
+
+  it("consumes server-pushed Team run events", () => {
+    const run = createInitialAgentTeamRun("server team");
+    let state = applyEvent(createInitialState(), {
+      type: "agent_team_run_start",
+      run,
+    } as never);
+    state = applyEvent(state, {
+      type: "agent_team_run_update",
+      run: { ...run, status: "paused", updatedAt: run.updatedAt + 1 },
+    } as never);
+
+    const part = state.messages[0].parts?.[0];
+    expect(part?.kind).toBe("agent_team_run");
+    if (part?.kind !== "agent_team_run") throw new Error("type narrow");
+    expect(part.run.status).toBe("paused");
+  });
+
+  it("restores persisted Team runs as dedicated Team cards", () => {
+    const run = createInitialAgentTeamRun("restored team");
+    const out = appendRestoredAgentTeamRuns([], [run]);
+
+    expect(out).toHaveLength(1);
+    const part = out[0].parts?.[0];
+    expect(part?.kind).toBe("agent_team_run");
+    if (part?.kind !== "agent_team_run") throw new Error("type narrow");
+    expect(part.run.id).toBe(run.id);
   });
 });
 
