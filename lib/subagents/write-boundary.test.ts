@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  extractWriteTargetPaths,
   findWriteBoundaryViolation,
   normalizeWriteBoundaries,
 } from "./write-boundary";
@@ -70,6 +71,21 @@ describe("subagent write boundary", () => {
     });
 
     expect(violation).toBeNull();
+  });
+
+  it("exposes write target extraction for Team file locks", () => {
+    expect(
+      extractWriteTargetPaths({
+        toolName: "write",
+        input: { path: "src/app.ts", content: "x" },
+      })
+    ).toEqual(["src/app.ts"]);
+    expect(
+      extractWriteTargetPaths({
+        toolName: "read",
+        input: { path: "src/app.ts" },
+      })
+    ).toEqual([]);
   });
 
   it("normalizes relative boundaries against the child cwd", () => {

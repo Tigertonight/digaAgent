@@ -2,6 +2,7 @@ import type { BrowserSnapshot } from "@/lib/browser/types";
 import type { ApprovalRequest } from "@/lib/collab/types";
 import type { EvidenceRef } from "@/lib/evidence/types";
 import type { AgentProgress } from "@/lib/progress/types";
+import type { AgentTeamRun } from "@/lib/agent-team/types";
 import type { SubagentBatch, SubagentResult } from "@/lib/subagents/types";
 import type { WorkflowArtifact, WorkflowCheckpoint, WorkflowRun } from "@/lib/workflows/types";
 import type {
@@ -379,6 +380,46 @@ function bridgeGoal(
   );
 }
 
+function bridgeAgentTeam(
+  ctx: AgentEventBridgeContext,
+  event: Record<string, unknown>
+): AgentEventBridgeResult {
+  const run = event.run as AgentTeamRun | undefined;
+  const teamId = run?.id ?? asString(event.teamId) ?? "unknown";
+  const runtimeEvent = {
+    ...baseEvent(
+      ctx,
+      "agent_team",
+      String(event.type).replace(/_/g, "."),
+      run ?? event,
+      statusFrom(run?.status)
+    ),
+    teamId,
+  };
+  const evidence: EvidenceRef[] = [];
+  const createdAt = run?.updatedAt ?? Date.now();
+  for (const finding of run?.board.findings ?? []) {
+    evidence.push({
+      id: `agent-team-finding:${teamId}:${finding.id}`,
+      kind: "agent_team_finding",
+      title: `Team finding: ${finding.claim.slice(0, 100)}`,
+      sessionId: ctx.sessionId ?? null,
+      agentId: ctx.agentId,
+      textPreview: finding.claim,
+      metadata: {
+        teamId,
+        taskId: finding.taskId,
+        authorAgentId: finding.authorAgentId,
+        confidence: finding.confidence,
+        status: finding.status,
+        evidenceRefs: finding.evidenceRefs,
+      },
+      createdAt,
+    });
+  }
+  return withEvidence(runtimeEvent, evidence);
+}
+
 export function bridgeAgentEventToRuntime(
   ctx: AgentEventBridgeContext,
   rawEvent: unknown
@@ -394,6 +435,7 @@ export function bridgeAgentEventToRuntime(
   }
   if (type.startsWith("workflow_")) return bridgeWorkflow(ctx, event);
   if (type.startsWith("subagent_")) return bridgeSubagent(ctx, event);
+  if (type.startsWith("agent_team_")) return bridgeAgentTeam(ctx, event);
   if (type === "goal_updated") return bridgeGoal(ctx, event);
 
   if (type === "agent_start" || type === "agent_end") {

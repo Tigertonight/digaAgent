@@ -11,6 +11,7 @@ import { assertRemoteAuth } from "@/lib/remote/auth";
 import { internalErrorResponse } from "@/lib/api/error-response";
 import { listAgentSummaries } from "@/lib/agent-registry";
 import { listBatchesByParentSessionPath } from "@/lib/subagents/server-store";
+import { listAgentTeamRunsByParentSessionPath } from "@/lib/agent-team/server-store";
 import { readPersistedProgress } from "@/lib/progress/file-store";
 import {
   hasUnpairedToolCalls,
@@ -95,6 +96,9 @@ export async function GET(
       forkableUserMessages,
       subagentBatches: resolvedPath
         ? listBatchesByParentSessionPath(resolvedPath)
+        : [],
+      agentTeamRuns: resolvedPath
+        ? listAgentTeamRunsByParentSessionPath(resolvedPath)
         : [],
       progress,
       interrupted,

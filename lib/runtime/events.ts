@@ -4,6 +4,7 @@ export type RuntimeEventSource =
   | "agent"
   | "browser"
   | "workflow"
+  | "agent_team"
   | "subagent"
   | "goal"
   | "approval"
@@ -27,6 +28,7 @@ export interface RuntimeEvent<TPayload = unknown> {
   browserId?: string | null;
   taskId?: string | null;
   workflowId?: string | null;
+  teamId?: string | null;
   parentId?: string | null;
   payload: TPayload;
   evidence?: EvidenceRef[];

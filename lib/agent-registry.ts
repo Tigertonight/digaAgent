@@ -38,6 +38,8 @@ import { agentBrowserId, standaloneBrowserId } from "./browser/browser-id";
 import { createClipboardExtension } from "./clipboard/extension";
 import { createGoalExtension } from "./goal/extension";
 import { createProgressExtension } from "./progress/extension";
+import { createAgentTeamWriteLockExtension } from "./agent-team/write-lock-extension";
+import { createAgentTeamPolicyExtension } from "./agent-team/policy-extension";
 import { createDelegateSubagentsTool } from "./subagents/extension";
 import { createSubagentWriteBoundaryExtension } from "./subagents/write-boundary-extension";
 import {
@@ -125,6 +127,7 @@ import type {
 import type { BrowserStateEvent } from "./browser/types";
 import type { SubagentEvent, SubagentRole } from "./subagents/types";
 import type { WorkflowEvent } from "./workflows/types";
+import type { AgentTeamRuntimeEvent } from "./agent-team/types";
 import type { AgentGoal, GoalUpdatedEvent } from "./goal/types";
 import type {
   AgentProgress,
@@ -174,6 +177,7 @@ export type RingBufferEvent =
   | ClarificationResolvedEvent
   | BrowserStateEvent
   | SubagentEvent
+  | AgentTeamRuntimeEvent
   | WorkflowEvent
   | GoalUpdatedEvent
   | ProgressUpdatedEvent
@@ -468,6 +472,7 @@ export function pushExternalEvent(
     | ClarificationResolvedEvent
     | BrowserStateEvent
     | SubagentEvent
+    | AgentTeamRuntimeEvent
     | WorkflowEvent
     | GoalUpdatedEvent
     | ProgressUpdatedEvent
@@ -485,6 +490,13 @@ export function pushProgressEvent(
   progress: AgentProgress
 ): void {
   pushExternalEvent(rec, { type: "progress_updated", progress });
+}
+
+export function pushAgentTeamEvent(
+  rec: AgentRecord,
+  event: AgentTeamRuntimeEvent
+): void {
+  pushExternalEvent(rec, event);
 }
 
 /**
@@ -2000,6 +2012,12 @@ async function createAgentImpl(opts: CreateOptions): Promise<{
             createSubagentWriteBoundaryExtension({
               cwd: opts.cwd,
               writePaths: opts.writePaths,
+            }),
+            createAgentTeamPolicyExtension({
+              getAgentId: () => id,
+            }),
+            createAgentTeamWriteLockExtension({
+              getAgentId: () => id,
             }),
           ]
         : []),

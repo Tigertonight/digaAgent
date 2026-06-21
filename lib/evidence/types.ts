@@ -3,6 +3,7 @@ export type EvidenceKind =
   | "browser_step"
   | "browser_annotation"
   | "workflow_artifact"
+  | "agent_team_finding"
   | "subagent_result"
   | "goal_turn"
   | "approval_decision"

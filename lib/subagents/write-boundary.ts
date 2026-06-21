@@ -71,6 +71,14 @@ function collectInputPaths(value: unknown, parentKey = ""): string[] {
   );
 }
 
+export function extractWriteTargetPaths(params: {
+  toolName: string;
+  input: unknown;
+}): string[] {
+  if (!isWriteBoundaryTool(params.toolName)) return [];
+  return Array.from(new Set(collectInputPaths(params.input)));
+}
+
 export function findWriteBoundaryViolation(params: {
   toolName: string;
   input: unknown;
@@ -88,7 +96,7 @@ export function findWriteBoundaryViolation(params: {
     };
   }
 
-  const rawPaths = Array.from(new Set(collectInputPaths(params.input)));
+  const rawPaths = extractWriteTargetPaths(params);
   if (rawPaths.length === 0) {
     return {
       reason: "write target path could not be verified against writePaths",
