@@ -545,6 +545,7 @@ export function Sidebar(props: SidebarProps) {
                 <button
                   onClick={() => setSelectedId(s.id)}
                   className="w-full text-left py-1.5 hover:opacity-90 flex items-start gap-1.5"
+                  suppressHydrationWarning
                   style={{
                     background: active ? "var(--bg-panel-2)" : "transparent",
                     paddingLeft: 12 + depth * 14,
