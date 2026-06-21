@@ -118,7 +118,7 @@ describe("isWorthNarrating — Phase 3 LLM 白名单", () => {
     ).toBe(true);
     expect(
       isWorthNarrating(
-        mk({ toolName: "web_search", args: { query: "小红书新闻" } })
+        mk({ toolName: "web_search", args: { query: "product news" } })
       )
     ).toBe(true);
     expect(

@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { __setBrowserSitePolicyPathForTest } from "./policy";
 import {
   addBrowserAnnotation,
   browserScroll,
@@ -17,6 +21,8 @@ import {
   registerInAppBrowserHost,
 } from "./runtime";
 
+let tmpDir: string | null = null;
+
 async function nextInAppCommand(browserId: string) {
   for (let i = 0; i < 20; i++) {
     const { command } = pollInAppBrowserCommand(browserId);
@@ -27,8 +33,16 @@ async function nextInAppCommand(browserId: string) {
 }
 
 describe("browser in-app runtime", () => {
-  afterEach(() => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "browser-runtime-test-"));
+    __setBrowserSitePolicyPathForTest(path.join(tmpDir, "browser-sites.json"));
+  });
+
+  afterEach(async () => {
     vi.useRealTimers();
+    __setBrowserSitePolicyPathForTest(null);
+    if (tmpDir) await rm(tmpDir, { recursive: true, force: true });
+    tmpDir = null;
   });
 
   it("merges host completions even when only screenshot or pointer changed", () => {
