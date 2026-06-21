@@ -238,5 +238,7 @@ describe("Workbench overview model", () => {
     expect(source).toContain("stopConditions");
     expect(source).toContain("普通聊天、Subagents、Workflow 不会自动升级到 Team");
     expect(source).toContain("body: JSON.stringify({ type: \"start\", objective: text, settings })");
+    expect(source).toContain("const checked = event.currentTarget.checked");
+    expect(source).not.toContain("[key]: event.currentTarget.checked");
   });
 });

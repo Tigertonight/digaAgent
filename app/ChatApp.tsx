@@ -3892,12 +3892,13 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                     <input
                       type="checkbox"
                       checked={teamLaunchSettings.allowChallenges}
-                      onChange={(event) =>
+                      onChange={(event) => {
+                        const checked = event.currentTarget.checked;
                         setTeamLaunchSettings((prev) => ({
                           ...prev,
-                          allowChallenges: event.currentTarget.checked,
-                        }))
-                      }
+                          allowChallenges: checked,
+                        }));
+                      }}
                     />
                     允许成员互相挑战发现
                   </label>
@@ -3905,12 +3906,13 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                     <input
                       type="checkbox"
                       checked={teamLaunchSettings.requirePlanApproval}
-                      onChange={(event) =>
+                      onChange={(event) => {
+                        const checked = event.currentTarget.checked;
                         setTeamLaunchSettings((prev) => ({
                           ...prev,
-                          requirePlanApproval: event.currentTarget.checked,
-                        }))
-                      }
+                          requirePlanApproval: checked,
+                        }));
+                      }}
                     />
                     Lead 先形成任务板再推进
                   </label>
@@ -3936,12 +3938,13 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                       <input
                         type="checkbox"
                         checked={teamLaunchSettings[key]}
-                        onChange={(event) =>
+                        onChange={(event) => {
+                          const checked = event.currentTarget.checked;
                           setTeamLaunchSettings((prev) => ({
                             ...prev,
-                            [key]: event.currentTarget.checked,
-                          }))
-                        }
+                            [key]: checked,
+                          }));
+                        }}
                       />
                       {label}
                     </label>
@@ -3961,15 +3964,16 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                       <input
                         type="checkbox"
                         checked={teamLaunchSettings.stopConditions[key]}
-                        onChange={(event) =>
+                        onChange={(event) => {
+                          const checked = event.currentTarget.checked;
                           setTeamLaunchSettings((prev) => ({
                             ...prev,
                             stopConditions: {
                               ...prev.stopConditions,
-                              [key]: event.currentTarget.checked,
+                              [key]: checked,
                             },
-                          }))
-                        }
+                          }));
+                        }}
                       />
                       {label}
                     </label>
