@@ -1260,8 +1260,8 @@ function AgentTeamWorkspace({
                     }}
                     className="inline-flex h-7 w-7 items-center justify-center rounded border hover:bg-[color:var(--bg-hover)] disabled:opacity-40"
                     style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
-                    title="Send follow-up"
-                    aria-label="Send follow-up"
+                    title="发送追问"
+                    aria-label="发送追问"
                   >
                     <MessageSquare size={13} />
                   </button>
@@ -1462,7 +1462,9 @@ function AgentTeamWorkspace({
             return (
               <div key={challenge.id} className="rounded border px-2 py-2" style={{ borderColor: "var(--color-warning)", background: "var(--bg-subtle)" }}>
                 <div className="flex items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate text-xs font-medium">{challenge.reason}</span>
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                    {humanizeTeamText(challenge.reason)}
+                  </span>
                   <TeamStatusBadge label={teamChallengeStatusText(challenge.status)} tone={challenge.status === "resolved" || challenge.status === "dismissed" ? "done" : "warn"} />
                 </div>
                 <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
@@ -1689,7 +1691,7 @@ function buildTeamAttentionItems({
     items.push({
       id: `challenge:${challenge.id}`,
       title: "有发现需要裁决",
-      body: challenge.reason,
+      body: humanizeTeamText(challenge.reason),
       tone: "warn",
     });
   }

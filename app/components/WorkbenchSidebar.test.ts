@@ -221,6 +221,9 @@ describe("Workbench overview model", () => {
     expect(source).toContain("固定到侧栏");
     expect(source).toContain("重试");
     expect(source).toContain("换人");
+    expect(source).toContain("发送追问");
+    expect(source).toContain("humanizeTeamText(challenge.reason)");
+    expect(source).not.toContain("Send follow-up");
     expect(source).toContain("告诉整个团队");
     expect(source).toContain("问 ${teamMemberDisplayName(member)}");
     expect(source).toContain("发送给团队");
