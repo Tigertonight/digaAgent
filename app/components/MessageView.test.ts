@@ -44,7 +44,9 @@ describe("MessageView CoT/toolchain UX safeguards", () => {
 
     expect(text).toContain("AgentTeamRunCard");
     expect(text).toContain("data-testid=\"agent-team-run-card\"");
-    expect(text).toContain("Open Team Workspace");
+    expect(text).toContain("查看团队进展");
+    expect(text).toContain("团队协作");
+    expect(text).toContain("生成总结");
     expect(text).toContain("agentTeamLeadStateLabel");
     expect(text).toContain("openChallenges");
     expect(text).toContain("acceptedFindings");

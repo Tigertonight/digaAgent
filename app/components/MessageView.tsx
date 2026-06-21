@@ -35,7 +35,6 @@ import {
   Play,
   RotateCcw,
   ShieldCheck,
-  Square,
   Users,
   XCircle,
 } from "lucide-react";
@@ -2380,6 +2379,14 @@ function AgentTeamRunCard({
   const acceptedFindings = findings.filter(
     (finding) => finding.status === "accepted"
   ).length;
+  const requiredTasks = tasks.filter((task) => task.required);
+  const completedRequired = requiredTasks.filter((task) => task.status === "completed").length;
+  const primaryStatus =
+    openChallenges > 0
+      ? "有问题需要确认"
+      : openTasks > 0
+        ? "团队正在推进"
+        : "可以整理结果";
   const running = run.status === "running" || run.status === "finalizing";
   const paused = run.status === "paused";
   const terminal =
@@ -2408,7 +2415,7 @@ function AgentTeamRunCard({
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <span className="text-token-sm font-semibold">Agent Team</span>
+            <span className="text-token-sm font-semibold">团队协作</span>
             {running ? <Loader2 size={13} className="animate-spin" /> : null}
             <span
               className="rounded border px-1.5 py-0.5 text-token-xs"
@@ -2427,7 +2434,7 @@ function AgentTeamRunCard({
               {statusLabel}
             </span>
             <span className="text-token-xs" style={{ color: "var(--text-muted)" }}>
-              Lead: {leadLabel}
+              {leadLabel}
             </span>
           </div>
           <div className="mt-1 truncate text-token-sm" title={run.objective}>
@@ -2436,11 +2443,10 @@ function AgentTeamRunCard({
         </div>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-4">
+      <div className="grid gap-2 sm:grid-cols-3">
         <AgentTeamMetric icon={<Users size={13} />} label="成员" value={run.members.length} />
-        <AgentTeamMetric icon={<Circle size={13} />} label="开放任务" value={openTasks} />
-        <AgentTeamMetric icon={<Lightbulb size={13} />} label="采纳发现" value={acceptedFindings} />
-        <AgentTeamMetric icon={<ShieldCheck size={13} />} label="开放挑战" value={openChallenges} tone={openChallenges > 0 ? "warn" : "muted"} />
+        <AgentTeamMetric icon={<Circle size={13} />} label="关键任务" value={completedRequired} suffix={`/${requiredTasks.length}`} />
+        <AgentTeamMetric icon={<ShieldCheck size={13} />} label="待确认" value={openChallenges} tone={openChallenges > 0 ? "warn" : "muted"} />
       </div>
 
       <div
@@ -2451,7 +2457,16 @@ function AgentTeamRunCard({
           color: "var(--text-muted)",
         }}
       >
-        {run.board.summary}
+        <span className="font-medium" style={{ color: openChallenges > 0 ? "var(--color-warning)" : "var(--text)" }}>
+          {primaryStatus}
+        </span>
+        <span className="ml-1 inline-block">
+          {openChallenges > 0
+            ? "。团队发现了需要你判断的问题。"
+            : openTasks > 0
+              ? `。还有 ${openTasks} 个任务在处理中。`
+              : `。已采纳 ${acceptedFindings} 条发现，可以进入总结。`}
+        </span>
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">
@@ -2463,18 +2478,18 @@ function AgentTeamRunCard({
           data-testid="open-agent-team-workspace"
         >
           <PanelRightOpen size={13} />
-          Open Team Workspace
+          查看团队进展
         </button>
         {!terminal && (
           <button
             type="button"
             onClick={() => onAction?.(run.id, paused ? "resume" : "pause")}
-            className="inline-flex h-7 w-7 items-center justify-center rounded-token-sm border hover:bg-[color:var(--bg-hover)]"
+            className="inline-flex h-7 items-center justify-center rounded-token-sm border px-2 text-token-xs hover:bg-[color:var(--bg-hover)]"
             style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
             title={paused ? "Resume Team" : "Pause Team"}
             aria-label={paused ? "Resume Team" : "Pause Team"}
           >
-            {paused ? <Play size={13} /> : <Circle size={13} />}
+            {paused ? "继续" : "暂停"}
           </button>
         )}
         {!terminal && (
@@ -2485,19 +2500,19 @@ function AgentTeamRunCard({
             style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
           >
             <CheckCircle2 size={13} />
-            Finalize
+            生成总结
           </button>
         )}
         {!terminal && (
           <button
             type="button"
             onClick={() => onAction?.(run.id, "stop")}
-            className="inline-flex h-7 w-7 items-center justify-center rounded-token-sm border hover:bg-[color:var(--bg-hover)]"
+            className="inline-flex h-7 items-center justify-center rounded-token-sm border px-2 text-token-xs hover:bg-[color:var(--bg-hover)]"
             style={{ borderColor: "var(--border-soft)", color: "var(--color-danger)" }}
             title="Stop Team"
             aria-label="Stop Team"
           >
-            <Square size={12} />
+            停止
           </button>
         )}
       </div>
@@ -2509,11 +2524,13 @@ function AgentTeamMetric({
   icon,
   label,
   value,
+  suffix,
   tone = "muted",
 }: {
   icon: ReactNode;
   label: string;
   value: number;
+  suffix?: string;
   tone?: "muted" | "warn";
 }) {
   return (
@@ -2528,7 +2545,10 @@ function AgentTeamMetric({
         {icon}
         <span className="truncate">{label}</span>
       </div>
-      <div className="mt-0.5 text-token-lg font-semibold tabular-nums">{value}</div>
+      <div className="mt-0.5 text-token-lg font-semibold tabular-nums">
+        {value}
+        {suffix ? <span className="text-token-xs font-normal" style={{ color: "var(--text-muted)" }}>{suffix}</span> : null}
+      </div>
     </div>
   );
 }

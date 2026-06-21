@@ -886,8 +886,6 @@ function AgentTeamWorkspace({
   const [teamMessage, setTeamMessage] = useState("");
   const [activeTranscriptMemberId, setActiveTranscriptMemberId] = useState<string | null>(null);
   const [memberFollowUps, setMemberFollowUps] = useState<Record<string, string>>({});
-  const [resultDrafts, setResultDrafts] = useState<Record<string, string>>({});
-  const [planDrafts, setPlanDrafts] = useState<Record<string, string>>({});
   const [detailsOpen, setDetailsOpen] = useState(false);
   const run =
     runs.find((item) => item.id === teamId) ?? runs[0] ?? null;
@@ -912,9 +910,6 @@ function AgentTeamWorkspace({
   const resolvedChallenges = run.board.challenges.filter(
     (challenge) => challenge.status === "resolved" || challenge.status === "dismissed"
   );
-  const activeFileLocks = (run.board.fileLocks ?? []).filter(
-    (lock) => lock.status === "active"
-  );
   const lead = run.members.find((member) => member.id === run.leadAgentId) ?? run.members[0];
   const activeTranscriptMember = activeTranscriptMemberId
     ? run.members.find((member) => member.id === activeTranscriptMemberId)
@@ -935,8 +930,8 @@ function AgentTeamWorkspace({
   const visibleActivity = [
     ...workingMembers.map((member) => ({
       id: `member:${member.id}`,
-      title: `${member.name} 正在推进`,
-      body: member.latestOutput || member.currentTaskId || member.role,
+      title: `${teamMemberDisplayName(member)} 正在推进`,
+      body: humanizeTeamText(member.latestOutput || member.currentTaskId || member.role),
     })),
     ...openTasks.slice(0, 3).map((task) => ({
       id: `task:${task.id}`,
@@ -954,7 +949,7 @@ function AgentTeamWorkspace({
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="truncate text-sm font-semibold">Team Brief</span>
+              <span className="truncate text-sm font-semibold">团队协作</span>
               <span className="rounded border px-1.5 py-0.5 text-token-xs" style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}>
                 {agentTeamStatusText(run.status)}
               </span>
@@ -1038,7 +1033,7 @@ function AgentTeamWorkspace({
         <div className="space-y-1.5">
           {attentionItems.length === 0 ? (
             <div className="rounded border px-2 py-2 text-token-xs" style={{ borderColor: "var(--border-soft)", background: "var(--bg-subtle)", color: "var(--text-muted)" }}>
-              Team 会继续推进；有冲突、阻塞或可完成时再提醒你。
+              团队会继续推进；有冲突、阻塞或可完成时再提醒你。
             </div>
           ) : (
             attentionItems.map((item) => (
@@ -1065,9 +1060,9 @@ function AgentTeamWorkspace({
           style={{ color: "var(--text)" }}
         >
           {detailsOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-          高级详情
+          查看任务细节
           <span className="ml-auto text-token-xs font-normal" style={{ color: "var(--text-muted)" }}>
-            任务板 / 成员 / 证据 / 门禁
+            任务 / 成员 / 发现 / 决策
           </span>
         </button>
       </section>
@@ -1075,8 +1070,8 @@ function AgentTeamWorkspace({
       {detailsOpen ? (
         <>
       <TeamWorkspaceSection
-        title="Board"
-        summary={run.board.summary}
+        title="任务列表"
+        summary="这里只放当前需要推进的事项。更底层的执行日志不会默认展示。"
         icon={<LayoutDashboard size={13} />}
       >
         <div className="space-y-1.5">
@@ -1098,12 +1093,11 @@ function AgentTeamWorkspace({
                   <TeamStatusBadge label={teamTaskStatusText(task.status)} tone={task.status === "completed" ? "done" : task.status === "blocked" ? "warn" : "muted"} />
                 </div>
                 <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--text-muted)" }}>
-                  {task.description}
+                  {humanizeTeamText(task.description)}
                 </div>
                 <div className="mt-1 flex flex-wrap gap-1 text-token-xs" style={{ color: "var(--fg-faint)" }}>
-                  <span>{task.required ? "required" : "optional"}</span>
-                  <span>priority {task.priority}</span>
-                  {owner ? <span>owner {owner.name}</span> : <span>unclaimed</span>}
+                  <span>{task.required ? "关键任务" : "可选任务"}</span>
+                  {owner ? <span>{teamMemberDisplayName(owner)} 负责</span> : <span>等待分配</span>}
                 </div>
                 {lead && onCommand ? (
                   <div className="mt-2 flex flex-wrap gap-1">
@@ -1120,7 +1114,7 @@ function AgentTeamWorkspace({
                         className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
                         style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
                       >
-                        claim
+                        认领
                       </button>
                     )}
                     {task.status === "blocked" && (
@@ -1135,7 +1129,7 @@ function AgentTeamWorkspace({
                         className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
                         style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
                       >
-                        retry
+                        重试
                       </button>
                     )}
                     {(task.status === "claimed" || task.status === "running") && (
@@ -1152,90 +1146,9 @@ function AgentTeamWorkspace({
                         className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
                         style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
                       >
-                        complete
+                        标记完成
                       </button>
                     )}
-                  </div>
-                ) : null}
-                {onCommand && (task.status === "claimed" || task.status === "running" || task.status === "blocked") ? (
-                  <div className="mt-2 space-y-1.5">
-                    <textarea
-                      value={resultDrafts[task.id] ?? ""}
-                      onChange={(event) =>
-                        setResultDrafts((current) => ({
-                          ...current,
-                          [task.id]: event.target.value,
-                        }))
-                      }
-                      placeholder="Paste TEAM_RESULT_JSON"
-                      rows={3}
-                      className="w-full resize-none rounded border px-2 py-1 text-token-xs outline-none"
-                      style={{
-                        borderColor: "var(--border-soft)",
-                        background: "var(--bg-panel)",
-                        color: "var(--text)",
-                      }}
-                    />
-                    <button
-                      type="button"
-                      disabled={!(resultDrafts[task.id] ?? "").trim()}
-                      onClick={async () => {
-                        const rawText = (resultDrafts[task.id] ?? "").trim();
-                        if (!rawText) return;
-                        setResultDrafts((current) => ({ ...current, [task.id]: "" }));
-                        await onCommand(run.id, {
-                          type: "submit_result",
-                          taskId: task.id,
-                          memberId: task.ownerAgentId ?? lead?.id ?? run.leadAgentId,
-                          rawText,
-                        });
-                      }}
-                      className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)] disabled:opacity-40"
-                      style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
-                    >
-                      submit result
-                    </button>
-                  </div>
-                ) : null}
-                {onCommand && run.settings.requirePlanApproval && task.status === "needs_plan" ? (
-                  <div className="mt-2 space-y-1.5">
-                    <textarea
-                      value={planDrafts[task.id] ?? ""}
-                      onChange={(event) =>
-                        setPlanDrafts((current) => ({
-                          ...current,
-                          [task.id]: event.target.value,
-                        }))
-                      }
-                      placeholder="Plan for lead approval"
-                      rows={2}
-                      className="w-full resize-none rounded border px-2 py-1 text-token-xs outline-none"
-                      style={{
-                        borderColor: "var(--border-soft)",
-                        background: "var(--bg-panel)",
-                        color: "var(--text)",
-                      }}
-                    />
-                    <button
-                      type="button"
-                      disabled={!(planDrafts[task.id] ?? "").trim()}
-                      onClick={async () => {
-                        const body = (planDrafts[task.id] ?? "").trim();
-                        if (!body) return;
-                        setPlanDrafts((current) => ({ ...current, [task.id]: "" }));
-                        await onCommand(run.id, {
-                          type: "submit_plan",
-                          taskId: task.id,
-                          actorAgentId: task.ownerAgentId ?? lead?.id ?? run.leadAgentId,
-                          body,
-                          criteria: task.acceptanceCriteria,
-                        });
-                      }}
-                      className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)] disabled:opacity-40"
-                      style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
-                    >
-                      submit plan
-                    </button>
                   </div>
                 ) : null}
               </div>
@@ -1245,8 +1158,8 @@ function AgentTeamWorkspace({
       </TeamWorkspaceSection>
 
       <TeamWorkspaceSection
-        title="Members"
-        summary="成员 transcript 默认留在协作室里，不进入主聊天。"
+        title="成员进展"
+        summary="只显示每个成员正在做什么；完整会话需要时再打开。"
         icon={<Users size={13} />}
       >
         <div className="grid gap-1.5">
@@ -1257,7 +1170,7 @@ function AgentTeamWorkspace({
               style={{ borderColor: "var(--border-soft)", background: "var(--bg-subtle)" }}
             >
               <div className="flex min-w-0 items-center gap-2">
-                <span className="truncate text-xs font-medium">{member.name}</span>
+                <span className="truncate text-xs font-medium">{teamMemberDisplayName(member)}</span>
                 <TeamStatusBadge label={teamMemberStatusText(member.status)} tone={member.status === "working" ? "running" : member.status === "blocked" ? "warn" : member.status === "done" ? "done" : "muted"} />
                 {member.sessionFile && onOpenMember ? (
                   <button
@@ -1267,7 +1180,7 @@ function AgentTeamWorkspace({
                     style={{ color: "var(--text-muted)" }}
                   >
                     <ExternalLink size={11} />
-                    transcript
+                    查看记录
                   </button>
                 ) : null}
               </div>
@@ -1276,7 +1189,7 @@ function AgentTeamWorkspace({
               </div>
               {member.latestOutput ? (
                 <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--fg-faint)" }}>
-                  {member.latestOutput}
+                  {humanizeTeamText(member.latestOutput)}
                 </div>
               ) : null}
               {onCommand && member.id !== run.leadAgentId ? (
@@ -1294,7 +1207,7 @@ function AgentTeamWorkspace({
                     disabled={!member.agentId && !member.sessionFile}
                     title="Promote teammate to sidebar"
                   >
-                    {member.sidebarVisible ? "promoted to sidebar" : "promote to sidebar"}
+                    {member.sidebarVisible ? "已固定" : "固定到侧栏"}
                   </button>
                   {member.status === "blocked" ? (
                     <button
@@ -1308,7 +1221,7 @@ function AgentTeamWorkspace({
                       className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
                       style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
                     >
-                      replace
+                      换人
                     </button>
                   ) : null}
                 </div>
@@ -1323,7 +1236,7 @@ function AgentTeamWorkspace({
                         [member.id]: event.target.value,
                       }))
                     }
-                    placeholder={`Ask ${member.name}`}
+                    placeholder={`问 ${teamMemberDisplayName(member)}...`}
                     className="min-w-0 flex-1 rounded border px-2 text-token-xs outline-none"
                     style={{
                       borderColor: "var(--border-soft)",
@@ -1362,7 +1275,7 @@ function AgentTeamWorkspace({
             <input
               value={teamMessage}
               onChange={(event) => setTeamMessage(event.target.value)}
-              placeholder="Broadcast to team"
+              placeholder="告诉整个团队..."
               className="min-w-0 flex-1 rounded border px-2 text-token-xs outline-none"
               style={{
                 borderColor: "var(--border-soft)",
@@ -1385,8 +1298,8 @@ function AgentTeamWorkspace({
               }}
               className="inline-flex h-7 w-7 items-center justify-center rounded border hover:bg-[color:var(--bg-hover)] disabled:opacity-40"
               style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
-              title="Broadcast"
-              aria-label="Broadcast"
+              title="发送给团队"
+              aria-label="发送给团队"
             >
               <MessageSquare size={13} />
             </button>
@@ -1394,186 +1307,9 @@ function AgentTeamWorkspace({
         ) : null}
       </TeamWorkspaceSection>
 
-      {onCommand && run.status === "running" ? (
-        <TeamWorkspaceSection
-          title="Team Controls"
-          summary="批量推进和自动运行保留给高级操作。"
-          icon={<Network size={13} />}
-        >
-          <div className="flex flex-wrap gap-1.5">
-            <button
-              type="button"
-              onClick={() => onCommand(run.id, { type: "run_batch", maxDispatches: 4 })}
-              className="inline-flex h-7 items-center gap-1.5 rounded border px-2 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
-              style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
-            >
-              <Network size={13} />
-              Run batch
-            </button>
-            <button
-              type="button"
-              onClick={() => onCommand(run.id, { type: "run_until_idle", maxDispatches: 4, maxRounds: 6 })}
-              className="inline-flex h-7 items-center gap-1.5 rounded border px-2 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
-              style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
-            >
-              <Network size={13} />
-              Auto run
-            </button>
-          </div>
-        </TeamWorkspaceSection>
-      ) : null}
-
-      {activeFileLocks.length > 0 ? (
-        <TeamWorkspaceSection
-          title="File Locks"
-          summary="成员写入同一路径前会先经过 board 锁，避免并发覆盖。"
-          icon={<FileText size={13} />}
-        >
-          <div className="space-y-1.5">
-            {activeFileLocks.map((lock) => {
-              const owner = run.members.find((member) => member.id === lock.ownerAgentId);
-              return (
-                <div
-                  key={lock.id}
-                  className="rounded border px-2 py-2"
-                  style={{ borderColor: "var(--color-warning)", background: "var(--bg-subtle)" }}
-                >
-                  <div className="truncate text-xs font-medium">{lock.path}</div>
-                  <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
-                    {owner?.name ?? lock.ownerAgentId} · {lock.taskId}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </TeamWorkspaceSection>
-      ) : null}
-
       <TeamWorkspaceSection
-        title="Results"
-        summary={`${(run.board.results ?? []).length} structured teammate results`}
-        icon={<FileText size={13} />}
-      >
-        <div className="space-y-1.5">
-          {(run.board.results ?? []).length === 0 ? (
-            <div className="text-token-xs" style={{ color: "var(--text-muted)" }}>
-              No submitted teammate results yet.
-            </div>
-          ) : (
-            (run.board.results ?? []).map((result) => {
-              const author = run.members.find((member) => member.id === result.authorAgentId);
-              return (
-                <div
-                  key={result.id}
-                  className="rounded border px-2 py-2"
-                  style={{
-                    borderColor: result.status === "needs_review" ? "var(--color-warning)" : "var(--border-soft)",
-                    background: "var(--bg-subtle)",
-                  }}
-                >
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate text-xs font-medium">{result.summary}</span>
-                    <TeamStatusBadge label={result.status} tone={result.status === "parsed" ? "done" : "warn"} />
-                  </div>
-                  <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
-                    {author?.name ?? result.authorAgentId} · findings {result.findingIds.length}
-                  </div>
-                  {result.parseWarnings.length > 0 ? (
-                    <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--color-warning)" }}>
-                      {result.parseWarnings.join("；")}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })
-          )}
-        </div>
-      </TeamWorkspaceSection>
-
-      <TeamWorkspaceSection
-        title="Plans"
-        summary={`${(run.board.plans ?? []).length} submitted plans`}
-        icon={<LayoutDashboard size={13} />}
-      >
-        <div className="space-y-1.5">
-          {(run.board.plans ?? []).length === 0 ? (
-            <div className="text-token-xs" style={{ color: "var(--text-muted)" }}>
-              No plans submitted for approval.
-            </div>
-          ) : (
-            (run.board.plans ?? []).map((plan) => {
-              const author = run.members.find((member) => member.id === plan.authorAgentId);
-              return (
-                <div
-                  key={plan.id}
-                  className="rounded border px-2 py-2"
-                  style={{
-                    borderColor:
-                      plan.status === "approved"
-                        ? "var(--color-success)"
-                        : plan.status === "rejected"
-                          ? "var(--color-danger)"
-                          : "var(--border-soft)",
-                    background: "var(--bg-subtle)",
-                  }}
-                >
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate text-xs font-medium">
-                      {run.board.tasks.find((task) => task.id === plan.taskId)?.title ?? plan.taskId}
-                    </span>
-                    <TeamStatusBadge
-                      label={plan.status}
-                      tone={plan.status === "approved" ? "done" : plan.status === "rejected" ? "danger" : "muted"}
-                    />
-                  </div>
-                  <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
-                    {author?.name ?? plan.authorAgentId}
-                  </div>
-                  <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--fg-faint)" }}>
-                    {plan.body}
-                  </div>
-                  {onCommand && plan.status === "submitted" ? (
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onCommand(run.id, {
-                            type: "approve_plan",
-                            planId: plan.id,
-                            actorAgentId: lead?.id ?? run.leadAgentId,
-                          })
-                        }
-                        className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
-                        style={{ borderColor: "var(--border-soft)", color: "var(--color-success)" }}
-                      >
-                        approve
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onCommand(run.id, {
-                            type: "reject_plan",
-                            planId: plan.id,
-                            actorAgentId: lead?.id ?? run.leadAgentId,
-                          })
-                        }
-                        className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
-                        style={{ borderColor: "var(--border-soft)", color: "var(--color-danger)" }}
-                      >
-                        reject
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })
-          )}
-        </div>
-      </TeamWorkspaceSection>
-
-      <TeamWorkspaceSection
-        title="Quality Gates"
-        summary="结束前必须通过的验收条件。"
+        title="完成检查"
+        summary="这些条件满足后，Team 才适合输出最终总结。"
         icon={<ShieldCheck size={13} />}
       >
         <div className="space-y-1.5">
@@ -1593,10 +1329,10 @@ function AgentTeamWorkspace({
             >
               <div className="flex min-w-0 items-center gap-2">
                 <span className="min-w-0 flex-1 truncate text-xs font-medium">
-                  {gate.title}
+                  {teamGateTitle(gate.title)}
                 </span>
                 <TeamStatusBadge
-                  label={gate.status}
+                  label={teamCheckStatusText(gate.status)}
                   tone={
                     gate.status === "passed"
                       ? "done"
@@ -1607,7 +1343,7 @@ function AgentTeamWorkspace({
                 />
               </div>
               <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--text-muted)" }}>
-                {gate.message}
+                {teamGateMessage(gate.message)}
               </div>
             </div>
           ))}
@@ -1619,7 +1355,7 @@ function AgentTeamWorkspace({
             >
               <div className="flex min-w-0 items-center gap-2">
                 <span className="truncate text-xs font-semibold">
-                  {activeTranscriptMember.name} transcript
+                  {activeTranscriptMember.name} 的记录
                 </span>
                 <TeamStatusBadge
                   label={teamMemberStatusText(activeTranscriptMember.status)}
@@ -1627,7 +1363,7 @@ function AgentTeamWorkspace({
                 />
               </div>
               <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
-                {activeTranscriptMember.sessionFile ?? "No teammate transcript file yet."}
+                {activeTranscriptMember.sessionFile ? "已保存成员会话记录" : "还没有成员会话记录。"}
               </div>
               {activeTranscriptMember.latestOutput ? (
                 <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--fg-faint)" }}>
@@ -1641,7 +1377,7 @@ function AgentTeamWorkspace({
                   className="mt-2 h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
                   style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
                 >
-                  open session
+                  打开完整记录
                 </button>
               ) : null}
             </div>
@@ -1650,114 +1386,8 @@ function AgentTeamWorkspace({
       </TeamWorkspaceSection>
 
       <TeamWorkspaceSection
-        title="Hooks"
-        summary="运行中阻止或提示低质量状态迁移的规则。"
-        icon={<ShieldCheck size={13} />}
-      >
-        <div className="space-y-1.5">
-          {(run.board.hooks ?? []).map((hook) => (
-            <div
-              key={hook.id}
-              className="rounded border px-2 py-2"
-              style={{
-                borderColor:
-                  hook.status === "failed"
-                    ? hook.severity === "blocking"
-                      ? "var(--color-danger)"
-                      : "var(--color-warning)"
-                    : hook.status === "passed"
-                      ? "var(--color-success)"
-                      : "var(--border-soft)",
-                background: "var(--bg-subtle)",
-              }}
-            >
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="min-w-0 flex-1 truncate text-xs font-medium">{hook.title}</span>
-                {onCommand ? (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onCommand(run.id, {
-                        type: "configure_hook",
-                        hookId: hook.id,
-                        enabled: !hook.enabled,
-                      })
-                    }
-                    className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
-                    style={{ borderColor: "var(--border-soft)", color: hook.enabled ? "var(--text-muted)" : "var(--fg-faint)" }}
-                  >
-                    {hook.enabled ? "on" : "off"}
-                  </button>
-                ) : null}
-                <TeamStatusBadge
-                  label={hook.status}
-                  tone={
-                    hook.status === "passed"
-                      ? "done"
-                      : hook.status === "failed"
-                        ? hook.severity === "blocking"
-                          ? "danger"
-                          : "warn"
-                        : "muted"
-                  }
-                />
-              </div>
-              <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
-                {hook.trigger} · {hook.severity}
-              </div>
-              <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--fg-faint)" }}>
-                {hook.lastFailure ?? hook.message}
-              </div>
-            </div>
-          ))}
-        </div>
-      </TeamWorkspaceSection>
-
-      <TeamWorkspaceSection
-        title="Claude Parity"
-        summary="持续对照 Claude Agent Teams 能力。"
-        icon={<CheckDecisionIcon />}
-      >
-        <div className="space-y-1.5">
-          {run.board.capabilityAudit.map((item) => (
-            <div
-              key={item.id}
-              className="rounded border px-2 py-2"
-              style={{ borderColor: "var(--border-soft)", background: "var(--bg-subtle)" }}
-            >
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="min-w-0 flex-1 truncate text-xs font-medium">
-                  {item.title}
-                </span>
-                <TeamStatusBadge
-                  label={item.digaStatus}
-                  tone={
-                    item.digaStatus === "implemented"
-                      ? "done"
-                      : item.digaStatus === "partial"
-                        ? "warn"
-                        : item.digaStatus === "blocked"
-                          ? "danger"
-                          : "muted"
-                  }
-                />
-              </div>
-              <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--text-muted)" }}>
-                {item.gap ?? item.claudeCapability}
-              </div>
-              {item.nextStep ? (
-                <div className="mt-1 text-token-xs" style={{ color: "var(--fg-faint)" }}>
-                  next: {item.nextStep}
-                </div>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      </TeamWorkspaceSection>
-
-      <TeamWorkspaceSection
-        title="Findings & Challenges"
-        summary={`${run.board.findings.length} findings · ${run.board.challenges.length} challenges`}
+        title="发现和问题"
+        summary={`${run.board.findings.length} 条发现 · ${run.board.challenges.length} 个问题`}
         icon={<ShieldCheck size={13} />}
       >
         <div className="space-y-1.5">
@@ -1766,21 +1396,12 @@ function AgentTeamWorkspace({
             return (
               <div key={finding.id} className="rounded border px-2 py-2" style={{ borderColor: finding.status === "challenged" ? "var(--color-warning)" : "var(--border-soft)", background: "var(--bg-subtle)" }}>
                 <div className="flex min-w-0 items-center gap-2">
-                  <span className="truncate text-xs font-medium">{finding.claim}</span>
-                  <TeamStatusBadge label={finding.status} tone={finding.status === "accepted" ? "done" : finding.status === "challenged" ? "warn" : finding.status === "rejected" ? "danger" : "muted"} />
+                  <span className="truncate text-xs font-medium">{humanizeTeamText(finding.claim)}</span>
+                  <TeamStatusBadge label={teamFindingStatusText(finding.status)} tone={finding.status === "accepted" ? "done" : finding.status === "challenged" ? "warn" : finding.status === "rejected" ? "danger" : "muted"} />
                 </div>
                 <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
-                  {author?.name ?? finding.authorAgentId} · confidence {finding.confidence}
+                  {author ? teamMemberDisplayName(author) : finding.authorAgentId}
                 </div>
-                {finding.evidenceRefs.length > 0 ? (
-                  <div className="mt-1 flex flex-wrap gap-1">
-                    {finding.evidenceRefs.map((ref) => (
-                      <span key={ref} className="rounded border px-1.5 py-0.5 text-[10px]" style={{ borderColor: "var(--border-soft)", color: "var(--fg-faint)" }}>
-                        {ref}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
                 {onCommand ? (
                   <div className="mt-2 flex flex-wrap gap-1">
                     {finding.status !== "accepted" ? (
@@ -1796,7 +1417,7 @@ function AgentTeamWorkspace({
                         className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
                         style={{ borderColor: "var(--border-soft)", color: "var(--color-success)" }}
                       >
-                        accept
+                        采纳
                       </button>
                     ) : null}
                     {finding.status !== "rejected" ? (
@@ -1812,7 +1433,7 @@ function AgentTeamWorkspace({
                         className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
                         style={{ borderColor: "var(--border-soft)", color: "var(--color-danger)" }}
                       >
-                        reject
+                        不采纳
                       </button>
                     ) : null}
                     {run.settings.allowChallenges ? (
@@ -1828,7 +1449,7 @@ function AgentTeamWorkspace({
                         className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
                         style={{ borderColor: "var(--border-soft)", color: "var(--color-warning)" }}
                       >
-                        challenge
+                        提出问题
                       </button>
                     ) : null}
                   </div>
@@ -1842,10 +1463,10 @@ function AgentTeamWorkspace({
               <div key={challenge.id} className="rounded border px-2 py-2" style={{ borderColor: "var(--color-warning)", background: "var(--bg-subtle)" }}>
                 <div className="flex items-center gap-2">
                   <span className="min-w-0 flex-1 truncate text-xs font-medium">{challenge.reason}</span>
-                  <TeamStatusBadge label={challenge.status} tone={challenge.status === "resolved" || challenge.status === "dismissed" ? "done" : "warn"} />
+                  <TeamStatusBadge label={teamChallengeStatusText(challenge.status)} tone={challenge.status === "resolved" || challenge.status === "dismissed" ? "done" : "warn"} />
                 </div>
                 <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
-                  target: {target?.claim ?? challenge.targetFindingId}
+                  关于：{target?.claim ?? challenge.targetFindingId}
                 </div>
                 {onCommand && (challenge.status === "open" || challenge.status === "needs_evidence") ? (
                   <div className="mt-2 flex flex-wrap gap-1">
@@ -1862,7 +1483,7 @@ function AgentTeamWorkspace({
                       className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
                       style={{ borderColor: "var(--border-soft)", color: "var(--color-success)" }}
                     >
-                      resolve
+                      已解决
                     </button>
                     <button
                       type="button"
@@ -1876,7 +1497,7 @@ function AgentTeamWorkspace({
                       className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
                       style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
                     >
-                      dismiss
+                      忽略
                     </button>
                   </div>
                 ) : null}
@@ -1887,8 +1508,8 @@ function AgentTeamWorkspace({
       </TeamWorkspaceSection>
 
       <TeamWorkspaceSection
-        title="Decisions"
-        summary="Lead 的裁决会把最终结论绑定到发现与挑战。"
+        title="最终判断"
+        summary="这里记录团队最后采纳了什么、为什么采纳。"
         icon={<CheckDecisionIcon />}
       >
         {onCommand && acceptedFindings.length > 0 ? (
@@ -1920,18 +1541,18 @@ function AgentTeamWorkspace({
             className="mb-2 h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
             style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
           >
-            record lead decision
+            记录最终判断
           </button>
         ) : null}
         <div className="space-y-1.5">
           {run.board.decisions.map((decision) => (
             <div key={decision.id} className="rounded border px-2 py-2" style={{ borderColor: "var(--border-soft)", background: "var(--bg-subtle)" }}>
-              <div className="text-xs font-medium">{decision.title}</div>
+              <div className="text-xs font-medium">{humanizeTeamText(decision.title)}</div>
               <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--text-muted)" }}>
-                {decision.rationale}
+                {humanizeTeamText(decision.rationale)}
               </div>
               <div className="mt-1 text-token-xs" style={{ color: "var(--fg-faint)" }}>
-                accepted {decision.acceptedFindingIds.length} · rejected {decision.rejectedFindingIds.length}
+                采纳 {decision.acceptedFindingIds.length} 条 · 未采纳 {decision.rejectedFindingIds.length} 条
               </div>
             </div>
           ))}
@@ -2024,7 +1645,7 @@ function deriveTeamBriefPhase(run: AgentTeamRun): {
     return {
       index: 4,
       label: "可综合",
-      summary: "关键任务已完成，下一步是记录 Lead 决策和最终综合。",
+      summary: "关键任务已完成，下一步是记录负责人判断和最终总结。",
       tone: "muted",
     };
   }
@@ -2040,14 +1661,14 @@ function deriveTeamBriefPhase(run: AgentTeamRun): {
     return {
       index: 2,
       label: "收敛中",
-      summary: "Team 已产出发现，正在确认哪些结论可以采纳。",
+      summary: "团队已产出发现，正在确认哪些结论可以采纳。",
       tone: "muted",
     };
   }
   return {
     index: 1,
     label: "推进中",
-    summary: "Team 正在拆任务、收集证据并推进下一步。",
+    summary: "团队正在拆任务、收集证据并推进下一步。",
     tone: "muted",
   };
 }
@@ -2150,6 +1771,76 @@ function teamMemberStatusText(status: string): string {
   if (status === "blocked") return "阻塞";
   if (status === "done") return "完成";
   return status;
+}
+
+function teamMemberDisplayName(member: { name: string; role?: string }): string {
+  if (member.name === "Lead") return "负责人";
+  if (member.name === "Research") return "资料员";
+  if (member.name === "Critic") return "质疑者";
+  if (member.name === "Synthesis") return "整理者";
+  if (member.name === "Validation") return "验收员";
+  return member.name || member.role || "成员";
+}
+
+function teamFindingStatusText(status: string): string {
+  if (status === "accepted") return "已采纳";
+  if (status === "challenged") return "有疑问";
+  if (status === "rejected") return "未采纳";
+  if (status === "proposed") return "待确认";
+  return status;
+}
+
+function teamChallengeStatusText(status: string): string {
+  if (status === "open") return "待处理";
+  if (status === "needs_evidence") return "需要证据";
+  if (status === "resolved") return "已解决";
+  if (status === "dismissed") return "已忽略";
+  return status;
+}
+
+function teamCheckStatusText(status: string): string {
+  if (status === "passed") return "通过";
+  if (status === "failed") return "未通过";
+  if (status === "pending") return "待完成";
+  return status;
+}
+
+function humanizeTeamText(text: string | undefined): string {
+  if (!text) return "";
+  return text
+    .replaceAll("Teammate session", "成员记录")
+    .replaceAll("Agent Team", "团队协作")
+    .replaceAll("Team Workspace", "团队协作空间")
+    .replaceAll("Team", "团队")
+    .replaceAll("accepted findings", "已采纳的发现")
+    .replaceAll("resolved challenges", "已解决的问题")
+    .replaceAll("transcript", "记录")
+    .replaceAll("sidebar", "侧栏")
+    .replaceAll("findings", "发现")
+    .replaceAll("finding", "发现")
+    .replaceAll("challenges", "问题")
+    .replaceAll("challenge", "问题")
+    .replaceAll("decision", "判断")
+    .replaceAll("accepted", "已采纳")
+    .replaceAll("rejected", "未采纳")
+    .replaceAll("session", "会话")
+    .replaceAll("基于已采纳 发现 和已解决 问题 记录最终 判断。", "基于已采纳的发现和已解决的问题，记录最终判断。");
+}
+
+function teamGateTitle(title: string): string {
+  if (title === "Required tasks complete") return "关键任务都已完成";
+  if (title === "No open blocking challenges") return "没有待确认的问题";
+  if (title === "Lead final synthesis") return "已经形成最终总结";
+  return title;
+}
+
+function teamGateMessage(message: string): string {
+  if (message.includes("required tasks")) return "所有关键任务完成后，才适合输出最终总结。";
+  if (message.includes("open") || message.includes("needs_evidence")) {
+    return "还有问题没有处理完，先确认后再结束。";
+  }
+  if (message.includes("Lead")) return "需要记录最后采纳了什么，以及为什么采纳。";
+  return message;
 }
 
 function CheckDecisionIcon() {
