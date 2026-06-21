@@ -189,13 +189,13 @@ npm run internal-runtime:check -- --api http://localhost:3000
 ## Development
 
 ```bash
-# Hot reload (Next.js dev)
+# Hot reload (Next.js dev only)
 npm run dev
 
 # Production build (web)
 npm run build && npm start
 
-# Electron dev
+# Electron dev (auto-starts Next.js dev server if needed)
 npm run electron:dev
 
 # Electron build (mac arm64 by default)

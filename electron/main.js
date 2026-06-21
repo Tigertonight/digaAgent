@@ -2,7 +2,7 @@
  * Electron 主进程入口。
  *
  * 两种模式：
- *  - dev:  ELECTRON_DEV=1，期望外部已经 `npm run dev` 起好 :3000，直接 loadURL
+ *  - dev:  ELECTRON_DEV=1，优先复用外部 `npm run dev`；若 :3000 未就绪则自动启动
  *  - prod: 默认模式，主进程 fork .next/standalone/server.js 监听随机端口
  *
  * key 透传策略：把主进程 process.env 整个传给 child（含 MINIMAX_CN_API_KEY、OPENAI_API_KEY 等）。
@@ -215,7 +215,53 @@ async function waitForHttp(url, timeoutMs = 15000) {
   return false;
 }
 
+function projectRoot() {
+  return path.resolve(__dirname, "..");
+}
+
+function npmCommand() {
+  return process.platform === "win32" ? "npm.cmd" : "npm";
+}
+
+async function ensureDevServer(url) {
+  const existing = await waitForHttp(url, 1500);
+  if (existing) {
+    console.log(`[electron] dev server already reachable at ${url}`);
+    return;
+  }
+  if (!devServerChild) {
+    console.log(`[electron] dev server not reachable at ${url}; starting npm run dev`);
+    devServerChild = spawn(npmCommand(), ["run", "dev"], {
+      cwd: projectRoot(),
+      stdio: ["ignore", "pipe", "pipe"],
+      env: process.env,
+    });
+    const forward = (chunk) => {
+      const text = chunk.toString("utf8").trimEnd();
+      if (text) console.log(`[next-dev] ${text}`);
+    };
+    devServerChild.stdout?.on("data", forward);
+    devServerChild.stderr?.on("data", forward);
+    devServerChild.on("exit", (code, signal) => {
+      console.log(
+        `[electron] dev server exited code=${code ?? "null"} signal=${signal ?? "null"}`
+      );
+      devServerChild = null;
+    });
+    devServerChild.on("error", (err) => {
+      console.error("[electron] failed to start dev server:", err);
+    });
+  }
+  const ok = await waitForHttp(url, 45000);
+  if (!ok) {
+    throw new Error(
+      `Dev server did not become reachable at ${url}. Try running npm install, then npm run dev.`
+    );
+  }
+}
+
 let serverChild = null;
+let devServerChild = null;
 /** standalone server 的 base URL，IPC getApiBase 返回 */
 let apiBase = null;
 let localSessionSecret = crypto.randomBytes(32).toString("base64url");
@@ -1129,12 +1175,8 @@ async function createWindow() {
   const url = DEV ? DEV_URL : apiBase || await startStandaloneServer();
   console.log(`[electron] loading ${url}`);
 
-  // dev 下 next dev 启动可能需要时间，做个简单 retry
   if (DEV) {
-    const ok = await waitForHttp(`${url}/api/health`, 30000);
-    if (!ok) {
-      console.error(`[electron] dev server not reachable at ${url}; 请先 npm run dev`);
-    }
+    await ensureDevServer(url);
   }
 
   win.once("ready-to-show", () => {
@@ -1615,15 +1657,39 @@ function killServerChild(reason) {
   }, 500).unref();
 }
 
+function killDevServerChild(reason) {
+  if (!devServerChild || devServerChild.killed) return;
+  console.log(`[electron] killing dev server (${reason})`);
+  try {
+    devServerChild.kill("SIGTERM");
+  } catch (e) {
+    console.warn("[electron] dev server SIGTERM failed:", e);
+  }
+  const pid = devServerChild.pid;
+  setTimeout(() => {
+    if (pid) {
+      try {
+        process.kill(pid, 0);
+        console.warn(`[electron] dev server pid=${pid} still alive after SIGTERM, SIGKILL`);
+        process.kill(pid, "SIGKILL");
+      } catch {
+        /* 已死 */
+      }
+    }
+  }, 500).unref();
+}
+
 app.on("before-quit", () => {
   app.isQuitting = true;
   powerSave.setKeepAwakeEnabled(false);
   killServerChild("before-quit");
+  killDevServerChild("before-quit");
 });
 
 app.on("will-quit", () => {
   powerSave.setKeepAwakeEnabled(false);
   killServerChild("will-quit");
+  killDevServerChild("will-quit");
 });
 
 // 同步阶段最后一次机会
@@ -1631,6 +1697,13 @@ process.on("exit", () => {
   if (serverChild && !serverChild.killed && serverChild.pid) {
     try {
       process.kill(serverChild.pid, "SIGTERM");
+    } catch {
+      /* ignore */
+    }
+  }
+  if (devServerChild && !devServerChild.killed && devServerChild.pid) {
+    try {
+      process.kill(devServerChild.pid, "SIGTERM");
     } catch {
       /* ignore */
     }
