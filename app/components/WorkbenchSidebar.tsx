@@ -888,6 +888,7 @@ function AgentTeamWorkspace({
   const [memberFollowUps, setMemberFollowUps] = useState<Record<string, string>>({});
   const [resultDrafts, setResultDrafts] = useState<Record<string, string>>({});
   const [planDrafts, setPlanDrafts] = useState<Record<string, string>>({});
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const run =
     runs.find((item) => item.id === teamId) ?? runs[0] ?? null;
   if (!run) {
@@ -918,6 +919,31 @@ function AgentTeamWorkspace({
   const activeTranscriptMember = activeTranscriptMemberId
     ? run.members.find((member) => member.id === activeTranscriptMemberId)
     : null;
+  const requiredTasks = run.board.tasks.filter((task) => task.required);
+  const openTasks = run.board.tasks.filter((task) => task.status !== "completed");
+  const blockedTasks = run.board.tasks.filter((task) => task.status === "blocked");
+  const workingMembers = run.members.filter((member) => member.status === "working");
+  const pendingPlans = (run.board.plans ?? []).filter((plan) => plan.status === "submitted");
+  const pendingGates = run.board.qualityGates.filter((gate) => gate.status !== "passed");
+  const phase = deriveTeamBriefPhase(run);
+  const attentionItems = buildTeamAttentionItems({
+    openChallenges,
+    blockedTasks,
+    pendingPlans,
+    pendingGates,
+  });
+  const visibleActivity = [
+    ...workingMembers.map((member) => ({
+      id: `member:${member.id}`,
+      title: `${member.name} 正在推进`,
+      body: member.latestOutput || member.currentTaskId || member.role,
+    })),
+    ...openTasks.slice(0, 3).map((task) => ({
+      id: `task:${task.id}`,
+      title: task.title,
+      body: `${teamTaskStatusText(task.status)} · ${task.required ? "关键任务" : "可选任务"}`,
+    })),
+  ].slice(0, 4);
 
   return (
     <div className="space-y-3 p-2.5" data-testid="agent-team-workspace">
@@ -928,7 +954,7 @@ function AgentTeamWorkspace({
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="truncate text-sm font-semibold">Team Workspace</span>
+              <span className="truncate text-sm font-semibold">Team Brief</span>
               <span className="rounded border px-1.5 py-0.5 text-token-xs" style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}>
                 {agentTeamStatusText(run.status)}
               </span>
@@ -939,44 +965,115 @@ function AgentTeamWorkspace({
           </div>
         </div>
         <div className="mt-3 grid grid-cols-4 gap-2">
+          <TeamMiniStat label="阶段" value={phase.index} caption={phase.label} tone={phase.tone === "warn" ? "warn" : "muted"} />
+          <TeamMiniStat label="关注" value={attentionItems.length} tone={attentionItems.length > 0 ? "warn" : "muted"} />
+          <TeamMiniStat label="任务" value={requiredTasks.filter((task) => task.status === "completed").length} caption={`/${requiredTasks.length}`} />
           <TeamMiniStat label="成员" value={run.members.length} />
-          <TeamMiniStat label="采纳" value={acceptedFindings.length} />
-          <TeamMiniStat label="挑战" value={openChallenges.length} tone={openChallenges.length > 0 ? "warn" : "muted"} />
-          <TeamMiniStat label="锁" value={activeFileLocks.length} tone={activeFileLocks.length > 0 ? "warn" : "muted"} />
         </div>
         {onCommand && run.status === "running" ? (
           <div className="mt-3 flex flex-wrap gap-1.5">
             <button
               type="button"
               onClick={() => onCommand(run.id, { type: "run_next" })}
-              className="inline-flex h-7 items-center gap-1.5 rounded border px-2 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
+              className="inline-flex h-8 items-center gap-1.5 rounded border px-2.5 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
               style={{ borderColor: "var(--border-soft)", color: "var(--text)" }}
             >
               <Network size={13} />
-              Run next
+              继续推进
             </button>
+            {openChallenges.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => setDetailsOpen(true)}
+                className="inline-flex h-8 items-center gap-1.5 rounded border px-2.5 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
+                style={{ borderColor: "var(--color-warning)", color: "var(--color-warning)" }}
+              >
+                查看问题
+              </button>
+            ) : null}
             <button
               type="button"
-              onClick={() => onCommand(run.id, { type: "run_batch", maxDispatches: 4 })}
-              className="inline-flex h-7 items-center gap-1.5 rounded border px-2 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
+              onClick={() => setDetailsOpen((open) => !open)}
+              className="inline-flex h-8 items-center gap-1.5 rounded border px-2.5 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
               style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
             >
-              <Network size={13} />
-              Run batch
-            </button>
-            <button
-              type="button"
-              onClick={() => onCommand(run.id, { type: "run_until_idle", maxDispatches: 4, maxRounds: 6 })}
-              className="inline-flex h-7 items-center gap-1.5 rounded border px-2 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
-              style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
-            >
-              <Network size={13} />
-              Auto run
+              {detailsOpen ? "收起详情" : "查看详情"}
             </button>
           </div>
         ) : null}
       </section>
 
+      <TeamWorkspaceSection
+        title="现在发生什么"
+        summary={phase.summary}
+        icon={<Clock size={13} />}
+      >
+        <div className="space-y-1.5">
+          {visibleActivity.length === 0 ? (
+            <div className="text-token-xs" style={{ color: "var(--text-muted)" }}>
+              Team 暂无可见活动。
+            </div>
+          ) : (
+            visibleActivity.map((item) => (
+              <div
+                key={item.id}
+                className="rounded border px-2 py-2"
+                style={{ borderColor: "var(--border-soft)", background: "var(--bg-subtle)" }}
+              >
+                <div className="truncate text-xs font-medium">{item.title}</div>
+                <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--text-muted)" }}>
+                  {item.body}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </TeamWorkspaceSection>
+
+      <TeamWorkspaceSection
+        title="需要你关注"
+        summary={attentionItems.length > 0 ? `${attentionItems.length} 个待处理决策点` : "目前没有需要你介入的阻塞点。"}
+        icon={<ShieldCheck size={13} />}
+      >
+        <div className="space-y-1.5">
+          {attentionItems.length === 0 ? (
+            <div className="rounded border px-2 py-2 text-token-xs" style={{ borderColor: "var(--border-soft)", background: "var(--bg-subtle)", color: "var(--text-muted)" }}>
+              Team 会继续推进；有冲突、阻塞或可完成时再提醒你。
+            </div>
+          ) : (
+            attentionItems.map((item) => (
+              <div
+                key={item.id}
+                className="rounded border px-2 py-2"
+                style={{ borderColor: item.tone === "warn" ? "var(--color-warning)" : "var(--border-soft)", background: "var(--bg-subtle)" }}
+              >
+                <div className="text-xs font-medium">{item.title}</div>
+                <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--text-muted)" }}>
+                  {item.body}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </TeamWorkspaceSection>
+
+      <section className="rounded border p-2.5" style={{ borderColor: "var(--border-soft)" }}>
+        <button
+          type="button"
+          onClick={() => setDetailsOpen((open) => !open)}
+          className="flex w-full items-center gap-2 text-left text-xs font-semibold"
+          style={{ color: "var(--text)" }}
+        >
+          {detailsOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          高级详情
+          <span className="ml-auto text-token-xs font-normal" style={{ color: "var(--text-muted)" }}>
+            任务板 / 成员 / 证据 / 门禁
+          </span>
+        </button>
+      </section>
+
+      {detailsOpen ? (
+        <>
       <TeamWorkspaceSection
         title="Board"
         summary={run.board.summary}
@@ -1296,6 +1393,35 @@ function AgentTeamWorkspace({
           </div>
         ) : null}
       </TeamWorkspaceSection>
+
+      {onCommand && run.status === "running" ? (
+        <TeamWorkspaceSection
+          title="Team Controls"
+          summary="批量推进和自动运行保留给高级操作。"
+          icon={<Network size={13} />}
+        >
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              onClick={() => onCommand(run.id, { type: "run_batch", maxDispatches: 4 })}
+              className="inline-flex h-7 items-center gap-1.5 rounded border px-2 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
+              style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+            >
+              <Network size={13} />
+              Run batch
+            </button>
+            <button
+              type="button"
+              onClick={() => onCommand(run.id, { type: "run_until_idle", maxDispatches: 4, maxRounds: 6 })}
+              className="inline-flex h-7 items-center gap-1.5 rounded border px-2 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
+              style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+            >
+              <Network size={13} />
+              Auto run
+            </button>
+          </div>
+        </TeamWorkspaceSection>
+      ) : null}
 
       {activeFileLocks.length > 0 ? (
         <TeamWorkspaceSection
@@ -1811,6 +1937,8 @@ function AgentTeamWorkspace({
           ))}
         </div>
       </TeamWorkspaceSection>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -1847,10 +1975,12 @@ function TeamWorkspaceSection({
 function TeamMiniStat({
   label,
   value,
+  caption,
   tone = "muted",
 }: {
   label: string;
   value: number;
+  caption?: string;
   tone?: "muted" | "warn";
 }) {
   return (
@@ -1858,9 +1988,116 @@ function TeamMiniStat({
       <div className="text-token-xs" style={{ color: tone === "warn" ? "var(--color-warning)" : "var(--text-muted)" }}>
         {label}
       </div>
-      <div className="text-token-lg font-semibold tabular-nums">{value}</div>
+      <div className="flex items-baseline gap-1">
+        <span className="text-token-lg font-semibold tabular-nums">{value}</span>
+        {caption ? (
+          <span className="text-token-xs" style={{ color: "var(--text-muted)" }}>
+            {caption}
+          </span>
+        ) : null}
+      </div>
     </div>
   );
+}
+
+function deriveTeamBriefPhase(run: AgentTeamRun): {
+  index: number;
+  label: string;
+  summary: string;
+  tone: "muted" | "warn";
+} {
+  const openChallenges = run.board.challenges.filter(
+    (challenge) => challenge.status === "open" || challenge.status === "needs_evidence"
+  );
+  const requiredTasks = run.board.tasks.filter((task) => task.required);
+  const completedRequired = requiredTasks.filter((task) => task.status === "completed");
+  const hasDecision = run.board.decisions.length > 0;
+  if (openChallenges.length > 0) {
+    return {
+      index: 3,
+      label: "待裁决",
+      summary: "有发现被挑战，先解决冲突再继续收敛。",
+      tone: "warn",
+    };
+  }
+  if (requiredTasks.length > 0 && completedRequired.length === requiredTasks.length && !hasDecision) {
+    return {
+      index: 4,
+      label: "可综合",
+      summary: "关键任务已完成，下一步是记录 Lead 决策和最终综合。",
+      tone: "muted",
+    };
+  }
+  if (run.status === "completed") {
+    return {
+      index: 5,
+      label: "已完成",
+      summary: "Team 已完成综合，可以回看决策与证据。",
+      tone: "muted",
+    };
+  }
+  if (run.board.findings.length > 0) {
+    return {
+      index: 2,
+      label: "收敛中",
+      summary: "Team 已产出发现，正在确认哪些结论可以采纳。",
+      tone: "muted",
+    };
+  }
+  return {
+    index: 1,
+    label: "推进中",
+    summary: "Team 正在拆任务、收集证据并推进下一步。",
+    tone: "muted",
+  };
+}
+
+function buildTeamAttentionItems({
+  openChallenges,
+  blockedTasks,
+  pendingPlans,
+  pendingGates,
+}: {
+  openChallenges: AgentTeamRun["board"]["challenges"];
+  blockedTasks: AgentTeamRun["board"]["tasks"];
+  pendingPlans: NonNullable<AgentTeamRun["board"]["plans"]>;
+  pendingGates: AgentTeamRun["board"]["qualityGates"];
+}): Array<{ id: string; title: string; body: string; tone: "muted" | "warn" }> {
+  const items: Array<{ id: string; title: string; body: string; tone: "muted" | "warn" }> = [];
+  for (const challenge of openChallenges.slice(0, 2)) {
+    items.push({
+      id: `challenge:${challenge.id}`,
+      title: "有发现需要裁决",
+      body: challenge.reason,
+      tone: "warn",
+    });
+  }
+  for (const task of blockedTasks.slice(0, 2)) {
+    items.push({
+      id: `task:${task.id}`,
+      title: "任务阻塞",
+      body: task.blocker || task.description,
+      tone: "warn",
+    });
+  }
+  for (const plan of pendingPlans.slice(0, 2)) {
+    items.push({
+      id: `plan:${plan.id}`,
+      title: "计划等待审批",
+      body: plan.body,
+      tone: "muted",
+    });
+  }
+  const failedGate = pendingGates.find((gate) => gate.status === "failed");
+  if (failedGate) {
+    items.push({
+      id: `gate:${failedGate.id}`,
+      title: "结束条件未满足",
+      body: failedGate.message,
+      tone: "warn",
+    });
+  }
+  return items.slice(0, 4);
 }
 
 function TeamStatusBadge({

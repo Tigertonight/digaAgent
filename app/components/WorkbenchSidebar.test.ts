@@ -184,12 +184,19 @@ describe("Workbench overview model", () => {
     });
   });
 
-  it("keeps Agent Team workspace controls and parity surfaces visible", () => {
+  it("keeps Agent Team simple by default while preserving advanced controls", () => {
     const source = readFileSync(
       path.join(process.cwd(), "app/components/WorkbenchSidebar.tsx"),
       "utf8"
     );
 
+    expect(source).toContain("Team Brief");
+    expect(source).toContain("现在发生什么");
+    expect(source).toContain("需要你关注");
+    expect(source).toContain("高级详情");
+    expect(source).toContain("detailsOpen");
+    expect(source).toContain("deriveTeamBriefPhase");
+    expect(source).toContain("buildTeamAttentionItems");
     expect(source).toContain("Quality Gates");
     expect(source).toContain("Hooks");
     expect(source).toContain("File Locks");
@@ -205,7 +212,8 @@ describe("Workbench overview model", () => {
     expect(source).toContain("type: \"run_next\"");
     expect(source).toContain("type: \"run_batch\"");
     expect(source).toContain("type: \"run_until_idle\"");
-    expect(source).toContain("Run next");
+    expect(source).toContain("继续推进");
+    expect(source).toContain("查看问题");
     expect(source).toContain("Run batch");
     expect(source).toContain("Auto run");
     expect(source).toContain("setActiveTranscriptMemberId(member.id)");
