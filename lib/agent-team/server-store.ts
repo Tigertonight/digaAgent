@@ -7,6 +7,7 @@ import type { AgentTeamRun } from "./types";
 import {
   acceptAgentTeamFinding,
   claimAgentTeamTask,
+  completeAgentTeamInitialFrame,
   completeAgentTeamTask,
   createAgentTeamChallenge,
   createAgentTeamDispatchPlan,
@@ -22,9 +23,11 @@ import {
   recordAgentTeamToolWrite,
   rejectAgentTeamPlan,
   rejectAgentTeamFinding,
+  recoverStaleAgentTeamTasks,
   resolveAgentTeamChallenge,
   retryAgentTeamTask,
   sendAgentTeamMessage,
+  settleAgentTeamCompletedSynthesis,
   submitAgentTeamPlan,
   submitAgentTeamResult,
   transitionAgentTeamRun,
@@ -453,6 +456,45 @@ export function retryStoredAgentTeamTask(
   return {
     run: putAgentTeamRun(result.run),
     error: result.error,
+  };
+}
+
+export function recoverStoredAgentTeamStaleTasks(
+  id: string,
+  opts?: { now?: number; staleMs?: number }
+): { run?: AgentTeamRun; recoveredTaskIds: string[]; error?: string } {
+  const run = getAgentTeamRun(id);
+  if (!run) return { recoveredTaskIds: [], error: "team run not found" };
+  const result = recoverStaleAgentTeamTasks(run, opts);
+  return {
+    run: putAgentTeamRun(result.run),
+    recoveredTaskIds: result.recoveredTaskIds,
+  };
+}
+
+export function completeStoredAgentTeamInitialFrame(
+  id: string
+): { run?: AgentTeamRun; completed: boolean; error?: string } {
+  const run = getAgentTeamRun(id);
+  if (!run) return { completed: false, error: "team run not found" };
+  const result = completeAgentTeamInitialFrame(run);
+  return {
+    run: putAgentTeamRun(result),
+    completed:
+      run.board.tasks.find((task) => task.id === "frame")?.status !== "completed" &&
+      result.board.tasks.find((task) => task.id === "frame")?.status === "completed",
+  };
+}
+
+export function settleStoredAgentTeamCompletedSynthesis(
+  id: string
+): { run?: AgentTeamRun; settled: boolean; error?: string } {
+  const run = getAgentTeamRun(id);
+  if (!run) return { settled: false, error: "team run not found" };
+  const result = settleAgentTeamCompletedSynthesis(run);
+  return {
+    run: putAgentTeamRun(result),
+    settled: result.status === "completed" && run.status !== "completed",
   };
 }
 

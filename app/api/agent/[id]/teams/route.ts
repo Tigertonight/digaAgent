@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import {
+  abortLocalCodingAssistantAgent,
   createAgent,
   disposeAgent,
   getAgent,
@@ -13,6 +14,7 @@ import {
   acceptStoredAgentTeamFinding,
   approveStoredAgentTeamPlan,
   claimStoredAgentTeamTask,
+  completeStoredAgentTeamInitialFrame,
   completeStoredAgentTeamTask,
   createStoredAgentTeamChallenge,
   dismissStoredAgentTeamChallenge,
@@ -27,12 +29,14 @@ import {
   putAgentTeamRun,
   promoteStoredAgentTeamMember,
   recordStoredAgentTeamDecision,
+  recoverStoredAgentTeamStaleTasks,
   rejectStoredAgentTeamFinding,
   rejectStoredAgentTeamPlan,
   replaceStoredAgentTeamMember,
   resolveStoredAgentTeamChallenge,
   retryStoredAgentTeamTask,
   sendStoredAgentTeamMessage,
+  settleStoredAgentTeamCompletedSynthesis,
   submitStoredAgentTeamPlan,
   submitStoredAgentTeamResult,
   transitionStoredAgentTeamRun,
@@ -62,6 +66,54 @@ interface AgentTeamDispatchRequest {
   dispatchMode: "single" | "batch" | "until_idle";
 }
 
+const DEFAULT_TEAM_DISPATCH_TIMEOUT_MS = 180_000;
+
+function teamDispatchTimeoutMs(): number {
+  const raw = process.env.DIGA_AGENT_TEAM_DISPATCH_TIMEOUT_MS;
+  if (!raw) return DEFAULT_TEAM_DISPATCH_TIMEOUT_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 30_000
+    ? parsed
+    : DEFAULT_TEAM_DISPATCH_TIMEOUT_MS;
+}
+
+function messageContentToText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (!part || typeof part !== "object") return "";
+      const record = part as Record<string, unknown>;
+      return typeof record.text === "string" ? record.text : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function teamDispatchTimeoutMessage(): string {
+  const seconds = Math.round(teamDispatchTimeoutMs() / 1000);
+  return `等待成员返回证据已超过 ${seconds} 秒，系统已自动收回任务并准备重派。`;
+}
+
+async function withTeamDispatchTimeout<T>(
+  promise: Promise<T>,
+  onTimeout: () => Promise<void> | void
+): Promise<{ ok: true; value: T } | { ok: false; timedOut: true }> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<{ ok: false; timedOut: true }>((resolve) => {
+    timeout = setTimeout(async () => {
+      await onTimeout();
+      resolve({ ok: false, timedOut: true });
+    }, teamDispatchTimeoutMs());
+  });
+  const result = await Promise.race([
+    promise.then((value) => ({ ok: true as const, value })),
+    timeoutPromise,
+  ]);
+  if (timeout) clearTimeout(timeout);
+  return result;
+}
+
 function canAccessTeamRun(
   run: AgentTeamRun | undefined,
   agentId: string,
@@ -86,12 +138,26 @@ function listAccessibleTeamRuns(agentId: string, rec: AgentRecord): AgentTeamRun
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+function hasIdleClaimedTeamTask(run: AgentTeamRun): boolean {
+  return run.board.tasks.some((task) => {
+    if (task.status !== "claimed" && task.status !== "running") return false;
+    if (run.board.results.some((result) => result.taskId === task.id)) return false;
+    const owner = run.members.find((member) => member.id === task.ownerAgentId);
+    const ownerRec = owner?.agentId ? getAgent(owner.agentId) : undefined;
+    return !ownerRec || (!ownerRec.isStreaming && !ownerRec.pendingToolCall);
+  });
+}
+
 function persistAgentTeamStartInSession(rec: AgentRecord, objective: string): void {
   const branch = rec.session.sessionManager.getBranch();
-  const hasUserMessage = branch.some(
-    (entry) => entry.type === "message" && entry.message.role === "user"
-  );
-  if (!hasUserMessage) {
+  const lastMessage = branch
+    .filter((entry) => entry.type === "message")
+    .at(-1) as { type: "message"; message?: { role?: string; content?: unknown } } | undefined;
+  const alreadyLast =
+    lastMessage?.message?.role === "user" &&
+    typeof lastMessage.message.content === "string" &&
+    lastMessage.message.content.trim() === objective;
+  if (!alreadyLast) {
     const message = {
       role: "user" as const,
       content: objective,
@@ -106,6 +172,60 @@ function persistAgentTeamStartInSession(rec: AgentRecord, objective: string): vo
     rec.session.setSessionName(`团队协作：${title}`);
   }
   flushAgentTeamSessionFile(rec);
+}
+
+function persistAgentTeamFinalSummaryInSession(rec: AgentRecord, run: AgentTeamRun): void {
+  if (run.status !== "completed") return;
+  const marker = `agent-team-final:${run.id}`;
+  const contentText = (content: unknown): string => {
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content)) return "";
+    return content
+      .map((part) =>
+        part && typeof part === "object" && "text" in part
+          ? String((part as { text?: unknown }).text ?? "")
+          : ""
+      )
+      .join("");
+  };
+  const branch = rec.session.sessionManager.getBranch();
+  const alreadyPersisted = branch.some((entry) => {
+    if (entry.type !== "message") return false;
+    const record = entry.message as unknown as { role?: string; content?: unknown };
+    return record.role === "assistant" && contentText(record.content).includes(marker);
+  });
+  if (alreadyPersisted) return;
+  const decision = run.board.decisions.at(-1);
+  const rationale = decision?.rationale?.trim();
+  if (!rationale) return;
+  const text = [
+    "结论",
+    "",
+    rationale,
+    "",
+    `<!-- ${marker} -->`,
+  ].join("\n");
+  const modelId = rec.session.model?.id ?? "team";
+  const message = {
+    role: "assistant" as const,
+    provider: rec.session.model?.provider ?? "team",
+    model: modelId,
+    api: "agent-team",
+    content: [{ type: "text" as const, text }],
+    stopReason: "stop",
+    timestamp: Date.now(),
+  };
+  rec.session.agent.state.messages.push(message as never);
+  rec.session.sessionManager.appendMessage(message as never);
+  flushAgentTeamSessionFile(rec);
+}
+
+function pushAgentTeamRunEvent(rec: AgentRecord, run: AgentTeamRun): void {
+  persistAgentTeamFinalSummaryInSession(rec, run);
+  pushAgentTeamEvent(rec, {
+    type: run.status === "completed" ? "agent_team_run_finalized" : "agent_team_run_update",
+    run,
+  });
 }
 
 function flushAgentTeamSessionFile(rec: AgentRecord): void {
@@ -176,8 +296,10 @@ export const POST = withRemoteAuth(async function (
     };
     const withTeammates = await spawnInitialTeammates(initial, rec);
     const stored = putAgentTeamRun(withTeammates);
-    pushAgentTeamEvent(rec, { type: "agent_team_run_start", run: stored });
-    return NextResponse.json({ ok: true, run: stored });
+    const framed = completeStoredAgentTeamInitialFrame(stored.id);
+    const readyRun = framed.run ?? stored;
+    pushAgentTeamEvent(rec, { type: "agent_team_run_start", run: readyRun });
+    return NextResponse.json({ ok: true, run: readyRun });
   }
 
   if (type === "transition") {
@@ -200,6 +322,7 @@ export const POST = withRemoteAuth(async function (
     if (!result.run) {
       return NextResponse.json({ error: "team run not found" }, { status: 404 });
     }
+    persistAgentTeamFinalSummaryInSession(rec, result.run);
     pushAgentTeamEvent(rec, {
       type: status === "completed" && result.blockedReasons.length === 0
         ? "agent_team_run_finalized"
@@ -520,7 +643,7 @@ export const POST = withRemoteAuth(async function (
         if (isLocalCodingAssistantAgent(targetRec)) {
           await promptLocalCodingAssistantAgent(targetRec, prompt);
         } else {
-          await targetRec.session.prompt(prompt);
+          await targetRec.session.prompt(prompt, { streamingBehavior: "followUp" });
         }
       } catch (err) {
         const failure = followUpStoredAgentTeamMember(teamId, {
@@ -652,15 +775,35 @@ export const POST = withRemoteAuth(async function (
       type === "run_until_idle" && typeof body.maxRounds === "number"
         ? Math.max(1, Math.min(12, Math.floor(body.maxRounds)))
         : 1;
+    const framed = completeStoredAgentTeamInitialFrame(teamId);
+    let latestRun = framed.run ?? existing;
+    if (framed.run && framed.completed) {
+      pushAgentTeamEvent(rec, { type: "agent_team_run_update", run: framed.run });
+    }
+    const recovered = recoverStoredAgentTeamStaleTasks(teamId, { staleMs: teamDispatchTimeoutMs() });
+    latestRun = recovered.run ?? latestRun;
+    if (recovered.run && recovered.recoveredTaskIds.length > 0) {
+      pushAgentTeamEvent(rec, { type: "agent_team_run_update", run: recovered.run });
+    }
     const dispatched: AgentTeamDispatchResult["dispatched"] = [];
     const errors: string[] = [];
-    let latestRun = existing;
     let rounds = 0;
 
     for (let round = 0; round < maxRounds; round += 1) {
       let plannedRun: AgentTeamRun | undefined;
       let plannedError: string | undefined;
       let plans: AgentTeamDispatchPlan[] = [];
+      const currentBeforePlan = getAgentTeamRun(teamId) ?? latestRun;
+      const framedRound = completeStoredAgentTeamInitialFrame(teamId);
+      if (framedRound.run && framedRound.completed) {
+        latestRun = framedRound.run;
+        pushAgentTeamEvent(rec, { type: "agent_team_run_update", run: framedRound.run });
+      }
+      const recoveredRound = recoverStoredAgentTeamStaleTasks(teamId, { staleMs: teamDispatchTimeoutMs() });
+      latestRun = recoveredRound.run ?? latestRun ?? currentBeforePlan;
+      if (recoveredRound.run && recoveredRound.recoveredTaskIds.length > 0) {
+        pushAgentTeamEvent(rec, { type: "agent_team_run_update", run: recoveredRound.run });
+      }
       if (type === "run_next") {
         const planned = planStoredAgentTeamDispatch(teamId);
         plannedRun = planned.run;
@@ -674,6 +817,20 @@ export const POST = withRemoteAuth(async function (
       }
       latestRun = plannedRun ?? latestRun;
       if (!plannedRun || plans.length === 0) {
+        if (type === "run_until_idle" && hasIdleClaimedTeamTask(latestRun)) {
+          const recoveredNoPlan = recoverStoredAgentTeamStaleTasks(teamId, { staleMs: 1 });
+          if (recoveredNoPlan.run && recoveredNoPlan.recoveredTaskIds.length > 0) {
+            latestRun = recoveredNoPlan.run;
+            pushAgentTeamEvent(rec, { type: "agent_team_run_update", run: recoveredNoPlan.run });
+            continue;
+          }
+        }
+        const settled = settleStoredAgentTeamCompletedSynthesis(teamId);
+        if (settled.run) {
+          latestRun = settled.run;
+          pushAgentTeamRunEvent(rec, settled.run);
+          if (settled.settled || settled.run.status === "completed") break;
+        }
         if (round === 0) {
           return NextResponse.json(
             { ok: false, run: latestRun, error: plannedError ?? "no dispatch plan" },
@@ -697,6 +854,7 @@ export const POST = withRemoteAuth(async function (
       dispatched.push(...result.dispatched);
       errors.push(...result.errors);
       rounds += 1;
+      if (latestRun.status === "completed") pushAgentTeamRunEvent(rec, latestRun);
       if (type !== "run_until_idle" || result.errors.length > 0) break;
     }
 
@@ -749,12 +907,30 @@ async function dispatchAgentTeamPlans({
     claimedJobs.map(async (job) => {
       try {
         const prompt = createAgentTeamResultPrompt(job.plan.prompt);
-        if (isLocalCodingAssistantAgent(job.targetRec)) {
-          await promptLocalCodingAssistantAgent(job.targetRec, prompt);
-        } else {
-          await job.targetRec.session.prompt(prompt);
+        const runPrompt = async (): Promise<string> => {
+          if (isLocalCodingAssistantAgent(job.targetRec)) {
+            return await promptLocalCodingAssistantAgent(job.targetRec, prompt);
+          }
+          await job.targetRec.session.prompt(prompt, { streamingBehavior: "followUp" });
+          return messageContentToText(job.targetRec.session.agent.state.messages
+            .filter((message) => message.role === "assistant")
+            .at(-1)?.content);
+        };
+        const result = await withTeamDispatchTimeout(runPrompt(), async () => {
+          if (isLocalCodingAssistantAgent(job.targetRec)) {
+            await abortLocalCodingAssistantAgent(job.targetRec).catch(() => undefined);
+          } else {
+            await job.targetRec.session.abort().catch(() => undefined);
+          }
+        });
+        if (!result.ok) {
+          return {
+            job,
+            timedOut: true,
+            error: teamDispatchTimeoutMessage(),
+          };
         }
-        return { job };
+        return { job, rawText: result.value };
       } catch (err) {
         return {
           job,
@@ -766,6 +942,12 @@ async function dispatchAgentTeamPlans({
 
   for (const result of results) {
     const { job } = result;
+    if ("timedOut" in result && result.timedOut) {
+      const recovered = recoverStoredAgentTeamStaleTasks(teamId, { staleMs: 1 });
+      latestRun = recovered.run ?? latestRun;
+      if (recovered.run) pushAgentTeamEvent(rec, { type: "agent_team_run_update", run: recovered.run });
+      continue;
+    }
     if (result.error) {
       errors.push(result.error);
       const failed = failStoredAgentTeamTask(
@@ -784,36 +966,16 @@ async function dispatchAgentTeamPlans({
       memberId: job.plan.memberId,
       agentId: job.targetRec.id,
     });
-    const current = getAgentTeamRun(teamId) ?? latestRun;
-    latestRun = putAgentTeamRun({
-      ...current,
-      updatedAt: Date.now(),
-      board: {
-        ...current.board,
-        tasks: current.board.tasks.map((task) =>
-          task.id === job.plan.task.id
-            ? {
-                ...task,
-                status: "running" as const,
-                completionSource: "teammate_result" as const,
-                blocker: "Waiting for structured teammate result.",
-              }
-            : task
-        ),
-      },
-      members: current.members.map((member) =>
-        member.id === job.plan.memberId
-          ? {
-              ...member,
-              status: "working" as const,
-              currentTaskId: job.plan.task.id,
-              latestOutput: `Dispatched via ${dispatchMode}; waiting for structured teammate result.`,
-              lastActiveAt: Date.now(),
-            }
-          : member
-      ),
+    const submitted = submitStoredAgentTeamResult(teamId, {
+      taskId: job.plan.task.id,
+      memberId: job.plan.memberId,
+      rawText: result.rawText || "No teammate output was captured.",
+      sessionFile: getAgentTeamRun(teamId)?.members.find((member) => member.id === job.plan.memberId)?.sessionFile,
+      dispatchMode,
     });
-    pushAgentTeamEvent(rec, { type: "agent_team_run_update", run: latestRun });
+    latestRun = submitted.run ?? latestRun;
+    if (submitted.error) errors.push(submitted.error);
+    if (submitted.run) pushAgentTeamRunEvent(rec, submitted.run);
   }
 
   return { run: latestRun, dispatched, errors };

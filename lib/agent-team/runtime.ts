@@ -175,6 +175,133 @@ function runnableTasks(run: AgentTeamRun): AgentTeamTask[] {
     });
 }
 
+export function recoverStaleAgentTeamTasks(
+  run: AgentTeamRun,
+  opts: { now?: number; staleMs?: number } = {}
+): { run: AgentTeamRun; recoveredTaskIds: string[] } {
+  const now = opts.now ?? Date.now();
+  const staleMs = Math.max(1, opts.staleMs ?? 2 * 60 * 1000);
+  const recoveredTaskIds: string[] = [];
+  const nextTasks = run.board.tasks.map((task) => {
+    if (task.status !== "claimed" && task.status !== "running") return task;
+    const lastTouched = task.claimedAt ?? run.updatedAt ?? run.createdAt;
+    if (now - lastTouched < staleMs) return task;
+    const hasResult = (run.board.results ?? []).some((result) => result.taskId === task.id);
+    if (hasResult) return task;
+    recoveredTaskIds.push(task.id);
+    return {
+      ...task,
+      status: dependenciesComplete(run, task.id) ? ("pending" as const) : ("blocked" as const),
+      ownerAgentId: undefined,
+      blocker: dependenciesComplete(run, task.id)
+        ? undefined
+        : `Waiting for dependencies: ${(task.dependsOnTaskIds ?? []).join(", ")}`,
+      lastError: "Recovered stale task without teammate result.",
+      retryCount: (task.retryCount ?? 0) + 1,
+    };
+  });
+  if (recoveredTaskIds.length === 0) return { run, recoveredTaskIds };
+  const recoveredSet = new Set(recoveredTaskIds);
+  const nextEvents = [
+    ...run.board.events,
+    ...recoveredTaskIds.map((taskId) => ({
+      ...makeEvent(run, "task_retried", `Recovered stale task ${taskId} for automatic redispatch.`, {
+        staleMs,
+      }),
+      taskId,
+    })),
+  ];
+  return {
+    recoveredTaskIds,
+    run: refreshAgentTeamQualityGates(patchAgentTeamRun(run, {
+      board: {
+        ...run.board,
+        tasks: nextTasks,
+        events: nextEvents,
+      },
+      members: run.members.map((member) =>
+        member.currentTaskId && recoveredSet.has(member.currentTaskId)
+          ? {
+              ...member,
+              status: "idle" as const,
+              currentTaskId: undefined,
+              failureCount: (member.failureCount ?? 0) + 1,
+              latestOutput: "之前的任务没有返回结果，已交回队列等待自动重派。",
+              lastActiveAt: now,
+            }
+          : member
+      ),
+    })),
+  };
+}
+
+export function completeAgentTeamInitialFrame(run: AgentTeamRun): AgentTeamRun {
+  const frame = run.board.tasks.find((task) => task.id === "frame");
+  if (!frame || frame.status === "completed") return run;
+  const frameFindings = run.board.findings.filter(
+    (finding) =>
+      finding.taskId === frame.id &&
+      finding.evidenceRefs.length > 0 &&
+      (finding.status === "accepted" || finding.status === "proposed")
+  );
+  if (frameFindings.length === 0) return run;
+  const now = Date.now();
+  const events: AgentTeamEvent[] = [
+    ...run.board.events,
+    {
+      ...eventWithActor(
+        run,
+        "task_completed",
+        run.leadAgentId,
+        "Lead completed initial Team framing."
+      ),
+      taskId: frame.id,
+    },
+  ];
+  const intermediate: AgentTeamRun = {
+    ...run,
+    board: {
+      ...run.board,
+      tasks: run.board.tasks.map((task) =>
+        task.id === frame.id
+          ? {
+              ...task,
+              status: "completed" as const,
+              ownerAgentId: task.ownerAgentId ?? run.leadAgentId,
+              completedAt: now,
+              findingIds: Array.from(new Set([...task.findingIds, ...frameFindings.map((finding) => finding.id)])),
+              blocker: undefined,
+            }
+          : task
+      ),
+    },
+  };
+  return refreshAgentTeamQualityGates(patchAgentTeamRun(run, {
+    board: {
+      ...run.board,
+      tasks: unblockReadyTasks(intermediate, events),
+      events,
+      capabilityAudit: updateCapability(run, "shared-task-list", {
+        status: "partial",
+        evidence: "initial Team frame completed from board evidence",
+        gap: "已支持启动后自动完成 Lead framing 并解锁首个成员任务。",
+        nextStep: "继续补强多成员协作和失败恢复体验。",
+      }),
+    },
+    members: run.members.map((member) =>
+      member.id === run.leadAgentId && member.currentTaskId === frame.id
+        ? {
+            ...member,
+            status: "idle" as const,
+            currentTaskId: undefined,
+            latestOutput: "已界定目标和协作方式，团队开始自动分工。",
+            lastActiveAt: now,
+          }
+        : member
+    ),
+  }));
+}
+
 function idleTeammates(run: AgentTeamRun): string[] {
   return run.members
     .filter((member) =>
@@ -184,6 +311,48 @@ function idleTeammates(run: AgentTeamRun): string[] {
       Boolean(member.agentId)
     )
     .map((member) => member.id);
+}
+
+function teammateScoreForTask(run: AgentTeamRun, task: AgentTeamTask, memberId: string): number {
+  const member = run.members.find((item) => item.id === memberId);
+  if (!member) return 0;
+  const failurePenalty = (member.failureCount ?? 0) * 70;
+  const taskText = `${task.id} ${task.title} ${task.description} ${task.expectedOutput ?? ""}`.toLowerCase();
+  const roleText = `${member.role} ${member.name}`.toLowerCase();
+  if (/synthesis|decision|综合|决策|final/.test(taskText)) {
+    if (/综合|结构|synth|裁判|lead|决策/.test(roleText)) return 100 - failurePenalty;
+    if (member.id === run.leadAgentId) return 80 - failurePenalty;
+    return 10 - failurePenalty;
+  }
+  if (/challenge|review|critic|挑战|反证|质疑/.test(taskText)) {
+    if (/挑战|反证|critic|review/.test(roleText)) return 100 - failurePenalty;
+    if (/验收|核查|validator/.test(roleText)) return 60 - failurePenalty;
+    if (member.id === run.leadAgentId) return 20 - failurePenalty;
+    return 5 - failurePenalty;
+  }
+  if (/evidence|finding|research|证据|调研|收集|发现/.test(taskText)) {
+    if (/资料|证据|research/.test(roleText)) return 100 - failurePenalty;
+    if (/验收|核查|validator/.test(roleText)) return 60 - failurePenalty;
+    return 20 - failurePenalty;
+  }
+  if (/validate|验收|核查/.test(taskText)) {
+    if (/验收|核查|validator/.test(roleText)) return 100 - failurePenalty;
+    if (/挑战|反证|critic/.test(roleText)) return 50 - failurePenalty;
+    return 10 - failurePenalty;
+  }
+  return 25 - failurePenalty;
+}
+
+function selectIdleTeammateForTask(
+  run: AgentTeamRun,
+  task: AgentTeamTask,
+  candidates = idleTeammates(run)
+): string | undefined {
+  return [...candidates].sort((left, right) => {
+    const score = teammateScoreForTask(run, task, right) - teammateScoreForTask(run, task, left);
+    if (score !== 0) return score;
+    return candidates.indexOf(left) - candidates.indexOf(right);
+  })[0];
 }
 
 function evaluateHookRule(
@@ -253,7 +422,7 @@ export function evaluateAgentTeamHooks(
 
 export function createAgentTeamDispatchPlan(run: AgentTeamRun): AgentTeamDispatchPlan | null {
   const task = runnableTasks(run)[0];
-  const memberId = idleTeammates(run)[0] ?? run.leadAgentId;
+  const memberId = task ? selectIdleTeammateForTask(run, task) : undefined;
   if (!task || !memberId) return null;
   const mailboxMessages = run.board.messages.filter(
     (message) =>
@@ -273,6 +442,27 @@ export function createAgentTeamDispatchPlan(run: AgentTeamRun): AgentTeamDispatc
     ...(mailboxMessages.length > 0
       ? mailboxMessages.map((message) => `- ${message.fromAgentId}: ${message.body}`)
       : ["- (none)"]),
+    "",
+    "Current board context:",
+    ...run.board.results.slice(-6).map((result) =>
+      `- result ${result.id} (${result.taskId}, ${result.status}): ${result.summary}`
+    ),
+    ...run.board.findings.slice(-12).map((finding) =>
+      `- finding ${finding.id} [${finding.status}] (${finding.confidence}): ${finding.claim} evidence=${finding.evidenceRefs.join(", ") || "(none)"}`
+    ),
+    ...run.board.challenges.slice(-8).map((challenge) =>
+      `- challenge ${challenge.id} [${challenge.status}] target=${challenge.targetFindingId}: ${challenge.reason}`
+    ),
+    "",
+    task.expectedOutput === "decision_input"
+      ? [
+          "For synthesis: write the summary as the final answer to the user's Team objective, not as an internal process report.",
+          "Start with the direct conclusion, then summarize the strongest reasons and any remaining caveats or next steps.",
+          "Use proposed and accepted findings plus resolved/open challenges above to make a traceable decision.",
+          "Do not refuse merely because Lead has not accepted findings yet; the Team runtime will accept/resolve after your synthesis if your result cites evidence.",
+          "Avoid wording like 'cannot form a decision because no accepted findings exist' when there are usable results/findings in the board.",
+        ].join(" ")
+      : "Use the board context to avoid repeating previous work and to challenge or refine existing findings.",
     "",
     "Return a concise task result with evidence. If you find a risk, include it explicitly.",
     "Use the TEAM_RESULT_JSON contract exactly so the Team board can ingest your real output.",
@@ -295,7 +485,11 @@ export function createAgentTeamDispatchPlans(
   const usedTasks = new Set<string>();
   const usedMembers = new Set<string>();
   for (const task of tasks) {
-    const memberId = members.find((id) => !usedMembers.has(id));
+    const memberId = selectIdleTeammateForTask(
+      run,
+      task,
+      members.filter((id) => !usedMembers.has(id))
+    );
     if (!memberId) break;
     if (usedTasks.has(task.id)) continue;
     const single = createAgentTeamDispatchPlan({
@@ -1152,8 +1346,7 @@ export function submitAgentTeamResult(
   const dedupedFindings = nextRun.board.findings.filter(
     (finding, index, all) => all.findIndex((item) => item.id === finding.id) === index
   );
-  return {
-    run: patchAgentTeamRun(nextRun, {
+  const ingestedRun = patchAgentTeamRun(nextRun, {
       board: {
         ...nextRun.board,
         findings: dedupedFindings,
@@ -1193,9 +1386,98 @@ export function submitAgentTeamResult(
           })),
         ],
       },
-    }),
+    });
+  const settledRun = autoSettleSynthesisResult(ingestedRun, {
+    taskId: opts.taskId,
+    memberId: opts.memberId,
+    resultId,
+    summary: parsed.summary,
+    findingIds,
+    challengeIds: challenges.map((challenge) => challenge.id),
+    evidenceRefs: result.evidenceRefs,
+  });
+  return {
+    run: settledRun,
     error: completed.error,
   };
+}
+
+function autoSettleSynthesisResult(
+  run: AgentTeamRun,
+  opts: {
+    taskId: string;
+    memberId: string;
+    resultId: string;
+    summary: string;
+    findingIds: string[];
+    challengeIds: string[];
+    evidenceRefs: string[];
+  }
+): AgentTeamRun {
+  const task = run.board.tasks.find((item) => item.id === opts.taskId);
+  if (!task || (task.id !== "synthesis" && task.expectedOutput !== "decision_input")) {
+    return run;
+  }
+  let nextRun = run;
+  const synthesisFindingIds = opts.findingIds.filter((id) =>
+    nextRun.board.findings.some((finding) => finding.id === id)
+  );
+  for (const findingId of synthesisFindingIds) {
+    const accepted = acceptAgentTeamFinding(nextRun, findingId, nextRun.leadAgentId);
+    nextRun = accepted.run;
+  }
+  const openChallenges = nextRun.board.challenges.filter(isOpenChallenge);
+  for (const challenge of openChallenges) {
+    const resolved = resolveAgentTeamChallenge(
+      nextRun,
+      challenge.id,
+      nextRun.leadAgentId,
+      "Lead accepted the synthesis result as the resolution for this open challenge.",
+      synthesisFindingIds
+    );
+    nextRun = resolved.run;
+  }
+  const acceptedFindingIds = nextRun.board.findings
+    .filter((finding) => isAcceptedForDecision(nextRun, finding))
+    .map((finding) => finding.id);
+  const decision = recordAgentTeamDecision(nextRun, {
+    title: "Team 最终综合",
+    rationale: opts.summary,
+    madeByAgentId: nextRun.leadAgentId,
+    acceptedFindingIds,
+    challengeIds: nextRun.board.challenges
+      .filter((challenge) => challenge.status === "resolved" || challenge.status === "dismissed")
+      .map((challenge) => challenge.id),
+    evidenceRefs: opts.evidenceRefs,
+    sourceResultIds: [opts.resultId],
+    confidence: "high",
+  });
+  nextRun = decision.run;
+  if (decision.error) return nextRun;
+  return transitionAgentTeamRun(nextRun, "completed").run;
+}
+
+export function settleAgentTeamCompletedSynthesis(run: AgentTeamRun): AgentTeamRun {
+  if (run.status === "completed") return run;
+  const synthesisTask = run.board.tasks.find(
+    (task) =>
+      task.status === "completed" &&
+      (task.id === "synthesis" || task.expectedOutput === "decision_input") &&
+      task.resultId
+  );
+  const result = synthesisTask?.resultId
+    ? run.board.results.find((item) => item.id === synthesisTask.resultId)
+    : undefined;
+  if (!synthesisTask || !result) return run;
+  return autoSettleSynthesisResult(run, {
+    taskId: synthesisTask.id,
+    memberId: synthesisTask.ownerAgentId ?? result.authorAgentId,
+    resultId: result.id,
+    summary: result.summary,
+    findingIds: result.findingIds,
+    challengeIds: result.challengeIds,
+    evidenceRefs: result.evidenceRefs,
+  });
 }
 
 export function acceptAgentTeamFinding(

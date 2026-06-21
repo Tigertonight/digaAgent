@@ -997,7 +997,7 @@ export function isLocalCodingAssistantAgent(rec: AgentRecord): boolean {
 export async function promptLocalCodingAssistantAgent(
   rec: AgentRecord,
   text: string
-): Promise<void> {
+): Promise<string> {
   if (rec.external?.child) {
     throw new Error("自研 Coding 助手正在运行，请等待完成或先中止当前任务。");
   }
@@ -1047,66 +1047,70 @@ export async function promptLocalCodingAssistantAgent(
       blockedReason: "Local coding assistant failed to start.",
       pushAgentEnd: true,
     });
-    return;
+    return rec.external?.emittedText ?? "";
   }
 
-  const child = spawn(cliResolution.command, args, {
-    cwd: rec.cwd,
-    env: {
-      ...cliResolution.env,
-      FORCE_COLOR: "0",
-      NO_COLOR: "1",
-    },
-  });
-  rec.external.child = child;
-  child.stdin.end();
-
-  let stdoutBuffer = "";
-  child.stdout.on("data", (chunk: Buffer) => {
-    stdoutBuffer += chunk.toString("utf8");
-    let idx = stdoutBuffer.indexOf("\n");
-    while (idx >= 0) {
-      const line = stdoutBuffer.slice(0, idx);
-      stdoutBuffer = stdoutBuffer.slice(idx + 1);
-      emitLocalCodingAssistantJsonLine(rec, responseId, line);
-      idx = stdoutBuffer.indexOf("\n");
-    }
-  });
-  child.stderr.on("data", (chunk: Buffer) => {
-    const textChunk = chunk.toString("utf8");
-    if (textChunk.trim()) emitLocalCodingAssistantText(rec, responseId, textChunk);
-  });
-
-  child.on("close", (code, signal) => {
-    if (stdoutBuffer.trim()) emitLocalCodingAssistantJsonLine(rec, responseId, stdoutBuffer);
-    stdoutBuffer = "";
-    if (code && code !== 0 && signal !== "SIGTERM") {
-      emitLocalCodingAssistantText(
-        rec,
-        responseId,
-        `\n\n[自研 Coding 助手退出，代码 ${code}]`
-      );
-    }
-    pushAgentEvent(rec, {
-      type: "message_end",
-      message: {
-        ...localCodingAssistantMessage("assistant", "", responseId, modelId),
-        stopReason: code === 0 ? "stop" : "error",
+  return await new Promise<string>((resolve, reject) => {
+    const child = spawn(cliResolution.command, args, {
+      cwd: rec.cwd,
+      env: {
+        ...cliResolution.env,
+        FORCE_COLOR: "0",
+        NO_COLOR: "1",
       },
-    } as RingBufferEvent);
-    if (rec.external) rec.external.child = null;
-    forceFinishStream(rec, {
-      reason: "local_exit",
-      goalStatus: code === 0 ? "completed" : "failed",
-      ...(code === 0
-        ? {}
-        : { blockedReason: "Local coding assistant exited with an error." }),
-      pushAgentEnd: true,
-      continueGoal: code === 0,
     });
-  });
-  child.on("error", (err) => {
-    emitLocalCodingAssistantText(rec, responseId, `自研 Coding 助手启动失败：${err.message}`);
+    rec.external!.child = child;
+    child.stdin.end();
+
+    let stdoutBuffer = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdoutBuffer += chunk.toString("utf8");
+      let idx = stdoutBuffer.indexOf("\n");
+      while (idx >= 0) {
+        const line = stdoutBuffer.slice(0, idx);
+        stdoutBuffer = stdoutBuffer.slice(idx + 1);
+        emitLocalCodingAssistantJsonLine(rec, responseId, line);
+        idx = stdoutBuffer.indexOf("\n");
+      }
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      const textChunk = chunk.toString("utf8");
+      if (textChunk.trim()) emitLocalCodingAssistantText(rec, responseId, textChunk);
+    });
+
+    child.on("close", (code, signal) => {
+      if (stdoutBuffer.trim()) emitLocalCodingAssistantJsonLine(rec, responseId, stdoutBuffer);
+      stdoutBuffer = "";
+      if (code && code !== 0 && signal !== "SIGTERM") {
+        emitLocalCodingAssistantText(
+          rec,
+          responseId,
+          `\n\n[自研 Coding 助手退出，代码 ${code}]`
+        );
+      }
+      pushAgentEvent(rec, {
+        type: "message_end",
+        message: {
+          ...localCodingAssistantMessage("assistant", "", responseId, modelId),
+          stopReason: code === 0 ? "stop" : "error",
+        },
+      } as RingBufferEvent);
+      if (rec.external) rec.external.child = null;
+      forceFinishStream(rec, {
+        reason: "local_exit",
+        goalStatus: code === 0 ? "completed" : "failed",
+        ...(code === 0
+          ? {}
+          : { blockedReason: "Local coding assistant exited with an error." }),
+        pushAgentEnd: true,
+        continueGoal: code === 0,
+      });
+      resolve(rec.external?.emittedText ?? "");
+    });
+    child.on("error", (err) => {
+      emitLocalCodingAssistantText(rec, responseId, `自研 Coding 助手启动失败：${err.message}`);
+      reject(err);
+    });
   });
 }
 

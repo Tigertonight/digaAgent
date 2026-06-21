@@ -3,6 +3,7 @@ import { createInitialAgentTeamRun } from "./mock";
 import {
   acceptAgentTeamFinding,
   claimAgentTeamTask,
+  completeAgentTeamInitialFrame,
   completeAgentTeamTask,
   createAgentTeamChallenge,
   createAgentTeamDispatchPlan,
@@ -11,6 +12,7 @@ import {
   markAgentTeamTeammateIdle,
   promoteAgentTeamMember,
   failAgentTeamTask,
+  recoverStaleAgentTeamTasks,
   recordAgentTeamDecision,
   replaceAgentTeamMember,
   resolveAgentTeamChallenge,
@@ -426,6 +428,238 @@ describe("agent team runtime gates", () => {
     expect(plan?.memberId).toBe(teammateId);
     expect(plan?.mailboxMessages[0]?.body).toBe("Focus on evidence.");
     expect(plan?.prompt).toContain("Task title: 收集证据");
+  });
+
+  it("does not fall back to Lead when no teammate session is runnable", () => {
+    const run = createInitialAgentTeamRun("no teammate fallback");
+    const ready = completeAgentTeamInitialFrame(run);
+
+    expect(createAgentTeamDispatchPlan(ready)).toBeNull();
+  });
+
+  it("recovers stale claimed tasks so until-idle can redispatch them", () => {
+    const run = createInitialAgentTeamRun("stale team");
+    const now = 1_782_000_000_000;
+    const teammateId = run.members.find((member) => member.id.includes(":researcher"))?.id;
+    if (!teammateId) throw new Error("missing researcher");
+    const claimed = claimAgentTeamTask(
+      {
+        ...run,
+        updatedAt: now - 10 * 60_000,
+        board: {
+          ...run.board,
+          tasks: run.board.tasks.map((task) =>
+            task.id === "frame"
+              ? { ...task, status: "completed" as const }
+              : task
+          ),
+        },
+        members: run.members.map((member) =>
+          member.id === teammateId ? { ...member, agentId: "research-agent" } : member
+        ),
+      },
+      "evidence",
+      teammateId
+    ).run;
+    const stale = {
+      ...claimed,
+      board: {
+        ...claimed.board,
+        tasks: claimed.board.tasks.map((task) =>
+          task.id === "evidence"
+            ? { ...task, claimedAt: now - 10 * 60_000 }
+            : task
+        ),
+      },
+    };
+
+    const recovered = recoverStaleAgentTeamTasks(stale, {
+      now,
+      staleMs: 60_000,
+    });
+
+    expect(recovered.recoveredTaskIds).toEqual(["evidence"]);
+    expect(
+      recovered.run.board.tasks.find((task) => task.id === "evidence")?.status
+    ).toBe("pending");
+    expect(
+      recovered.run.board.tasks.find((task) => task.id === "evidence")?.ownerAgentId
+    ).toBeUndefined();
+    expect(
+      recovered.run.members.find((member) => member.id === teammateId)?.status
+    ).toBe("idle");
+    expect(createAgentTeamDispatchPlan(recovered.run)?.task.id).toBe("evidence");
+    expect(createAgentTeamDispatchPlan(recovered.run)?.memberId).toBe(teammateId);
+  });
+
+  it("assigns challenge and synthesis tasks to matching teammates", () => {
+    const run = createInitialAgentTeamRun("role matching");
+    const withAgents = {
+      ...run,
+      members: run.members.map((member) =>
+        member.id === run.leadAgentId
+          ? member
+          : { ...member, agentId: `agent-${member.name.toLowerCase()}` }
+      ),
+      board: {
+        ...run.board,
+        tasks: run.board.tasks.map((task) => {
+          if (task.id === "frame" || task.id === "evidence") {
+            return { ...task, status: "completed" as const };
+          }
+          return task;
+        }),
+      },
+    };
+
+    const challengePlan = createAgentTeamDispatchPlan(withAgents);
+
+    expect(challengePlan?.task.id).toBe("challenge");
+    expect(challengePlan?.memberId).toContain(":critic");
+
+    const withChallengeDone = {
+      ...withAgents,
+      board: {
+        ...withAgents.board,
+        tasks: withAgents.board.tasks.map((task) =>
+          task.id === "challenge"
+            ? { ...task, status: "completed" as const }
+            : task
+        ),
+      },
+    };
+    const synthesisPlan = createAgentTeamDispatchPlan(withChallengeDone);
+
+    expect(synthesisPlan?.task.id).toBe("synthesis");
+    expect(synthesisPlan?.memberId).toContain(":synthesizer");
+    expect(synthesisPlan?.prompt).toContain("final answer to the user's Team objective");
+    expect(synthesisPlan?.prompt).toContain("direct conclusion");
+  });
+
+  it("auto-settles synthesis results into a traceable final decision", () => {
+    const run = createInitialAgentTeamRun("auto settle");
+    const memberId = run.members.find((member) => member.id.includes(":synthesizer"))?.id ?? run.leadAgentId;
+    const prepared = {
+      ...run,
+      members: run.members.map((member) =>
+        member.id === memberId ? { ...member, agentId: "synthesis-agent" } : member
+      ),
+      board: {
+        ...run.board,
+        tasks: run.board.tasks.map((task) => {
+          if (task.id === "frame" || task.id === "evidence" || task.id === "challenge") {
+            return { ...task, status: "completed" as const };
+          }
+          if (task.id === "synthesis") {
+            return {
+              ...task,
+              status: "claimed" as const,
+              ownerAgentId: memberId,
+            };
+          }
+          return task;
+        }),
+        challenges: [
+          {
+            id: "open-challenge",
+            targetFindingId: "f-mode",
+            authorAgentId: run.leadAgentId,
+            reason: "Needs final synthesis.",
+            severity: "medium" as const,
+            status: "open" as const,
+            createdAt: Date.now(),
+          },
+        ],
+      },
+    };
+
+    const submitted = submitAgentTeamResult(prepared, {
+      taskId: "synthesis",
+      memberId,
+      rawText: [
+        "TEAM_RESULT_JSON:",
+        "```json",
+        JSON.stringify({
+          summary: "Final traceable synthesis.",
+          findings: [
+            {
+              claim: "Final decision is backed by accepted evidence.",
+              confidence: "high",
+              evidenceRefs: ["file:app/components/MessageView.tsx"],
+            },
+          ],
+          challenges: [],
+          needsFollowUp: [],
+        }),
+        "```",
+      ].join("\n"),
+      dispatchMode: "until_idle",
+    });
+
+    expect(submitted.error).toBeUndefined();
+    expect(submitted.run.status).toBe("completed");
+    expect(submitted.run.leadState).toBe("finalized");
+    expect(submitted.run.board.challenges.every((challenge) => challenge.status === "resolved")).toBe(true);
+    expect(submitted.run.board.decisions.at(-1)?.acceptedFindingIds.length).toBeGreaterThan(0);
+    expect(submitted.run.board.decisions.at(-1)?.sourceResultIds).toHaveLength(1);
+  });
+
+  it("does not recover stale tasks that already have a submitted result", () => {
+    const run = createInitialAgentTeamRun("result team");
+    const now = 1_782_000_000_000;
+    const leadId = run.leadAgentId;
+    const claimed = claimAgentTeamTask(
+      {
+        ...run,
+        updatedAt: now - 10 * 60_000,
+        board: {
+          ...run.board,
+          tasks: run.board.tasks.map((task) =>
+            task.id === "frame"
+              ? { ...task, status: "completed" as const }
+              : task
+          ),
+        },
+      },
+      "evidence",
+      leadId
+    ).run;
+    const withResult = {
+      ...claimed,
+      board: {
+        ...claimed.board,
+        tasks: claimed.board.tasks.map((task) =>
+          task.id === "evidence"
+            ? { ...task, claimedAt: now - 10 * 60_000 }
+            : task
+        ),
+        results: [
+          {
+            id: "result-1",
+            taskId: "evidence",
+            authorAgentId: leadId,
+            rawText: "done",
+            summary: "done",
+            parsedAt: now - 1_000,
+            status: "parsed" as const,
+            findingIds: [],
+            challengeIds: [],
+            evidenceRefs: [],
+            parseWarnings: [],
+          },
+        ],
+      },
+    };
+
+    const recovered = recoverStaleAgentTeamTasks(withResult, {
+      now,
+      staleMs: 60_000,
+    });
+
+    expect(recovered.recoveredTaskIds).toEqual([]);
+    expect(
+      recovered.run.board.tasks.find((task) => task.id === "evidence")?.status
+    ).toBe("claimed");
   });
 
   it("marks automatic dispatch parity partial when auto-dispatched completion lands", () => {
