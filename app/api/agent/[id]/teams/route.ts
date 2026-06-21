@@ -86,6 +86,37 @@ function listAccessibleTeamRuns(agentId: string, rec: AgentRecord): AgentTeamRun
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+function persistAgentTeamStartInSession(rec: AgentRecord, objective: string): void {
+  const branch = rec.session.sessionManager.getBranch();
+  const hasUserMessage = branch.some(
+    (entry) => entry.type === "message" && entry.message.role === "user"
+  );
+  if (!hasUserMessage) {
+    const message = {
+      role: "user" as const,
+      content: objective,
+      timestamp: Date.now(),
+    };
+    rec.session.agent.state.messages.push(message);
+    rec.session.sessionManager.appendMessage(message);
+  }
+  if (!rec.session.sessionManager.getSessionName()) {
+    const title =
+      objective.length > 40 ? `${objective.slice(0, 40)}...` : objective;
+    rec.session.setSessionName(`团队协作：${title}`);
+  }
+  flushAgentTeamSessionFile(rec);
+}
+
+function flushAgentTeamSessionFile(rec: AgentRecord): void {
+  const sessionManager = rec.session.sessionManager as unknown as {
+    _rewriteFile?: () => void;
+    flushed?: boolean;
+  };
+  sessionManager._rewriteFile?.();
+  sessionManager.flushed = true;
+}
+
 export const GET = withRemoteAuth(async function (
   req: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -120,6 +151,8 @@ export const POST = withRemoteAuth(async function (
     if (!objective) {
       return NextResponse.json({ error: "objective is required" }, { status: 400 });
     }
+    persistAgentTeamStartInSession(rec, objective);
+    invalidateSessionListCache();
     const provisional = createInitialAgentTeamRun(objective);
     const settings = mergeSettings(provisional.settings, body.settings);
     const run = createInitialAgentTeamRun(objective, settings);

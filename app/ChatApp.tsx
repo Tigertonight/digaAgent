@@ -135,6 +135,30 @@ function describeTeamMemberScale(scale: AgentTeamSettings["memberScale"]): strin
   return "标准 5";
 }
 
+function teamOperationErrorMessage(
+  error: unknown,
+  fallback: string,
+): string {
+  const raw = typeof error === "string" ? error : "";
+  const normalized = raw.toLowerCase();
+  if (normalized.includes("no runnable task or teammate")) {
+    return "当前没有可以继续推进的任务。你可以先查看任务细节，或直接生成总结。";
+  }
+  if (normalized.includes("team run not found")) {
+    return "这次团队协作已不可用，请重新启动一次。";
+  }
+  if (normalized.includes("open challenges")) {
+    return "还有待确认的问题，解决后才能生成最终总结。";
+  }
+  if (normalized.includes("critical tasks")) {
+    return "还有关键任务未完成，完成后才能生成最终总结。";
+  }
+  if (normalized.includes("lead final synthesis")) {
+    return "负责人还没有给出最终判断，暂时不能结束。";
+  }
+  return raw || fallback;
+}
+
 // SLASH_COMMANDS / SlashName / detectAutocompleteToken 已搬到 hooks/useAutocomplete.ts（RFC-1 阶段 C2）。
 
 function formatWorkflowTime(ms: number | undefined): string {
@@ -2465,7 +2489,12 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data?.run) {
-        setError(data?.error ?? `启动 Team 失败: HTTP ${response.status}`);
+        setError(
+          teamOperationErrorMessage(
+            data?.error,
+            `启动团队协作失败：HTTP ${response.status}`,
+          ),
+        );
         return;
       }
       const run = data.run as AgentTeamRun;
@@ -3192,7 +3221,12 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data?.run) {
-        setError(data?.error ?? `Team 操作失败: HTTP ${response.status}`);
+        setError(
+          teamOperationErrorMessage(
+            data?.error,
+            `团队操作失败：HTTP ${response.status}`,
+          ),
+        );
         return;
       }
       updateAgentTeamRun(data.run as AgentTeamRun);
@@ -3200,7 +3234,12 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         ? (data.blockedReasons as string[])
         : [];
       if (blockedReasons.length > 0) {
-        setError(`Team 暂不能 finalize：${blockedReasons.join("；")}`);
+        setError(
+          teamOperationErrorMessage(
+            blockedReasons.join("; "),
+            "暂时还不能生成最终总结，请先处理待确认事项。",
+          ),
+        );
       } else {
         setError(null);
       }
@@ -3249,11 +3288,16 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         updateAgentTeamRun(data.run as AgentTeamRun);
       }
       if (!response.ok || !data?.run) {
-        setError(data?.error ?? `Team 操作失败: HTTP ${response.status}`);
+        setError(
+          teamOperationErrorMessage(
+            data?.error,
+            `团队操作失败：HTTP ${response.status}`,
+          ),
+        );
         return;
       }
       if (data.error) {
-        setError(String(data.error));
+        setError(teamOperationErrorMessage(data.error, "团队操作没有完成。"));
       } else {
         setError(null);
       }
@@ -3843,7 +3887,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
               borderColor: "var(--border)",
               color: "var(--text)",
             }}
-            aria-label="Team launch confirmation"
+            aria-label="团队协作启动确认"
             onClick={(event) => event.stopPropagation()}
           >
             <div
@@ -3861,12 +3905,12 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                 <Users size={18} />
               </span>
               <div className="min-w-0 flex-1">
-                <div className="text-token-ui font-semibold">启动 Agent Team</div>
+                <div className="text-token-ui font-semibold">启动团队协作</div>
                 <p
                   className="mt-1 text-token-sm leading-5"
                   style={{ color: "var(--text-muted)" }}
                 >
-                  Team 会打开独立协作室，成员共享任务板、发现、挑战和决策；主聊天只保留摘要。
+                  适合目标较复杂、需要多人分工和互相校验的任务；主聊天只保留关键进展。
                 </p>
               </div>
             </div>
@@ -3935,7 +3979,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                         }));
                       }}
                     />
-                    允许成员互相挑战发现
+                    允许成员互相质疑结论
                   </label>
                   <label className="mt-2 flex items-center gap-2 text-token-sm">
                     <input
@@ -3949,7 +3993,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                         }));
                       }}
                     />
-                    Lead 先形成任务板再推进
+                    负责人先拆任务再推进
                   </label>
                 </div>
               </div>
@@ -3958,9 +4002,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                 <div className="text-token-sm font-semibold">权限边界</div>
                 <div className="mt-2 grid gap-2 md:grid-cols-3">
                   {([
-                    ["allowNetwork", "允许网络"],
-                    ["allowWrite", "允许写入"],
-                    ["allowWorktree", "允许 worktree"],
+                    ["allowNetwork", "允许查网页"],
+                    ["allowWrite", "允许改文件"],
+                    ["allowWorktree", "使用独立改动区"],
                   ] as const).map(([key, label]) => (
                     <label
                       key={key}
@@ -3992,8 +4036,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                 <div className="mt-2 grid gap-2">
                   {([
                     ["requiredTasksComplete", "全部关键任务完成"],
-                    ["noOpenBlockingChallenges", "没有开放阻塞挑战"],
-                    ["leadFinalSynthesis", "Lead 给出最终综合"],
+                    ["noOpenBlockingChallenges", "没有待确认问题"],
+                    ["leadFinalSynthesis", "负责人给出总结"],
                   ] as const).map(([key, label]) => (
                     <label key={key} className="flex items-center gap-2 text-token-sm">
                       <input
@@ -4021,11 +4065,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
               style={{ borderColor: "var(--border)" }}
             >
               <div className="text-token-xs" style={{ color: "var(--text-muted)" }}>
-                普通聊天、Subagents、Workflow 不会自动升级到 Team。
+                普通对话不会自动切换到团队协作，只有你确认后才会启动。
               </div>
               <div className="flex justify-end gap-2">
                 <Button variant="ghost" onClick={cancelTeamLaunch}>
-                  Cancel
+                  取消
                 </Button>
                 <Button
                   variant="solid"
@@ -4035,7 +4079,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                     void confirmTeamLaunch();
                   }}
                 >
-                  Start Team
+                  开始
                 </Button>
               </div>
             </div>

@@ -231,19 +231,34 @@ describe("Workbench overview model", () => {
       path.join(process.cwd(), "app/ChatApp.tsx"),
       "utf8"
     );
+    const routeSource = readFileSync(
+      path.join(process.cwd(), "app/api/agent/[id]/teams/route.ts"),
+      "utf8"
+    );
 
     expect(source).toContain("pendingTeamLaunch");
     expect(source).toContain("requestTeamLaunch");
     expect(source).toContain("confirmTeamLaunch");
-    expect(source).toContain("启动 Agent Team");
+    expect(routeSource).toContain("persistAgentTeamStartInSession");
+    expect(routeSource).toContain("flushAgentTeamSessionFile");
+    expect(routeSource).toContain("rec.session.sessionManager.appendMessage");
+    expect(routeSource).toContain("rec.session.setSessionName");
+    expect(routeSource).toContain("sessionManager._rewriteFile?.()");
+    expect(source).toContain("启动团队协作");
     expect(source).toContain("成员规模");
     expect(source).toContain("权限边界");
     expect(source).toContain("停止条件");
+    expect(source).toContain("允许查网页");
+    expect(source).toContain("允许改文件");
+    expect(source).toContain("使用独立改动区");
     expect(source).toContain("allowNetwork");
     expect(source).toContain("allowWrite");
     expect(source).toContain("allowWorktree");
     expect(source).toContain("stopConditions");
-    expect(source).toContain("普通聊天、Subagents、Workflow 不会自动升级到 Team");
+    expect(source).toContain("普通对话不会自动切换到团队协作");
+    expect(source).not.toContain("启动 Agent Team");
+    expect(source).not.toContain("Start Team");
+    expect(source).not.toContain("Subagents、Workflow 不会自动升级到 Team");
     expect(source).toContain("body: JSON.stringify({ type: \"start\", objective: text, settings })");
     expect(source).toContain("const checked = event.currentTarget.checked");
     expect(source).not.toContain("[key]: event.currentTarget.checked");

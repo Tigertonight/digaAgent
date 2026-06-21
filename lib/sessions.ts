@@ -6,6 +6,7 @@
  * 注意：pi-coding-agent 是 Node-only ESM 包，必须在 runtime=nodejs 的路由里用。
  */
 import "server-only";
+import { access } from "node:fs/promises";
 import {
   buildSessionContext,
   SessionManager,
@@ -36,6 +37,7 @@ export type SessionInfoWithStatus = SessionInfo & {
 };
 
 const LIST_ALL_CACHE_MS = 200;
+const MISSING_EMPTY_SESSION_GRACE_MS = 30 * 1000;
 let listAllCache: {
   at: number;
   value?: SessionInfo[];
@@ -175,7 +177,8 @@ export async function listAllSessions(): Promise<SessionInfoWithStatus[]> {
     });
   }
 
-  return enriched.sort((a, b) => {
+  const visible = await filterDeletedEmptySessions(enriched);
+  return visible.sort((a, b) => {
     // pinned 始终最优先（无论是否 running）
     const ap = a.meta?.pinned ? 1 : 0;
     const bp = b.meta?.pinned ? 1 : 0;
@@ -186,6 +189,29 @@ export async function listAllSessions(): Promise<SessionInfoWithStatus[]> {
     if (a.isRunning !== b.isRunning) return a.isRunning ? -1 : 1;
     return b.modified.getTime() - a.modified.getTime();
   });
+}
+
+async function filterDeletedEmptySessions(
+  sessions: SessionInfoWithStatus[],
+): Promise<SessionInfoWithStatus[]> {
+  const keep = await Promise.all(
+    sessions.map(async (session) => {
+      if (session.isRunning) return true;
+      if (session.messageCount > 0) return true;
+      if (session.firstMessage.trim()) return true;
+      if (session.meta?.title?.trim() || session.name?.trim()) return true;
+      if (Date.now() - session.modified.getTime() < MISSING_EMPTY_SESSION_GRACE_MS) {
+        return true;
+      }
+      try {
+        await access(session.path);
+        return true;
+      } catch {
+        return false;
+      }
+    }),
+  );
+  return sessions.filter((_, index) => keep[index]);
 }
 
 /** 通过 session id 找到对应文件路径 */

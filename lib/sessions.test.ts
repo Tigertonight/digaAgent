@@ -10,6 +10,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const listAll = vi.fn();
+const access = vi.fn();
+const listAgentSummaries = vi.fn<() => unknown[]>(() => []);
 
 vi.mock("@earendil-works/pi-coding-agent", async () => {
   const actual = await vi.importActual<
@@ -28,14 +30,26 @@ vi.mock("./meta/store", () => ({
   batchReadMeta: vi.fn(async () => new Map()),
 }));
 
+vi.mock("./agent-registry", () => ({
+  listAgentSummaries: () => listAgentSummaries(),
+}));
+
+vi.mock("node:fs/promises", () => ({
+  access: (...args: unknown[]) => access(...args),
+}));
+
 import {
   __clearSessionListCacheForTests,
   collectSessionDescendants,
+  listAllSessions,
 } from "./sessions";
 
 afterEach(() => {
   __clearSessionListCacheForTests();
   listAll.mockReset();
+  access.mockReset();
+  listAgentSummaries.mockReset();
+  listAgentSummaries.mockReturnValue([]);
 });
 
 function makeSession(
@@ -63,6 +77,14 @@ function makeSession(
     messageCount: 0,
     firstMessage: "",
     allMessagesText: "",
+  };
+}
+
+function makeRecentSession(id: string, path: string) {
+  return {
+    ...makeSession(id, path),
+    created: new Date(),
+    modified: new Date(),
   };
 }
 
@@ -98,5 +120,50 @@ describe("collectSessionDescendants", () => {
     expect(ids).toEqual(["child1", "child2", "grand", "root"]);
     // root 必须排第一（删除顺序：广度优先）
     expect(out![0]!.id).toBe("root");
+  });
+});
+
+describe("listAllSessions", () => {
+  it("隐藏文件已不存在的空白会话", async () => {
+    listAll.mockResolvedValue([
+      makeSession("ghost", "/p/ghost.jsonl"),
+      { ...makeSession("real", "/p/real.jsonl"), messageCount: 1 },
+    ]);
+    access.mockImplementation(async (path: string) => {
+      if (path === "/p/ghost.jsonl") throw new Error("missing");
+    });
+
+    const out = await listAllSessions();
+
+    expect(out.map((s) => s.id)).toEqual(["real"]);
+  });
+
+  it("保留刚创建但文件尚未出现的空白会话", async () => {
+    listAll.mockResolvedValue([makeRecentSession("fresh", "/p/fresh.jsonl")]);
+    access.mockRejectedValue(new Error("missing"));
+
+    const out = await listAllSessions();
+
+    expect(out.map((s) => s.id)).toEqual(["fresh"]);
+  });
+
+  it("保留正在运行但文件尚未出现的临时会话", async () => {
+    listAll.mockResolvedValue([]);
+    listAgentSummaries.mockReturnValue([
+      {
+        agentId: "agent-1",
+        sessionId: "running",
+        sessionFile: "/p/running.jsonl",
+        hidden: false,
+        cwd: "/tmp",
+        runtimeState: "streaming",
+        updatedAt: 1,
+      },
+    ]);
+    access.mockRejectedValue(new Error("missing"));
+
+    const out = await listAllSessions();
+
+    expect(out.map((s) => s.id)).toEqual(["running"]);
   });
 });
