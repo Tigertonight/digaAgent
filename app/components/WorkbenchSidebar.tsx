@@ -87,6 +87,11 @@ const OVERVIEW_SECTION_IDS = [
 ] as const;
 type OverviewSectionId = (typeof OVERVIEW_SECTION_IDS)[number];
 type OverviewExpandedOverrides = Partial<Record<OverviewSectionId, boolean>>;
+interface OverviewExpandedPrefs {
+  storageKey: string;
+  overrides: OverviewExpandedOverrides;
+  loaded: boolean;
+}
 
 export interface WorkbenchSidebarProps {
   open: boolean;
@@ -1930,15 +1935,20 @@ function OverviewPanel({
       browserSnapshot.status === "busy" ||
       browserSnapshot.status === "error",
   };
-  const [expandedOverrides, setExpandedOverrides] =
-    useState<OverviewExpandedOverrides>(() =>
-      loadOverviewExpandedOverrides(expandedStorageKey)
-    );
+  const [expandedPrefs, setExpandedPrefs] = useState<OverviewExpandedPrefs>({
+    storageKey: expandedStorageKey,
+    overrides: {},
+    loaded: false,
+  });
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
       if (!cancelled) {
-        setExpandedOverrides(loadOverviewExpandedOverrides(expandedStorageKey));
+        setExpandedPrefs({
+          storageKey: expandedStorageKey,
+          overrides: loadOverviewExpandedOverrides(expandedStorageKey),
+          loaded: true,
+        });
       }
     });
     return () => {
@@ -1946,8 +1956,11 @@ function OverviewPanel({
     };
   }, [expandedStorageKey]);
   useEffect(() => {
-    saveOverviewExpandedOverrides(expandedStorageKey, expandedOverrides);
-  }, [expandedOverrides, expandedStorageKey]);
+    if (!expandedPrefs.loaded || expandedPrefs.storageKey !== expandedStorageKey) return;
+    saveOverviewExpandedOverrides(expandedStorageKey, expandedPrefs.overrides);
+  }, [expandedPrefs, expandedStorageKey]);
+  const expandedOverrides =
+    expandedPrefs.storageKey === expandedStorageKey ? expandedPrefs.overrides : {};
   const expanded: Record<OverviewSectionId, boolean> = {
     progress: expandedOverrides.progress ?? hasContent.progress,
     outputs: expandedOverrides.outputs ?? hasContent.outputs,
@@ -1956,7 +1969,14 @@ function OverviewPanel({
     browser: expandedOverrides.browser ?? hasContent.browser,
   };
   const toggle = (id: OverviewSectionId) => {
-    setExpandedOverrides((prev) => ({ ...prev, [id]: !expanded[id] }));
+    setExpandedPrefs((prev) => ({
+      storageKey: expandedStorageKey,
+      loaded: prev.storageKey === expandedStorageKey ? prev.loaded : true,
+      overrides: {
+        ...(prev.storageKey === expandedStorageKey ? prev.overrides : {}),
+        [id]: !expanded[id],
+      },
+    }));
   };
 
   return (
