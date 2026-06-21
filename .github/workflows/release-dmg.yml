@@ -24,12 +24,24 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run electron:build
+      - run: npm run ci:release
+
+      - name: Upload release smoke summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-smoke-summary
+          path: dist/release-smoke-summary.json
+          if-no-files-found: error
 
       - name: Upload DMG to release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
         run: |
-          cp "dist/Diga Agent-0.1.2-arm64.dmg" "dist/Diga.Agent-0.1.2-arm64.dmg"
-          gh release upload "$TAG" "dist/Diga.Agent-0.1.2-arm64.dmg" --clobber
+          dmg="$(find dist -maxdepth 1 -type f -name '*.dmg' | sort | head -n 1)"
+          if [ -z "$dmg" ]; then
+            echo "No DMG found in dist"
+            exit 1
+          fi
+          cp "$dmg" "dist/Diga.Agent-mac-arm64.dmg"
+          gh release upload "$TAG" "dist/Diga.Agent-mac-arm64.dmg" --clobber
