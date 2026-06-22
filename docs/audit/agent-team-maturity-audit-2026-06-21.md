@@ -290,3 +290,42 @@ lint 仅剩 3 个既有 non-blocking warning，位于 benchmark 脚本：
 3. 设计用户自定义 Team hooks DSL，但保持在 P2，不影响当前发版。
 4. 增加 member transcript 并排视图或更强的查看记录入口。
 
+## 2026-06-22 PM 后续：Final Mile 三件事补齐
+
+> 上述 Definition of Done 与 ✅ 标记是 6-22 上半天对**数据层与服务端能力**的核对，
+> 当时 Workspace UI 上 coordination audit / hydrate banner / replace 入口尚未串通。
+> 6-22 PM 在 `docs/plans/2026-06-22-agent-team-final-mile.md` 计划下补齐了三件事，
+> 让 DoD#6、#9 从「数据具备」升级为「用户可见」。
+
+### 改动
+
+| Item | 交付物 | 说明 |
+| --- | --- | --- |
+| 1 | `lib/agent-team/coordination-integration.test.ts` | 4 个 it：通过 mock `ExtensionAPI` 复现 child agent 注册路径，断言 8 个 `team_*` 工具被注入、`before_agent_start` 注入 prompt contract、claim → submit_result 闭环走完 + audit 累积、跨身份 agentId 被拒绝。补上了原 `coordination-tools.test.ts` 和 `agent-registry` 之间 **没人验证过的注入接合点**。 |
+| 2 | Workspace 「Teammate 协作调用」抽屉 | `app/components/WorkbenchSidebar.tsx`：诊断详情 section 内插入 `agent-team-coordination-audit`；header 显示「协作 N（近 5 分钟）」计数；展开后倒序列 ≤ 50 条，标注接受/被拒绝、关键参数。 |
+| 3 | Workspace 顶部 Hydrate Banner + Replace 串通 | 同文件：成员行 `hydrateState ∈ {missing, replaced}` 或 `missingMemberIds.length > 0` 时，顶部出现 warning banner，「一键恢复」按钮调用 `{ type: "resume" }`；missing 行显式「替换成员」按钮接到现有 `replace_member` API。`onAgentTeamCommand` union 上补 `resume`，避免双通道。 |
+
+### 证据
+
+- `npx tsc --noEmit`：0 error。
+- `npx vitest run`：130 files / **1059 tests** 全绿（`lib/agent-team/` 73 → 77 tests）。
+- `npx playwright test e2e/10-agent-team.spec.ts e2e/10b-agent-team-worktree.spec.ts e2e/10c-agent-team-final-mile.spec.ts`：3 spec 全绿。
+- 新增 E2E `e2e/10c-agent-team-final-mile.spec.ts` 走完 banner → 查看过程 → replace 按钮 → 诊断 toggle → drawer 列出 ok/被拒绝条目 → 一键恢复触发 resume → banner 消失。
+
+### 对评分的影响
+
+| 维度 | 6-22 上午 | 6-22 PM | 变化原因 |
+| --- | --- | --- | --- |
+| 真实协作闭环 | 8 | 8.5 | coordination 注入点首次被 integration test 锁住。 |
+| 可靠性与恢复 | 7.5 | 8 | hydrate 状态不再只是字段，banner + replace 让重启路径用户可操作。 |
+| 测试与验收证据 | 8 | 8.5 | 新增 1 个 integration spec + 1 个 E2E spec，覆盖前两轮没真验过的 UI/注入接合点。 |
+| 总评 | 8.0 | **8.3** / 10 | mature candidate 信号更稳。 |
+
+### 仍未变的边界
+
+下列项与 6-22 上午相同，仍属于 P2 / 后续：
+
+- 用户自定义 hooks DSL。
+- split panes / 多 teammate transcript 并排视图。
+- LLM planner（接口预留）。
+- 真实模型长时运行的手工验收视频/trace 仍待补一轮（**ship 前最后一项软门**）。
