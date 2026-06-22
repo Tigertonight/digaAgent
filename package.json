@@ -65,7 +65,8 @@
     "electron:build": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --mac --arm64",
     "release:smoke": "node scripts/release-smoke.mjs",
     "release:smoke:ci": "node scripts/release-smoke.mjs --dry-run",
-    "ci:quality": "npm run lint && npm run typecheck && npm test && npm run route-auth:check && npm run workflow:sandbox:check && npm run public-surface:check && npm run internal-runtime:check",
+    "ci:quality": "npm run lint && npm run typecheck && npm test && npm run route-auth:check && npm run workflow:sandbox:check && npm run public-surface:check",
+    "ci:quality:local": "npm run ci:quality && npm run internal-runtime:check",
     "ci:release": "npm run ci:quality && npm run electron:build && npm run release:smoke:ci"
   },
   "dependencies": {

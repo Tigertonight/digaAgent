@@ -173,10 +173,15 @@ npm run public-surface:check
 
 On an internal workstation, run the runtime check to verify the local coding
 assistant can be discovered from a GUI-launched app environment and has a usable
-login cache:
+login cache. This check is intentionally not part of cloud CI because GitHub
+Actions runners do not have the private local assistant CLI or login session:
 
 ```bash
 npm run internal-runtime:check
+```
+
+```bash
+npm run ci:quality:local
 ```
 
 If a local Diga server is already running, this also verifies that the provider
