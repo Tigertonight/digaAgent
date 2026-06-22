@@ -13,6 +13,12 @@ export default defineConfig({
     trace: "retain-on-failure",
     actionTimeout: 5_000,
   },
+  webServer: {
+    command: "npm run dev",
+    url: "http://localhost:3000",
+    reuseExistingServer: !process.env.CI,
+    timeout: 120_000,
+  },
   projects: [
     {
       name: "chromium",

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import fs from "node:fs";
 import {
   abortLocalCodingAssistantAgent,
   createAgent,
@@ -10,10 +11,12 @@ import {
 } from "@/lib/agent-registry";
 import { createInitialAgentTeamRun } from "@/lib/agent-team/mock";
 import { createAgentTeamResultPrompt } from "@/lib/agent-team/result-ingestion";
+import { prepareAgentTeamMemberWorktree } from "@/lib/agent-team/worktree-policy";
 import {
   acceptStoredAgentTeamFinding,
   approveStoredAgentTeamPlan,
   claimStoredAgentTeamTask,
+  cleanupStoredAgentTeamWorktrees,
   completeStoredAgentTeamInitialFrame,
   completeStoredAgentTeamTask,
   createStoredAgentTeamChallenge,
@@ -21,9 +24,11 @@ import {
   failStoredAgentTeamTask,
   followUpStoredAgentTeamMember,
   getAgentTeamRun,
+  hydrateStoredAgentTeamRun,
   listAgentTeamRuns,
   listAgentTeamRunsByParentSessionPath,
   markStoredAgentTeamIdle,
+  mergeStoredAgentTeamWorktree,
   planStoredAgentTeamDispatches,
   planStoredAgentTeamDispatch,
   putAgentTeamRun,
@@ -37,10 +42,12 @@ import {
   retryStoredAgentTeamTask,
   sendStoredAgentTeamMessage,
   settleStoredAgentTeamCompletedSynthesis,
+  synthesizeStoredAgentTeamFromAvailableWork,
   submitStoredAgentTeamPlan,
   submitStoredAgentTeamResult,
   transitionStoredAgentTeamRun,
   updateStoredAgentTeamHook,
+  validateStoredAgentTeamWorktreePaths,
 } from "@/lib/agent-team/server-store";
 import type { AgentTeamDispatchPlan } from "@/lib/agent-team/runtime";
 import type { AgentTeamRun, AgentTeamRunStatus, AgentTeamSettings } from "@/lib/agent-team/types";
@@ -317,6 +324,8 @@ export const POST = withRemoteAuth(async function (
     }
     if (status === "aborted") {
       await shutdownAgentTeamTeammates(existing, rec);
+      const cleaned = await cleanupStoredAgentTeamWorktrees(teamId, { cwd: rec.cwd });
+      if (cleaned.run) pushAgentTeamEvent(rec, { type: "agent_team_run_update", run: cleaned.run });
     }
     const result = transitionStoredAgentTeamRun(teamId, status);
     if (!result.run) {
@@ -333,6 +342,85 @@ export const POST = withRemoteAuth(async function (
       ok: result.blockedReasons.length === 0,
       run: result.run,
       blockedReasons: result.blockedReasons,
+    });
+  }
+
+  if (type === "resume") {
+    const teamId = typeof body.teamId === "string" ? body.teamId : "";
+    const existing = getAgentTeamRun(teamId);
+    if (!canAccessTeamRun(existing, id, rec)) {
+      return NextResponse.json({ error: "team run not found" }, { status: 404 });
+    }
+    const model = rec.session.model;
+    if (!model) {
+      return NextResponse.json({ error: "current agent has no model for teammate resume" }, { status: 400 });
+    }
+    const hydrated = await hydrateStoredAgentTeamRun(teamId, {
+      recreateIdleTeammates: true,
+      sessionExists: (sessionFile) => fs.existsSync(sessionFile),
+      recreateMember: async (member) => {
+        if (!member.sessionFile) throw new Error("missing teammate session file");
+        const created = await createAgent({
+          provider: model.provider,
+          modelId: model.id,
+          cwd: rec.cwd,
+          sessionPath: member.sessionFile,
+          thinkingLevel: rec.session.thinkingLevel,
+          parentAgentId: rec.id,
+          parentSessionPath: rec.session.sessionFile,
+          childRole: teamRoleToSubagentRole(member.role),
+          hidden: true,
+        });
+        return {
+          agentId: created.id,
+          sessionFile: created.sessionFile,
+          modelId: model.id,
+        };
+      },
+    });
+    if (!hydrated.run) {
+      return NextResponse.json({ error: hydrated.error ?? "team run not found" }, { status: 404 });
+    }
+    pushAgentTeamEvent(rec, { type: "agent_team_run_update", run: hydrated.run });
+    return NextResponse.json({
+      ok: hydrated.missing.length === 0 && hydrated.replaced.length === 0,
+      run: hydrated.run,
+      rehydrated: hydrated.rehydrated,
+      missing: hydrated.missing,
+      replaced: hydrated.replaced,
+    });
+  }
+
+  if (type === "merge_worktree") {
+    const teamId = typeof body.teamId === "string" ? body.teamId : "";
+    const memberId = typeof body.memberId === "string" ? body.memberId : "";
+    const strategy =
+      body.strategy === "accept" ||
+      body.strategy === "discard" ||
+      body.strategy === "keep_branch"
+        ? body.strategy
+        : null;
+    const existing = getAgentTeamRun(teamId);
+    if (!canAccessTeamRun(existing, id, rec)) {
+      return NextResponse.json({ error: "team run not found" }, { status: 404 });
+    }
+    if (!memberId || !strategy) {
+      return NextResponse.json(
+        { error: "merge_worktree requires memberId and strategy" },
+        { status: 400 }
+      );
+    }
+    const result = await mergeStoredAgentTeamWorktree(teamId, memberId, strategy, {
+      cwd: rec.cwd,
+    });
+    if (!result.run) {
+      return NextResponse.json({ error: result.error ?? "team run not found" }, { status: 404 });
+    }
+    pushAgentTeamEvent(rec, { type: "agent_team_run_update", run: result.run });
+    return NextResponse.json({
+      ok: !result.error,
+      run: result.run,
+      error: result.error,
     });
   }
 
@@ -725,6 +813,29 @@ export const POST = withRemoteAuth(async function (
     return NextResponse.json({ ok: true, run: result.run });
   }
 
+  if (type === "summarize_available") {
+    const teamId = typeof body.teamId === "string" ? body.teamId : "";
+    const reason = typeof body.reason === "string" ? body.reason : undefined;
+    const existing = getAgentTeamRun(teamId);
+    if (!canAccessTeamRun(existing, id, rec)) {
+      return NextResponse.json({ error: "team run not found" }, { status: 404 });
+    }
+    const result = synthesizeStoredAgentTeamFromAvailableWork(teamId, {
+      actorAgentId: existing.leadAgentId,
+      reason,
+    });
+    if (!result.run || result.error) {
+      return NextResponse.json({ error: result.error ?? "summarize failed" }, { status: 400 });
+    }
+    pushAgentTeamRunEvent(rec, result.run);
+    return NextResponse.json({
+      ok: result.blockedReasons.length === 0,
+      run: result.run,
+      blockedReasons: result.blockedReasons,
+      forcedTaskIds: result.forcedTaskIds,
+    });
+  }
+
   if (type === "replace_member") {
     const teamId = typeof body.teamId === "string" ? body.teamId : "";
     const memberId = typeof body.memberId === "string" ? body.memberId : "";
@@ -891,7 +1002,47 @@ async function dispatchAgentTeamPlans({
 
   for (const plan of plans) {
     const member = latestRun.members.find((item) => item.id === plan.memberId);
-    const targetRec = member?.agentId ? getAgent(member.agentId) ?? rec : rec;
+    const targetRec = member?.agentId ? getAgent(member.agentId) : undefined;
+    if (!member || !targetRec) {
+      const reason = !member
+        ? `Team member missing for ${plan.memberId}`
+        : "Teammate session is not available; resume or replace this member before dispatch.";
+      errors.push(reason);
+      const failed = failStoredAgentTeamTask(teamId, plan.task.id, plan.memberId, reason);
+      latestRun = failed.run ?? latestRun;
+      if (failed.run) {
+        const patched = putAgentTeamRun({
+          ...failed.run,
+          members: failed.run.members.map((item) =>
+            item.id === plan.memberId
+              ? {
+                  ...item,
+                  agentId: undefined,
+                  hydrateState: "missing" as const,
+                  status: "blocked" as const,
+                  latestOutput: reason,
+                  lastActiveAt: Date.now(),
+                }
+              : item
+          ),
+        });
+        latestRun = patched;
+        pushAgentTeamEvent(rec, { type: "agent_team_run_update", run: patched });
+      }
+      continue;
+    }
+    const checkedWorktrees = validateStoredAgentTeamWorktreePaths(teamId, (worktreePath) =>
+      fs.existsSync(worktreePath)
+    );
+    latestRun = checkedWorktrees.run ?? latestRun;
+    if (checkedWorktrees.missingMemberIds.includes(plan.memberId)) {
+      const reason = "Teammate worktree path is missing; merge, discard, or replace this member before dispatch.";
+      errors.push(reason);
+      const failed = failStoredAgentTeamTask(teamId, plan.task.id, plan.memberId, reason);
+      latestRun = failed.run ?? latestRun;
+      if (failed.run) pushAgentTeamEvent(rec, { type: "agent_team_run_update", run: failed.run });
+      continue;
+    }
     const claimed = claimStoredAgentTeamTask(teamId, plan.task.id, plan.memberId);
     if (!claimed.run || claimed.error) {
       errors.push(claimed.error ?? `claim failed for ${plan.task.id}`);
@@ -1005,16 +1156,29 @@ async function spawnInitialTeammates(
   const now = Date.now();
   const members = [];
   const events = [...run.board.events];
+  let worktreeRoot = run.worktreeRoot;
   for (const member of run.members) {
     if (member.id === run.leadAgentId) {
       members.push(member);
       continue;
     }
     try {
+      const prepared = await prepareAgentTeamMemberWorktree({
+        run,
+        member,
+        cwd: rec.cwd,
+        now,
+      });
+      if (prepared.event) events.push(prepared.event);
+      worktreeRoot = worktreeRoot ?? prepared.worktreeRoot;
+      if (prepared.member.worktree?.status === "failed") {
+        members.push(prepared.member);
+        continue;
+      }
       const created = await createAgent({
         provider: model.provider,
         modelId: model.id,
-        cwd: rec.cwd,
+        cwd: prepared.cwd,
         thinkingLevel: rec.session.thinkingLevel,
         parentAgentId: rec.id,
         parentSessionPath: rec.session.sessionFile,
@@ -1022,7 +1186,7 @@ async function spawnInitialTeammates(
         hidden: true,
       });
       members.push({
-        ...member,
+        ...prepared.member,
         agentId: created.id,
         sessionFile: created.sessionFile,
         modelId: model.id,
@@ -1038,7 +1202,12 @@ async function spawnInitialTeammates(
         actorAgentId: run.leadAgentId,
         targetAgentId: member.id,
         message: `${member.name} teammate session created.`,
-        data: { agentId: created.id, sessionFile: created.sessionFile },
+        data: {
+          agentId: created.id,
+          sessionFile: created.sessionFile,
+          cwd: prepared.cwd,
+          worktreeId: prepared.member.worktree?.id,
+        },
       });
     } catch (err) {
       members.push({
@@ -1054,6 +1223,7 @@ async function spawnInitialTeammates(
   return {
     ...run,
     members,
+    worktreeRoot,
     updatedAt: now,
     board: {
       ...run.board,

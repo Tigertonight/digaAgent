@@ -131,9 +131,60 @@ function createDefaultTeamLaunchSettings(): AgentTeamSettings {
 }
 
 function describeTeamMemberScale(scale: AgentTeamSettings["memberScale"]): string {
-  if (scale === "small") return "小队 3";
-  if (scale === "deep") return "深度 8+";
+  if (scale === "small") return "快速小队";
+  if (scale === "deep") return "深度团队";
   return "标准 5";
+}
+
+function inferTeamLaunchSettings(objective: string): AgentTeamSettings {
+  const text = objective.toLowerCase();
+  const wantsDeep =
+    /深度|全面|严格|发布前|风险|架构|复盘|审查|验收|回归|多视角|可追溯|challenge|critic|release|risk|architecture|audit|review/.test(
+      text
+    );
+  const wantsQuick = /快速|简单|粗看|大概|quick|brief/.test(text);
+  const wantsWrite =
+    /修复|实现|修改|改一下|提交|commit|push|落地|改代码|fix|implement|write/.test(text);
+  const wantsReadonly = /只读|不要改|不修改|只看|readonly|read only/.test(text);
+  const wantsNetwork =
+    /联网|网页|最新|资料|竞品|市场|搜索|查一下|browser|web|latest|search/.test(text);
+  const wantsNoNetwork = /不联网|不要联网|只看当前项目|no web|offline/.test(text);
+  const memberScale: AgentTeamSettings["memberScale"] = wantsDeep
+    ? "deep"
+    : wantsQuick
+      ? "small"
+      : "standard";
+  const allowWrite = wantsWrite && !wantsReadonly;
+  const allowNetwork = wantsNetwork && !wantsNoNetwork;
+
+  return {
+    ...createDefaultTeamLaunchSettings(),
+    memberScale,
+    allowNetwork,
+    allowWrite,
+    allowWorktree: false,
+    allowChallenges: !/不需要质疑|不要质疑|快速完成|no challenge/.test(text),
+    requirePlanApproval: allowWrite,
+    writePolicy: !allowWrite ? "read_only" : "plan_approval",
+    networkPolicy: allowNetwork ? "lead_only" : "disabled",
+    worktreePolicy: "none",
+  };
+}
+
+function teamLaunchConfigSummary(settings: AgentTeamSettings): string[] {
+  const scale =
+    settings.memberScale === "small"
+      ? "快速小队 · 3 人"
+      : settings.memberScale === "deep"
+        ? "深度团队 · 8 人左右"
+        : "标准团队 · 5 人";
+  return [
+    scale,
+    settings.allowWrite ? "需要时会先确认再改文件" : "只看不改",
+    settings.allowNetwork ? "需要时可查外部资料" : "只看当前上下文",
+    settings.allowChallenges ? "会互相校验" : "快速收敛",
+    "完成后直接给你结论",
+  ];
 }
 
 function teamOperationErrorMessage(
@@ -146,7 +197,7 @@ function teamOperationErrorMessage(
     return "团队暂时没有可自动推进的事项。可以补充目标，或等当前成员结果返回后再推进。";
   }
   if (normalized.includes("waiting for dependencies")) {
-    return "团队在等待前置证据或成员结果。可以点击“让团队自动推进”，负责人会优先处理可继续的部分。";
+    return "团队在等待前置证据或成员结果。可以点击“继续推进”，负责人会优先处理可继续的部分。";
   }
   if (normalized.includes("no dispatch plan") || normalized.includes("no runnable")) {
     return "团队暂时没有可继续分派的事项。可以补充目标，或等当前成员结果返回后再推进。";
@@ -162,6 +213,9 @@ function teamOperationErrorMessage(
   }
   if (normalized.includes("lead final synthesis")) {
     return "负责人还没有给出最终判断，暂时不能结束。";
+  }
+  if (normalized.includes("worktree")) {
+    return "还有独立改动区没有处理。请先在 Team 面板里合并、保留或丢弃后再生成总结。";
   }
   return raw || fallback;
 }
@@ -1122,6 +1176,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   } | null>(null);
   const [teamLaunchSettings, setTeamLaunchSettings] =
     useState<AgentTeamSettings>(() => createDefaultTeamLaunchSettings());
+  const [teamLaunchAdvancedOpen, setTeamLaunchAdvancedOpen] = useState(false);
   // sseStatus 已挪到 RunnerState(每个会话独立的 SSE 状态)。
   // forksCollapsed / toggleForks 已挪到 useForkable hook（C1）
   /** 当前打开 ⋯ 菜单的 session id；renaming 时存 inline edit 状态 */
@@ -2580,7 +2635,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         setError("请输入 Team 目标描述");
         return;
       }
-      setTeamLaunchSettings(createDefaultTeamLaunchSettings());
+      setTeamLaunchSettings(inferTeamLaunchSettings(text));
+      setTeamLaunchAdvancedOpen(false);
       setPendingTeamLaunch({ objective: text });
       setError(null);
     },
@@ -2589,6 +2645,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
 
   const cancelTeamLaunch = useCallback(() => {
     setPendingTeamLaunch(null);
+    setTeamLaunchAdvancedOpen(false);
   }, []);
 
   const confirmTeamLaunch = useCallback(async () => {
@@ -3267,18 +3324,21 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       }
       const statusByAction = {
         pause: "paused",
-        resume: "running",
         finalize: "completed",
         stop: "aborted",
       } as const;
       const response = await fetch(`/api/agent/${ensured.aid}/teams`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: "transition",
-          teamId,
-          status: statusByAction[action],
-        }),
+        body: JSON.stringify(
+          action === "resume"
+            ? { type: "resume", teamId }
+            : {
+                type: "transition",
+                teamId,
+                status: statusByAction[action],
+              }
+        ),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data?.run) {
@@ -3329,7 +3389,10 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         | { type: "promote_member"; memberId: string }
         | { type: "configure_hook"; hookId: string; enabled?: boolean; severity?: "info" | "warning" | "blocking" }
         | { type: "retry_task"; taskId: string }
+        | { type: "summarize_available"; reason?: string }
         | { type: "replace_member"; memberId: string }
+        | { type: "merge_worktree"; memberId: string; strategy: "accept" | "discard" | "keep_branch" }
+        | { type: "resume" }
         | { type: "run_next" }
         | { type: "run_batch"; maxDispatches?: number }
         | { type: "run_until_idle"; maxDispatches?: number; maxRounds?: number }
@@ -3357,7 +3420,17 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         );
         return;
       }
-      if (data.error) {
+      const blockedReasons = Array.isArray(data.blockedReasons)
+        ? (data.blockedReasons as string[])
+        : [];
+      if (blockedReasons.length > 0) {
+        setError(
+          teamOperationErrorMessage(
+            blockedReasons.join("; "),
+            "仍有结束条件未满足。",
+          ),
+        );
+      } else if (data.error) {
         setError(teamOperationErrorMessage(data.error, "团队操作没有完成。"));
       } else {
         setError(null);
@@ -3966,12 +4039,12 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                 <Users size={18} />
               </span>
               <div className="min-w-0 flex-1">
-                <div className="text-token-ui font-semibold">启动团队协作</div>
+                <div className="text-token-ui font-semibold">准备启动团队协作</div>
                 <p
                   className="mt-1 text-token-sm leading-5"
                   style={{ color: "var(--text-muted)" }}
                 >
-                  适合目标较复杂、需要多人分工和互相校验的任务；主聊天只保留关键进展。
+                  我会让一个小团队分工处理、互相校验，最后用普通回复给你综合结论。
                 </p>
               </div>
             </div>
@@ -3994,139 +4067,194 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
                 </div>
               </div>
 
-              <div className="mt-4 grid gap-4 md:grid-cols-2">
-                <div>
-                  <div className="text-token-sm font-semibold">成员规模</div>
-                  <div className="mt-2 grid grid-cols-3 gap-2">
-                    {(["small", "standard", "deep"] as const).map((scale) => (
-                      <button
-                        key={scale}
-                        type="button"
-                        className="rounded-md border px-2 py-2 text-token-sm transition-colors"
-                        style={{
-                          borderColor:
-                            teamLaunchSettings.memberScale === scale
-                              ? "var(--accent)"
-                              : "var(--border)",
-                          background:
-                            teamLaunchSettings.memberScale === scale
-                              ? "color-mix(in srgb, var(--accent) 12%, var(--bg-panel))"
-                              : "var(--bg-panel)",
-                          color: "var(--text)",
-                        }}
-                        onClick={() =>
-                          setTeamLaunchSettings((prev) => ({
-                            ...prev,
-                            memberScale: scale,
-                          }))
-                        }
-                      >
-                        {describeTeamMemberScale(scale)}
-                      </button>
-                    ))}
+              <div
+                className="mt-4 rounded-md border p-3"
+                style={{
+                  borderColor: "var(--border)",
+                  background: "var(--bg-subtle)",
+                }}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-token-sm font-semibold">推荐配置</div>
+                    <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
+                      已根据你的任务自动选择，通常不用调整。
+                    </div>
                   </div>
+                  <button
+                    type="button"
+                    className="shrink-0 rounded border px-2.5 py-1 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
+                    style={{ borderColor: "var(--border)", color: "var(--text)" }}
+                    onClick={() => setTeamLaunchAdvancedOpen((open) => !open)}
+                  >
+                    {teamLaunchAdvancedOpen ? "收起调整" : "调整"}
+                  </button>
                 </div>
-                <div>
-                  <div className="text-token-sm font-semibold">协作策略</div>
-                  <label className="mt-2 flex items-center gap-2 text-token-sm">
-                    <input
-                      type="checkbox"
-                      checked={teamLaunchSettings.allowChallenges}
-                      onChange={(event) => {
-                        const checked = event.currentTarget.checked;
-                        setTeamLaunchSettings((prev) => ({
-                          ...prev,
-                          allowChallenges: checked,
-                        }));
-                      }}
-                    />
-                    允许成员互相质疑结论
-                  </label>
-                  <label className="mt-2 flex items-center gap-2 text-token-sm">
-                    <input
-                      type="checkbox"
-                      checked={teamLaunchSettings.requirePlanApproval}
-                      onChange={(event) => {
-                        const checked = event.currentTarget.checked;
-                        setTeamLaunchSettings((prev) => ({
-                          ...prev,
-                          requirePlanApproval: checked,
-                        }));
-                      }}
-                    />
-                    负责人先拆任务再推进
-                  </label>
-                </div>
-              </div>
-
-              <div className="mt-4">
-                <div className="text-token-sm font-semibold">权限边界</div>
-                <div className="mt-2 grid gap-2 md:grid-cols-3">
-                  {([
-                    ["allowNetwork", "允许查网页"],
-                    ["allowWrite", "允许改文件"],
-                    ["allowWorktree", "使用独立改动区"],
-                  ] as const).map(([key, label]) => (
-                    <label
-                      key={key}
-                      className="flex items-center gap-2 rounded-md border px-3 py-2 text-token-sm"
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {teamLaunchConfigSummary(teamLaunchSettings).map((item) => (
+                    <span
+                      key={item}
+                      className="rounded-full border px-2.5 py-1 text-token-xs"
                       style={{
-                        borderColor: "var(--border)",
-                        background: "var(--bg-panel)",
+                        borderColor: "var(--border-soft)",
+                        background: "var(--bg)",
+                        color: "var(--text-muted)",
                       }}
                     >
-                      <input
-                        type="checkbox"
-                        checked={teamLaunchSettings[key]}
-                        onChange={(event) => {
-                          const checked = event.currentTarget.checked;
-                          setTeamLaunchSettings((prev) => ({
-                            ...prev,
-                            [key]: checked,
-                          }));
-                        }}
-                      />
-                      {label}
-                    </label>
+                      {item}
+                    </span>
                   ))}
                 </div>
               </div>
 
-              <div className="mt-4">
-                <div className="text-token-sm font-semibold">停止条件</div>
-                <div className="mt-2 grid gap-2">
-                  {([
-                    ["requiredTasksComplete", "全部关键任务完成"],
-                    ["noOpenBlockingChallenges", "没有待确认问题"],
-                    ["leadFinalSynthesis", "负责人给出总结"],
-                  ] as const).map(([key, label]) => (
-                    <label key={key} className="flex items-center gap-2 text-token-sm">
-                      <input
-                        type="checkbox"
-                        checked={teamLaunchSettings.stopConditions[key]}
-                        onChange={(event) => {
-                          const checked = event.currentTarget.checked;
-                          setTeamLaunchSettings((prev) => ({
-                            ...prev,
-                            stopConditions: {
-                              ...prev.stopConditions,
-                              [key]: checked,
-                            },
-                          }));
-                        }}
-                      />
-                      {label}
-                    </label>
-                  ))}
+              {teamLaunchAdvancedOpen ? (
+                <div
+                  className="mt-4 space-y-4 rounded-md border p-3"
+                  style={{
+                    borderColor: "var(--border)",
+                    background: "var(--bg-panel)",
+                  }}
+                >
+                  <div>
+                    <div className="text-token-sm font-semibold">团队规模</div>
+                    <div className="mt-2 grid grid-cols-3 gap-2">
+                      {(["small", "standard", "deep"] as const).map((scale) => (
+                        <button
+                          key={scale}
+                          type="button"
+                          className="rounded-md border px-2 py-2 text-token-sm transition-colors"
+                          style={{
+                            borderColor:
+                              teamLaunchSettings.memberScale === scale
+                                ? "var(--accent)"
+                                : "var(--border)",
+                            background:
+                              teamLaunchSettings.memberScale === scale
+                                ? "color-mix(in srgb, var(--accent) 12%, var(--bg-panel))"
+                                : "var(--bg-panel)",
+                            color: "var(--text)",
+                          }}
+                          onClick={() =>
+                            setTeamLaunchSettings((prev) => ({
+                              ...prev,
+                              memberScale: scale,
+                            }))
+                          }
+                        >
+                          {describeTeamMemberScale(scale)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-token-sm font-semibold">处理方式</div>
+                    <div className="mt-2 grid gap-2 md:grid-cols-3">
+                      {([
+                        ["readonly", "只看不改"],
+                        ["write", "可以帮我改"],
+                        ["network", "需要查资料"],
+                      ] as const).map(([mode, label]) => {
+                        const active =
+                          mode === "readonly"
+                            ? !teamLaunchSettings.allowWrite && !teamLaunchSettings.allowNetwork
+                            : mode === "write"
+                              ? teamLaunchSettings.allowWrite
+                              : teamLaunchSettings.allowNetwork;
+                        return (
+                          <button
+                            key={mode}
+                            type="button"
+                            className="rounded-md border px-3 py-2 text-token-sm transition-colors"
+                            style={{
+                              borderColor: active ? "var(--accent)" : "var(--border)",
+                              background: active
+                                ? "color-mix(in srgb, var(--accent) 12%, var(--bg-panel))"
+                                : "var(--bg-panel)",
+                              color: "var(--text)",
+                            }}
+                            onClick={() =>
+                              setTeamLaunchSettings((prev) => {
+                                if (mode === "readonly") {
+                                  return {
+                                    ...prev,
+                                    allowWrite: false,
+                                    allowNetwork: false,
+                                    writePolicy: "read_only",
+                                    networkPolicy: "disabled",
+                                  };
+                                }
+                                if (mode === "write") {
+                                  return {
+                                    ...prev,
+                                    allowWrite: !prev.allowWrite,
+                                    requirePlanApproval: !prev.allowWrite ? true : prev.requirePlanApproval,
+                                    writePolicy: !prev.allowWrite ? "plan_approval" : "read_only",
+                                  };
+                                }
+                                return {
+                                  ...prev,
+                                  allowNetwork: !prev.allowNetwork,
+                                  networkPolicy: !prev.allowNetwork ? "lead_only" : "disabled",
+                                };
+                              })
+                            }
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-token-sm font-semibold">协作方式</div>
+                    <div className="mt-2 flex flex-wrap gap-3 text-token-sm">
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={teamLaunchSettings.allowChallenges}
+                          onChange={(event) => {
+                            const checked = event.currentTarget.checked;
+                            setTeamLaunchSettings((prev) => ({
+                              ...prev,
+                              allowChallenges: checked,
+                            }));
+                          }}
+                        />
+                        互相校验结论
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={teamLaunchSettings.requirePlanApproval}
+                          onChange={(event) => {
+                            const checked = event.currentTarget.checked;
+                            setTeamLaunchSettings((prev) => ({
+                              ...prev,
+                              requirePlanApproval: checked,
+                              writePolicy:
+                                prev.allowWrite && checked
+                                  ? "plan_approval"
+                                  : prev.allowWrite
+                                    ? "write_allowed"
+                                    : "read_only",
+                            }));
+                          }}
+                        />
+                        改文件前先给计划
+                      </label>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              ) : null}
             </div>
             <div
               className="flex flex-col gap-2 border-t px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
               style={{ borderColor: "var(--border)" }}
             >
               <div className="text-token-xs" style={{ color: "var(--text-muted)" }}>
-                普通对话不会自动切换到团队协作，只有你确认后才会启动。
+                只有你确认后才会启动；过程中只有真正需要你判断时才会打断。
               </div>
               <div className="flex justify-end gap-2">
                 <Button variant="ghost" onClick={cancelTeamLaunch}>

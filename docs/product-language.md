@@ -235,6 +235,58 @@ When a long-running task resumes, show:
 
 Do not imply the task is complete until the agent emits completion.
 
+### Agent Team
+
+Use `团队协作` as the user-facing Chinese name for Agent Team. Keep `Agent Team`
+only in developer-facing docs, technical labels, or exact product comparisons.
+
+Agent Team is a mature-candidate workflow, not a beta-only experiment. The UI
+may describe it as:
+
+- `共享任务板`
+- `成员自主推进`
+- `挑战与决策追踪`
+- `独立改动区`
+- `恢复团队状态`
+
+Avoid saying:
+
+- `实验功能`
+- `Beta`
+- `自动魔法完成`
+- `完全复刻 Claude Code Agent Teams`
+
+Preferred state labels:
+
+| Raw / Internal | Preferred |
+| --- | --- |
+| `Agent Team` | `团队协作` |
+| `teammate` | `成员` |
+| `coordination tools` | `团队协作工具` |
+| `coordinationAudit` | `协作记录` |
+| `worktree` | `独立改动区` |
+| `merge worktree` | `合并独立改动区` |
+| `keep_branch` | `保留，稍后手动处理` |
+| `discard` | `丢弃独立改动区` |
+| `hydrate` | `恢复团队状态` |
+| `missing teammate` | `成员会话丢失` |
+
+Team blocked messages should name the remaining action:
+
+- `还有独立改动区没有处理。请先合并、保留或丢弃后再生成总结。`
+- `还有未解决的质疑。请先处理质疑后再生成总结。`
+- `成员会话丢失，需要替换成员或恢复会话后继续。`
+- `写入计划还没有批准。请先确认计划。`
+
+Team completion should be evidence-based:
+
+- Use `已完成` only when required tasks are complete, open blocking challenges
+  are resolved, and pending worktrees are closed.
+- Use `可用现有结果总结` when the user chooses to summarize despite blocked
+  optional work. Include the skipped/blocked reason in secondary text.
+- Do not imply that the lead completed work that actually belongs to a missing
+  teammate session.
+
 ## Settings Language
 
 Settings section names are fixed:

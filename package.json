@@ -54,7 +54,9 @@
     "typecheck": "tsc --noEmit --pretty false",
     "design-tokens:check": "node scripts/check-design-tokens.mjs",
     "test": "vitest run",
+    "test:e2e:team": "DIGA_AGENT_TEAM_FIXTURE=1 playwright test e2e/10-agent-team.spec.ts e2e/10b-agent-team-worktree.spec.ts",
     "test:watch": "vitest",
+    "agent-team:validation-summary": "node scripts/agent-team-validation-summary.mjs",
     "public-surface:check": "node scripts/check-public-surface.mjs",
     "internal-runtime:check": "node scripts/check-internal-runtime.mjs",
     "workflow:sandbox:check": "node scripts/check-workflow-sandbox.mjs",
@@ -65,7 +67,7 @@
     "electron:build": "npm run clean && npm run build:electron && node scripts/build-electron.mjs --mac --arm64",
     "release:smoke": "node scripts/release-smoke.mjs",
     "release:smoke:ci": "node scripts/release-smoke.mjs --dry-run",
-    "ci:quality": "npm run lint && npm run typecheck && npm test && npm run route-auth:check && npm run workflow:sandbox:check && npm run public-surface:check",
+    "ci:quality": "npm run lint && npm run typecheck && npm test && npm run route-auth:check && npm run workflow:sandbox:check && npm run public-surface:check && npm run test:e2e:team",
     "ci:quality:local": "npm run ci:quality && npm run internal-runtime:check",
     "ci:release": "npm run ci:quality && npm run electron:build && npm run release:smoke:ci"
   },

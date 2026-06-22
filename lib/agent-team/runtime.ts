@@ -97,6 +97,14 @@ function acceptedDecisions(run: AgentTeamRun) {
   return run.board.decisions.filter((decision) => (decision.status ?? "accepted") === "accepted");
 }
 
+function unmergedWorktreeMembers(run: AgentTeamRun) {
+  return run.members.filter(
+    (member) =>
+      member.worktree?.status === "active" ||
+      member.worktree?.status === "merge_pending"
+  );
+}
+
 function makeEvent(
   run: AgentTeamRun,
   type: AgentTeamEvent["type"],
@@ -537,6 +545,7 @@ export function evaluateAgentTeamFinalize(run: AgentTeamRun): AgentTeamFinalizeC
     (task) => task.required && task.status !== "completed"
   );
   const openBlockingChallenges = run.board.challenges.filter(isOpenChallenge);
+  const activeWorktrees = unmergedWorktreeMembers(run);
   const decisions = acceptedDecisions(run);
   const hasTraceableDecision = decisions.some(
     (decision) =>
@@ -547,7 +556,24 @@ export function evaluateAgentTeamFinalize(run: AgentTeamRun): AgentTeamFinalizeC
   );
   const leadReady = run.leadState === "finalized" || hasTraceableDecision;
 
-  const gates: AgentTeamQualityGate[] = run.board.qualityGates.map((gate) => {
+  const baseGates =
+    run.settings.worktreePolicy && run.settings.worktreePolicy !== "none"
+      ? [
+          ...run.board.qualityGates,
+          ...(run.board.qualityGates.some((gate) => gate.id === "gate-worktrees-merged")
+            ? []
+            : [
+                {
+                  id: "gate-worktrees-merged",
+                  title: "Worktrees merged or discarded",
+                  status: "pending" as const,
+                  severity: "blocking" as const,
+                  message: "所有 active worktree 处理完成前不能 finalize。",
+                },
+              ]),
+        ]
+      : run.board.qualityGates;
+  const gates: AgentTeamQualityGate[] = baseGates.map((gate) => {
     if (gate.id === "gate-required-tasks") {
       return {
         ...gate,
@@ -580,6 +606,17 @@ export function evaluateAgentTeamFinalize(run: AgentTeamRun): AgentTeamFinalizeC
         message: leadReady
           ? "Lead 已形成带 evidence / finding 追溯的最终综合判断。"
           : "Lead 尚未形成可追溯最终综合判断。",
+      };
+    }
+    if (gate.id === "gate-worktrees-merged") {
+      return {
+        ...gate,
+        status: activeWorktrees.length === 0 ? "passed" : "failed",
+        checkedAt: now,
+        message:
+          activeWorktrees.length === 0
+            ? "所有 worktree 已合并、丢弃或关闭。"
+            : `仍有 ${activeWorktrees.length} 个 worktree 未合并或未丢弃。`,
       };
     }
     return gate;
@@ -726,6 +763,192 @@ export function transitionAgentTeamRun(
           : run.members,
     }),
     blockedReasons: [],
+  };
+}
+
+export function synthesizeAgentTeamFromAvailableWork(
+  run: AgentTeamRun,
+  opts: { actorAgentId?: string; reason?: string } = {}
+): { run: AgentTeamRun; blockedReasons: string[]; forcedTaskIds: string[] } {
+  const now = Date.now();
+  const actorAgentId = opts.actorAgentId || run.leadAgentId;
+  const forcedTasks = run.board.tasks.filter(
+    (task) => task.required && task.status !== "completed"
+  );
+  const openChallenges = run.board.challenges.filter(isOpenChallenge);
+  const reusableFindings = run.board.findings.filter(
+    (finding) => finding.status !== "rejected"
+  );
+  const fallbackFindingId = `${run.id}:finding:available:${now}`;
+  const acceptedFindingIds =
+    reusableFindings.length > 0
+      ? reusableFindings.map((finding) => finding.id)
+      : [fallbackFindingId];
+  const sourceResultIds = (run.board.results ?? []).map((result) => result.id);
+  const evidenceRefs =
+    sourceResultIds.length > 0
+      ? []
+      : run.board.tasks
+          .filter((task) => task.status === "completed" || forcedTasks.some((item) => item.id === task.id))
+          .map((task) => `task:${task.id}`);
+  const fallbackFinding: AgentTeamFinding | null =
+    reusableFindings.length === 0
+      ? {
+          id: fallbackFindingId,
+          taskId: forcedTasks[0]?.id,
+          authorAgentId: actorAgentId,
+          claim: "基于当前团队过程，已有信息足以给出阶段性综合；未完成部分需要在结论中说明风险。",
+          evidenceRefs,
+          confidence: "medium",
+          status: "accepted",
+          challengeIds: [],
+          acceptedByAgentId: actorAgentId,
+          acceptedAt: now,
+          provenance: evidenceRefs.map((ref) => ({
+            kind: ref.startsWith("task:") ? "task" as const : "artifact" as const,
+            ref,
+          })),
+        }
+      : null;
+  const forcedTaskIds = forcedTasks.map((task) => task.id);
+  const forcedTaskSet = new Set(forcedTaskIds);
+  const rationale = [
+    opts.reason?.trim() || "用户选择使用当前已有结果收束，避免团队卡在失败成员或未完成整理任务上。",
+    forcedTasks.length > 0
+      ? `未完成关键任务已由负责人接管：${forcedTasks.map((task) => task.title).join("、")}。`
+      : "关键任务已完成。",
+    openChallenges.length > 0
+      ? `开放分歧已作为风险纳入最终判断：${openChallenges.map((challenge) => challenge.reason).join("；")}。`
+      : "没有开放分歧。",
+  ].join("\n");
+  const decisionId = `${run.id}:decision:available:${now}`;
+  const nextFindings = [
+    ...run.board.findings.map((finding) =>
+      reusableFindings.some((item) => item.id === finding.id)
+        ? {
+            ...finding,
+            status: "accepted" as const,
+            acceptedByAgentId: finding.acceptedByAgentId ?? actorAgentId,
+            acceptedAt: finding.acceptedAt ?? now,
+          }
+        : finding
+    ),
+    ...(fallbackFinding ? [fallbackFinding] : []),
+  ];
+  const nextChallenges = run.board.challenges.map((challenge) =>
+    isOpenChallenge(challenge)
+      ? {
+          ...challenge,
+          status: "dismissed" as const,
+          resolution: "使用已有结果收束；该分歧作为最终结论的风险说明保留。",
+          resolvedAt: now,
+          resolvedByAgentId: actorAgentId,
+        }
+      : challenge
+  );
+  const nextTasks = run.board.tasks.map((task) =>
+    forcedTaskSet.has(task.id)
+      ? {
+          ...task,
+          status: "completed" as const,
+          ownerAgentId: task.ownerAgentId ?? actorAgentId,
+          completedAt: now,
+          findingIds: Array.from(new Set([...task.findingIds, ...acceptedFindingIds])),
+          completionSource: "lead_override" as const,
+          blocker: undefined,
+        }
+      : task
+  );
+  const releasedLocks = (run.board.fileLocks ?? []).map((lock) =>
+    forcedTaskSet.has(lock.taskId) && lock.status === "active"
+      ? { ...lock, status: "released" as const, releasedAt: now }
+      : lock
+  );
+  const nextMembers = run.members.map((member) =>
+    member.currentTaskId && forcedTaskSet.has(member.currentTaskId)
+      ? {
+          ...member,
+          status: "idle" as const,
+          currentTaskId: undefined,
+          latestOutput: "负责人已使用当前已有结果接管收束。",
+          lastActiveAt: now,
+        }
+      : member
+  );
+  const decision = {
+    id: decisionId,
+    title: "使用已有结果生成最终综合",
+    rationale,
+    acceptedFindingIds,
+    rejectedFindingIds: [],
+    challengeIds: openChallenges.map((challenge) => challenge.id),
+    evidenceRefs,
+    sourceResultIds,
+    confidence: "medium" as const,
+    status: "accepted" as const,
+    madeByAgentId: actorAgentId,
+    createdAt: now,
+  };
+  const events: AgentTeamEvent[] = [
+    ...run.board.events,
+    ...forcedTasks.map((task) => ({
+      ...eventWithActor(run, "task_completed", actorAgentId, `${task.title} completed by lead override.`, {
+        reason: opts.reason,
+      }),
+      taskId: task.id,
+    })),
+    ...reusableFindings.map((finding) => ({
+      ...eventWithActor(run, "finding_accepted", actorAgentId, `Accepted available finding: ${finding.claim}`),
+      findingId: finding.id,
+    })),
+    ...(fallbackFinding
+      ? [
+          {
+            ...eventWithActor(run, "finding_accepted", actorAgentId, fallbackFinding.claim),
+            findingId: fallbackFinding.id,
+            taskId: fallbackFinding.taskId,
+          },
+        ]
+      : []),
+    ...openChallenges.map((challenge) => ({
+      ...eventWithActor(run, "challenge_dismissed", actorAgentId, "Dismissed while summarizing available results.", {
+        challengeId: challenge.id,
+      }),
+      challengeId: challenge.id,
+      findingId: challenge.targetFindingId,
+    })),
+    {
+      ...eventWithActor(run, "decision_recorded", actorAgentId, decision.title, {
+        decisionId,
+        forcedTaskIds,
+        acceptedFindingIds,
+      }),
+    },
+  ];
+  const prepared = patchAgentTeamRun(run, {
+    leadState: "finalized",
+    board: {
+      ...run.board,
+      tasks: nextTasks,
+      findings: nextFindings,
+      challenges: nextChallenges,
+      decisions: [...run.board.decisions, decision],
+      fileLocks: releasedLocks,
+      capabilityAudit: updateCapability(run, "shutdown-cleanup", {
+        status: "partial",
+        evidence: "summarize_available can bypass stuck teammate with lead override",
+        gap: "已支持用户触发降级收束；后续可在连续失败时自动建议该动作。",
+        nextStep: "把连续失败阈值接入自动恢复建议。",
+      }),
+      events,
+    },
+    members: nextMembers,
+  });
+  const finalized = transitionAgentTeamRun(prepared, "completed");
+  return {
+    run: finalized.run,
+    blockedReasons: finalized.blockedReasons,
+    forcedTaskIds,
   };
 }
 

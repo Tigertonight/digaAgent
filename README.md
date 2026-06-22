@@ -73,6 +73,7 @@ for the full architecture roadmap.
 | **Session-level budget** (cost / turns / duration limits with auto-abort) | ✅ |
 | **Tool approval bubbles** (inline allow / deny / don't-ask with timeout) | ✅ |
 | **Dynamic workflows** (script harness, templates, trace inspector, resume) | ✅ |
+| **Agent Team** (shared task board, teammate coordination, worktree merge UI) | ✅ |
 
 ## Configuration
 
@@ -94,6 +95,7 @@ Diga Agent reads from `~/.pi/` (shared with the `pi` CLI) and `~/.diga-agent/`
 | `~/.diga-agent/workflows/templates/<templateId>.json` | Reusable dynamic workflow templates |
 | `~/.diga-agent/workflows/network-policy.json` | Workflow network allow/deny policy |
 | `~/.diga-agent/workflows/network-audit.json` | Workflow network request audit trail |
+| `~/.diga-agent/agent-teams/runs/<teamId>.json` | Agent Team board, members, findings, decisions, and resume state |
 
 The `~/.pi/` files are interchangeable with the upstream `pi` CLI and `pi-web`.
 
@@ -124,6 +126,27 @@ or aborted runs.
 See [docs/guides/dynamic-workflows.md](./docs/guides/dynamic-workflows.md) and
 the example templates in
 [docs/examples/workflow-templates](./docs/examples/workflow-templates).
+
+### Agent Team
+
+Use `/team <objective>` when work should be split across a shared team board
+instead of delegated as a one-off subagent batch. Agent Team is now a
+mature-candidate workflow: teammates can claim tasks, submit structured results,
+raise challenges, request plan approval, and send team messages through
+coordination tools.
+
+For write-capable work, Team can isolate members in per-member git worktrees.
+The Workspace shows each independent change area and blocks final synthesis
+until the user merges, keeps, or discards every pending worktree. Team state is
+persisted under `~/.diga-agent/agent-teams/`; after a restart, runs resume from
+the board state and missing teammate sessions are shown explicitly instead of
+silently falling back to the lead session.
+
+See
+[docs/audit/agent-team-maturity-audit-2026-06-21.md](./docs/audit/agent-team-maturity-audit-2026-06-21.md)
+for the current maturity audit and
+[docs/plans/2026-06-22-agent-team-delivery-plan.md](./docs/plans/2026-06-22-agent-team-delivery-plan.md)
+for the delivery plan.
 
 ### Environment variables
 
@@ -166,6 +189,17 @@ This is what the maintainers run before publishing.
 Run the public-surface check before sharing the project externally or publishing
 a build. It fails if source/docs/build metadata contain internal company names,
 domains, package scopes, or client identifiers.
+
+```bash
+npm run ci:quality
+```
+
+`ci:quality` runs lint, typecheck, unit/integration tests, route auth checks,
+workflow sandbox checks, public-surface checks, and the Agent Team Playwright
+E2E suite (`e2e/10-agent-team.spec.ts` and
+`e2e/10b-agent-team-worktree.spec.ts`).
+
+For a narrower public-surface-only check:
 
 ```bash
 npm run public-surface:check

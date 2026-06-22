@@ -39,23 +39,19 @@ describe("MessageView CoT/toolchain UX safeguards", () => {
     expect(text).toContain("1px solid var(--border-soft)");
   });
 
-  it("renders Agent Team runs as a dedicated card with workspace actions", () => {
+  it("renders Agent Team runs as a lightweight process strip with workspace actions", () => {
     const text = source();
 
     expect(text).toContain("AgentTeamRunCard");
     expect(text).toContain("data-testid=\"agent-team-run-card\"");
-    expect(text).toContain("打开右侧面板");
+    expect(text).toContain("查看过程");
     expect(text).toContain("团队协作");
     expect(text).toContain("进度");
-    expect(text).toContain("自动处理");
-    expect(text).toContain("需要你");
-    expect(text).toContain("关键任务进度");
-    expect(text).toContain("agent-team-inline-progress");
-    expect(text).toContain("当前进展");
-    expect(text).toContain("你要做什么");
-    expect(text).toContain("agentTeamTaskCardStatus");
+    expect(text).toContain("目前无需你操作");
+    expect(text).not.toContain("agent-team-inline-progress");
+    expect(text).not.toContain("agentTeamTaskCardStatus");
+    expect(text).not.toContain("data-testid=\"agent-team-final-summary\"");
     expect(text).toContain("agentTeamCardSummary");
-    expect(text).toContain("打开右侧面板");
     expect(text).toContain("生成总结");
     expect(text).toContain("agentTeamLeadStateLabel");
     expect(text).toContain("openChallenges");

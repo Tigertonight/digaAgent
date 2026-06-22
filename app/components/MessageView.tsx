@@ -2410,37 +2410,36 @@ function AgentTeamRunCard({
     run.status === "aborted";
   const leadLabel = agentTeamLeadStateLabel(run.leadState);
   const statusLabel = agentTeamStatusLabel(run.status);
-  const finalDecision =
-    run.status === "completed"
-      ? run.board.decisions
-          .slice()
-          .reverse()
-          .find((decision) => decision.title.includes("最终") || decision.acceptedFindingIds.length > 0)
-        ?? run.board.decisions.at(-1)
-      : undefined;
-  const finalRationale = finalDecision?.rationale?.trim();
-
   return (
     <div
-      className="space-y-3 rounded-token-md border p-3"
+      className="space-y-2 rounded-token-md border px-3 py-2.5"
       style={{
         borderColor: "var(--border-soft)",
-        background: "var(--bg-panel)",
+        background: running ? "var(--bg-subtle)" : "var(--bg)",
         color: "var(--text)",
       }}
       data-testid="agent-team-run-card"
     >
-      <div className="flex min-w-0 items-start gap-2">
+      <div className="flex min-w-0 items-start gap-2.5">
         <span
-          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-token-sm"
-          style={{ background: "var(--bg-selected)", color: "var(--color-info)" }}
+          className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-token-sm"
+          style={{
+            background: "var(--bg-selected)",
+            color:
+              run.status === "completed"
+                ? "var(--color-success)"
+                : openChallenges > 0 || blockedTasks.length > 0
+                  ? "var(--color-warning)"
+                  : "var(--color-info)",
+          }}
         >
-          <Network size={17} />
+          {running ? <Loader2 size={15} className="animate-spin" /> : <Network size={15} />}
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <span className="text-token-sm font-semibold">团队协作</span>
-            {running ? <Loader2 size={13} className="animate-spin" /> : null}
+            <span className="text-token-sm font-semibold">
+              {terminal ? "团队协作已处理" : "团队协作处理中"}
+            </span>
             <span
               className="rounded border px-1.5 py-0.5 text-token-xs"
               style={{
@@ -2461,125 +2460,45 @@ function AgentTeamRunCard({
               {leadLabel}
             </span>
           </div>
-          <div className="mt-1 truncate text-token-sm" title={run.objective}>
+          <div className="mt-1 line-clamp-2 text-token-sm" title={run.objective}>
             {run.objective}
           </div>
         </div>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-3">
-        <AgentTeamMetric icon={<Circle size={13} />} label="进度" value={completedRequired} suffix={`/${requiredTasks.length}`} />
-        <AgentTeamMetric icon={<Network size={13} />} label="自动处理" value={openTasks} tone={blockedTasks.length > 0 ? "warn" : "muted"} />
-        <AgentTeamMetric icon={<ShieldCheck size={13} />} label="需要你" value={openChallenges} tone={openChallenges > 0 ? "warn" : "muted"} />
-      </div>
-
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between text-token-xs">
-          <span style={{ color: "var(--text-muted)" }}>关键任务进度</span>
-          <span className="font-medium tabular-nums" style={{ color: "var(--text)" }}>
-            {progressPercent}%
-          </span>
-        </div>
-        <div className="h-1.5 overflow-hidden rounded-full" style={{ background: "var(--bg-subtle)" }}>
-          <div
-            className="h-full rounded-full"
-            style={{
-              width: `${progressPercent}%`,
-              background:
-                openChallenges > 0 || blockedTasks.length > 0
-                  ? "var(--color-warning)"
-                  : "var(--accent)",
-            }}
-          />
-        </div>
-      </div>
-
       <div
-        className="w-full rounded border px-2.5 py-2 text-left text-token-xs"
+        className="rounded border px-2.5 py-2 text-token-xs"
         style={{
-          borderColor: cardSummary.tone === "warn" ? "var(--color-warning)" : "var(--border-soft)",
-          background: "var(--bg-subtle)",
+          borderColor:
+            cardSummary.tone === "warn"
+              ? "var(--color-warning)"
+              : "var(--border-soft)",
+          background: "var(--bg-panel)",
           color: "var(--text-muted)",
         }}
       >
-        <span className="font-medium" style={{ color: cardSummary.tone === "warn" ? "var(--color-warning)" : "var(--text)" }}>
+        <span
+          className="font-medium"
+          style={{
+            color:
+              cardSummary.tone === "warn"
+                ? "var(--color-warning)"
+                : "var(--text)",
+          }}
+        >
           {cardSummary.title}
         </span>
-        <span className="ml-1 inline">
-          {cardSummary.body}
-        </span>
-        <span className="mt-1 block" style={{ color: "var(--fg-faint)" }}>
-          {cardSummary.nextStep}
-        </span>
-      </div>
-
-      {finalRationale ? (
-        <div
-          className="space-y-1 rounded border px-2.5 py-2 text-token-sm"
-          style={{
-            borderColor: "var(--border-soft)",
-            background: "var(--bg)",
-            color: "var(--text)",
-          }}
-          data-testid="agent-team-final-summary"
-        >
-          <div className="text-token-xs font-semibold" style={{ color: "var(--text-muted)" }}>
-            结论
-          </div>
-          <div className="whitespace-pre-wrap leading-relaxed">
-            {humanizeAgentTeamCardText(finalRationale)}
-          </div>
-        </div>
-      ) : null}
-
-      <div
-        className="space-y-2 rounded border px-2.5 py-2 text-token-xs"
-        style={{ borderColor: "var(--border-soft)", background: "var(--bg-subtle)" }}
-        data-testid="agent-team-inline-progress"
-      >
-        <div className="flex items-start gap-2">
-          <span className="mt-0.5 font-medium" style={{ color: "var(--text)" }}>
-            当前进展
-          </span>
-          <span className="min-w-0 flex-1" style={{ color: "var(--text-muted)" }}>
-            已完成 {completedRequired}/{requiredTasks.length} 个关键任务；
-            {openChallenges > 0
-              ? `有 ${openChallenges} 个问题需要判断。`
-              : openTasks > 0
-                ? `还有 ${openTasks} 个事项由团队自动处理。`
-                : "可以进入最终总结。"}
-          </span>
-        </div>
-        <div className="flex items-start gap-2">
-          <span className="mt-0.5 font-medium" style={{ color: "var(--text)" }}>
-            你要做什么
-          </span>
-          <span className="min-w-0 flex-1" style={{ color: "var(--text-muted)" }}>
-            {cardSummary.nextStep}
-          </span>
-        </div>
-        <div className="space-y-1">
-          {tasks.slice(0, 4).map((task) => (
-            <div key={task.id} className="flex min-w-0 items-center gap-2">
-              <span
-                className="h-1.5 w-1.5 shrink-0 rounded-full"
-                style={{
-                  background:
-                    task.status === "completed"
-                      ? "var(--color-success)"
-                      : task.status === "blocked"
-                        ? "var(--color-warning)"
-                        : "var(--accent)",
-                }}
-              />
-              <span className="min-w-0 flex-1 truncate" style={{ color: "var(--text-muted)" }}>
-                {task.title}
-              </span>
-              <span className="shrink-0" style={{ color: "var(--fg-faint)" }}>
-                {agentTeamTaskCardStatus(task.status)}
-              </span>
-            </div>
-          ))}
+        <span className="ml-1">{cardSummary.body}</span>
+        <div className="mt-1 flex items-center gap-2" style={{ color: "var(--fg-faint)" }}>
+          <span>进度 {completedRequired}/{requiredTasks.length}</span>
+          <span>·</span>
+          <span>{openChallenges > 0 ? `${openChallenges} 件事需要你判断` : "目前无需你操作"}</span>
+          {progressPercent > 0 ? (
+            <>
+              <span>·</span>
+              <span>{progressPercent}%</span>
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -2592,7 +2511,7 @@ function AgentTeamRunCard({
           data-testid="open-agent-team-workspace"
         >
           <PanelRightOpen size={13} />
-          打开右侧面板
+          查看过程
         </button>
         {!terminal && (
           <button
@@ -2719,48 +2638,6 @@ function humanizeAgentTeamCardText(text: string | undefined): string {
     .replaceAll("Waiting for structured teammate result.", "等待成员返回结果。")
     .replaceAll("required task", "关键任务")
     .replaceAll("required tasks", "关键任务");
-}
-
-function agentTeamTaskCardStatus(status: string): string {
-  if (status === "completed") return "已完成";
-  if (status === "running" || status === "claimed") return "处理中";
-  if (status === "blocked") return "等待前置";
-  if (status === "pending") return "待安排";
-  if (status === "needs_plan") return "等负责人";
-  return status;
-}
-
-function AgentTeamMetric({
-  icon,
-  label,
-  value,
-  suffix,
-  tone = "muted",
-}: {
-  icon: ReactNode;
-  label: string;
-  value: number;
-  suffix?: string;
-  tone?: "muted" | "warn";
-}) {
-  return (
-    <div
-      className="min-w-0 rounded border px-2 py-1.5"
-      style={{
-        borderColor: "var(--border-soft)",
-        background: "var(--bg-subtle)",
-      }}
-    >
-      <div className="flex items-center gap-1 text-token-xs" style={{ color: tone === "warn" ? "var(--color-warning)" : "var(--text-muted)" }}>
-        {icon}
-        <span className="truncate">{label}</span>
-      </div>
-      <div className="mt-0.5 text-token-lg font-semibold tabular-nums">
-        {value}
-        {suffix ? <span className="text-token-xs font-normal" style={{ color: "var(--text-muted)" }}>{suffix}</span> : null}
-      </div>
-    </div>
-  );
 }
 
 function agentTeamStatusLabel(status: string): string {

@@ -10,12 +10,14 @@ import type {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Boxes,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock,
   ExternalLink,
   FileText,
   FolderOpen,
+  GitBranch,
   Globe,
   LayoutDashboard,
   MessageSquare,
@@ -141,7 +143,10 @@ export interface WorkbenchSidebarProps {
       | { type: "promote_member"; memberId: string }
       | { type: "configure_hook"; hookId: string; enabled?: boolean; severity?: "info" | "warning" | "blocking" }
       | { type: "retry_task"; taskId: string }
+      | { type: "summarize_available"; reason?: string }
       | { type: "replace_member"; memberId: string }
+      | { type: "merge_worktree"; memberId: string; strategy: "accept" | "discard" | "keep_branch" }
+      | { type: "resume" }
       | { type: "run_next" }
       | { type: "run_batch"; maxDispatches?: number }
       | { type: "run_until_idle"; maxDispatches?: number; maxRounds?: number }
@@ -899,14 +904,21 @@ function AgentTeamWorkspace({
         ?.scrollIntoView({ block: "center", behavior: "smooth" });
     }, 60);
   }, []);
+  const revealMemberTranscript = useCallback(
+    (memberId: string) => {
+      setActiveTranscriptMemberId(memberId);
+      revealTeamItem(`member-transcript:${memberId}`);
+    },
+    [revealTeamItem]
+  );
   const run =
     runs.find((item) => item.id === teamId) ?? runs[0] ?? null;
   if (!run) {
     return (
       <div className="p-2.5" data-testid="agent-team-workspace-empty">
         <EmptyDetail
-          title="暂无 Agent Team"
-          body="使用 /team 启动一个共享白板协作室后，任务、发现、挑战和决策会在这里汇总。"
+          title="暂无团队协作"
+          body="使用 /team 启动后，团队的进展、发现和分歧会在这里汇总。"
         />
       </div>
     );
@@ -933,8 +945,25 @@ function AgentTeamWorkspace({
   const workingMembers = run.members.filter((member) => member.status === "working");
   const pendingPlans = (run.board.plans ?? []).filter((plan) => plan.status === "submitted");
   const pendingGates = run.board.qualityGates.filter((gate) => gate.status !== "passed");
+  const worktreeMembers = run.members.filter((member) => member.worktree);
+  const failedGate = pendingGates.find((gate) => gate.status === "failed");
+  const canSummarizeAvailable =
+    run.status === "running" && (blockedTasks.length > 0 || Boolean(failedGate));
   const phase = deriveTeamBriefPhase(run);
   const automation = deriveTeamAutomationSummary(run);
+  const hydrateMissingMemberIds = run.hydrate?.missingMemberIds ?? [];
+  const hydrateMissingMembers = run.members.filter(
+    (member) =>
+      member.id !== run.leadAgentId &&
+      (member.hydrateState === "missing" ||
+        member.hydrateState === "replaced" ||
+        hydrateMissingMemberIds.includes(member.id))
+  );
+  const hydrateBannerVisible = hydrateMissingMembers.length > 0;
+  const recentCoordinationCalls = (run.coordinationAudit ?? []).slice(-50);
+  const coordinationCallsLastFiveMinutes = recentCoordinationCalls.filter(
+    (call) => Date.now() - call.at <= 5 * 60_000
+  ).length;
   const attentionItems = buildTeamAttentionItems({
     openChallenges,
     blockedTasks,
@@ -953,6 +982,7 @@ function AgentTeamWorkspace({
       body: `${teamTaskStatusText(task.status)} · ${task.required ? "关键任务" : "可选任务"}`,
     })),
   ].slice(0, 4);
+  const recentEvents = [...run.board.events].slice(-5).reverse();
 
   return (
     <div className="space-y-3 p-2.5" data-testid="agent-team-workspace">
@@ -973,6 +1003,40 @@ function AgentTeamWorkspace({
             </div>
           </div>
         </div>
+        {hydrateBannerVisible ? (
+          <div
+            className="mt-3 rounded border px-2.5 py-2"
+            style={{
+              borderColor: "var(--color-warning)",
+              background: "var(--bg-subtle)",
+            }}
+            data-testid="agent-team-hydrate-banner"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold" style={{ color: "var(--color-warning)" }}>
+                重启后还有 {hydrateMissingMembers.length} 位 teammate 需要恢复
+              </span>
+              {onCommand && run.status !== "completed" && run.status !== "aborted" ? (
+                <button
+                  type="button"
+                  data-testid="agent-team-hydrate-resume"
+                  onClick={() => onCommand(run.id, { type: "resume" })}
+                  className="ml-auto inline-flex h-6 items-center gap-1 rounded border px-2 text-token-xs hover:bg-[color:var(--bg-hover)]"
+                  style={{ borderColor: "var(--color-warning)", color: "var(--color-warning)" }}
+                >
+                  一键恢复
+                </button>
+              ) : null}
+            </div>
+            <div
+              className="mt-1 text-token-xs leading-snug"
+              style={{ color: "var(--text-muted)" }}
+            >
+              {run.hydrate?.notes ??
+                "点击「一键恢复」会按已保存的会话重建 teammate；仍丢失的会标为『需要替换』。"}
+            </div>
+          </div>
+        ) : null}
         <div
           className="mt-3 rounded border px-2.5 py-2"
           style={{
@@ -1000,7 +1064,7 @@ function AgentTeamWorkspace({
               style={{ borderColor: "var(--accent)", color: "var(--text)" }}
             >
               <Network size={13} />
-              让团队自动推进
+              继续推进
             </button>
             {openChallenges.length > 0 ? (
               <button
@@ -1010,6 +1074,22 @@ function AgentTeamWorkspace({
                 style={{ borderColor: "var(--color-warning)", color: "var(--color-warning)" }}
               >
                 处理需要确认的事
+              </button>
+            ) : null}
+            {canSummarizeAvailable ? (
+              <button
+                type="button"
+                onClick={() =>
+                  onCommand(run.id, {
+                    type: "summarize_available",
+                    reason: "用户选择使用当前已有结果生成最终综合，未完成项作为风险说明保留。",
+                  })
+                }
+                className="inline-flex h-8 items-center gap-1.5 rounded border px-2.5 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
+                style={{ borderColor: "var(--color-warning)", color: "var(--color-warning)" }}
+              >
+                <CheckCircle2 size={13} />
+                用现有结果总结
               </button>
             ) : null}
             <button
@@ -1032,7 +1112,7 @@ function AgentTeamWorkspace({
         <div className="space-y-1.5">
           {visibleActivity.length === 0 ? (
             <div className="text-token-xs" style={{ color: "var(--text-muted)" }}>
-              团队暂时没有新的动作。点击“让团队自动推进”后，负责人会自己分配成员和处理下一步。
+              团队暂时没有新的动作。点击“继续推进”后，负责人会自己分配成员和处理下一步。
             </div>
           ) : (
             visibleActivity.map((item) => (
@@ -1052,6 +1132,60 @@ function AgentTeamWorkspace({
       </TeamWorkspaceSection>
 
       <TeamWorkspaceSection
+        title="最近执行"
+        summary={recentEvents.length > 0 ? "任务分配、成员反馈和状态变化会实时出现在这里。" : "还没有执行事件。"}
+        icon={<Terminal size={13} />}
+      >
+        <div className="space-y-1.5">
+          {recentEvents.length === 0 ? (
+            <div className="rounded border px-2 py-2 text-token-xs" style={{ borderColor: "var(--border-soft)", background: "var(--bg-subtle)", color: "var(--text-muted)" }}>
+              团队开始推进后，这里会显示成员领取任务、提交结果、阻塞和收敛动作。
+            </div>
+          ) : (
+            recentEvents.map((event) => {
+              const actor = event.actorAgentId
+                ? run.members.find((member) => member.id === event.actorAgentId)
+                : null;
+              const task = event.taskId
+                ? run.board.tasks.find((item) => item.id === event.taskId)
+                : null;
+              const targetItemId = event.taskId ? `task:${event.taskId}` : undefined;
+              return (
+                <button
+                  key={event.id}
+                  type="button"
+                  onClick={() => revealTeamItem(targetItemId)}
+                  disabled={!targetItemId}
+                  className="w-full rounded border px-2 py-2 text-left hover:bg-[color:var(--bg-hover)] disabled:cursor-default disabled:hover:bg-transparent"
+                  style={{ borderColor: "var(--border-soft)", background: "var(--bg-subtle)" }}
+                  data-agent-team-item={`event:${event.id}`}
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                      {teamEventUserText(event.type)}
+                    </span>
+                    {actor ? (
+                      <span className="shrink-0 text-token-xs" style={{ color: "var(--text-muted)" }}>
+                        {teamMemberDisplayName(actor)}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--text-muted)" }}>
+                    {humanizeTeamText(event.message)}
+                  </div>
+                  {task ? (
+                    <div className="mt-1 text-token-xs" style={{ color: "var(--fg-faint)" }}>
+                      关联任务：{humanizeTeamText(task.title)}
+                    </div>
+                  ) : null}
+                </button>
+              );
+            })
+          )}
+        </div>
+      </TeamWorkspaceSection>
+
+      <TeamWorkspaceSection
         title="需要你处理"
         summary={attentionItems.length > 0 ? `${attentionItems.length} 件事需要你确认` : "目前不用你操作，团队会继续推进。"}
         icon={<ShieldCheck size={13} />}
@@ -1059,7 +1193,7 @@ function AgentTeamWorkspace({
         <div className="space-y-1.5">
           {attentionItems.length === 0 ? (
             <div className="rounded border px-2 py-2 text-token-xs" style={{ borderColor: "var(--border-soft)", background: "var(--bg-subtle)", color: "var(--text-muted)" }}>
-              目前不用你操作。模型会自动分配任务、采纳低风险发现、处理可恢复阻塞；只有需要你拍板时才会停下来问你。
+              目前不用你操作。负责人会自动分配任务、采纳低风险发现、处理可恢复阻塞；只有需要你拍板时才会停下来问你。
             </div>
           ) : (
             attentionItems.map((item) => (
@@ -1093,7 +1227,7 @@ function AgentTeamWorkspace({
           {detailsOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
           查看团队过程
           <span className="ml-auto text-token-xs font-normal" style={{ color: "var(--text-muted)" }}>
-            默认自动处理
+            细节默认收起
           </span>
         </button>
       </section>
@@ -1101,8 +1235,8 @@ function AgentTeamWorkspace({
       {detailsOpen ? (
         <>
       <TeamWorkspaceSection
-        title="自动处理队列"
-        summary={`模型会继续处理剩余事项。关键任务 ${completedRequiredCount}/${requiredTasks.length}，需要你处理 ${attentionItems.length}。`}
+        title="接下来团队会做什么"
+        summary={`负责人会继续处理剩余事项。关键任务 ${completedRequiredCount}/${requiredTasks.length}，需要你处理 ${attentionItems.length}。`}
         icon={<LayoutDashboard size={13} />}
       >
         <div className="space-y-1.5">
@@ -1151,6 +1285,19 @@ function AgentTeamWorkspace({
                     >
                       让模型重试
                     </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onCommand(run.id, {
+                          type: "summarize_available",
+                          reason: `用户选择跳过阻塞任务「${task.title}」，使用当前已有结果生成最终综合。`,
+                        })
+                      }
+                      className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+                      style={{ borderColor: "var(--color-warning)", color: "var(--color-warning)" }}
+                    >
+                      跳过并总结
+                    </button>
                   </div>
                 ) : null}
               </div>
@@ -1165,21 +1312,35 @@ function AgentTeamWorkspace({
         icon={<Users size={13} />}
       >
         <div className="grid gap-1.5">
-          {run.members.map((member) => (
+          {run.members.map((member) => {
+            const needsReplace =
+              member.hydrateState === "missing" || member.hydrateState === "replaced";
+            return (
             <div
               key={member.id}
               className="rounded border px-2 py-2"
-              style={{ borderColor: "var(--border-soft)", background: "var(--bg-subtle)" }}
+              style={{
+                borderColor: needsReplace ? "var(--color-warning)" : "var(--border-soft)",
+                background: "var(--bg-subtle)",
+              }}
+              data-agent-team-item={`member:${member.id}`}
             >
               <div className="flex min-w-0 items-center gap-2">
                 <span className="truncate text-xs font-medium">{teamMemberDisplayName(member)}</span>
                 <TeamStatusBadge label={teamMemberStatusText(member.status)} tone={member.status === "working" ? "running" : member.status === "blocked" ? "warn" : member.status === "done" ? "done" : "muted"} />
+                {needsReplace ? (
+                  <TeamStatusBadge
+                    label={member.hydrateState === "replaced" ? "会话已重置" : "会话丢失"}
+                    tone="warn"
+                  />
+                ) : null}
                 {member.sessionFile && onOpenMember ? (
                   <button
                     type="button"
-                    onClick={() => setActiveTranscriptMemberId(member.id)}
+                    onClick={() => revealMemberTranscript(member.id)}
                     className="ml-auto inline-flex h-6 items-center gap-1 rounded px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
                     style={{ color: "var(--text-muted)" }}
+                    title="展开成员记录"
                   >
                     <ExternalLink size={11} />
                     查看记录
@@ -1199,7 +1360,7 @@ function AgentTeamWorkspace({
                   {humanizeTeamText(member.latestOutput)}
                 </div>
               ) : null}
-              {onCommand && member.id !== run.leadAgentId && (member.sidebarVisible || member.status === "blocked") ? (
+              {onCommand && member.id !== run.leadAgentId && (member.sidebarVisible || member.status === "blocked" || needsReplace) ? (
                 <div className="mt-2 flex flex-wrap gap-1">
                   <button
                     type="button"
@@ -1216,9 +1377,10 @@ function AgentTeamWorkspace({
                   >
                     {member.sidebarVisible ? "已固定" : "固定到侧栏"}
                   </button>
-                  {member.status === "blocked" ? (
+                  {member.status === "blocked" || needsReplace ? (
                     <button
                       type="button"
+                      data-testid={`replace-member-${member.id}`}
                       onClick={() =>
                         onCommand(run.id, {
                           type: "replace_member",
@@ -1226,9 +1388,12 @@ function AgentTeamWorkspace({
                         })
                       }
                       className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
-                      style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+                      style={{
+                        borderColor: needsReplace ? "var(--color-warning)" : "var(--border-soft)",
+                        color: needsReplace ? "var(--color-warning)" : "var(--text-muted)",
+                      }}
                     >
-                      换人
+                      {needsReplace ? "替换成员" : "换人"}
                     </button>
                   ) : null}
                 </div>
@@ -1275,7 +1440,8 @@ function AgentTeamWorkspace({
                 </div>
               ) : null}
             </div>
-          ))}
+            );
+          })}
         </div>
         {lead && onCommand ? (
           <div className="mt-2 flex gap-1.5">
@@ -1314,13 +1480,132 @@ function AgentTeamWorkspace({
         ) : null}
       </TeamWorkspaceSection>
 
+      {worktreeMembers.length > 0 ? (
+        <TeamWorkspaceSection
+          title="独立改动区"
+          summary="写入型成员会在独立 worktree 中工作；完成前需要合并、保留或丢弃。"
+          icon={<GitBranch size={13} />}
+        >
+          <div className="space-y-1.5">
+            {worktreeMembers.map((member) => {
+              const worktree = member.worktree!;
+              const actionable =
+                worktree.status === "active" || worktree.status === "merge_pending";
+              const statusLabel =
+                worktree.status === "active"
+                  ? "待处理"
+                  : worktree.status === "merge_pending"
+                    ? "待手动处理"
+                    : worktree.status === "merged"
+                      ? "已合并"
+                      : worktree.status === "cleaned"
+                        ? "已清理"
+                        : worktree.status === "failed"
+                          ? "创建失败"
+                          : worktree.status;
+              return (
+                <div
+                  key={`${member.id}:${worktree.id}`}
+                  className="rounded border px-2 py-2"
+                  style={{
+                    borderColor: actionable ? "var(--color-warning)" : "var(--border-soft)",
+                    background: "var(--bg-subtle)",
+                  }}
+                  data-agent-team-item={`worktree:${member.id}`}
+                  data-testid="agent-team-worktree-item"
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                      {teamMemberDisplayName(member)}
+                    </span>
+                    <TeamStatusBadge
+                      label={statusLabel}
+                      tone={
+                        worktree.status === "merged" || worktree.status === "cleaned"
+                          ? "done"
+                          : worktree.status === "failed" || worktree.status === "merge_pending"
+                            ? "warn"
+                            : "running"
+                      }
+                    />
+                  </div>
+                  <div
+                    className="mt-1 truncate font-mono text-[11px]"
+                    style={{ color: "var(--fg-faint)" }}
+                    title={worktree.path}
+                  >
+                    {worktree.branchName || worktree.id} · {worktree.path}
+                  </div>
+                  {worktree.failureReason ? (
+                    <div className="mt-1 text-token-xs leading-snug" style={{ color: "var(--color-warning)" }}>
+                      {worktree.failureReason}
+                    </div>
+                  ) : null}
+                  {onCommand && actionable ? (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onCommand(run.id, {
+                            type: "merge_worktree",
+                            memberId: member.id,
+                            strategy: "accept",
+                          })
+                        }
+                        className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+                        style={{ borderColor: "var(--accent)", color: "var(--text)" }}
+                      >
+                        合并
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onCommand(run.id, {
+                            type: "merge_worktree",
+                            memberId: member.id,
+                            strategy: "keep_branch",
+                          })
+                        }
+                        className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+                        style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+                      >
+                        保留
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onCommand(run.id, {
+                            type: "merge_worktree",
+                            memberId: member.id,
+                            strategy: "discard",
+                          })
+                        }
+                        className="h-6 rounded border px-1.5 text-token-xs hover:bg-[color:var(--bg-hover)]"
+                        style={{ borderColor: "var(--color-danger)", color: "var(--color-danger)" }}
+                      >
+                        丢弃
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </TeamWorkspaceSection>
+      ) : null}
+
       {activeTranscriptMember ? (
         <TeamWorkspaceSection
           title="成员记录"
           summary="这是成员会话的摘要，完整记录需要时再打开。"
           icon={<FileText size={13} />}
         >
-            <div className="rounded border px-2 py-2" style={{ borderColor: "var(--color-info)", background: "var(--bg-panel)" }} data-testid="agent-team-member-transcript-detail">
+            <div
+              className="rounded border px-2 py-2"
+              style={{ borderColor: "var(--color-info)", background: "var(--bg-panel)" }}
+              data-agent-team-item={`member-transcript:${activeTranscriptMember.id}`}
+              data-testid="agent-team-member-transcript-detail"
+            >
               <div className="flex min-w-0 items-center gap-2">
                 <span className="truncate text-xs font-semibold">
                   {activeTranscriptMember.name} 的记录
@@ -1511,13 +1796,87 @@ function AgentTeamWorkspace({
           onClick={() => setDiagnosticsOpen((open) => !open)}
           className="flex w-full items-center gap-2 text-left text-token-xs font-medium"
           style={{ color: "var(--text-muted)" }}
+          data-testid="agent-team-diagnostics-toggle"
         >
           {diagnosticsOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
           诊断详情
-          <span className="ml-auto">给调试和回溯使用</span>
+          <span
+            className="ml-auto inline-flex items-center gap-1"
+            style={{ color: coordinationCallsLastFiveMinutes > 0 ? "var(--color-info)" : "var(--text-muted)" }}
+            title="近 5 分钟 teammate 协作工具调用次数"
+          >
+            协作 {coordinationCallsLastFiveMinutes}
+          </span>
         </button>
         {diagnosticsOpen ? (
-          <div className="mt-2 space-y-1.5">
+          <div className="mt-2 space-y-2">
+            <div
+              className="rounded border"
+              style={{ borderColor: "var(--border-soft)", background: "var(--bg-subtle)" }}
+              data-testid="agent-team-coordination-audit"
+            >
+              <div
+                className="flex items-center gap-2 px-2 py-1.5 text-token-xs font-medium"
+                style={{ color: "var(--text-muted)" }}
+              >
+                <span>Teammate 协作调用</span>
+                <span className="ml-auto" style={{ color: "var(--fg-faint)" }}>
+                  近 {recentCoordinationCalls.length} 条
+                </span>
+              </div>
+              {recentCoordinationCalls.length === 0 ? (
+                <div
+                  className="px-2 pb-2 text-token-xs leading-snug"
+                  style={{ color: "var(--fg-faint)" }}
+                >
+                  还没有 teammate 调用过协作工具。启用后会实时在这里出现 team_get_board / team_claim_task / team_submit_result 等记录。
+                </div>
+              ) : (
+                <ul className="divide-y" style={{ borderColor: "var(--border-soft)" }}>
+                  {[...recentCoordinationCalls]
+                    .reverse()
+                    .map((call) => {
+                      const member = run.members.find((item) => item.id === call.memberId);
+                      const memberLabel = member ? teamMemberDisplayName(member) : call.memberId;
+                      const toolLabel = call.toolName.replace(/^team_/, "");
+                      const reason = call.rejectionReason ?? formatCoordinationArgs(call.args);
+                      return (
+                        <li
+                          key={call.id}
+                          className="flex min-w-0 items-start gap-2 px-2 py-1.5 text-token-xs"
+                        >
+                          <span
+                            className="min-w-[64px] shrink-0"
+                            style={{ color: "var(--fg-faint)" }}
+                            title={new Date(call.at).toLocaleString()}
+                          >
+                            {formatCoordinationTime(call.at)}
+                          </span>
+                          <span className="min-w-0 truncate" style={{ color: "var(--text-muted)" }}>
+                            {memberLabel}
+                          </span>
+                          <span className="shrink-0 font-medium" style={{ color: "var(--text)" }}>
+                            {toolLabel}
+                          </span>
+                          <TeamStatusBadge
+                            label={call.outcome === "ok" ? "已接受" : "被拒绝"}
+                            tone={call.outcome === "ok" ? "done" : "warn"}
+                          />
+                          {reason ? (
+                            <span
+                              className="ml-auto min-w-0 truncate"
+                              style={{ color: "var(--fg-faint)" }}
+                              title={reason}
+                            >
+                              {reason}
+                            </span>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                </ul>
+              )}
+            </div>
             {run.board.qualityGates.map((gate) => (
               <div
                 key={gate.id}
@@ -1662,7 +2021,7 @@ function deriveTeamAutomationSummary(run: AgentTeamRun): {
   if (blockedTasks.length > 0) {
     return {
       title: "团队正在自动处理阻塞",
-      body: "有任务在等前置证据或成员结果。点击自动推进后，负责人会优先安排可继续的部分。",
+      body: "有任务在等前置证据或成员结果。可以先点“继续推进”；如果仍卡住，就用现有结果总结。",
       tone: "warn",
     };
   }
@@ -1676,7 +2035,7 @@ function deriveTeamAutomationSummary(run: AgentTeamRun): {
   if (pendingTasks.length > 0) {
     return {
       title: "团队准备继续分工",
-      body: "点击自动推进后，负责人会自己分配成员，不需要你手动认领任务。",
+      body: "点击“继续推进”后，负责人会自己分配成员，不需要你手动认领任务。",
       tone: "muted",
     };
   }
@@ -1826,6 +2185,50 @@ function teamMemberStatusText(status: string): string {
   if (status === "blocked") return "阻塞";
   if (status === "done") return "完成";
   return status;
+}
+
+function teamEventUserText(type: string): string {
+  if (type === "team_created") return "团队已创建";
+  if (type === "member_spawned") return "成员已启动";
+  if (type === "member_status_changed") return "成员状态更新";
+  if (type === "task_created") return "任务已创建";
+  if (type === "task_claimed") return "任务已分配";
+  if (type === "task_blocked") return "任务遇到阻塞";
+  if (type === "task_retried") return "任务已重试";
+  if (type === "task_unblocked") return "任务恢复推进";
+  if (type === "task_completed") return "任务已完成";
+  if (type === "result_submitted") return "成员提交结果";
+  if (type === "finding_proposed") return "提出发现";
+  if (type === "finding_accepted") return "发现已采纳";
+  if (type === "finding_rejected") return "发现未采纳";
+  if (type === "finding_challenged") return "发现被质疑";
+  if (type === "challenge_resolved") return "质疑已解决";
+  if (type === "decision_recorded") return "记录判断";
+  if (type === "message_sent") return "团队消息";
+  if (type === "quality_gate_failed") return "质量门禁未通过";
+  if (type === "team_finalized") return "团队已总结";
+  if (type === "team_aborted") return "团队已停止";
+  return type.replaceAll("_", " ");
+}
+
+function formatCoordinationTime(at: number): string {
+  const d = new Date(at);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function formatCoordinationArgs(args: Record<string, unknown> | undefined): string {
+  if (!args) return "";
+  const parts: string[] = [];
+  const taskId = typeof args.taskId === "string" ? args.taskId : undefined;
+  if (taskId) parts.push(`task=${taskId}`);
+  const findingId = typeof args.targetFindingId === "string" ? args.targetFindingId : undefined;
+  if (findingId) parts.push(`finding=${findingId}`);
+  const challengeId = typeof args.challengeId === "string" ? args.challengeId : undefined;
+  if (challengeId) parts.push(`challenge=${challengeId}`);
+  const body = typeof args.body === "string" ? args.body : undefined;
+  if (body) parts.push(body.length > 60 ? `${body.slice(0, 60)}…` : body);
+  return parts.join(" \u00b7 ");
 }
 
 function teamMemberDisplayName(member: { name: string; role?: string }): string {

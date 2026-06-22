@@ -41,6 +41,8 @@ export type AgentTeamCapabilityStatus =
   | "planned"
   | "blocked";
 
+export type AgentTeamCoordinationProfile = "none" | "basic" | "full";
+
 export type AgentTeamHookTrigger =
   | "TaskCreated"
   | "TaskCompleted"
@@ -75,6 +77,10 @@ export type AgentTeamEventType =
   | "message_sent"
   | "member_promoted"
   | "member_replaced"
+  | "worktree_created"
+  | "worktree_failed"
+  | "worktree_cleaned"
+  | "worktree_merged"
   | "file_lock_acquired"
   | "file_lock_released"
   | "quality_gate_failed"
@@ -101,6 +107,32 @@ export interface AgentTeamMember {
   promotedAt?: number;
   spawnedAt?: number;
   lastActiveAt?: number;
+  worktree?: {
+    id: string;
+    path: string;
+    branchName: string;
+    baseRef: string;
+    status: "active" | "merge_pending" | "merged" | "failed" | "cleaned";
+    createdAt: number;
+    failureReason?: string;
+  };
+  hydrateState?: "intact" | "rehydrated" | "missing" | "replaced";
+  toolCallCounts?: {
+    read: number;
+    write: number;
+    network: number;
+    coordination: number;
+  };
+}
+
+export interface AgentTeamTaskAttempt {
+  attempt: number;
+  memberId: string;
+  status: "completed" | "failed" | "timeout" | "needs_review";
+  startedAt: number;
+  endedAt?: number;
+  resultId?: string;
+  error?: string;
 }
 
 export interface AgentTeamTask {
@@ -127,6 +159,10 @@ export interface AgentTeamTask {
   priority: "low" | "normal" | "high";
   required: boolean;
   findingIds: string[];
+  attempts?: AgentTeamTaskAttempt[];
+  worktreeId?: string;
+  selfClaimedAt?: number;
+  selfClaimedToolCallId?: string;
 }
 
 export interface AgentTeamFinding {
@@ -280,11 +316,22 @@ export interface AgentTeamSettings {
   networkPolicy?: "disabled" | "lead_only" | "teammates_allowed";
   worktreePolicy?: "none" | "per_member" | "per_task";
   resultIngestionMode?: "structured" | "transcript_summary";
+  coordinationProfile?: AgentTeamCoordinationProfile;
   stopConditions: {
     requiredTasksComplete: boolean;
     noOpenBlockingChallenges: boolean;
     leadFinalSynthesis: boolean;
   };
+}
+
+export interface AgentTeamCoordinationCall {
+  id: string;
+  at: number;
+  memberId: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  outcome: "ok" | "rejected";
+  rejectionReason?: string;
 }
 
 export interface AgentTeamEvent {
@@ -331,6 +378,16 @@ export interface AgentTeamRun {
   updatedAt: number;
   endedAt?: number;
   error?: string;
+  hydrate?: {
+    lastHydratedAt: number;
+    rehydratedMemberIds: string[];
+    missingMemberIds: string[];
+    notes?: string;
+  };
+  worktreeRoot?: string;
+  coordinationAudit?: AgentTeamCoordinationCall[];
+  plannerProfile?: "deterministic" | "llm";
+  plannerInputs?: { objective: string; tags: string[] };
 }
 
 export interface AgentTeamRunStartedEvent {

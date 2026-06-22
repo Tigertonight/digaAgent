@@ -19,6 +19,7 @@ import {
   recordAgentTeamToolWrite,
   retryAgentTeamTask,
   sendAgentTeamMessage,
+  synthesizeAgentTeamFromAvailableWork,
   submitAgentTeamResult,
   transitionAgentTeamRun,
   updateAgentTeamHook,
@@ -33,6 +34,28 @@ describe("agent team runtime gates", () => {
     expect(result.run.status).toBe("running");
     expect(result.run.board.qualityGates.some((gate) => gate.status === "failed")).toBe(true);
     expect(result.run.board.events.at(-1)?.type).toBe("quality_gate_failed");
+  });
+
+  it("can summarize available work when a required synthesis task is stuck", () => {
+    const run = createInitialAgentTeamRun("stuck organizer");
+    const failed = failAgentTeamTask(
+      run,
+      "synthesis",
+      run.leadAgentId,
+      "organizer crashed before final answer"
+    ).run;
+
+    const blocked = transitionAgentTeamRun(failed, "completed");
+    const result = synthesizeAgentTeamFromAvailableWork(blocked.run, {
+      reason: "Use current evidence and keep unfinished work as risk.",
+    });
+
+    expect(blocked.blockedReasons.join(" ")).toContain("required task");
+    expect(result.blockedReasons).toEqual([]);
+    expect(result.forcedTaskIds).toContain("synthesis");
+    expect(result.run.status).toBe("completed");
+    expect(result.run.board.tasks.find((task) => task.id === "synthesis")?.completionSource).toBe("lead_override");
+    expect(result.run.board.decisions.at(-1)?.title).toBe("使用已有结果生成最终综合");
   });
 
   it("allows finalize only after required tasks and a traceable decision are present", () => {
@@ -82,6 +105,49 @@ describe("agent team runtime gates", () => {
     expect(result.blockedReasons).toEqual([]);
     expect(result.run.status).toBe("completed");
     expect(result.run.leadState).toBe("finalized");
+  });
+
+  it("blocks finalize while agent team worktrees are still active", () => {
+    const run = createInitialAgentTeamRun("finalize worktree team", {
+      allowWorktree: true,
+      worktreePolicy: "per_member",
+    });
+    const teammate = run.members.find((member) => member.id !== run.leadAgentId)!;
+    const ready = {
+      ...run,
+      leadState: "finalized" as const,
+      board: {
+        ...run.board,
+        tasks: run.board.tasks.map((task) => ({
+          ...task,
+          status: "completed" as const,
+          completedAt: Date.now(),
+        })),
+      },
+      members: run.members.map((member) =>
+        member.id === teammate.id
+          ? {
+              ...member,
+              worktree: {
+                id: "wt-active",
+                path: "/tmp/wt-active",
+                branchName: "team/wt-active",
+                baseRef: "HEAD",
+                status: "active" as const,
+                createdAt: Date.now(),
+              },
+            }
+          : member
+      ),
+    };
+
+    const result = transitionAgentTeamRun(ready, "completed");
+
+    expect(result.run.status).toBe("running");
+    expect(result.blockedReasons.join(" ")).toContain("worktree");
+    expect(
+      result.run.board.qualityGates.find((gate) => gate.id === "gate-worktrees-merged")?.status
+    ).toBe("failed");
   });
 
   it("ingests structured teammate results before completing tasks", () => {

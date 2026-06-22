@@ -53,7 +53,6 @@ async function main() {
     await textarea.fill('PROBE-' + Date.now());
     await page.waitForTimeout(200);
 
-    const sendBtn = page.locator('button[title="Send"]').first();
     // 不通过 playwright click（避免它内置的等待开销），用 evaluate 直接触发原生 click
     await page.evaluate(() => {
       window.__perfLog('before-click');

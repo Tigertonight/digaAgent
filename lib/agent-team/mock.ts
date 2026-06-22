@@ -1,4 +1,5 @@
 import type { AgentTeamRun, AgentTeamSettings } from "./types";
+import { planAgentTeamDeterministic } from "./planner";
 
 function makeId(prefix: string): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -45,6 +46,7 @@ function normalizeSettings(settings?: Partial<AgentTeamSettings>): AgentTeamSett
       settings?.worktreePolicy ??
       (settings?.allowWorktree ? "per_member" : "none"),
     resultIngestionMode: settings?.resultIngestionMode ?? "structured",
+    coordinationProfile: settings?.coordinationProfile ?? "basic",
     stopConditions: {
       ...DEFAULT_SETTINGS.stopConditions,
       ...(settings?.stopConditions ?? {}),
@@ -60,150 +62,14 @@ export function createInitialAgentTeamRun(
   const runId = makeId("team");
   const leadAgentId = `${runId}:lead`;
   const normalizedSettings = normalizeSettings(settings);
-  const baseMembers = [
-    {
-      id: leadAgentId,
-      name: "Lead",
-      role: "裁判 / 综合",
-      status: "working" as const,
-      currentTaskId: "frame",
-      latestOutput: "建立共享白板，等待成员认领任务。",
-    },
-    {
-      id: `${runId}:researcher`,
-      name: "Research",
-      role: "资料 / 证据",
-      status: "idle" as const,
-      latestOutput: "等待任务租约。",
-    },
-    {
-      id: `${runId}:critic`,
-      name: "Critic",
-      role: "挑战 / 反证",
-      status: "idle" as const,
-      latestOutput: "等待可挑战的发现。",
-    },
-    {
-      id: `${runId}:synthesizer`,
-      name: "Synthesis",
-      role: "结构 / 决策",
-      status: "idle" as const,
-      latestOutput: "等待 board 汇总。",
-    },
-  ];
-  const extraMembers =
-    normalizedSettings.memberScale === "deep"
-      ? [
-          {
-            id: `${runId}:validator`,
-            name: "Validation",
-            role: "验收 / 证据核查",
-            status: "idle" as const,
-            latestOutput: "等待验收任务。",
-          },
-          {
-            id: `${runId}:builder`,
-            name: "Builder",
-            role: "实现 / 写入规划",
-            status: "idle" as const,
-            latestOutput: "等待实现或计划任务。",
-          },
-          {
-            id: `${runId}:scout`,
-            name: "Scout",
-            role: "横向探索 / 补充资料",
-            status: "idle" as const,
-            latestOutput: "等待探索任务。",
-          },
-        ]
-      : normalizedSettings.memberScale === "standard"
-        ? [
-            {
-              id: `${runId}:validator`,
-              name: "Validation",
-              role: "验收 / 证据核查",
-              status: "idle" as const,
-              latestOutput: "等待验收任务。",
-            },
-          ]
-        : [];
-  const members =
-    normalizedSettings.memberScale === "small"
-      ? baseMembers.filter((member) => member.id !== `${runId}:synthesizer`)
-      : [...baseMembers, ...extraMembers];
-  const tasks = [
-    {
-      id: "frame",
-      title: "界定问题",
-      description: "确认目标、约束、成功标准和需要显式裁决的地方。",
-      status: "running" as const,
-      ownerAgentId: leadAgentId,
-      claimedAt: now,
-      priority: "high" as const,
-      required: true,
-      findingIds: ["f-mode"],
-      expectedOutput: "findings" as const,
-      evidenceRequired: true,
-    },
-    {
-      id: "evidence",
-      title: "收集证据",
-      description: "围绕目标收集来源、代码位置、事实依据和不确定点。",
-      status: "pending" as const,
-      priority: "high" as const,
-      required: true,
-      findingIds: [],
-      dependsOnTaskIds: ["frame"],
-      expectedOutput: "findings" as const,
-      evidenceRequired: true,
-    },
-    ...(normalizedSettings.allowChallenges
-      ? [
-          {
-            id: "challenge",
-            title: "挑战结论",
-            description: "对关键发现做反证、找冲突、标出需要继续探索的地方。",
-            status: "pending" as const,
-            priority: "normal" as const,
-            required: true,
-            findingIds: [],
-            dependsOnTaskIds: ["evidence"],
-            expectedOutput: "review" as const,
-            evidenceRequired: true,
-          },
-        ]
-      : []),
-    {
-      id: "synthesis",
-      title: "形成可追溯综合",
-      description: "基于已采纳 findings 和已解决 challenges 记录最终 decision。",
-      status: "pending" as const,
-      priority: "high" as const,
-      required: true,
-      findingIds: [],
-      dependsOnTaskIds: normalizedSettings.allowChallenges ? ["challenge"] : ["evidence"],
-      expectedOutput: "decision_input" as const,
-      evidenceRequired: true,
-    },
-    ...(normalizedSettings.allowWrite
-      ? [
-          {
-            id: "implementation-plan",
-            title: normalizedSettings.requirePlanApproval ? "提交写入计划" : "规划写入任务",
-            description: normalizedSettings.requirePlanApproval
-              ? "写入前先提交 plan，等待 Lead 批准后才能执行写工具。"
-              : "识别需要写入的文件和验收方式。",
-            status: normalizedSettings.requirePlanApproval ? "needs_plan" as const : "pending" as const,
-            priority: "normal" as const,
-            required: false,
-            findingIds: [],
-            dependsOnTaskIds: ["frame"],
-            expectedOutput: "plan" as const,
-            evidenceRequired: false,
-          },
-        ]
-      : []),
-  ];
+  const plan = planAgentTeamDeterministic({
+    objective,
+    settings: normalizedSettings,
+    runId,
+    leadAgentId,
+    now,
+  });
+  const { members, tasks } = plan;
 
   return {
     id: runId,
@@ -434,6 +300,8 @@ export function createInitialAgentTeamRun(
       ],
     },
     settings: normalizedSettings,
+    plannerProfile: plan.profile,
+    plannerInputs: { objective, tags: plan.tags },
     createdAt: now,
     updatedAt: now,
   };

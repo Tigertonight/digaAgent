@@ -3,7 +3,14 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import type { AgentTeamRun } from "./types";
+import type { AgentTeamCoordinationCall, AgentTeamRun } from "./types";
+import {
+  cleanupAgentTeamWorktrees,
+  mergeAgentTeamMemberWorktree,
+  markMissingAgentTeamWorktrees,
+  type AgentTeamWorktreeMergeStrategy,
+} from "./worktree-policy";
+import type { WorkflowWorktreeManager } from "@/lib/workflows/types";
 import {
   acceptAgentTeamFinding,
   claimAgentTeamTask,
@@ -28,12 +35,14 @@ import {
   retryAgentTeamTask,
   sendAgentTeamMessage,
   settleAgentTeamCompletedSynthesis,
+  synthesizeAgentTeamFromAvailableWork,
   submitAgentTeamPlan,
   submitAgentTeamResult,
   transitionAgentTeamRun,
   updateAgentTeamHook,
 } from "./runtime";
 import type { AgentTeamDispatchPlan } from "./runtime";
+import { hydrateAgentTeamRun, type HydrateAgentTeamOptions } from "./hydrate";
 
 const AGENT_TEAM_STORE_SCHEMA_VERSION = 1;
 
@@ -105,8 +114,28 @@ function isAgentTeamRun(value: unknown): value is AgentTeamRun {
 }
 
 function normalizeRun(run: AgentTeamRun): AgentTeamRun {
+  const defaultSettings: AgentTeamRun["settings"] = {
+    memberScale: "standard",
+    allowNetwork: false,
+    allowWrite: false,
+    allowWorktree: false,
+    allowChallenges: true,
+    requirePlanApproval: true,
+    displayMode: "workspace",
+    writePolicy: "plan_approval",
+    networkPolicy: "disabled",
+    worktreePolicy: "none",
+    resultIngestionMode: "structured",
+    coordinationProfile: "basic",
+    stopConditions: {
+      requiredTasksComplete: true,
+      noOpenBlockingChallenges: true,
+      leadFinalSynthesis: true,
+    },
+  };
   return {
     ...run,
+    coordinationAudit: run.coordinationAudit ?? [],
     board: {
       ...run.board,
       results: run.board.results ?? [],
@@ -118,22 +147,13 @@ function normalizeRun(run: AgentTeamRun): AgentTeamRun {
       capabilityAudit: run.board.capabilityAudit ?? [],
       events: run.board.events ?? [],
     },
-    settings: run.settings ?? {
-      memberScale: "standard",
-      allowNetwork: false,
-      allowWrite: false,
-      allowWorktree: false,
-      allowChallenges: true,
-      requirePlanApproval: true,
-      displayMode: "workspace",
-      writePolicy: "plan_approval",
-      networkPolicy: "disabled",
-      worktreePolicy: "none",
-      resultIngestionMode: "structured",
+    settings: {
+      ...defaultSettings,
+      ...(run.settings ?? {}),
+      coordinationProfile: run.settings?.coordinationProfile ?? "basic",
       stopConditions: {
-        requiredTasksComplete: true,
-        noOpenBlockingChallenges: true,
-        leadFinalSynthesis: true,
+        ...defaultSettings.stopConditions,
+        ...(run.settings?.stopConditions ?? {}),
       },
     },
   };
@@ -218,6 +238,14 @@ function loadPersistedRuns(): void {
               ...run,
               status: "paused" as const,
               updatedAt: Date.now(),
+              hydrate: {
+                lastHydratedAt: Date.now(),
+                rehydratedMemberIds: [],
+                missingMemberIds: run.members
+                  .filter((member) => member.id !== run.leadAgentId && !member.agentId)
+                  .map((member) => member.id),
+                notes: "Team was paused during process restart.",
+              },
               board: {
                 ...run.board,
                 events: [
@@ -293,6 +321,42 @@ export function patchStoredAgentTeamRun(
   return putAgentTeamRun(patchAgentTeamRun(run, patch));
 }
 
+export function resolveStoredAgentTeamMemberByAgentId(
+  memberAgentId: string
+): {
+  run?: AgentTeamRun;
+  teamId?: string;
+  memberId?: string;
+  error?: string;
+} {
+  loadPersistedRuns();
+  for (const run of store.runs.values()) {
+    const member = run.members.find((item) => item.agentId === memberAgentId);
+    if (!member) continue;
+    return {
+      run: cloneRun(run),
+      teamId: run.id,
+      memberId: member.id,
+    };
+  }
+  return { error: "agent is not an active teammate in any Agent Team" };
+}
+
+export function recordStoredAgentTeamCoordinationCall(
+  id: string,
+  call: AgentTeamCoordinationCall
+): { run?: AgentTeamRun; error?: string } {
+  const run = getAgentTeamRun(id);
+  if (!run) return { error: "team run not found" };
+  return {
+    run: putAgentTeamRun({
+      ...run,
+      coordinationAudit: [...(run.coordinationAudit ?? []), call].slice(-200),
+      updatedAt: Date.now(),
+    }),
+  };
+}
+
 export function transitionStoredAgentTeamRun(
   id: string,
   status: AgentTeamRun["status"]
@@ -303,6 +367,101 @@ export function transitionStoredAgentTeamRun(
   return {
     run: putAgentTeamRun(result.run),
     blockedReasons: result.blockedReasons,
+  };
+}
+
+export function synthesizeStoredAgentTeamFromAvailableWork(
+  id: string,
+  opts?: { actorAgentId?: string; reason?: string }
+): { run?: AgentTeamRun; blockedReasons: string[]; forcedTaskIds: string[]; error?: string } {
+  const run = getAgentTeamRun(id);
+  if (!run) {
+    return {
+      blockedReasons: ["team run not found"],
+      forcedTaskIds: [],
+      error: "team run not found",
+    };
+  }
+  const result = synthesizeAgentTeamFromAvailableWork(run, opts);
+  return {
+    run: putAgentTeamRun(result.run),
+    blockedReasons: result.blockedReasons,
+    forcedTaskIds: result.forcedTaskIds,
+  };
+}
+
+export async function mergeStoredAgentTeamWorktree(
+  id: string,
+  memberId: string,
+  strategy: AgentTeamWorktreeMergeStrategy,
+  opts: {
+    cwd: string;
+    manager?: WorkflowWorktreeManager;
+  }
+): Promise<{ run?: AgentTeamRun; error?: string }> {
+  const run = getAgentTeamRun(id);
+  if (!run) return { error: "team run not found" };
+  const result = await mergeAgentTeamMemberWorktree({
+    run,
+    memberId,
+    strategy,
+    cwd: opts.cwd,
+    manager: opts.manager,
+  });
+  return {
+    run: putAgentTeamRun(result.run),
+    error: result.error,
+  };
+}
+
+export async function cleanupStoredAgentTeamWorktrees(
+  id: string,
+  opts: {
+    cwd: string;
+    manager?: WorkflowWorktreeManager;
+  }
+): Promise<{ run?: AgentTeamRun; cleanedMemberIds: string[]; failedMemberIds: string[]; error?: string }> {
+  const run = getAgentTeamRun(id);
+  if (!run) {
+    return { cleanedMemberIds: [], failedMemberIds: [], error: "team run not found" };
+  }
+  const result = await cleanupAgentTeamWorktrees({
+    run,
+    cwd: opts.cwd,
+    manager: opts.manager,
+  });
+  return {
+    run: putAgentTeamRun(result.run),
+    cleanedMemberIds: result.cleanedMemberIds,
+    failedMemberIds: result.failedMemberIds,
+  };
+}
+
+export function validateStoredAgentTeamWorktreePaths(
+  id: string,
+  pathExists: (path: string) => boolean
+): { run?: AgentTeamRun; missingMemberIds: string[]; error?: string } {
+  const run = getAgentTeamRun(id);
+  if (!run) return { missingMemberIds: [], error: "team run not found" };
+  const result = markMissingAgentTeamWorktrees(run, pathExists);
+  return {
+    run: result.missingMemberIds.length > 0 ? putAgentTeamRun(result.run) : result.run,
+    missingMemberIds: result.missingMemberIds,
+  };
+}
+
+export async function hydrateStoredAgentTeamRun(
+  id: string,
+  opts?: HydrateAgentTeamOptions
+): Promise<{ run?: AgentTeamRun; rehydrated: string[]; missing: string[]; replaced: string[]; error?: string }> {
+  const run = getAgentTeamRun(id);
+  if (!run) return { rehydrated: [], missing: [], replaced: [], error: "team run not found" };
+  const result = await hydrateAgentTeamRun(run, opts);
+  return {
+    run: putAgentTeamRun(result.run),
+    rehydrated: result.rehydrated,
+    missing: result.missing,
+    replaced: result.replaced,
   };
 }
 

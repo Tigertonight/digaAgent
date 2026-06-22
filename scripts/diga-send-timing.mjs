@@ -66,7 +66,6 @@ async function main() {
       obs.observe(document.body, { childList: true, subtree: true });
     });
 
-    const fillStart = performance.now();
     await textarea.fill(probeText);
     await page.waitForTimeout(300);
 
@@ -84,7 +83,6 @@ async function main() {
     await page.evaluate(() => {
       window.__perfLog('click-fired');
     });
-    const clickT = await page.evaluate(() => performance.now());
     await sendBtn.click({ timeout: 2000 });
     await page.evaluate(() => {
       window.__perfLog('click-returned');

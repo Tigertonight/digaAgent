@@ -40,6 +40,7 @@ import { createGoalExtension } from "./goal/extension";
 import { createProgressExtension } from "./progress/extension";
 import { createAgentTeamWriteLockExtension } from "./agent-team/write-lock-extension";
 import { createAgentTeamPolicyExtension } from "./agent-team/policy-extension";
+import { createAgentTeamCoordinationExtension } from "./agent-team/coordination-tools";
 import { createDelegateSubagentsTool } from "./subagents/extension";
 import { createSubagentWriteBoundaryExtension } from "./subagents/write-boundary-extension";
 import {
@@ -2018,6 +2019,9 @@ async function createAgentImpl(opts: CreateOptions): Promise<{
               writePaths: opts.writePaths,
             }),
             createAgentTeamPolicyExtension({
+              getAgentId: () => id,
+            }),
+            createAgentTeamCoordinationExtension({
               getAgentId: () => id,
             }),
             createAgentTeamWriteLockExtension({

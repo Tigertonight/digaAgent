@@ -49,20 +49,20 @@ const OpenParams = Type.Object({
   }),
 });
 
-const ClickParams = Type.Union(
-  [
-    Type.Object({
-      selector: Type.String({
-        description: "CSS selector to click. Do not include x/y when selector is provided.",
-      }),
-    }),
-    Type.Object({
-      x: Type.Number({ description: "Viewport x coordinate." }),
-      y: Type.Number({ description: "Viewport y coordinate." }),
-    }),
-  ],
+const ClickParams = Type.Object(
   {
-    description: "Provide either selector OR both x and y, but not both.",
+    selector: Type.Optional(
+      Type.String({
+        description:
+          "CSS selector to click. Do not include x/y when selector is provided.",
+      })
+    ),
+    x: Type.Optional(Type.Number({ description: "Viewport x coordinate." })),
+    y: Type.Optional(Type.Number({ description: "Viewport y coordinate." })),
+  },
+  {
+    description:
+      "Provide either selector OR both x and y, but not both. Empty input is invalid.",
   }
 );
 
@@ -136,30 +136,26 @@ const VerifyParams = Type.Object({
   ),
 });
 
-const WaitForParams = Type.Union(
-  [
-    Type.Object({
-      url: Type.String({
+const WaitForParams = Type.Object(
+  {
+    url: Type.Optional(
+      Type.String({
         description:
           "Wait until the current URL contains this substring. Use this to confirm a navigation/redirect finished.",
-      }),
-      timeoutMs: Type.Optional(
-        Type.Number({ description: "Max time to wait, in milliseconds (default 10000)." })
-      ),
-    }),
-    Type.Object({
-      selector: Type.String({ description: "Wait until this CSS selector appears." }),
-      timeoutMs: Type.Optional(
-        Type.Number({ description: "Max time to wait, in milliseconds (default 10000)." })
-      ),
-    }),
-    Type.Object({
-      text: Type.String({ description: "Wait until this visible text appears." }),
-      timeoutMs: Type.Optional(
-        Type.Number({ description: "Max time to wait, in milliseconds (default 10000)." })
-      ),
-    }),
-  ],
+      })
+    ),
+    selector: Type.Optional(
+      Type.String({ description: "Wait until this CSS selector appears." })
+    ),
+    text: Type.Optional(
+      Type.String({ description: "Wait until this visible text appears." })
+    ),
+    timeoutMs: Type.Optional(
+      Type.Number({
+        description: "Max time to wait, in milliseconds (default 10000).",
+      })
+    ),
+  },
   {
     description:
       "Wait for one condition: url, selector, or text. Empty input is invalid.",

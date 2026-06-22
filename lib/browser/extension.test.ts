@@ -54,6 +54,29 @@ describe("browser extension annotation lookup", () => {
 });
 
 describe("browser extension retry gate", () => {
+  it("exposes provider-compatible object schemas for every browser tool", () => {
+    const tools: Array<{
+      name: string;
+      parameters?: { type?: string; anyOf?: unknown; oneOf?: unknown };
+    }> = [];
+    createBrowserExtension({
+      getAgentId: () => "agent-schema-check",
+      onBrowserState: () => {},
+    })({
+      on: () => {},
+      registerTool: (tool: unknown) => {
+        tools.push(tool as (typeof tools)[number]);
+      },
+    } as never);
+
+    expect(tools.length).toBeGreaterThan(0);
+    for (const tool of tools) {
+      expect(tool.parameters?.type, tool.name).toBe("object");
+      expect(tool.parameters?.anyOf, tool.name).toBeUndefined();
+      expect(tool.parameters?.oneOf, tool.name).toBeUndefined();
+    }
+  });
+
   it("blocks the third identical browser action failure", async () => {
     const tools: Array<{ name: string; execute: (...args: unknown[]) => Promise<unknown> }> = [];
     createBrowserExtension({
