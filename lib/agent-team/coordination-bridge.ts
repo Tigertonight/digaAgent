@@ -72,7 +72,7 @@ function runnableTasks(run: AgentTeamRun): AgentTeamTask[] {
       .map((task) => task.id)
   );
   return run.board.tasks.filter((task) => {
-    if (task.status !== "pending" && task.status !== "blocked") return false;
+    if (task.status !== "pending") return false;
     return (task.dependsOnTaskIds ?? []).every((id) => completed.has(id));
   });
 }

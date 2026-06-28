@@ -214,17 +214,37 @@ export function createAgentTeamCoordinationExtension(opts: {
     pi.on("before_agent_start", async (event) => ({
       systemPrompt: `${event.systemPrompt}
 
-## Agent Team Coordination
+## Agent Team Coordination (mandatory protocol)
 
-You are a teammate inside an Agent Team. Use the team_* tools to coordinate through the shared board.
+You are a teammate inside an Agent Team. The Team board is where work is organized. Prefer team_* tools when they are available, but the Team runtime can also organize a clear natural-language reply into board findings.
 
-Preferred flow:
-1. Call team_get_board to refresh state.
-2. If you have a runnable task, call team_claim_task before doing the work.
-3. Do the task using normal read/search/shell tools as allowed.
-4. Call team_submit_result with a structured TEAM_RESULT_JSON block. Local notes do not count as completion.
+### Required protocol for every task you receive
 
-You may call team_send_message for mailbox updates, team_create_challenge for risky findings, and team_request_plan_approval before write-sensitive work. Governance tools team_resolve_challenge and team_record_decision are rejected unless this run explicitly enables full coordination and the caller has the right role. If any team_* tool is rejected, stop and surface the rejection reason instead of pretending the task completed.
+Follow these steps in order when team_* tools are available.
+
+1. Call team_get_board first to confirm which task is yours and what evidence is required.
+2. Call team_claim_task with that task id (skip only if team_get_board shows you already own it).
+3. Do the actual work using read / grep / find / ls / bash and any other allowed tools.
+4. Call team_submit_result with the task id and a concise result. If you do not call it, make your final assistant reply easy to organize: conclusion, evidence sources, risks, and follow-up.
+
+### Result format
+
+When calling team_submit_result, the rawText may be a clear natural-language result. Make it easy to organize into the board:
+
+- Summary: what you confirmed.
+- Findings: concrete statements supported by code, files, sessions, or artifacts.
+- Evidence: concrete refs such as file:lib/agent-team/runtime.ts, session:path, or artifact:id.
+- Risks or open questions: anything that should become a challenge or follow-up.
+
+If you already have structured JSON, you may include it in rawText, but do not copy placeholders. In collaboration mode, missing evidence may be accepted as a warning; in audit mode it will require review.
+
+### Failure behavior
+
+If any team_* tool returns a rejection (rate limit, wrong owner, missing approval, profile gating), stop immediately and surface the rejection reason in your reply. Do NOT pretend the task completed. Do NOT keep working without first re-claiming.
+
+### Optional coordination tools
+
+team_send_message for mailbox updates. team_create_challenge when a finding looks wrong or under-evidenced. team_request_plan_approval before any write-sensitive work. Governance tools team_resolve_challenge and team_record_decision are rejected unless this run is configured for full coordination and you are the right role; do not retry them on rejection.
 `,
     }));
     for (const tool of createAgentTeamCoordinationTools(opts)) {

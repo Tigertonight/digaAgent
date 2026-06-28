@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { createInitialAgentTeamRun } from "./mock";
+import { createInitialAgentTeamRun } from "./initial-run";
 import { hydrateAgentTeamRun } from "./hydrate";
 
 describe("hydrateAgentTeamRun", () => {

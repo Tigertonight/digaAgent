@@ -17,9 +17,49 @@ import {
   hasUnpairedToolCalls,
   markInterruptedProgress,
 } from "@/lib/progress/recovery";
+import type { AgentTeamRun } from "@/lib/agent-team/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+function insertAgentTeamRunMessages<T extends { messages?: unknown }>(
+  ctx: T,
+  runs: AgentTeamRun[]
+): T {
+  if (runs.length === 0 || !Array.isArray(ctx.messages)) return ctx;
+  const messages = [...ctx.messages];
+  const existing = new Set<string>();
+  for (const message of messages) {
+    const content = (message as { content?: unknown })?.content;
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      if (
+        part &&
+        typeof part === "object" &&
+        (part as { type?: unknown; run?: { id?: unknown } }).type === "agent_team_run"
+      ) {
+        const runId = (part as { run?: { id?: unknown } }).run?.id;
+        if (typeof runId === "string") existing.add(runId);
+      }
+    }
+  }
+  for (const run of runs.slice().sort((a, b) => a.createdAt - b.createdAt)) {
+    if (existing.has(run.id)) continue;
+    const message = {
+      role: "assistant",
+      timestamp: run.createdAt,
+      content: [{ type: "agent_team_run", run }],
+    };
+    const insertAt = messages.findIndex((candidate) => {
+      const ts = (candidate as { timestamp?: unknown })?.timestamp;
+      return typeof ts === "number" && ts > run.createdAt;
+    });
+    if (insertAt === -1) messages.push(message);
+    else messages.splice(insertAt, 0, message);
+    existing.add(run.id);
+  }
+  return { ...ctx, messages };
+}
 
 export async function GET(
   req: Request,
@@ -91,15 +131,18 @@ export async function GET(
     // path), not by sessionId. Passing `id` here matched nothing, so historical
     // sessions always showed an empty subagent history. Resolve the real path.
     const resolvedPath = await findSessionPathById(id);
+    const subagentBatches = resolvedPath
+      ? listBatchesByParentSessionPath(resolvedPath)
+      : [];
+    const agentTeamRuns = resolvedPath
+      ? listAgentTeamRunsByParentSessionPath(resolvedPath)
+      : [];
+    const ctxWithTeamRuns = insertAgentTeamRunMessages(ctx, agentTeamRuns);
     return NextResponse.json({
-      ...ctx,
+      ...ctxWithTeamRuns,
       forkableUserMessages,
-      subagentBatches: resolvedPath
-        ? listBatchesByParentSessionPath(resolvedPath)
-        : [],
-      agentTeamRuns: resolvedPath
-        ? listAgentTeamRunsByParentSessionPath(resolvedPath)
-        : [],
+      subagentBatches,
+      agentTeamRuns,
       progress,
       interrupted,
     });

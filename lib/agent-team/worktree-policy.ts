@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { WorkflowWorktree, WorkflowWorktreeManager } from "@/lib/workflows/types";
-import { createGitWorktreeManager } from "@/lib/workflows/git-worktree";
+import { createGitWorktreeManager } from "@/lib/shared/git-worktree";
 import type { AgentTeamEvent, AgentTeamMember, AgentTeamRun } from "./types";
 
 export interface AgentTeamMemberWorktreeResult {

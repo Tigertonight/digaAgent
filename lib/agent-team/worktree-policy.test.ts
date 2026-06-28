@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createInitialAgentTeamRun } from "./mock";
+import { createInitialAgentTeamRun } from "./initial-run";
 import {
   cleanupAgentTeamWorktrees,
   markMissingAgentTeamWorktrees,

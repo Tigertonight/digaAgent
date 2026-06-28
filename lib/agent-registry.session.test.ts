@@ -196,3 +196,121 @@ describe("createAgent in-flight dedup（导出契约）", () => {
     expect(typeof mod.finalizeAfterAbort).toBe("function");
   });
 });
+
+describe("buildLocalCodingAssistantPromptWithContext", () => {
+  it("includes recent visible Team final answers for follow-up questions", async () => {
+    const { buildLocalCodingAssistantPromptWithContext } = await import(
+      "./agent-registry"
+    );
+    const prompt = buildLocalCodingAssistantPromptWithContext(
+      {
+        session: {
+          agent: {
+            state: {
+              messages: [
+                {
+                  role: "user",
+                  content: "检查一个不存在的文件",
+                },
+                {
+                  role: "assistant",
+                  content: [
+                    {
+                      type: "text",
+                      text:
+                        "结论\n\n不存在 — 当前项目里没有找到 `/definitely-not-a-real-file-xyz.ts`。\n\n<!-- agent-team-final:team-1 -->",
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      } as never,
+      "这个结论用一句话解释一下。"
+    );
+
+    expect(prompt).toContain("最近的可见会话上下文");
+    expect(prompt).toContain("不存在 — 当前项目里没有找到");
+    expect(prompt).not.toContain("agent-team-final");
+    expect(prompt).toContain("用户的新问题：\n这个结论用一句话解释一下。");
+  });
+
+  it("returns the original text when there is no useful history", async () => {
+    const { buildLocalCodingAssistantPromptWithContext } = await import(
+      "./agent-registry"
+    );
+
+    expect(
+      buildLocalCodingAssistantPromptWithContext(
+        {
+          session: { agent: { state: { messages: [] } } },
+        } as never,
+        "你好"
+      )
+    ).toBe("你好");
+  });
+
+  it("filters provider errors from follow-up history", async () => {
+    const { buildLocalCodingAssistantPromptWithContext } = await import(
+      "./agent-registry"
+    );
+
+    const prompt = buildLocalCodingAssistantPromptWithContext(
+      {
+        session: {
+          agent: {
+            state: {
+              messages: [
+                {
+                  role: "assistant",
+                  content:
+                    'API Error: 500 {"error":"ValidationException: messages: Unexpected role \\"system\\"."} [自研 Coding 助手退出，代码 1]',
+                },
+              ],
+            },
+          },
+        },
+      } as never,
+      "继续回答刚才的问题"
+    );
+
+    expect(prompt).toBe("继续回答刚才的问题");
+    expect(prompt).not.toContain("Unexpected role");
+    expect(prompt).not.toContain("API Error");
+  });
+
+  it("filters process-only Team card text but keeps final conclusions", async () => {
+    const { buildLocalCodingAssistantPromptWithContext } = await import(
+      "./agent-registry"
+    );
+
+    const prompt = buildLocalCodingAssistantPromptWithContext(
+      {
+        session: {
+          agent: {
+            state: {
+              messages: [
+                {
+                  role: "assistant",
+                  content:
+                    "团队协作处理中\n\n开始执行任务\n成员记录已准备好，等待领取任务。\n进度 1/4",
+                },
+                {
+                  role: "assistant",
+                  content:
+                    "结论\n\n存在 — 已确认 app/page.tsx 在当前项目中。\n\n<!-- agent-team-final:team-ok -->",
+                },
+              ],
+            },
+          },
+        },
+      } as never,
+      "这次最终确认的文件是什么？"
+    );
+
+    expect(prompt).toContain("存在 — 已确认 app/page.tsx");
+    expect(prompt).not.toContain("团队协作处理中");
+    expect(prompt).not.toContain("agent-team-final");
+  });
+});

@@ -19,7 +19,8 @@ export type AgentTeamTaskStatus =
   | "claimed"
   | "running"
   | "blocked"
-  | "completed";
+  | "completed"
+  | "skipped";
 
 export type AgentTeamFindingStatus =
   | "proposed"
@@ -42,6 +43,22 @@ export type AgentTeamCapabilityStatus =
   | "blocked";
 
 export type AgentTeamCoordinationProfile = "none" | "basic" | "full";
+
+export type AgentTeamMode = "collaboration" | "audit";
+
+export type AgentTeamBlockReasonCode =
+  | "missing_structured_result"
+  | "invalid_result_json"
+  | "missing_findings"
+  | "missing_evidence"
+  | "placeholder_result"
+  | "member_unavailable"
+  | "member_timeout"
+  | "task_dependency_waiting"
+  | "open_challenge"
+  | "quality_gate_failed"
+  | "worktree_pending"
+  | "provider_stream_error";
 
 export type AgentTeamHookTrigger =
   | "TaskCreated"
@@ -133,6 +150,8 @@ export interface AgentTeamTaskAttempt {
   endedAt?: number;
   resultId?: string;
   error?: string;
+  reasonCode?: AgentTeamBlockReasonCode;
+  recoveryAttemptIds?: string[];
 }
 
 export interface AgentTeamTask {
@@ -233,6 +252,8 @@ export interface AgentTeamResult {
   challengeIds: string[];
   evidenceRefs: string[];
   parseWarnings: string[];
+  source?: "contract" | "adapter" | "model_normalizer";
+  adaptedFromNaturalLanguage?: boolean;
 }
 
 export interface AgentTeamPlan {
@@ -305,6 +326,7 @@ export interface AgentTeamCapabilityAuditItem {
 }
 
 export interface AgentTeamSettings {
+  mode?: AgentTeamMode;
   memberScale: "small" | "standard" | "deep";
   allowNetwork: boolean;
   allowWrite: boolean;
@@ -332,6 +354,35 @@ export interface AgentTeamCoordinationCall {
   args: Record<string, unknown>;
   outcome: "ok" | "rejected";
   rejectionReason?: string;
+}
+
+export interface AgentTeamBlockReason {
+  code: AgentTeamBlockReasonCode;
+  severity: "info" | "warning" | "blocking";
+  message: string;
+  recommendedAction: string;
+  entityRefs: {
+    taskId?: string;
+    memberId?: string;
+    resultId?: string;
+    challengeId?: string;
+    gateId?: string;
+  };
+  autoActions: string[];
+  manualActions: string[];
+}
+
+export interface AgentTeamRecoveryAttempt {
+  id: string;
+  reasonCode: AgentTeamBlockReasonCode;
+  action: string;
+  status: "attempted" | "succeeded" | "failed";
+  startedAt: number;
+  endedAt?: number;
+  taskId?: string;
+  memberId?: string;
+  resultId?: string;
+  error?: string;
 }
 
 export interface AgentTeamEvent {
@@ -386,6 +437,8 @@ export interface AgentTeamRun {
   };
   worktreeRoot?: string;
   coordinationAudit?: AgentTeamCoordinationCall[];
+  blockReasons?: AgentTeamBlockReason[];
+  recoveryAttempts?: AgentTeamRecoveryAttempt[];
   plannerProfile?: "deterministic" | "llm";
   plannerInputs?: { objective: string; tags: string[] };
 }

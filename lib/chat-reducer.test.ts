@@ -6,7 +6,7 @@ import {
   createInitialState,
   ctxToMessages,
 } from "./chat-reducer";
-import { createInitialAgentTeamRun } from "./agent-team/mock";
+import { createInitialAgentTeamRun } from "./agent-team/initial-run";
 import type { ChatMessage, MessagePart } from "./types";
 
 afterEach(() => {
@@ -192,6 +192,26 @@ describe("ctxToMessages", () => {
       {
         kind: "text",
         text: "当前登录凭证已失效，请重新登录 ChatGPT Plus/Pro（Codex Subscription）或重新配置 Provider 凭证后再发送。",
+      },
+    ]);
+  });
+
+  it("assistant 流缺少 finish_reason → 显示可理解的断流提示", () => {
+    const out = ctxToMessages([
+      {
+        role: "assistant",
+        timestamp: 2000,
+        stopReason: "error",
+        errorMessage: "Stream ended without finish_reason",
+        content: [],
+      },
+    ]);
+
+    expect(out).toHaveLength(1);
+    expect(out[0].parts).toEqual([
+      {
+        kind: "text",
+        text: "回复失败：模型连接提前结束，服务没有返回完成标记。可以直接重试；如果频繁出现，建议切换模型或检查当前供应商的流式输出兼容性。",
       },
     ]);
   });
@@ -1666,6 +1686,99 @@ describe("applyEvent — agent team local events", () => {
     expect(part.run.status).toBe("paused");
   });
 
+  it("adds the visible final Team answer when a live run is finalized", () => {
+    const run = createInitialAgentTeamRun("live final team");
+    const completed = {
+      ...run,
+      status: "completed" as const,
+      board: {
+        ...run.board,
+        decisions: [
+          {
+            id: "decision-1",
+            title: "最终判断",
+            rationale: "存在：已确认 app/page.tsx 在当前项目中。",
+            acceptedFindingIds: [],
+            rejectedFindingIds: [],
+            challengeIds: [],
+            evidenceRefs: ["file:app/page.tsx"],
+            sourceResultIds: [],
+            confidence: "high" as const,
+            status: "accepted" as const,
+            madeByAgentId: run.leadAgentId,
+            createdAt: run.updatedAt + 1,
+          },
+        ],
+      },
+    };
+    let state = applyEvent(createInitialState(), {
+      type: "agent_team_run_start",
+      run,
+    } as never);
+
+    state = applyEvent(state, {
+      type: "agent_team_run_finalized",
+      run: completed,
+    } as never);
+    state = applyEvent(state, {
+      type: "agent_team_run_finalized",
+      run: completed,
+    } as never);
+
+    const finalMessages = state.messages.filter((message) =>
+      message.parts?.some(
+        (part) => part.kind === "text" && part.text.includes(`agent-team-final:${run.id}`)
+      )
+    );
+    expect(finalMessages).toHaveLength(1);
+    expect(finalMessages[0].parts?.[0]).toMatchObject({
+      kind: "text",
+      text: expect.stringContaining("存在：已确认 app/page.tsx 在当前项目中"),
+    });
+  });
+
+  it("keeps a terminal Team run when a stale running update arrives later", () => {
+    const run = createInitialAgentTeamRun("terminal guard");
+    let state = applyEvent(createInitialState(), {
+      type: "agent_team_run_start",
+      run,
+    } as never);
+    state = applyEvent(state, {
+      type: "__agent_team_update",
+      teamRun: {
+        id: run.id,
+        status: "aborted",
+        updatedAt: run.updatedAt + 10,
+      },
+    });
+    state = applyEvent(state, {
+      type: "agent_team_run_update",
+      run: { ...run, status: "running", updatedAt: run.updatedAt + 1 },
+    } as never);
+
+    const part = state.messages[0].parts?.[0];
+    expect(part?.kind).toBe("agent_team_run");
+    if (part?.kind !== "agent_team_run") throw new Error("type narrow");
+    expect(part.run.status).toBe("aborted");
+  });
+
+  it("applies a terminal Team update even after a running state", () => {
+    const run = createInitialAgentTeamRun("terminal update");
+    let state = applyEvent(createInitialState(), {
+      type: "agent_team_run_start",
+      run,
+    } as never);
+    state = applyEvent(state, {
+      type: "agent_team_run_update",
+      run: { ...run, status: "aborted", updatedAt: run.updatedAt + 1 },
+    } as never);
+
+    const part = state.messages[0].parts?.[0];
+    expect(part?.kind).toBe("agent_team_run");
+    if (part?.kind !== "agent_team_run") throw new Error("type narrow");
+    expect(part.run.status).toBe("aborted");
+  });
+
   it("restores persisted Team runs as dedicated Team cards", () => {
     const run = createInitialAgentTeamRun("restored team");
     const out = appendRestoredAgentTeamRuns([], [run]);
@@ -1677,7 +1790,24 @@ describe("applyEvent — agent team local events", () => {
     expect(part.run.id).toBe(run.id);
   });
 
-  it("restores completed Team runs with a final summary message", () => {
+  it("restores persisted Team runs from session context message parts", () => {
+    const run = createInitialAgentTeamRun("context team");
+    const out = ctxToMessages([
+      {
+        role: "assistant",
+        timestamp: run.createdAt,
+        content: [{ type: "agent_team_run", run }],
+      },
+    ]);
+
+    expect(out).toHaveLength(1);
+    const part = out[0].parts?.[0];
+    expect(part?.kind).toBe("agent_team_run");
+    if (part?.kind !== "agent_team_run") throw new Error("type narrow");
+    expect(part.run.id).toBe(run.id);
+  });
+
+  it("restores completed Team runs as Team cards with a visible final answer", () => {
     const run = createInitialAgentTeamRun("restored final team");
     const completed = {
       ...run,
@@ -1703,17 +1833,17 @@ describe("applyEvent — agent team local events", () => {
     const out = appendRestoredAgentTeamRuns([], [completed]);
 
     expect(out).toHaveLength(2);
-    expect(out[1].parts?.[0]).toMatchObject({
-      kind: "text",
-      text: expect.stringContaining("结论"),
+    expect(out[0].parts?.[0]).toMatchObject({
+      kind: "agent_team_run",
+      run: expect.objectContaining({ status: "completed" }),
     });
     expect(out[1].parts?.[0]).toMatchObject({
       kind: "text",
-      text: expect.stringContaining("这是可展示给用户的最终综合。"),
+      text: expect.stringContaining(`agent-team-final:${run.id}`),
     });
   });
 
-  it("adds a final summary when a restored message already contains a completed Team card", () => {
+  it("adds the visible final answer for an existing completed Team card", () => {
     const run = createInitialAgentTeamRun("existing completed team");
     const completed = {
       ...run,
@@ -1748,9 +1878,61 @@ describe("applyEvent — agent team local events", () => {
     );
 
     expect(out).toHaveLength(2);
+    expect(out[0].parts?.[0]).toMatchObject({
+      kind: "agent_team_run",
+      run: expect.objectContaining({ status: "completed" }),
+    });
     expect(out[1].parts?.[0]).toMatchObject({
       kind: "text",
-      text: expect.stringContaining("已有卡片也应该恢复最终回答。"),
+      text: expect.stringContaining(`agent-team-final:${run.id}`),
+    });
+  });
+
+  it("restores Team cards before later follow-up messages instead of hiding them at the end", () => {
+    const run = {
+      ...createInitialAgentTeamRun("completed team before follow-up"),
+      createdAt: 2000,
+      updatedAt: 3000,
+      status: "completed" as const,
+    };
+    const out = appendRestoredAgentTeamRuns(
+      [
+        {
+          role: "user",
+          parts: [{ kind: "text", text: "start team" }],
+          text: "start team",
+          timestamp: 1000,
+        },
+        {
+          role: "assistant",
+          parts: [{ kind: "text", text: `final answer <!-- agent-team-final:${run.id} -->` }],
+          timestamp: 3000,
+        },
+        {
+          role: "user",
+          parts: [{ kind: "text", text: "follow up" }],
+          text: "follow up",
+          timestamp: 4000,
+        },
+        {
+          role: "assistant",
+          parts: [{ kind: "text", text: "follow-up answer" }],
+          timestamp: 5000,
+        },
+      ],
+      [run]
+    );
+
+    expect(out.map((message) => message.timestamp)).toEqual([
+      1000, 2000, 3000, 4000, 5000,
+    ]);
+    expect(out.at(-2)?.parts?.[0]).toMatchObject({
+      kind: "text",
+      text: "follow up",
+    });
+    expect(out.at(-1)?.parts?.[0]).toMatchObject({
+      kind: "text",
+      text: "follow-up answer",
     });
   });
 
@@ -1792,9 +1974,10 @@ describe("applyEvent — agent team local events", () => {
     expect(part?.kind).toBe("agent_team_run");
     if (part?.kind !== "agent_team_run") throw new Error("type narrow");
     expect(part.run.status).toBe("completed");
+    expect(out).toHaveLength(2);
     expect(out[1].parts?.[0]).toMatchObject({
       kind: "text",
-      text: expect.stringContaining("最新 run 应该覆盖旧卡片。"),
+      text: expect.stringContaining(`agent-team-final:${run.id}`),
     });
   });
 });

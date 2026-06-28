@@ -82,11 +82,18 @@ export async function installApiFixtures(
       }>;
       __mockAgentCounter: number;
       __lastAgentNewBody?: unknown;
+      __mockSessionContext?: unknown;
       __E2E__: boolean;
     };
-    w.__mockSessions = [];
+    try {
+      const restored = JSON.parse(localStorage.getItem("__mockSessions") ?? "[]");
+      w.__mockSessions = Array.isArray(restored) ? restored : [];
+    } catch {
+      w.__mockSessions = [];
+    }
     w.__mockAgentCounter = 0;
     w.__lastAgentNewBody = undefined;
+    w.__mockSessionContext = undefined;
     w.__E2E__ = true; // 让 ChatApp 挂诊断钩子到 window.__chatAppDiag
   });
 
@@ -328,6 +335,8 @@ export async function installApiFixtures(
           firstMessage: `Session ${c}`,
           modified: new Date().toISOString(),
         });
+        localStorage.setItem("__mockSessions", JSON.stringify(w.__mockSessions));
+        localStorage.setItem("pi-selected-session-id", sessionId);
         return { id: `agent-${c}`, sessionId, sessionFile };
       }, requestBody);
       return route.fulfill({
@@ -367,6 +376,25 @@ export async function installApiFixtures(
           },
         });
       }
+      let requestBody: unknown = {};
+      try {
+        requestBody = route.request().postDataJSON();
+      } catch {
+        requestBody = {};
+      }
+      const mockedAction = await page
+        .evaluate((body) => {
+          const w = window as unknown as {
+            __mockAgentAction?: (body: unknown) => unknown;
+          };
+          return typeof w.__mockAgentAction === "function"
+            ? w.__mockAgentAction(body)
+            : null;
+        }, requestBody)
+        .catch(() => null);
+      if (mockedAction) {
+        return route.fulfill({ json: mockedAction });
+      }
       return route.fulfill({ json: { ok: true } });
     }
 
@@ -388,6 +416,13 @@ export async function installApiFixtures(
 
     // sessions/:id/context
     if (url.includes("/api/sessions/") && url.includes("/context")) {
+      const mockContext = await page.evaluate(() => {
+        const w = window as unknown as { __mockSessionContext?: unknown };
+        return w.__mockSessionContext;
+      }).catch(() => null);
+      if (mockContext) {
+        return route.fulfill({ json: mockContext });
+      }
       return route.fulfill({
         json: { messages: [], forkableUserMessages: [] },
       });

@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createInitialAgentTeamRun } from "./mock";
+import { createInitialAgentTeamRun } from "./initial-run";
 import {
   claimStoredAgentTeamTask,
   completeStoredAgentTeamTask,
@@ -18,6 +18,7 @@ import {
   recordStoredAgentTeamToolWrite,
   replaceStoredAgentTeamMember,
   retryStoredAgentTeamTask,
+  runAgentTeamStartupRecovery,
   sendStoredAgentTeamMessage,
   setAgentTeamStoreRootForTests,
   submitStoredAgentTeamPlan,
@@ -52,6 +53,79 @@ describe("agent team server store", () => {
     expect(getAgentTeamRun(run.id)?.objective).toBe("persist team");
     expect(listAgentTeamRuns("agent-1")).toHaveLength(1);
     expect(listAgentTeamRunsByParentSessionPath("/tmp/session.jsonl")).toHaveLength(1);
+  });
+
+  it("normalizes completed Team runs so no task remains active on hydrate", () => {
+    const base = createInitialAgentTeamRun("completed restore");
+    const run = {
+      ...base,
+      status: "completed" as const,
+      leadState: "finalized" as const,
+      parentAgentId: "agent-1",
+      board: {
+        ...base.board,
+        tasks: [
+          ...base.board.tasks.map((task) => ({ ...task, status: "completed" as const })),
+          {
+            id: "optional-review",
+            title: "Optional review",
+            description: "Optional task that should not remain active after hydrate.",
+            status: "claimed" as const,
+            ownerAgentId: base.members[1]?.id,
+            priority: "normal" as const,
+            required: false,
+            findingIds: [],
+            dependsOnTaskIds: ["synthesis"],
+            expectedOutput: "review" as const,
+            evidenceRequired: false,
+          },
+        ],
+      },
+      members: base.members.map((member, index) =>
+        index === 1 ? { ...member, status: "working" as const, currentTaskId: "optional-review" } : member
+      ),
+    };
+
+    putAgentTeamRun(run);
+    setAgentTeamStoreRootForTests(root);
+    const restored = getAgentTeamRun(run.id);
+
+    expect(
+      restored?.board.tasks.every(
+        (task) => task.status === "completed" || task.status === "skipped"
+      )
+    ).toBe(true);
+    expect(restored?.board.tasks.find((task) => task.id === "optional-review")?.status).toBe("skipped");
+    expect(restored?.members.find((member) => member.currentTaskId === "optional-review")).toBeUndefined();
+  });
+
+  it("does not let stale non-aborted snapshots overwrite a stopped Team run", () => {
+    const base = createInitialAgentTeamRun("stopped team");
+    const stopped = {
+      ...base,
+      status: "aborted" as const,
+      endedAt: Date.now(),
+    };
+    putAgentTeamRun(stopped);
+
+    const staleCompleted = {
+      ...base,
+      status: "completed" as const,
+      leadState: "finalized" as const,
+      endedAt: Date.now() + 1,
+      board: {
+        ...base.board,
+        tasks: base.board.tasks.map((task) => ({
+          ...task,
+          status: "completed" as const,
+        })),
+      },
+    };
+
+    const stored = putAgentTeamRun(staleCompleted);
+
+    expect(stored.status).toBe("aborted");
+    expect(getAgentTeamRun(base.id)?.status).toBe("aborted");
   });
 
   it("pauses an interrupted running Team run on hydrate", () => {
@@ -338,5 +412,45 @@ describe("agent team server store", () => {
     });
     expect(replaced.error).toBeUndefined();
     expect(getAgentTeamRun(run.id)?.members.find((member) => member.id === memberId)?.agentId).toBe("new-agent");
+  });
+
+  it("startup recovery recovers stale running tasks across non-terminal runs", () => {
+    const base = createInitialAgentTeamRun("startup recovery team");
+    const memberId = base.members[1].id;
+    const run = {
+      ...base,
+      parentAgentId: "agent-1",
+      status: "running" as const,
+      members: base.members.map((member) =>
+        member.id === memberId ? { ...member, agentId: "child-agent" } : member
+      ),
+    };
+    putAgentTeamRun(run);
+    // claim 后任务进入进行中（claimed），是 stale recovery 的目标状态之一。
+    expect(claimStoredAgentTeamTask(run.id, "frame", memberId).error).toBeUndefined();
+    expect(
+      getAgentTeamRun(run.id)?.board.tasks.find((task) => task.id === "frame")?.status
+    ).toBe("claimed");
+
+    // now 推后一秒，确保 claimedAt 落在 staleMs 窗口之外。
+    const result = runAgentTeamStartupRecovery({ now: Date.now() + 60_000, staleMs: 1 });
+    expect(result.scannedRuns).toBeGreaterThanOrEqual(1);
+    expect(result.recoveredTaskIds).toContain("frame");
+    // 恢复后该 task 交回队列（pending/blocked），不再停留在 claimed/running。
+    const recoveredStatus = getAgentTeamRun(run.id)?.board.tasks.find(
+      (task) => task.id === "frame"
+    )?.status;
+    expect(["pending", "blocked"]).toContain(recoveredStatus);
+  });
+
+  it("startup recovery ignores terminal runs", () => {
+    const base = createInitialAgentTeamRun("completed team");
+    putAgentTeamRun({
+      ...base,
+      parentAgentId: "agent-1",
+      status: "completed" as const,
+    });
+    const result = runAgentTeamStartupRecovery({ staleMs: 1 });
+    expect(result.recoveredTaskIds).toHaveLength(0);
   });
 });

@@ -1,8 +1,8 @@
 import "server-only";
 import fs from "node:fs";
-import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { atomicWriteFileSync } from "@/lib/shared/atomic-json-store";
 import type { AgentTeamCoordinationCall, AgentTeamRun } from "./types";
 import {
   cleanupAgentTeamWorktrees,
@@ -31,6 +31,7 @@ import {
   rejectAgentTeamPlan,
   rejectAgentTeamFinding,
   recoverStaleAgentTeamTasks,
+  recoverBlockedAgentTeamRun,
   resolveAgentTeamChallenge,
   retryAgentTeamTask,
   sendAgentTeamMessage,
@@ -122,7 +123,7 @@ function normalizeRun(run: AgentTeamRun): AgentTeamRun {
     allowChallenges: true,
     requirePlanApproval: true,
     displayMode: "workspace",
-    writePolicy: "plan_approval",
+    writePolicy: "read_only",
     networkPolicy: "disabled",
     worktreePolicy: "none",
     resultIngestionMode: "structured",
@@ -133,7 +134,7 @@ function normalizeRun(run: AgentTeamRun): AgentTeamRun {
       leadFinalSynthesis: true,
     },
   };
-  return {
+  const normalized: AgentTeamRun = {
     ...run,
     coordinationAudit: run.coordinationAudit ?? [],
     board: {
@@ -147,7 +148,8 @@ function normalizeRun(run: AgentTeamRun): AgentTeamRun {
       capabilityAudit: run.board.capabilityAudit ?? [],
       events: run.board.events ?? [],
     },
-    settings: {
+    settings: (() => {
+      const merged = {
       ...defaultSettings,
       ...(run.settings ?? {}),
       coordinationProfile: run.settings?.coordinationProfile ?? "basic",
@@ -155,7 +157,72 @@ function normalizeRun(run: AgentTeamRun): AgentTeamRun {
         ...defaultSettings.stopConditions,
         ...(run.settings?.stopConditions ?? {}),
       },
+      };
+      return {
+        ...merged,
+        writePolicy:
+          merged.allowWrite === false
+            ? "read_only"
+            : merged.writePolicy === "write_allowed" || merged.writePolicy === "plan_approval"
+              ? merged.writePolicy
+              : merged.requirePlanApproval
+                ? "plan_approval"
+                : "write_allowed",
+        networkPolicy:
+          merged.allowNetwork === false
+            ? "disabled"
+            : merged.networkPolicy === "teammates_allowed" || merged.networkPolicy === "lead_only"
+              ? merged.networkPolicy
+              : "lead_only",
+        worktreePolicy:
+          merged.allowWorktree === false
+            ? "none"
+            : merged.worktreePolicy === "per_task" || merged.worktreePolicy === "per_member"
+              ? merged.worktreePolicy
+              : "per_member",
+      };
+    })(),
+  };
+  if (normalized.status !== "completed") return normalized;
+  const archivedTaskIds = new Set(
+    normalized.board.tasks
+      .filter((task) => task.status !== "completed" && task.status !== "skipped")
+      .map((task) => task.id)
+  );
+  if (archivedTaskIds.size === 0) return normalized;
+  return {
+    ...normalized,
+    board: {
+      ...normalized.board,
+      tasks: normalized.board.tasks.map((task) =>
+        archivedTaskIds.has(task.id)
+          ? {
+              ...task,
+              status: "skipped" as const,
+              ownerAgentId: task.ownerAgentId ?? normalized.leadAgentId,
+              completedAt: task.completedAt ?? normalized.endedAt ?? normalized.updatedAt,
+              completionSource: "lead_override" as const,
+              blocker: undefined,
+              lastError: undefined,
+            }
+          : task
+      ),
+      fileLocks: (normalized.board.fileLocks ?? []).map((lock) =>
+        lock.status === "active"
+          ? { ...lock, status: "released" as const, releasedAt: normalized.endedAt ?? normalized.updatedAt }
+          : lock
+      ),
     },
+    members: normalized.members.map((member) =>
+      member.currentTaskId && archivedTaskIds.has(member.currentTaskId)
+        ? {
+            ...member,
+            status: "done" as const,
+            currentTaskId: undefined,
+            latestOutput: member.latestOutput ?? "最终总结已生成，剩余任务已随本次结论归档。",
+          }
+        : member
+    ),
   };
 }
 
@@ -179,40 +246,17 @@ function indexRun(run: AgentTeamRun): void {
 }
 
 function persistRun(run: AgentTeamRun): void {
-  let tmp: string | null = null;
-  let fd: number | null = null;
-  try {
-    fs.mkdirSync(runsDir(), { recursive: true });
-    const file = runFilePath(run.id);
-    tmp = `${file}.tmp.${process.pid}.${Date.now()}.${randomUUID()}`;
-    const persisted: PersistedAgentTeamRun = {
-      schemaVersion: AGENT_TEAM_STORE_SCHEMA_VERSION,
-      kind: "agent-team-run",
-      run,
-      persistedAt: Date.now(),
-    };
-    fd = fs.openSync(tmp, "wx");
-    fs.writeSync(fd, JSON.stringify(persisted, null, 2), 0, "utf8");
-    fs.fsyncSync(fd);
-    fs.closeSync(fd);
-    fd = null;
-    fs.renameSync(tmp, file);
-    tmp = null;
-  } catch (err) {
-    if (fd !== null) {
-      try { fs.closeSync(fd); } catch { /* ignore */ }
-    }
-    if (tmp) {
-      try { fs.unlinkSync(tmp); } catch { /* ignore */ }
-    }
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOSPC") throw err;
-    console.warn("[agent-team-store] persist failed", {
-      id: run.id,
-      code,
-      err: err instanceof Error ? err.message : String(err),
-    });
-  }
+  const persisted: PersistedAgentTeamRun = {
+    schemaVersion: AGENT_TEAM_STORE_SCHEMA_VERSION,
+    kind: "agent-team-run",
+    run,
+    persistedAt: Date.now(),
+  };
+  atomicWriteFileSync(
+    runFilePath(run.id),
+    JSON.stringify(persisted, null, 2),
+    "agent-team-store"
+  );
 }
 
 function loadPersistedRuns(): void {
@@ -274,6 +318,10 @@ function loadPersistedRuns(): void {
 export function putAgentTeamRun(run: AgentTeamRun): AgentTeamRun {
   loadPersistedRuns();
   const next = normalizeRun(cloneRun(run));
+  const current = store.runs.get(next.id);
+  if (current?.status === "aborted" && next.status !== "aborted") {
+    return cloneRun(current);
+  }
   store.runs.set(next.id, next);
   indexRun(next);
   persistRun(next);
@@ -628,6 +676,63 @@ export function recoverStoredAgentTeamStaleTasks(
   return {
     run: putAgentTeamRun(result.run),
     recoveredTaskIds: result.recoveredTaskIds,
+  };
+}
+
+export function recoverStoredAgentTeamRun(
+  id: string,
+  opts?: { now?: number; maxAttempts?: number }
+): { run?: AgentTeamRun; recoveredTaskIds: string[]; attempts: ReturnType<typeof recoverBlockedAgentTeamRun>["attempts"]; error?: string } {
+  const run = getAgentTeamRun(id);
+  if (!run) return { recoveredTaskIds: [], attempts: [], error: "team run not found" };
+  const result = recoverBlockedAgentTeamRun(run, opts);
+  return {
+    run: putAgentTeamRun(result.run),
+    recoveredTaskIds: result.recoveredTaskIds,
+    attempts: result.attempts,
+  };
+}
+
+/**
+ * 进程启动自检：扫描所有非终态 team run，对其卡住的 stale task 跑一次恢复。
+ *
+ * 背景：recovery 此前只在 dispatch API 被调用时被动触发。进程重启后，成员的
+ * child agent session 已丢失（hydrate 标记 hydrateState=missing），若用户不再
+ * 交互，team 会永久停在 running/working 态。启动时主动跑一次，把 stale task
+ * 解阻塞、成员标记 missing，使下次打开 UI 呈现“可恢复”而非“永久转圈”。
+ *
+ * 幂等：基于 hydrate 后的状态与 staleMs 判定，重复调用不会重复 spawn。
+ * 仅改 store 状态，不在此处真正 spawn agent（spawn 仍由 dispatch 路径负责）。
+ */
+export function runAgentTeamStartupRecovery(
+  opts?: { now?: number; staleMs?: number }
+): { scannedRuns: number; recoveredRuns: number; recoveredTaskIds: string[] } {
+  loadPersistedRuns();
+  const staleMs = opts?.staleMs ?? 1; // 重启后所有进行中 task 一律视为 stale
+  const now = opts?.now ?? Date.now();
+  const nonTerminal = listAgentTeamRuns().filter(
+    (run) =>
+      run.status === "running" ||
+      run.status === "paused" ||
+      run.status === "finalizing"
+  );
+  const recoveredTaskIds: string[] = [];
+  let recoveredRuns = 0;
+  for (const run of nonTerminal) {
+    try {
+      const result = recoverStoredAgentTeamStaleTasks(run.id, { now, staleMs });
+      if (result.recoveredTaskIds.length > 0) {
+        recoveredRuns += 1;
+        recoveredTaskIds.push(...result.recoveredTaskIds);
+      }
+    } catch {
+      // 单个 run 恢复失败不应阻塞其它 run 的启动自检。
+    }
+  }
+  return {
+    scannedRuns: nonTerminal.length,
+    recoveredRuns,
+    recoveredTaskIds,
   };
 }
 

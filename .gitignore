@@ -22,3 +22,4 @@ output/
 # Playwright 测试产物
 test-results/
 playwright-report/
+.tmp-agent-team-screens/

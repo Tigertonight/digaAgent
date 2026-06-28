@@ -112,8 +112,12 @@ export async function hydrateAgentTeamRun(
         ? "paused"
         : run.status;
   const message = recreate
-    ? `Team hydrate finished: ${rehydrated.length} rehydrated, ${missing.length} missing, ${replaced.length} replaced.`
-    : `Team hydrate inspected: ${missing.length} teammate session(s) need resume or replacement.`;
+    ? missing.length === 0 && replaced.length === 0
+      ? `已恢复 ${rehydrated.length} 位成员，团队会继续自动处理。`
+      : `已恢复 ${rehydrated.length} 位成员；还有 ${missing.length + replaced.length} 位成员记录不可用，需要重新派人或用现有结果总结。`
+    : missing.length > 0
+      ? `有 ${missing.length} 位成员记录需要恢复，恢复前不会继续分配任务。`
+      : "成员记录已检查完成。";
 
   return {
     run: {

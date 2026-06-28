@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { WorkflowWorktree, WorkflowWorktreeManager } from "./types";
+import type { WorkflowWorktree, WorkflowWorktreeManager } from "@/lib/workflows/types";
 
 const execFileAsync = promisify(execFile);
 

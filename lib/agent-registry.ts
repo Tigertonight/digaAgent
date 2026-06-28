@@ -61,7 +61,7 @@ import {
 import { runDynamicWorkflow } from "./workflows/orchestrator";
 import { runWorkflowScript } from "./workflows/script-runtime";
 import { abortRunningWorkflows, getWorkflowRun } from "./workflows/server-store";
-import { createGitWorktreeManager } from "./workflows/git-worktree";
+import { createGitWorktreeManager } from "@/lib/shared/git-worktree";
 import { getWorkflowNetworkPolicy } from "./workflows/network-policy";
 import { resolveLocalCodingAssistantCli } from "./local-coding-assistant/cli";
 import {
@@ -467,6 +467,7 @@ function releaseManagersForCwdIfUnused(cwd: string): void {
 export function pushExternalEvent(
   rec: AgentRecord,
   event:
+    | AgentSessionEvent
     | ApprovalRequestEvent
     | ApprovalResolvedEvent
     | ClarificationRequestEvent
@@ -995,6 +996,111 @@ export function isLocalCodingAssistantAgent(rec: AgentRecord): boolean {
   return rec.external?.kind === "local-coding-assistant";
 }
 
+function localCodingAssistantContentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      if (!part || typeof part !== "object") return "";
+      const text = (part as { text?: unknown }).text;
+      return typeof text === "string" ? text : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function cleanLocalCodingAssistantHistoryText(text: string): string {
+  return text
+    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, "\n")
+    .replace(/<think\b[^>]*>[\s\S]*$/gi, "")
+    .replace(/<\/think>/gi, "")
+    .replace(/\n?<!--\s*agent-team-final:[^>]+-->\s*/g, "")
+    .replace(/\s+\n/g, "\n")
+    .trim();
+}
+
+function truncateLocalCodingAssistantHistoryText(text: string): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= 800) return normalized;
+  return `${normalized.slice(0, 800)}...`;
+}
+
+function isLocalCodingAssistantProviderErrorText(text: string): boolean {
+  return [
+    /API Error:/i,
+    /Unexpected role ["']system["']/i,
+    /ValidationException:\s*messages/i,
+    /InvokeModelWithResponseStream/i,
+    /codewizllmproxy/i,
+    /server-side issue/i,
+    /自研 Coding 助手退出/i,
+    /模型连接提前结束/i,
+    /Stream ended without finish_reason/i,
+  ].some((pattern) => pattern.test(text));
+}
+
+function isLocalCodingAssistantProcessOnlyText(text: string): boolean {
+  const hasUsefulConclusion = /(^|\n)\s*(结论|最终结论|通过|不通过|存在|不存在)\b/.test(text);
+  if (hasUsefulConclusion) return false;
+  return [
+    /团队协作(处理中|已处理|正在自动推进)/,
+    /开始执行任务/,
+    /成员记录(?:已创建|已准备好)/,
+    /等待领取任务/,
+    /查看过程/,
+    /进度\s+\d+\/\d+/,
+  ].some((pattern) => pattern.test(text));
+}
+
+function shouldIncludeLocalCodingAssistantHistoryText(text: string): boolean {
+  if (!text.trim()) return false;
+  if (isLocalCodingAssistantProviderErrorText(text)) return false;
+  if (isLocalCodingAssistantProcessOnlyText(text)) return false;
+  return true;
+}
+
+export function buildLocalCodingAssistantPromptWithContext(
+  rec: Pick<AgentRecord, "session">,
+  text: string
+): string {
+  const messages = (rec.session.agent?.state?.messages ?? []) as Array<{
+    role?: string;
+    content?: unknown;
+  }>;
+  const recent = messages
+    .filter((message) => message.role === "user" || message.role === "assistant")
+    .map((message) => {
+      const cleaned = cleanLocalCodingAssistantHistoryText(
+        localCodingAssistantContentText(message.content)
+      );
+      if (!cleaned || cleaned === text.trim()) return null;
+      if (!shouldIncludeLocalCodingAssistantHistoryText(cleaned)) return null;
+      return {
+        role: message.role === "user" ? "用户" : "助手",
+        text: truncateLocalCodingAssistantHistoryText(cleaned),
+      };
+    })
+    .filter((item): item is { role: string; text: string } => Boolean(item))
+    .slice(-8);
+
+  if (recent.length === 0) return text;
+
+  const context = recent
+    .map((message) => `${message.role}：${message.text}`)
+    .join("\n");
+
+  return [
+    "下面是最近的可见会话上下文。用户说“这个 / 上面 / 刚才”时，优先指代这里最近的助手结论。",
+    "",
+    context,
+    "",
+    "请基于上述上下文回答用户的新问题；不要复述这段上下文。",
+    "",
+    "用户的新问题：",
+    text,
+  ].join("\n");
+}
+
 export async function promptLocalCodingAssistantAgent(
   rec: AgentRecord,
   text: string
@@ -1021,6 +1127,7 @@ export async function promptLocalCodingAssistantAgent(
     message: localCodingAssistantMessage("assistant", "", responseId, modelId),
   } as RingBufferEvent);
 
+  const promptText = buildLocalCodingAssistantPromptWithContext(rec, text);
   const modelArg = localCodingAssistantCliModelArg(modelId);
   const args = [
     "-p",
@@ -1031,7 +1138,7 @@ export async function promptLocalCodingAssistantAgent(
     "--permission-mode",
     "default",
     ...(modelArg ? ["--model", modelArg] : []),
-    text,
+    promptText,
   ];
   let cliResolution: Awaited<ReturnType<typeof resolveLocalCodingAssistantCli>>;
   try {

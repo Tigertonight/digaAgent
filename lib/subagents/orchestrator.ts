@@ -41,12 +41,14 @@ import type { WorkflowWorktree, WorkflowWorktreeManager } from "@/lib/workflows/
 import type { ApprovalResponse } from "@/lib/collab/types";
 import { readMeta, writeMeta } from "@/lib/meta/store";
 import { largeFileWriteProtocolLines } from "@/lib/tool-recovery/truncated-write";
+import { RUNTIME_LIMITS } from "@/lib/shared/runtime-limits";
 
 const DEFAULT_MAX_TASKS = 8;
 const EXPLICIT_MAX_TASKS = 32;
-const DEFAULT_CONCURRENCY = 4;
-const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
-const DEFAULT_MAX_TURNS = 6;
+const DEFAULT_CONCURRENCY = RUNTIME_LIMITS.subagentMaxConcurrency;
+const DEFAULT_MAX_TURNS = RUNTIME_LIMITS.subagentDefaultMaxTurns;
+/** 单任务超时上限（也是默认值）。集中到 RUNTIME_LIMITS，支持 env 覆盖。 */
+const taskTimeoutMs = (): number => RUNTIME_LIMITS.subagentTaskTimeoutMs();
 const WRITE_TOOL_PATTERN = /write|edit|patch|apply|delete|move|rename|mkdir|touch/i;
 const MAX_AUDIT_EVENTS = 200;
 
@@ -162,10 +164,12 @@ function clamp(n: number, min: number, max: number): number {
 }
 
 function sanitizeTaskTimeoutMs(raw: number | undefined): number {
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return DEFAULT_TIMEOUT_MS;
+  const max = taskTimeoutMs();
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
+    return max;
   }
-  return DEFAULT_TIMEOUT_MS;
+  // 支持调小：caller 可以指定一个更短的超时；超过上限则 clamp 到上限。
+  return Math.min(Math.floor(raw), max);
 }
 
 function sanitizeTask(raw: SubagentTask, index: number): SubagentTaskRuntime {
@@ -245,9 +249,7 @@ export function validateDelegateInput(input: DelegateSubagentsInput): {
       seen.set(original, count + 1);
     }
   }
-  if (dedupedTaskIds.length > 0) {
-    // 这个 warning 会被带进 planning.warnings。
-  }
+  // dedupedTaskIds 的 warning 在下方与其它 warning 一起 push 进 planning.warnings。
   const requestedConcurrency =
     typeof input.concurrency === "number" && Number.isFinite(input.concurrency)
       ? Math.floor(input.concurrency)
@@ -270,15 +272,16 @@ export function validateDelegateInput(input: DelegateSubagentsInput): {
       `Requested concurrency ${requestedConcurrency} was clamped to ${concurrency}.`
     );
   }
-  const timeoutAdjustments = input.tasks.filter(
+  const maxTaskTimeoutMs = taskTimeoutMs();
+  const timeoutClamped = input.tasks.filter(
     (task) =>
       typeof task.timeoutMs === "number" &&
       Number.isFinite(task.timeoutMs) &&
-      Math.floor(task.timeoutMs) !== DEFAULT_TIMEOUT_MS
+      Math.floor(task.timeoutMs) > maxTaskTimeoutMs
   );
-  if (timeoutAdjustments.length > 0) {
+  if (timeoutClamped.length > 0) {
     warnings.push(
-      `${timeoutAdjustments.length} task timeout(s) were normalized to ${DEFAULT_TIMEOUT_MS} ms.`
+      `${timeoutClamped.length} task timeout(s) exceeded the ${maxTaskTimeoutMs} ms limit and were clamped.`
     );
   }
   const unsafeWriteRequests = input.tasks.filter(
@@ -715,8 +718,8 @@ function verifyBatch(batch: SubagentBatch, verifiedAt = Date.now()): SubagentBat
     status: conflictMessages.length === 0 ? "passed" : "warning",
     message:
       conflictMessages.length === 0
-        ? "No obvious cross-task answer conflicts detected."
-        : conflictMessages.join(" | "),
+        ? "No obvious cross-task answer conflicts detected (heuristic hint, not a reliable consistency check)."
+        : `${conflictMessages.join(" | ")} (heuristic hint, not a reliable consistency check; verify manually).`,
   });
   const checkStatus = worstVerificationStatus(checks.map((check) => check.status));
   const status =
@@ -1181,7 +1184,7 @@ async function runOneTask(
     const timedOut = new Promise<never>((_resolve, reject) => {
       timeout = setTimeout(() => {
         reject(new Error("timeout"));
-      }, task.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+      }, task.timeoutMs ?? taskTimeoutMs());
     });
 
     const abortListener = () => {
@@ -1308,7 +1311,7 @@ async function runOneTask(
       answer: latestAnswer.trim() || undefined,
       error:
         status === "timeout"
-          ? `Subagent task timed out after ${task.timeoutMs ?? DEFAULT_TIMEOUT_MS} ms`
+          ? `Subagent task timed out after ${task.timeoutMs ?? taskTimeoutMs()} ms`
           : (err as Error).message,
       startedAt,
       endedAt,

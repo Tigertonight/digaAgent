@@ -1,19 +1,5 @@
 import "server-only";
-import {
-  closeSync,
-  existsSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeSync,
-} from "node:fs";
-import { randomUUID } from "node:crypto";
-import * as os from "node:os";
-import * as path from "node:path";
+import { createAtomicJsonStore } from "@/lib/shared/atomic-json-store";
 import type {
   SubagentBatch,
   SubagentBatchStatus,
@@ -34,41 +20,7 @@ if (!g.__digaAgentSubagents) {
   };
 }
 const store = g.__digaAgentSubagents!;
-let activeRoot: string | null = null;
 let hydrated = false;
-
-function getRoot(): string {
-  return activeRoot ?? path.join(os.homedir(), ".diga-agent");
-}
-
-function batchDir(): string {
-  return path.join(getRoot(), "subagents", "batches");
-}
-
-function assertSafeBatchId(batchId: string): void {
-  if (
-    !batchId ||
-    batchId.includes("/") ||
-    batchId.includes("\\") ||
-    batchId.includes("..")
-  ) {
-    throw new Error(`invalid subagent batch id: ${batchId}`);
-  }
-}
-
-function batchFilePath(batchId: string): string {
-  assertSafeBatchId(batchId);
-  return path.join(batchDir(), `${batchId}.json`);
-}
-
-function indexBatch(batch: SubagentBatch): void {
-  let ids = store.byParentAgentId.get(batch.parentAgentId);
-  if (!ids) {
-    ids = new Set();
-    store.byParentAgentId.set(batch.parentAgentId, ids);
-  }
-  ids.add(batch.id);
-}
 
 function isBatchStatus(value: unknown): value is SubagentBatchStatus {
   // S4：detached 也是有效状态。丢了后台运行的 batch 在重启后会被跳过，
@@ -135,76 +87,47 @@ function sanitizeBatch(raw: unknown): SubagentBatch | null {
 }
 
 /**
- * T2.4: 同步原子写（UUID tmp + open(wx) + fsync + rename）+ 错误可观察。
- * 为什么仍同步：subagents store 被大量同步调用路径依赖。
+ * C9-1: 重启后的 "running" 是虚假的——进程已丢，runtime controller 不存在。
+ * 降级为 detached（保留可 resume 语义）、未终态 task 降为 aborted 并补 endedAt。
  */
-function persistBatch(batch: SubagentBatch): void {
-  let tmp: string | null = null;
-  let fd: number | null = null;
-  try {
-    mkdirSync(batchDir(), { recursive: true });
-    const fp = batchFilePath(batch.id);
-    tmp = `${fp}.tmp.${process.pid}.${Date.now()}.${randomUUID()}`;
-    fd = openSync(tmp, "wx");
-    writeSync(fd, JSON.stringify(batch, null, 2), 0, "utf8");
-    fsyncSync(fd);
-    closeSync(fd);
-    fd = null;
-    renameSync(tmp, fp);
-    tmp = null;
-  } catch (err) {
-    if (fd !== null) {
-      try { closeSync(fd); } catch { /* ignore */ }
-    }
-    if (tmp) {
-      try { unlinkSync(tmp); } catch { /* ignore */ }
-    }
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOSPC") {
-      console.warn("[subagent-store] persist failed (no space)", { id: batch.id, code });
-      throw err;
-    }
-    console.warn("[subagent-store] persist failed", {
-      id: batch.id,
-      code,
-      err: err instanceof Error ? err.message : String(err),
-    });
+function hydrateBatch(batch: SubagentBatch, now: number): SubagentBatch {
+  if (batch.status === "running" || batch.status === "pending") {
+    batch.status = "detached";
+    if (!batch.endedAt) batch.endedAt = now;
   }
+  for (const task of batch.tasks) {
+    if (task.status === "running" || task.status === "pending") {
+      task.status = "aborted";
+      task.error = task.error ?? "Process restarted before this task finished.";
+      task.endedAt = task.endedAt ?? now;
+    }
+  }
+  return batch;
+}
+
+const fileStore = createAtomicJsonStore<SubagentBatch>({
+  segments: ["subagents", "batches"],
+  idOf: (batch) => batch.id,
+  sanitize: sanitizeBatch,
+  onHydrate: hydrateBatch,
+});
+
+function indexBatch(batch: SubagentBatch): void {
+  let ids = store.byParentAgentId.get(batch.parentAgentId);
+  if (!ids) {
+    ids = new Set();
+    store.byParentAgentId.set(batch.parentAgentId, ids);
+  }
+  ids.add(batch.id);
 }
 
 function hydrateFromDisk(): void {
   if (hydrated) return;
   hydrated = true;
-  const dir = batchDir();
-  if (!existsSync(dir)) return;
-  const now = Date.now();
-  for (const name of readdirSync(dir)) {
-    if (!name.endsWith(".json")) continue;
-    try {
-      const batch = sanitizeBatch(
-        JSON.parse(readFileSync(path.join(dir, name), "utf8"))
-      );
-      if (!batch) continue;
-      // C9-1: 重启后的 "running" 是虚假的——进程已丢，runtime controller 不存在。
-      // 降级为 detached（保留可 resume 语义）、未终态 task 降为 aborted 并补 endedAt。
-      // 不调 persistBatch（活跃请求会在后续 putBatch 重写）。
-      if (batch.status === "running" || batch.status === "pending") {
-        batch.status = "detached";
-        if (!batch.endedAt) batch.endedAt = now;
-      }
-      for (const task of batch.tasks) {
-        if (task.status === "running" || task.status === "pending") {
-          task.status = "aborted";
-          task.error =
-            task.error ?? "Process restarted before this task finished.";
-          task.endedAt = task.endedAt ?? now;
-        }
-      }
-      store.batches.set(batch.id, batch);
-      indexBatch(batch);
-    } catch {
-      // Ignore corrupt metadata files. They should not block other batches.
-    }
+  for (const batch of fileStore.hydrateAll()) {
+    // hydrate 期不重写磁盘（活跃请求会在后续 putBatch 重写）。
+    store.batches.set(batch.id, batch);
+    indexBatch(batch);
   }
 }
 
@@ -212,7 +135,12 @@ export function putBatch(batch: SubagentBatch): void {
   hydrateFromDisk();
   store.batches.set(batch.id, batch);
   indexBatch(batch);
-  persistBatch(batch);
+  fileStore.persist(batch);
+}
+
+/** flush 时用于取某 batch 最新内存快照（避免 debounce 落盘到过期对象）。 */
+function resolveBatchForFlush(batchId: string): SubagentBatch | undefined {
+  return store.batches.get(batchId);
 }
 
 export function getBatch(batchId: string): SubagentBatch | undefined {
@@ -258,11 +186,7 @@ export function removeBatchesByParentSessionPath(
       ids.delete(batch.id);
       if (ids.size === 0) store.byParentAgentId.delete(batch.parentAgentId);
     }
-    try {
-      unlinkSync(batchFilePath(batch.id));
-    } catch {
-      // 文件不存在 / IO 错误忽略——内存已清，磁盘清理是 best-effort。
-    }
+    fileStore.remove(batch.id);
     removed += 1;
   }
   return removed;
@@ -277,7 +201,10 @@ export function updateBatchStatus(
   if (!batch) return;
   batch.status = status;
   if (endedAt !== undefined) batch.endedAt = endedAt;
-  persistBatch(batch);
+  // 状态变更（含终态）必须同步落盘，并 flush 掉该 batch 的待写 task 更新，
+  // 避免崩溃窗口内丢失终态。
+  fileStore.persist(batch);
+  fileStore.flush(batchId);
 }
 
 export function updateBatch(
@@ -287,7 +214,9 @@ export function updateBatch(
   const batch = store.batches.get(batchId);
   if (!batch) return;
   store.batches.set(batchId, { ...batch, ...patch, id: batch.id });
-  persistBatch(store.batches.get(batchId)!);
+  // updateBatch 常携带 verification/synthesis/审计等终态产物，同步落盘。
+  fileStore.persist(store.batches.get(batchId)!);
+  fileStore.flush(batchId);
 }
 
 export function updateTask(
@@ -300,7 +229,9 @@ export function updateTask(
   const idx = batch.tasks.findIndex((task) => task.id === taskId);
   if (idx < 0) return;
   batch.tasks[idx] = { ...batch.tasks[idx], ...patch };
-  persistBatch(batch);
+  // task 进度更新是高频写（并行 worker 的 answerPreview 流式刷新等），
+  // 用合并写缓解写放大。task 终态由其后紧跟的 updateBatchStatus 同步 flush。
+  fileStore.persistDebounced(batch, resolveBatchForFlush);
 }
 
 export function listRunningBatches(parentAgentId: string): SubagentBatch[] {
@@ -322,23 +253,28 @@ export function clearBatchesForParent(parentAgentId: string): void {
   if (!ids) return;
   for (const id of ids) {
     store.batches.delete(id);
-    try {
-      unlinkSync(batchFilePath(id));
-    } catch {
-      // ignore
-    }
+    fileStore.remove(id);
   }
   store.byParentAgentId.delete(parentAgentId);
 }
 
+/**
+ * 立即落盘所有 debounced 的待写 batch。
+ * 进程退出钩子 / 测试在直接读盘断言前调用，确保合并写已 flush。
+ */
+export function flushSubagentStore(): void {
+  fileStore.flush();
+}
+
 export function __setSubagentStoreRootForTest(root: string | null): void {
-  activeRoot = root;
+  fileStore.__setRootForTest(root);
   hydrated = false;
   store.batches.clear();
   store.byParentAgentId.clear();
 }
 
 export function __resetSubagentStoreForTest(): void {
+  fileStore.flush();
   store.batches.clear();
   store.byParentAgentId.clear();
   hydrated = false;

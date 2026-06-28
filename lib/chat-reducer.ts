@@ -39,6 +39,7 @@ import type {
   WorkflowTraceEvent,
 } from "./workflows/types";
 import type { AgentTeamRun, AgentTeamRunStatus } from "./agent-team/types";
+import { getAgentTeamFinalSummary } from "./agent-team/final-summary";
 import { stripContextAside } from "./context-aside";
 import { isFalseGrepNoMatch } from "./narration/false-error";
 import { diagnoseToolTruncation } from "./tool-recovery/truncation-diagnosis";
@@ -356,6 +357,9 @@ function assistantErrorText(message?: Pick<
   if (!message || message.stopReason !== "error") return null;
   const raw = message.errorMessage?.trim();
   if (!raw) return "回复失败，请检查当前模型或凭证配置后重试。";
+  if (raw.toLowerCase().includes("stream ended without finish_reason")) {
+    return "回复失败：模型连接提前结束，服务没有返回完成标记。可以直接重试；如果频繁出现，建议切换模型或检查当前供应商的流式输出兼容性。";
+  }
   if (raw.includes("authentication token has been invalidated")) {
     return "当前登录凭证已失效，请重新登录 ChatGPT Plus/Pro（Codex Subscription）或重新配置 Provider 凭证后再发送。";
   }
@@ -490,43 +494,6 @@ function findAgentTeamRunPartIndex(
     if (p.kind === "agent_team_run" && p.run.id === id) return i;
   }
   return -1;
-}
-
-function agentTeamFinalSummaryMarker(runId: string): string {
-  return `agent-team-final:${runId}`;
-}
-
-function agentTeamFinalSummaryText(run: AgentTeamRun): string | null {
-  if (run.status !== "completed") return null;
-  const decision = run.board.decisions.at(-1);
-  const rationale = decision?.rationale?.trim();
-  if (!rationale) return null;
-  return [
-    "结论",
-    "",
-    rationale,
-    "",
-    `<!-- ${agentTeamFinalSummaryMarker(run.id)} -->`,
-  ].join("\n");
-}
-
-function hasAgentTeamFinalSummary(messages: ChatMessage[], runId: string): boolean {
-  const marker = agentTeamFinalSummaryMarker(runId);
-  return messages.some((message) =>
-    (message.parts ?? []).some((part) => part.kind === "text" && part.text.includes(marker))
-  );
-}
-
-function appendAgentTeamFinalSummary(state: ReducerState, run: AgentTeamRun): void {
-  if (hasAgentTeamFinalSummary(state.messages, run.id)) return;
-  const text = agentTeamFinalSummaryText(run);
-  if (!text) return;
-  state.messages.push({
-    role: "assistant",
-    parts: [{ kind: "text", text }],
-    timestamp: run.updatedAt ?? Date.now(),
-    stopReason: "stop",
-  });
 }
 
 function previewSubagentAnswer(text: string | undefined): string | undefined {
@@ -777,7 +744,14 @@ export function appendRestoredAgentTeamRuns(
   messages: ChatMessage[],
   runs: AgentTeamRun[] | undefined
 ): ChatMessage[] {
-  const sortedRuns = (runs ?? []).slice().sort((a, b) => a.createdAt - b.createdAt);
+  const sourceRuns =
+    runs ??
+    messages.flatMap((message) =>
+      (message.parts ?? []).flatMap((part) =>
+        part.kind === "agent_team_run" ? [part.run] : []
+      )
+    );
+  const sortedRuns = sourceRuns.slice().sort((a, b) => a.createdAt - b.createdAt);
   const latestById = new Map(sortedRuns.map((run) => [run.id, run]));
   const existing = new Set<string>();
   const next = messages.map((message) => {
@@ -794,26 +768,34 @@ export function appendRestoredAgentTeamRuns(
   });
   const restored = sortedRuns
     .filter((run) => !existing.has(run.id))
-    .map((run): MessagePart => ({ kind: "agent_team_run", run }));
-  if (restored.length > 0) {
-    next.push({
+    .map((run): ChatMessage => ({
       role: "assistant",
-      parts: restored,
-      timestamp: restored[0]?.kind === "agent_team_run"
-        ? restored[0].run.createdAt
-        : Date.now(),
-    });
+      parts: [{ kind: "agent_team_run", run }],
+      timestamp: run.createdAt,
+    }));
+  for (const message of restored) {
+    insertMessageByTimestamp(next, message);
   }
-  const state: ReducerState = { messages: next, activeAssistantIndex: -1 };
-  const summaryRuns = new Map<string, AgentTeamRun>();
-  for (const message of state.messages) {
-    for (const part of message.parts ?? []) {
-      if (part.kind === "agent_team_run") summaryRuns.set(part.run.id, part.run);
-    }
+  for (const run of sortedRuns) {
+    if (run.status !== "completed") continue;
+    if (hasAgentTeamFinalMessage(next, run.id)) continue;
+    const finalMessage = buildAgentTeamFinalMessage(run);
+    if (finalMessage) insertMessageByTimestamp(next, finalMessage);
   }
-  for (const run of sortedRuns) summaryRuns.set(run.id, run);
-  for (const run of summaryRuns.values()) appendAgentTeamFinalSummary(state, run);
-  return state.messages;
+  return next;
+}
+
+function insertMessageByTimestamp(messages: ChatMessage[], message: ChatMessage): void {
+  const ts = typeof message.timestamp === "number" ? message.timestamp : Date.now();
+  const insertAt = messages.findIndex((candidate) => {
+    if (typeof candidate.timestamp !== "number") return false;
+    return candidate.timestamp > ts;
+  });
+  if (insertAt === -1) {
+    messages.push(message);
+  } else {
+    messages.splice(insertAt, 0, message);
+  }
 }
 
 function workflowStatus(value: unknown): WorkflowRunStatus | undefined {
@@ -838,6 +820,78 @@ function agentTeamRunStatus(value: unknown): AgentTeamRunStatus | undefined {
     value === "aborted"
     ? value
     : undefined;
+}
+
+function isTerminalAgentTeamRunStatus(status: AgentTeamRunStatus): boolean {
+  return status === "completed" || status === "failed" || status === "aborted";
+}
+
+function shouldIgnoreAgentTeamRunUpdate(
+  current: AgentTeamRun,
+  incoming: Partial<AgentTeamRun> & { id: string }
+): boolean {
+  const incomingStatus = agentTeamRunStatus(incoming.status);
+  if (
+    isTerminalAgentTeamRunStatus(current.status) &&
+    (!incomingStatus || !isTerminalAgentTeamRunStatus(incomingStatus))
+  ) {
+    return true;
+  }
+  if (
+    typeof current.updatedAt === "number" &&
+    typeof incoming.updatedAt === "number" &&
+    incoming.updatedAt < current.updatedAt
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function agentTeamFinalMarker(runId: string): string {
+  return `agent-team-final:${runId}`;
+}
+
+function hasAgentTeamFinalMessage(messages: ChatMessage[], runId: string): boolean {
+  const marker = agentTeamFinalMarker(runId);
+  return messages.some((message) =>
+    (message.parts ?? []).some(
+      (part) => part.kind === "text" && part.text.includes(marker)
+    )
+  );
+}
+
+function buildAgentTeamFinalMessage(run: AgentTeamRun): ChatMessage | null {
+  if (run.status !== "completed") return null;
+  const finalSummary = getAgentTeamFinalSummary(run);
+  const decision = run.board.decisions.at(-1);
+  const lines = finalSummary
+    ? finalSummary.concise
+      ? [finalSummary.verdict].filter(Boolean)
+      : [
+          finalSummary.verdict,
+          ...finalSummary.bullets.map((bullet) => `- ${bullet}`),
+          finalSummary.risk ? `风险：${finalSummary.risk}` : "",
+        ].filter(Boolean)
+    : [];
+  const body = lines.join("\n").trim() || decision?.rationale?.trim();
+  if (!body) return null;
+  return {
+    role: "assistant",
+    parts: [
+      {
+        kind: "text",
+        text: ["结论", "", body, "", `<!-- ${agentTeamFinalMarker(run.id)} -->`].join("\n"),
+      },
+    ],
+    timestamp: run.endedAt ?? run.updatedAt ?? Date.now(),
+  };
+}
+
+function appendAgentTeamFinalMessageIfMissing(state: ReducerState, run: AgentTeamRun): void {
+  if (run.status !== "completed") return;
+  if (hasAgentTeamFinalMessage(state.messages, run.id)) return;
+  const message = buildAgentTeamFinalMessage(run);
+  if (message) state.messages.push(message);
 }
 
 function workflowRunPartFromToolResult(params: {
@@ -995,28 +1049,22 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         const parts = m.parts.slice();
         const cur = parts[pi];
         if (cur.kind !== "agent_team_run") break;
+        if (shouldIgnoreAgentTeamRunUpdate(cur.run, patch)) break;
+        const nextRun = {
+          ...cur.run,
+          ...patch,
+          status: agentTeamRunStatus(patch.status) ?? cur.run.status,
+          board: patch.board ?? cur.run.board,
+          members: patch.members ?? cur.run.members,
+          updatedAt: patch.updatedAt ?? Date.now(),
+        };
         parts[pi] = {
           kind: "agent_team_run",
-          run: {
-            ...cur.run,
-            ...patch,
-            status: agentTeamRunStatus(patch.status) ?? cur.run.status,
-            board: patch.board ?? cur.run.board,
-            members: patch.members ?? cur.run.members,
-            updatedAt: patch.updatedAt ?? Date.now(),
-          },
+          run: nextRun,
         };
         state.messages[mi] = { ...m, parts };
+        appendAgentTeamFinalMessageIfMissing(state, nextRun);
         break;
-      }
-      if (patch.status === "completed") {
-        const runPart = state.messages
-          .flatMap((message) => message.parts ?? [])
-          .find(
-            (part): part is Extract<MessagePart, { kind: "agent_team_run" }> =>
-              part.kind === "agent_team_run" && part.run.id === patch.id
-          );
-        if (runPart) appendAgentTeamFinalSummary(state, runPart.run);
       }
       return state;
     }
@@ -1048,11 +1096,13 @@ export function applyEvent(prev: ReducerState, ev: AnyEvent): ReducerState {
         const pi = findAgentTeamRunPartIndex(m.parts, run.id);
         if (pi < 0) continue;
         const parts = m.parts.slice();
+        const cur = parts[pi];
+        if (cur.kind === "agent_team_run" && shouldIgnoreAgentTeamRunUpdate(cur.run, run)) break;
         parts[pi] = { kind: "agent_team_run", run };
         state.messages[mi] = { ...m, parts };
+        appendAgentTeamFinalMessageIfMissing(state, run);
         break;
       }
-      appendAgentTeamFinalSummary(state, run);
       return state;
     }
 
@@ -1925,6 +1975,7 @@ export function ctxToMessages(
       content?: unknown;
       is_error?: boolean;
       details?: unknown;
+      run?: AgentTeamRun;
       // image
       data?: string;
       mimeType?: string;
@@ -2011,6 +2062,8 @@ export function ctxToMessages(
           parts.push({ kind: "thinking", text: c.thinking });
         } else if (c.type === "image" && c.data && c.mimeType) {
           parts.push({ kind: "image", data: c.data, mimeType: c.mimeType });
+        } else if (c.type === "agent_team_run" && c.run) {
+          parts.push({ kind: "agent_team_run", run: c.run });
         } else if (
           (c.type === "tool_use" || c.type === "toolCall") &&
           c.id &&

@@ -28,7 +28,7 @@ vi.mock("@/lib/agent-registry", () => agentRegistryMock);
 vi.mock("@/lib/workflows/debug-bundle", () => ({
   buildWorkflowDebugBundle: vi.fn(() => ({ debug: true })),
 }));
-vi.mock("@/lib/workflows/git-worktree", () => ({
+vi.mock("@/lib/shared/git-worktree", () => ({
   createGitWorktreeManager: vi.fn(() => ({})),
 }));
 vi.mock("@/lib/workflows/server-store", () => workflowStoreMock);

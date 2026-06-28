@@ -34,7 +34,7 @@ function teamRun(input: {
   repo: string;
   worktreePath: string;
   worktreeStatus?: "active" | "merge_pending" | "cleaned";
-  status?: "running" | "completed";
+  status?: "running" | "paused" | "completed";
   blockedMessage?: string;
 }): AgentTeamRun {
   const now = Date.now();
@@ -45,7 +45,7 @@ function teamRun(input: {
     parentAgentId: "agent-1",
     parentSessionPath: path.join(input.repo, ".diga-agent", "sessions", "parent.jsonl"),
     objective: "Team worktree E2E：验证独立改动区阻止提前总结",
-    status: input.status ?? "running",
+    status: input.status ?? "paused",
     leadState: input.status === "completed" ? "finalized" : "ready_to_synthesize",
     leadAgentId: "team-wt-e2e:lead",
     createdAt: now,
@@ -210,6 +210,7 @@ function teamRun(input: {
 async function installWorktreeFixture(page: Page, repo: string, worktreePath: string) {
   const calls: Array<Record<string, unknown>> = [];
   let currentRun: AgentTeamRun | null = null;
+  let finalMessageText: string | null = null;
 
   await page.route("**/api/agent/*/teams", async (route: Route) => {
     if (route.request().method() === "GET") {
@@ -238,7 +239,10 @@ async function installWorktreeFixture(page: Page, repo: string, worktreePath: st
       return route.fulfill({ json: { ok: true, run: currentRun } });
     }
 
-    if (body.type === "transition" && body.status === "completed") {
+    if (
+      (body.type === "transition" && body.status === "completed") ||
+      body.type === "finalize_with_risks"
+    ) {
       const hasOpenWorktree = (currentRun ?? teamRun({ repo, worktreePath })).members.some(
         (member) =>
           member.worktree?.status === "active" ||
@@ -256,22 +260,65 @@ async function installWorktreeFixture(page: Page, repo: string, worktreePath: st
         });
         return route.fulfill({
           json: {
-            ok: false,
+            ok: true,
             run: currentRun,
             blockedReasons: ["Team has unmerged worktrees"],
           },
         });
       }
+      finalMessageText =
+        "结论\n\n通过：Required task is complete and the isolated worktree has been closed.\n\n<!-- agent-team-final:team-wt-e2e -->";
       currentRun = teamRun({
         repo,
         worktreePath,
         worktreeStatus: "cleaned",
         status: "completed",
       });
+      await page.evaluate(
+        (context) => {
+          const w = window as unknown as { __mockSessionContext?: unknown };
+          w.__mockSessionContext = context;
+        },
+        {
+          messages: [
+            {
+              role: "assistant",
+              provider: "team",
+              model: "agent-team-result",
+              content: [{ type: "text", text: finalMessageText }],
+              stopReason: "stop",
+              timestamp: Date.now(),
+            },
+          ],
+          forkableUserMessages: [],
+          agentTeamRuns: [currentRun],
+        }
+      );
       return route.fulfill({ json: { ok: true, run: currentRun, blockedReasons: [] } });
     }
 
     return route.fulfill({ json: { ok: true, run: currentRun ?? teamRun({ repo, worktreePath }) } });
+  });
+
+  await page.route("**/api/sessions/*/context", async (route: Route) => {
+    return route.fulfill({
+      json: {
+        messages: finalMessageText
+          ? [
+              {
+                role: "assistant",
+                provider: "team",
+                model: "agent-team-result",
+                content: [{ type: "text", text: finalMessageText }],
+                stopReason: "stop",
+                timestamp: Date.now(),
+              },
+            ]
+          : [],
+        forkableUserMessages: [],
+        agentTeamRuns: currentRun ? [currentRun] : [],
+      },
+    });
   });
 
   return calls;
@@ -286,13 +333,11 @@ test("agent team worktree: unresolved worktree blocks finalize until closed", as
   await editor(page).fill("/team Team worktree E2E：验证独立改动区阻止提前总结");
   await expect(page.getByTestId("mode-chip-team")).toBeVisible();
   await sendBtn(page).click();
-  await expect(page.getByText("准备启动团队协作")).toBeVisible();
-  await page.getByRole("button", { name: "开始" }).click();
 
   await expect.poll(() => calls.some((call) => call.type === "start")).toBe(true);
   const workspace = page.getByTestId("agent-team-workspace");
   await expect(workspace).toBeVisible();
-  await workspace.getByRole("button", { name: "查看过程" }).click();
+  await workspace.getByRole("button", { name: "展开" }).click();
   const worktreeItem = page.getByTestId("agent-team-worktree-item");
   await expect(worktreeItem).toContainText("team/builder-e2e");
   await expect(worktreeItem).toContainText(path.basename(worktreePath));
@@ -316,14 +361,15 @@ test("agent team worktree: unresolved worktree blocks finalize until closed", as
     .toBe(true);
   await expect(worktreeItem).toContainText("待手动处理");
 
-  const transitionCount = calls.filter((call) => call.type === "transition").length;
+  const finalizeCount = calls.filter((call) => call.type === "finalize_with_risks").length;
+  await page.waitForTimeout(600);
   await page
     .getByTestId("agent-team-run-card")
     .getByRole("button", { name: "生成总结" })
     .click();
   await expect
-    .poll(() => calls.filter((call) => call.type === "transition").length)
-    .toBe(transitionCount + 1);
+    .poll(() => calls.filter((call) => call.type === "finalize_with_risks").length)
+    .toBe(finalizeCount + 1);
   await expect(page.getByText("还有独立改动区没有处理。")).toBeVisible();
 
   await worktreeItem.getByRole("button", { name: "丢弃" }).click();
@@ -339,11 +385,12 @@ test("agent team worktree: unresolved worktree blocks finalize until closed", as
     .toBe(true);
   await expect(worktreeItem).toContainText("已清理");
 
+  await page.waitForTimeout(600);
   await page
     .getByTestId("agent-team-run-card")
     .getByRole("button", { name: "生成总结" })
     .click();
   await expect(
-    page.getByRole("main").getByText("Required task is complete and the isolated worktree has been closed.")
+    page.getByRole("main").getByText("Required task is complete and the isolated worktree has been closed")
   ).toBeVisible();
 });

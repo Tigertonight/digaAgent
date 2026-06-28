@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createSubmitGate, failOpenProgressSteps } from "./useChatStream";
 
@@ -10,6 +12,7 @@ describe("createSubmitGate", () => {
     expect(release).toBeTypeOf("function");
     expect(gate.claim("owner-1", "workflow")).toBeNull();
     expect(gate.claim("owner-1", "goal")).toBeTypeOf("function");
+    expect(gate.claim("owner-1", "team")).toBeTypeOf("function");
     expect(gate.claim("owner-2", "workflow")).toBeTypeOf("function");
 
     release?.();
@@ -31,5 +34,27 @@ describe("failOpenProgressSteps", () => {
     ]);
     expect(out?.steps).toEqual([]);
     expect(out?.artifacts).toEqual([]);
+  });
+});
+
+describe("useChatStream local Team follow-up refresh", () => {
+  it("refreshes the active runner when the API returns a local Team answer", () => {
+    const source = readFileSync(
+      path.join(process.cwd(), "app/hooks/useChatStream.ts"),
+      "utf8"
+    );
+    const appSource = readFileSync(
+      path.join(process.cwd(), "app/ChatApp.tsx"),
+      "utf8"
+    );
+
+    expect(source).toContain("localTeamAnswer");
+    expect(source).toContain("localMessages");
+    expect(source).toContain("type: \"message_start\"");
+    expect(source).toContain("onLocalAgentAnswer?.(ownerKey, aid)");
+    expect(appSource).toContain("refreshContextForRunnerRef");
+    expect(appSource).toContain("onLocalAgentAnswer: (ownerKey, aid)");
+    expect(appSource).toContain("mergeMissingChatMessages(");
+    expect(appSource).toContain("skipChatStateOverwrite");
   });
 });

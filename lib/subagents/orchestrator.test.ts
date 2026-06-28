@@ -12,6 +12,7 @@ import {
 import {
   __resetSubagentStoreForTest,
   __setSubagentStoreRootForTest,
+  flushSubagentStore,
   getBatch,
   listBatches,
   listBatchesByParentSessionPath,
@@ -87,9 +88,9 @@ describe("validateDelegateInput", () => {
     expect(out.concurrency).toBe(4);
   });
 
-  it("normalizes explicit short task timeouts to thirty minutes", () => {
+  it("honors an explicit shorter task timeout (does not force the max)", () => {
     const out = validateDelegateInput({
-      reason: "long audit tasks need the full runtime budget",
+      reason: "short task should keep its requested timeout",
       tasks: [
         {
           id: "audit",
@@ -100,12 +101,32 @@ describe("validateDelegateInput", () => {
       ],
     });
 
+    // 修复死代码后：低于上限的 timeout 原样生效，不再被强制改成 30min。
+    expect(out.tasks[0]?.timeoutMs).toBe(300000);
+    expect(out.planning.warnings).not.toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("timeout"),
+      ]),
+    );
+  });
+
+  it("clamps a task timeout that exceeds the limit and warns", () => {
+    const out = validateDelegateInput({
+      reason: "over-long timeout should be clamped to the limit",
+      tasks: [
+        {
+          id: "audit",
+          title: "Audit",
+          prompt: "Audit lifecycle behavior",
+          timeoutMs: 99 * 60 * 60 * 1000, // 99h, well over the 30min limit
+        },
+      ],
+    });
+
     expect(out.tasks[0]?.timeoutMs).toBe(30 * 60 * 1000);
     expect(out.planning.warnings).toEqual(
       expect.arrayContaining([
-        expect.stringContaining(
-          "1 task timeout(s) were normalized to 1800000 ms",
-        ),
+        expect.stringContaining("exceeded the 1800000 ms limit and were clamped"),
       ]),
     );
   });
@@ -491,6 +512,8 @@ describe("subagent batch metadata persistence", () => {
         ],
       });
       updateTask(batchId, "q1", { answerPreview: "persisted preview" });
+      // task 预览更新是 debounced 合并写，直接读盘断言前需 flush。
+      flushSubagentStore();
 
       const fp = path.join(root, "subagents", "batches", `${batchId}.json`);
       const saved = JSON.parse(readFileSync(fp, "utf8"));

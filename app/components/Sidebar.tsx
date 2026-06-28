@@ -40,6 +40,7 @@ import {
   X,
 } from "lucide-react";
 import type { SessionInfoLite } from "@/lib/types";
+import { sessionDisplayTitle } from "@/lib/sessions/display-title";
 import { isSessionUnread } from "@/lib/sessions/unread";
 import { formatRelativeTime, shortCwd } from "@/lib/format";
 import { BrandLogo } from "./BrandLogo";
@@ -260,7 +261,8 @@ export function Sidebar(props: SidebarProps) {
   const selectedSession = selectedId
     ? sessions.find((session) => session.id === selectedId)
     : null;
-  const selectedParentPath = selectedSession?.parentSessionPath;
+  const selectedParentPath =
+    hydrated ? selectedSession?.parentSessionPath : undefined;
   const hasMaintenanceActions = Boolean(
     updateAvailable && (onDownloadUpdate || onSkipUpdateVersion)
   );
@@ -506,9 +508,9 @@ export function Sidebar(props: SidebarProps) {
                   <span
                     className="flex-1 truncate"
                     style={{ color: "var(--text)" }}
-                    title={s.name || s.firstMessage || "新会话"}
+                    title={sessionDisplayTitle(s)}
                   >
-                    删除「{s.name || s.firstMessage || "新会话"}」？
+                    删除「{sessionDisplayTitle(s)}」？
                   </span>
                   <Button
                     type="button"
@@ -626,7 +628,7 @@ export function Sidebar(props: SidebarProps) {
                       <input
                         autoFocus
                         defaultValue={
-                          renameDraft || s.name || s.firstMessage
+                          renameDraft || sessionDisplayTitle(s)
                         }
                         onClick={(e) => e.stopPropagation()}
                         onKeyDown={(e) => {
@@ -659,10 +661,7 @@ export function Sidebar(props: SidebarProps) {
                           />
                         )}
                         <span className="truncate">
-                          {s.meta?.title ||
-                            s.name ||
-                            s.firstMessage ||
-                            "新会话"}
+                          {sessionDisplayTitle(s)}
                         </span>
                       </div>
                     )}
@@ -734,7 +733,7 @@ export function Sidebar(props: SidebarProps) {
                         onClick={() => {
                           setMenuFor(null);
                           setRenamingFor(s.id);
-                          setRenameDraft(s.meta?.title || s.name || s.firstMessage || "");
+                          setRenameDraft(sessionDisplayTitle(s));
                         }}
                       >
                         重命名

@@ -42,6 +42,16 @@ import type {
   ChatMessageComposerMeta,
   MessagePart,
 } from "@/lib/types";
+import type { AgentTeamRun } from "@/lib/agent-team/types";
+import { summarizeAgentTeamObjective } from "@/lib/agent-team/objective";
+import {
+  agentTeamLeadStateLabel,
+  agentTeamMemberLabel,
+  agentTeamStatusLabel,
+  subagentRoleLabel,
+  subagentStatusLabel,
+  workflowStatusLabel,
+} from "@/app/components/runs/labels";
 import type { AgentPhase } from "@/lib/session-runner";
 import { formatMessageTime } from "@/lib/format";
 import { previewStore } from "@/lib/preview-store";
@@ -139,11 +149,16 @@ export interface MessageViewProps {
   onOpenSubagentSession?: (sessionFile: string) => void;
   /** Agent Team：打开共享白板工作区 */
   onOpenAgentTeamWorkspace?: (teamId: string) => void;
+  /** Agent Team：打开某个成员记录；找不到子会话时由上层降级到 Team 工作区。 */
+  onOpenAgentTeamMember?: (teamId: string, memberId: string, sessionFile?: string) => void;
   /** Agent Team：轻量运行控制 */
   onAgentTeamAction?: (
     teamId: string,
-    action: "pause" | "resume" | "finalize" | "stop"
+    action: "pause" | "resume" | "finalize" | "stop",
+    leadAgentId?: string
   ) => void;
+  /** Agent Team：同 ID run 的最新版，避免历史消息快照遮住最终综合。 */
+  agentTeamRunsById?: ReadonlyMap<string, AgentTeamRun>;
 }
 
 export interface WorkflowWorktreeAction {
@@ -153,6 +168,16 @@ export interface WorkflowWorktreeAction {
   baseRef: string;
   createdAt?: number;
 }
+
+type AgentTeamProcessNodeState = "done" | "running" | "pending" | "warn";
+type AgentTeamProcessNode = {
+  id: string;
+  title: string;
+  body: string;
+  state: AgentTeamProcessNodeState;
+  memberId?: string;
+  sessionFile?: string;
+};
 
 function MessageViewInner({
   msg,
@@ -185,7 +210,9 @@ function MessageViewInner({
   onResumeSubagentBatch,
   onOpenSubagentSession,
   onOpenAgentTeamWorkspace,
+  onOpenAgentTeamMember,
   onAgentTeamAction,
+  agentTeamRunsById,
 }: MessageViewProps) {
   // user：右侧气泡（支持 text + image parts 混合）
   if (msg.role === "user") {
@@ -528,13 +555,20 @@ function MessageViewInner({
             );
           }
           if (p.kind === "agent_team_run") {
+            const latestRun = agentTeamRunsById?.get(p.run.id);
+            const part =
+              latestRun && (latestRun.updatedAt ?? 0) >= (p.run.updatedAt ?? 0)
+                ? { ...p, run: latestRun }
+                : p;
             return (
-              <AgentTeamRunCard
-                key={i}
-                part={p}
-                onOpenWorkspace={onOpenAgentTeamWorkspace}
-                onAction={onAgentTeamAction}
-              />
+              <div key={i} className="space-y-3">
+                <AgentTeamRunCard
+                  part={part}
+                  onOpenWorkspace={onOpenAgentTeamWorkspace}
+                  onAction={onAgentTeamAction}
+                  onOpenMember={onOpenAgentTeamMember}
+                />
+              </div>
             );
           }
           if (p.kind === "workflow_run") {
@@ -678,7 +712,9 @@ function areMessageViewPropsEqual(
   if (prev.onResumeSubagentBatch !== next.onResumeSubagentBatch) return false;
   if (prev.onOpenSubagentSession !== next.onOpenSubagentSession) return false;
   if (prev.onOpenAgentTeamWorkspace !== next.onOpenAgentTeamWorkspace) return false;
+  if (prev.onOpenAgentTeamMember !== next.onOpenAgentTeamMember) return false;
   if (prev.onAgentTeamAction !== next.onAgentTeamAction) return false;
+  if (prev.agentTeamRunsById !== next.agentTeamRunsById) return false;
   return true;
 }
 
@@ -1485,7 +1521,16 @@ function summarizeProcessIssue(
 }
 
 function stripAgentTeamInternalMarkers(text: string): string {
-  return text.replace(/\n?<!--\s*agent-team-final:[^>]+-->\s*/g, "").trimEnd();
+  return stripInternalThoughtBlocks(text)
+    .replace(/\n?<!--\s*agent-team-final:[^>]+-->\s*/g, "")
+    .trimEnd();
+}
+
+function stripInternalThoughtBlocks(text: string): string {
+  return text
+    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, "\n")
+    .replace(/<think\b[^>]*>[\s\S]*$/gi, "")
+    .replace(/<\/think>/gi, "");
 }
 
 function extractPlainText(parts: MessagePart[]): string {
@@ -1640,17 +1685,6 @@ function worktreeStatesFromArtifacts(
   return Array.from(byId.values())
     .sort((a, b) => b.artifact.createdAt - a.artifact.createdAt)
     .slice(0, 4);
-}
-
-function workflowStatusLabel(status: Extract<MessagePart, { kind: "workflow_run" }>["status"]): string {
-  if (status === "pending") return "排队中";
-  if (status === "running") return "执行中";
-  if (status === "completed") return "已完成";
-  if (status === "completed_with_warnings") return "已完成，有提醒";
-  if (status === "needs_continue") return "需要继续";
-  if (status === "failed") return "失败";
-  if (status === "aborted") return "已中止";
-  return status;
 }
 
 function workflowWarningArtifactNames(warnings: string[]): Set<string> {
@@ -2358,15 +2392,22 @@ function AgentTeamRunCard({
   part,
   onOpenWorkspace,
   onAction,
+  onOpenMember,
 }: {
   part: Extract<MessagePart, { kind: "agent_team_run" }>;
   onOpenWorkspace?: (teamId: string) => void;
   onAction?: (
     teamId: string,
-    action: "pause" | "resume" | "finalize" | "stop"
+    action: "pause" | "resume" | "finalize" | "stop",
+    leadAgentId?: string
   ) => void;
+  onOpenMember?: (teamId: string, memberId: string, sessionFile?: string) => void;
 }) {
   const { run } = part;
+  const terminal =
+    run.status === "completed" ||
+    run.status === "failed" ||
+    run.status === "aborted";
   const tasks = run.board.tasks;
   const findings = run.board.findings;
   const challenges = run.board.challenges;
@@ -2377,39 +2418,153 @@ function AgentTeamRunCard({
       task.status === "running" ||
       task.status === "blocked"
   ).length;
-  const openChallenges = challenges.filter(
-    (challenge) =>
-      challenge.status === "open" || challenge.status === "needs_evidence"
-  ).length;
+  const rawOpenChallenges = terminal
+    ? 0
+    : challenges.filter(
+        (challenge) =>
+          challenge.status === "open" || challenge.status === "needs_evidence"
+      ).length;
   const acceptedFindings = findings.filter(
     (finding) => finding.status === "accepted"
   ).length;
   const requiredTasks = tasks.filter((task) => task.required);
-  const completedRequired = requiredTasks.filter((task) => task.status === "completed").length;
-  const blockedTasks = tasks.filter((task) => task.status === "blocked");
-  const workingTasks = tasks.filter(
-    (task) => task.status === "claimed" || task.status === "running"
-  );
+  const completedRequired = requiredTasks.filter(
+    (task) => task.status === "completed" && task.completionSource !== "lead_override"
+  ).length;
+  const riskClosedRequired = requiredTasks.filter(
+    (task) => task.status === "completed" && task.completionSource === "lead_override"
+  ).length;
+  const incompleteRequired = Math.max(requiredTasks.length - completedRequired - riskClosedRequired, 0);
+  const unresolvedRequired = riskClosedRequired + incompleteRequired;
+  const finalDecision = run.board.decisions
+    .filter((decision) => (decision.status ?? "accepted") === "accepted")
+    .at(-1);
+  const hasHighConfidenceFinalDecision =
+    run.status === "completed" && finalDecision?.confidence === "high";
+  const hasTerminalUnresolvedRequired =
+    run.status === "completed" &&
+    !hasHighConfidenceFinalDecision &&
+    unresolvedRequired > 0;
+  const hasHighConfidenceTerminalShortcut =
+    run.status === "completed" &&
+    hasHighConfidenceFinalDecision &&
+    unresolvedRequired > 0;
+  const showRequiredTaskProgress = !hasHighConfidenceTerminalShortcut;
+  const blockedTasks = terminal ? [] : tasks.filter((task) => task.status === "blocked");
+  const workingTasks = terminal
+    ? []
+    : tasks.filter((task) => task.status === "claimed" || task.status === "running");
+  const pendingTasks = terminal ? [] : tasks.filter((task) => task.status === "pending");
+  const openChallenges =
+    workingTasks.length > 0 || blockedTasks.length > 0 ? 0 : rawOpenChallenges;
   const progressTotal = Math.max(requiredTasks.length, 1);
   const progressPercent = Math.round((completedRequired / progressTotal) * 100);
-  const cardSummary = agentTeamCardSummary({
-    acceptedFindings,
-    blockedTasks,
-    completedRequired,
-    now: run.updatedAt ?? run.createdAt,
-    openChallenges,
-    openTasks,
-    requiredTotal: requiredTasks.length,
-    workingTasks,
-  });
   const running = run.status === "running" || run.status === "finalizing";
+  const now = useAgentTeamClock(running);
+  const hydrateMissingMemberIds = new Set(run.hydrate?.missingMemberIds ?? []);
+  for (const member of run.members) {
+    if (member.hydrateState === "missing" || member.hydrateState === "replaced") {
+      hydrateMissingMemberIds.add(member.id);
+    }
+  }
+  const hydrateMissingCount = hydrateMissingMemberIds.size;
+  const needsMemberRecovery = run.status === "paused" && hydrateMissingCount > 0;
+  const pausedProviderAuthFailure =
+    run.status === "paused" &&
+    blockedTasks.some((task) => isAgentTeamProviderAuthFailure(task.blocker || task.lastError));
+  const pausedProviderTemporaryFailure =
+    run.status === "paused" &&
+    !pausedProviderAuthFailure &&
+    blockedTasks.some((task) => isAgentTeamProviderTemporaryFailure(task.blocker || task.lastError));
+  const cardSummary =
+    run.status === "completed"
+      ? hasTerminalUnresolvedRequired
+        ? {
+            title: "总结已生成",
+            body: ` 最终回答已放到会话里，但有 ${unresolvedRequired} 个关键任务没有完整验证。`,
+            nextStep: "可以打开进度面板回看哪些事项没有被完整验证。",
+            tone: "warn" as const,
+          }
+        : {
+            title: "总结已生成",
+            body: hasHighConfidenceTerminalShortcut
+              ? " 最终回答已放到会话里，已得到明确结论。"
+              : " 最终回答已放到会话里，关键任务已处理完。",
+            nextStep: "可以打开进度面板回看最终判断和证据。",
+            tone: "muted" as const,
+          }
+      : run.status === "aborted"
+        ? {
+            title: "团队已停止",
+            body: " 本次团队协作已中止，不会再自动处理。",
+            nextStep: "可以打开进度面板回看已发生的过程记录。",
+            tone: "muted" as const,
+          }
+        : run.status === "paused"
+          ? {
+              title: needsMemberRecovery
+                ? "等待成员恢复"
+                : pausedProviderAuthFailure
+                  ? "模型账号未配置"
+                  : pausedProviderTemporaryFailure
+                    ? "模型暂时不可用"
+                    : "团队已暂停",
+              body: needsMemberRecovery
+                ? ` 有 ${hydrateMissingCount} 位成员记录需要恢复，恢复后团队会继续处理。`
+                : pausedProviderAuthFailure
+                  ? " 成员模型调用失败，当前模型缺少可用凭证。"
+                  : pausedProviderTemporaryFailure
+                    ? " 成员模型调用失败，通常是供应商临时繁忙。"
+            : ` 已完成 ${completedRequired}/${requiredTasks.length} 个关键任务，暂停期间不会继续分配任务。`,
+              nextStep: needsMemberRecovery
+                ? "点击“恢复成员”后，系统会重新接上成员记录；仍不可用时会提示重派或带风险总结。"
+                : pausedProviderAuthFailure
+                  ? "请切换到已授权模型，或在设置里完成授权后再重试。"
+                  : pausedProviderTemporaryFailure
+                    ? "可以稍后重试自动处理，或切换到更稳定的模型。"
+                    : "恢复后团队会继续自动处理；也可以停止或用现有结果总结。",
+              tone: "warn" as const,
+            }
+        : agentTeamCardSummary({
+            acceptedFindings,
+            blockedTasks,
+            completedRequired,
+            now,
+            openChallenges,
+            openTasks,
+            pendingTasks,
+            requiredTotal: requiredTasks.length,
+            workingTasks,
+          });
   const paused = run.status === "paused";
-  const terminal =
-    run.status === "completed" ||
-    run.status === "failed" ||
-    run.status === "aborted";
-  const leadLabel = agentTeamLeadStateLabel(run.leadState);
-  const statusLabel = agentTeamStatusLabel(run.status);
+  const leadLabel =
+    run.status === "completed"
+      ? "已综合"
+      : run.status === "aborted"
+        ? "已停止"
+        : agentTeamLeadStateLabel(run.leadState);
+  const statusLabel = needsMemberRecovery ? "等待成员恢复" : agentTeamStatusLabel(run.status);
+  const processNodes = buildAgentTeamProcessNodes(run, now);
+  const actionStatusText =
+    paused
+      ? needsMemberRecovery
+        ? "等待恢复成员"
+        : pausedProviderAuthFailure
+          ? "需要先处理模型配置"
+          : pausedProviderTemporaryFailure
+            ? "模型暂时不可用"
+        : "已暂停，恢复后自动处理"
+      : openChallenges > 0
+      ? `${openChallenges} 件事需要你判断`
+        : blockedTasks.length > 0
+        ? "系统正在尝试处理；卡住时可在右侧重试"
+        : pendingTasks.length > 0 && workingTasks.length === 0
+          ? "团队已准备好；长时间不动可在右侧重试"
+        : "目前无需你操作";
+  const canManuallyFinalize =
+    !terminal && paused && (openTasks === 0 || blockedTasks.length > 0 || openChallenges > 0);
+  const showPauseResumeAction = !terminal && (paused || needsMemberRecovery);
+  const objectiveSummary = summarizeAgentTeamObjective(run.objective, 96);
   return (
     <div
       className="space-y-2 rounded-token-md border px-3 py-2.5"
@@ -2427,7 +2582,7 @@ function AgentTeamRunCard({
             background: "var(--bg-selected)",
             color:
               run.status === "completed"
-                ? "var(--color-success)"
+                ? "var(--accent)"
                 : openChallenges > 0 || blockedTasks.length > 0
                   ? "var(--color-warning)"
                   : "var(--color-info)",
@@ -2438,7 +2593,11 @@ function AgentTeamRunCard({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <span className="text-token-sm font-semibold">
-              {terminal ? "团队协作已处理" : "团队协作处理中"}
+              {run.status === "aborted"
+                ? "团队协作已停止"
+                : terminal
+                  ? "团队协作已完成"
+                  : "团队协作处理中"}
             </span>
             <span
               className="rounded border px-1.5 py-0.5 text-token-xs"
@@ -2446,7 +2605,7 @@ function AgentTeamRunCard({
                 borderColor: "var(--border-soft)",
                 color:
                   run.status === "completed"
-                    ? "var(--color-success)"
+                    ? "var(--accent)"
                     : run.status === "aborted" || run.status === "failed"
                       ? "var(--color-danger)"
                       : run.status === "paused"
@@ -2460,10 +2619,83 @@ function AgentTeamRunCard({
               {leadLabel}
             </span>
           </div>
-          <div className="mt-1 line-clamp-2 text-token-sm" title={run.objective}>
-            {run.objective}
+          <div className="mt-1 text-token-sm" title={run.objective}>
+            {objectiveSummary || "团队协作任务"}
           </div>
         </div>
+      </div>
+
+      <div
+        className="space-y-2 rounded border px-3 py-2 text-token-xs"
+        style={{
+          borderColor: "var(--border-soft)",
+          background: "var(--bg-panel)",
+          color: "var(--text-muted)",
+        }}
+        data-testid="agent-team-process-timeline"
+      >
+        {processNodes.map((node, index) => (
+          <div key={node.id} className="relative flex gap-2.5">
+            <div className="flex w-5 shrink-0 flex-col items-center">
+              <span
+                className={`mt-0.5 h-2.5 w-2.5 rounded-full border ${
+                  node.state === "running" ? "animate-pulse" : ""
+                }`}
+                style={{
+                  background:
+                    node.state === "warn"
+                      ? "var(--color-warning)"
+                      : node.state === "pending"
+                        ? "var(--bg)"
+                        : "var(--accent)",
+                  borderColor:
+                    node.state === "pending"
+                      ? "var(--border)"
+                      : node.state === "warn"
+                        ? "var(--color-warning)"
+                        : "var(--accent)",
+                  boxShadow:
+                    node.state === "running"
+                      ? "0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent)"
+                      : undefined,
+                }}
+              />
+              {index < processNodes.length - 1 ? (
+                <span
+                  className="mt-1 flex-1 border-l"
+                  style={{ borderColor: "var(--border)" }}
+                />
+              ) : null}
+            </div>
+            <div className={`min-w-0 flex-1 ${node.body ? "pb-1.5" : "pb-0.5"}`}>
+              <div className="flex min-w-0 items-center gap-1.5">
+                {node.memberId && onOpenMember ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenMember(run.id, node.memberId!, node.sessionFile)}
+                    className="min-w-0 truncate text-left font-semibold hover:underline"
+                    style={{ color: "var(--text)" }}
+                    title="在右侧查看这个成员"
+                  >
+                    {node.title}
+                  </button>
+                ) : (
+                  <span className="min-w-0 truncate font-semibold" style={{ color: "var(--text)" }}>
+                    {node.title}
+                  </span>
+                )}
+                {node.memberId && onOpenMember ? (
+                  <PanelRightOpen size={11} className="shrink-0" style={{ color: "var(--text-muted)" }} />
+                ) : null}
+              </div>
+              {node.body ? (
+                <div className="mt-0.5 line-clamp-2 leading-snug">
+                  {node.body}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ))}
       </div>
 
       <div
@@ -2490,10 +2722,24 @@ function AgentTeamRunCard({
         </span>
         <span className="ml-1">{cardSummary.body}</span>
         <div className="mt-1 flex items-center gap-2" style={{ color: "var(--fg-faint)" }}>
-          <span>进度 {completedRequired}/{requiredTasks.length}</span>
+          {run.status === "aborted" ? (
+            <span>已停止</span>
+          ) : showRequiredTaskProgress ? (
+            <>
+              <span>进度 {completedRequired}/{requiredTasks.length}</span>
+              {hasTerminalUnresolvedRequired ? (
+                <>
+                  <span>·</span>
+                  <span>带风险 {unresolvedRequired}</span>
+                </>
+              ) : null}
+            </>
+          ) : (
+            <span>结论已生成</span>
+          )}
           <span>·</span>
-          <span>{openChallenges > 0 ? `${openChallenges} 件事需要你判断` : "目前无需你操作"}</span>
-          {progressPercent > 0 ? (
+          <span>{actionStatusText}</span>
+          {run.status !== "aborted" && showRequiredTaskProgress && progressPercent > 0 ? (
             <>
               <span>·</span>
               <span>{progressPercent}%</span>
@@ -2511,39 +2757,71 @@ function AgentTeamRunCard({
           data-testid="open-agent-team-workspace"
         >
           <PanelRightOpen size={13} />
-          查看过程
+          展开
         </button>
-        {!terminal && (
+        {showPauseResumeAction ? (
           <button
             type="button"
-            onClick={() => onAction?.(run.id, paused ? "resume" : "pause")}
+            data-agent-team-id={run.id}
+            data-agent-team-lead-id={run.leadAgentId}
+            data-agent-team-action={paused ? "resume" : "pause"}
+            onPointerDown={(event) => {
+              event.preventDefault();
+              onAction?.(run.id, paused ? "resume" : "pause", run.leadAgentId);
+            }}
+            onClick={(event) => {
+              if (event.detail !== 0) return;
+              onAction?.(run.id, paused ? "resume" : "pause", run.leadAgentId);
+            }}
             className="inline-flex h-7 items-center justify-center rounded-token-sm border px-2 text-token-xs hover:bg-[color:var(--bg-hover)]"
             style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
-            title={paused ? "Resume Team" : "Pause Team"}
-            aria-label={paused ? "Resume Team" : "Pause Team"}
+            title={needsMemberRecovery ? "恢复成员记录" : paused ? "恢复团队自动处理" : "暂停团队协作"}
+            aria-label={needsMemberRecovery ? "恢复成员" : paused ? "恢复处理" : "暂停"}
           >
-            {paused ? "继续" : "暂停"}
+            {needsMemberRecovery ? "恢复成员" : paused ? "恢复处理" : "暂停"}
           </button>
-        )}
-        {!terminal && (
+        ) : null}
+        {canManuallyFinalize ? (
           <button
             type="button"
-            onClick={() => onAction?.(run.id, "finalize")}
+            data-agent-team-id={run.id}
+            data-agent-team-lead-id={run.leadAgentId}
+            data-agent-team-action="finalize"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              onAction?.(run.id, "finalize", run.leadAgentId);
+            }}
+            onClick={(event) => {
+              if (event.detail !== 0) return;
+              onAction?.(run.id, "finalize", run.leadAgentId);
+            }}
             className="inline-flex h-7 items-center gap-1 rounded-token-sm border px-2 text-token-xs hover:bg-[color:var(--bg-hover)]"
             style={{ borderColor: "var(--border-soft)", color: "var(--text-muted)" }}
+            title="生成总结"
+            aria-label="生成总结"
           >
             <CheckCircle2 size={13} />
             生成总结
           </button>
-        )}
+        ) : null}
         {!terminal && (
           <button
             type="button"
-            onClick={() => onAction?.(run.id, "stop")}
+            data-agent-team-id={run.id}
+            data-agent-team-lead-id={run.leadAgentId}
+            data-agent-team-action="stop"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              onAction?.(run.id, "stop", run.leadAgentId);
+            }}
+            onClick={(event) => {
+              if (event.detail !== 0) return;
+              onAction?.(run.id, "stop", run.leadAgentId);
+            }}
             className="inline-flex h-7 items-center justify-center rounded-token-sm border px-2 text-token-xs hover:bg-[color:var(--bg-hover)]"
             style={{ borderColor: "var(--border-soft)", color: "var(--color-danger)" }}
-            title="Stop Team"
-            aria-label="Stop Team"
+            title="停止团队协作"
+            aria-label="停止"
           >
             停止
           </button>
@@ -2560,6 +2838,7 @@ function agentTeamCardSummary({
   now,
   openChallenges,
   openTasks,
+  pendingTasks,
   requiredTotal,
   workingTasks,
 }: {
@@ -2569,6 +2848,12 @@ function agentTeamCardSummary({
   now: number;
   openChallenges: number;
   openTasks: number;
+  pendingTasks: Array<{
+    blocker?: string;
+    claimedAt?: number;
+    description?: string;
+    title?: string;
+  }>;
   requiredTotal: number;
   workingTasks: Array<{
     blocker?: string;
@@ -2591,7 +2876,7 @@ function agentTeamCardSummary({
       body: waitedMinutes
         ? ` 已等待 ${waitedMinutes} 分钟。`
         : " 成员任务已派出，还没有回写结果。",
-      nextStep: "你现在不用操作；系统会在自动推进时重试或重派这个任务。",
+      nextStep: "你现在不用操作；系统会在自动处理时重试或重派这个任务。",
       tone: "warn",
     };
   }
@@ -2604,19 +2889,45 @@ function agentTeamCardSummary({
     };
   }
   if (blockedTasks.length > 0) {
+    const rawReason =
+      blockedTasks[0]?.blocker || blockedTasks[0]?.description || blockedTasks[0]?.title;
     const reason = humanizeAgentTeamCardText(
-      blockedTasks[0]?.blocker || blockedTasks[0]?.description || blockedTasks[0]?.title
+      rawReason
     );
+    if (isAgentTeamProviderAuthFailure(rawReason)) {
+      return {
+        title: "模型账号未配置",
+        body: " 成员模型调用失败，当前模型缺少可用凭证。",
+        nextStep: "请切换到已授权模型，或在设置里完成授权后再点“重试自动处理”。",
+        tone: "warn",
+      };
+    }
+    if (isAgentTeamProviderTemporaryFailure(rawReason)) {
+      return {
+        title: "模型暂时不可用",
+        body: " 成员模型调用失败，通常是供应商临时繁忙。",
+        nextStep: "系统可以稍后重试；如果长时间没有变化，打开进度面板点“重试自动处理”。",
+        tone: "warn",
+      };
+    }
     return {
       title: "团队在等前置结果",
       body: reason ? ` ${reason}` : " 有任务要等证据或成员结果返回。",
-      nextStep: "你现在不用操作；如果想催一下，打开进度面板点“让团队自动推进”。",
+      nextStep: "你现在不用操作；如果长时间没有变化，打开进度面板点“重试自动处理”。",
       tone: "warn",
     };
   }
   if (openTasks > 0) {
+    if (pendingTasks.length > 0 && workingTasks.length === 0) {
+      return {
+        title: "团队已准备好",
+        body: ` 还有 ${pendingTasks.length} 个事项在队列里，负责人会继续自动安排。`,
+        nextStep: "通常不用你点；只有出现明确阻塞时，右侧才会给出重试或总结入口。",
+        tone: "warn",
+      };
+    }
     return {
-      title: "团队正在自动推进",
+      title: "团队正在自动协作",
       body: ` 已完成 ${completedRequired}/${requiredTotal} 个关键任务，${workingTasks.length || openTasks} 个事项还在处理。`,
       nextStep: "你现在不用操作；等需要你拍板或可以总结时，卡片会明确提示。",
       tone: "muted",
@@ -2633,30 +2944,230 @@ function agentTeamCardSummary({
 function humanizeAgentTeamCardText(text: string | undefined): string {
   if (!text) return "";
   return text
+    .replace(
+      /Dispatch failed: Member model error: No API key for provider:\s*[^。.\n]+(?:。|\.)?/gi,
+      "成员模型调用失败，当前模型缺少可用凭证。"
+    )
+    .replace(
+      /Dispatch failed: Member model error:\s*(?:401|403|unauthorized|authentication failed|OAuth token)[^。.\n]*(?:。|\.)?/gi,
+      "成员模型调用失败，当前模型账号未授权或凭证已失效。"
+    )
+    .replace(
+      /Dispatch failed: Member model error: 529[^。.\n]*(?:。|\.)?/g,
+      "成员模型调用失败，供应商临时繁忙，可以稍后重试。"
+    )
+    .replace(
+      /Dispatch failed: Member model error:\s*Stream ended without finish_reason\.?/gi,
+      "成员模型调用失败，模型连接提前结束，没有返回完成标记。"
+    )
+    .replace(
+      /Stream ended without finish_reason\.?/gi,
+      "模型连接提前结束，没有返回完成标记。"
+    )
+    .replace(/Dispatch failed: Member model error:\s*/g, "成员模型调用失败：")
+    .replace(/(.+?) failed and is ready for retry\./g, "「$1」执行失败，可以重试。")
+    .replace(/([A-Za-z][A-Za-z0-9_-]*) claimed (.+?)\./g, (_match, member, task) => {
+      const label = agentTeamMemberLabel(member);
+      return `${label} 已领取「${task}」。`;
+    })
+    .replaceAll("Replacement teammate session 已创建，等待重新认领任务。", "已重新准备成员记录，等待领取任务。")
+    .replaceAll("Teammate session 已创建，等待任务认领。", "成员记录已准备好，等待领取任务。")
+    .replaceAll("Teammate session created, waiting for task claim.", "成员记录已准备好，等待领取任务。")
+    .replaceAll("Replacement teammate session created, waiting for task claim.", "已重新准备成员记录，等待领取任务。")
+    .replaceAll("Accepted available finding:", "已采纳可用发现：")
+    .replaceAll("completed by lead override.", "已用现有结果完成。")
+    .replaceAll("completed by lead override", "已用现有结果完成")
+    .replaceAll("Team stopped; teammate work was shut down.", "团队已停止，这位成员不会继续执行。")
+    .replace(/([A-Za-z][A-Za-z0-9_-]*)(was replaced\.?)/g, "$1 was replaced.")
+    .replaceAll("Lead accepted the synthesis result as the resolution for this open challenge.", "负责人已采纳整理结果，这个分歧已作为最终结论的一部分收束。")
     .replaceAll("Waiting for dependencies:", "等待前置事项完成：")
     .replaceAll("Waiting for dependencies", "等待前置事项完成")
     .replaceAll("Waiting for structured teammate result.", "等待成员返回结果。")
-    .replaceAll("required task", "关键任务")
-    .replaceAll("required tasks", "关键任务");
+    .replaceAll("finalized after all quality gates passed.", "所有检查已通过，团队已完成总结。")
+    .replaceAll("Finalize blocked by quality gates.", "最终总结暂未通过检查。")
+    .replaceAll("quality gates", "质量检查")
+    .replaceAll("quality gate", "质量检查")
+    .replace(/([A-Za-z][A-Za-z0-9_-]*) was replaced\.?/g, "已重新派成员接替 $1。")
+    .replaceAll("required tasks", "关键任务")
+    .replaceAll("required task", "关键任务");
 }
 
-function agentTeamStatusLabel(status: string): string {
-  if (status === "draft") return "待确认";
-  if (status === "running") return "协作中";
-  if (status === "paused") return "已暂停";
-  if (status === "finalizing") return "综合中";
-  if (status === "completed") return "已完成";
-  if (status === "failed") return "失败";
-  if (status === "aborted") return "已中止";
-  return status;
+function isAgentTeamProviderAuthFailure(text: string | undefined): boolean {
+  if (!text) return false;
+  return /No API key|API key|OAuth token|unauthorized|authentication|401|403|鉴权|密钥|凭证|未授权|未配置/i.test(text);
 }
 
-function agentTeamLeadStateLabel(state: string): string {
-  if (state === "exploring") return "继续探索";
-  if (state === "needs_decision") return "需要裁决";
-  if (state === "ready_to_synthesize") return "可综合";
-  if (state === "finalized") return "已综合";
-  return state;
+function isAgentTeamProviderTemporaryFailure(text: string | undefined): boolean {
+  if (!text) return false;
+  if (isAgentTeamProviderAuthFailure(text)) return false;
+  return /529|负载|稍后重试|服务集群|rate limit|quota|用量上限|stream ended|finish_reason|模型连接提前结束/i.test(text);
+}
+
+function useAgentTeamClock(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return undefined;
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+  return now;
+}
+
+function formatAgentTeamElapsed(startedAt: number | undefined, now: number): string {
+  if (!startedAt) return "";
+  const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
+  if (seconds < 60) return "不到 1 分钟";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest > 0 ? `${hours} 小时 ${rest} 分钟` : `${hours} 小时`;
+}
+
+function isSpawnOnlyAgentTeamMemberOutput(text: string | undefined): boolean {
+  const value = humanizeAgentTeamCardText(text).trim();
+  return /^(?:成员记录已准备好|已重新准备成员记录).*(?:等待领取任务|等待任务)/.test(value);
+}
+
+function buildAgentTeamProcessNodes(run: AgentTeamRun, now: number): AgentTeamProcessNode[] {
+  const terminal =
+    run.status === "completed" ||
+    run.status === "failed" ||
+    run.status === "aborted";
+  const nodes: AgentTeamProcessNode[] = [
+    {
+      id: "start",
+      title: "开始执行任务",
+      body:
+        summarizeAgentTeamObjective(humanizeAgentTeamCardText(run.objective), 96) ||
+        "团队已开始处理这个目标。",
+      state: "done",
+    },
+  ];
+  const leadId = run.leadAgentId;
+  const spawnedMembers = terminal
+    ? []
+    : run.members
+        .filter((member) => member.id !== leadId)
+        .filter(
+          (member) =>
+            !member.currentTaskId &&
+            isSpawnOnlyAgentTeamMemberOutput(member.latestOutput)
+        );
+  const activeMembers = terminal
+    ? []
+    : run.members
+        .filter((member) => member.id !== leadId)
+        .filter((member) => {
+          if (
+            !member.currentTaskId &&
+            isSpawnOnlyAgentTeamMemberOutput(member.latestOutput)
+          ) {
+            return false;
+          }
+          return member.currentTaskId || member.latestOutput || member.status !== "idle";
+        })
+        .slice(0, 3);
+  if (spawnedMembers.length > 0) {
+    const shownNames = spawnedMembers
+      .slice(0, 3)
+      .map((member) => agentTeamMemberLabel(member.name || member.role));
+    const suffix =
+      spawnedMembers.length > shownNames.length
+        ? ` 等 ${spawnedMembers.length} 位成员`
+        : "";
+    nodes.push({
+      id: "members:spawned",
+      title: "成员记录已准备好",
+      body: `已准备 ${shownNames.join("、")}${suffix}，后续会自动安排任务。`,
+      state: terminal ? "done" : "pending",
+    });
+  }
+  for (const member of activeMembers) {
+    const task = member.currentTaskId
+      ? run.board.tasks.find((item) => item.id === member.currentTaskId)
+      : run.board.tasks.find((item) => item.ownerAgentId === member.id);
+    const runningElapsed = member.status === "working"
+      ? formatAgentTeamElapsed(task?.claimedAt ?? member.lastActiveAt, now)
+      : "";
+    const runningBody = runningElapsed && task
+      ? run.status === "paused"
+        ? `暂停前在处理「${task.title}」，已运行 ${runningElapsed}。`
+        : `正在处理「${task.title}」，已运行 ${runningElapsed}。`
+      : "";
+    nodes.push({
+      id: `member:${member.id}`,
+      title: `${agentTeamMemberLabel(member.name || member.role)} Domain Agent`,
+      // humanizeAgentTeamCardText 可能把纯内部文案清成空串，这里再兜一层，
+      // 避免节点只剩标题、留下连接线下方的空白段。
+      body:
+        runningBody ||
+        humanizeAgentTeamCardText(
+          member.latestOutput || task?.title || task?.description || ""
+        ) || "正在处理分配到的任务。",
+      state:
+        run.status === "paused"
+          ? "pending"
+          : member.status === "blocked"
+          ? "warn"
+          : member.status === "working" && run.status === "running"
+            ? "running"
+            : member.status === "done" || run.status === "completed"
+            ? "done"
+            : "pending",
+      memberId: member.id,
+      sessionFile: member.sessionFile,
+    });
+  }
+  const hasRunningMember = nodes.some((node) => node.memberId && node.state === "running");
+  const hasPendingMember = nodes.some((node) => node.memberId && node.state === "pending");
+  if (run.status === "completed") {
+    nodes.push({
+      id: "final",
+      title: "形成最终结论",
+      body: "最终回答已放到会话里。",
+      state: "done",
+    });
+  } else if (run.status === "aborted" || run.status === "failed") {
+    nodes.push({
+      id: "stopped",
+      title: run.status === "failed" ? "执行失败" : "任务已停止",
+      body: humanizeAgentTeamCardText(run.error) || "可以打开过程查看已经完成的部分。",
+      state: "warn",
+    });
+  } else if (run.status === "paused") {
+    const pausedBlockedTask = run.board.tasks.find((task) => task.status === "blocked");
+    const pausedBlocker = pausedBlockedTask?.blocker || pausedBlockedTask?.lastError || "";
+    const providerAuthFailure = isAgentTeamProviderAuthFailure(pausedBlocker);
+    const providerTemporaryFailure = isAgentTeamProviderTemporaryFailure(pausedBlocker);
+    nodes.push({
+      id: "paused",
+      title: providerAuthFailure
+        ? "模型账号未配置"
+        : providerTemporaryFailure
+          ? "模型暂时不可用"
+          : "团队已暂停",
+      body: providerAuthFailure
+        ? "成员模型调用失败，当前模型缺少可用凭证。请换到已授权模型，或完成授权后再重试。"
+        : providerTemporaryFailure
+          ? "成员模型调用失败，通常是供应商临时繁忙。稍后可以重试自动处理。"
+          : "恢复后团队会继续自动处理；暂停期间不会分配新任务。",
+      state: providerAuthFailure || providerTemporaryFailure ? "warn" : "pending",
+    });
+  } else {
+    nodes.push({
+      id: "next",
+      title: hasRunningMember ? "等待成员返回结果" : hasPendingMember ? "团队已准备好" : "规划下一步",
+      body:
+        hasRunningMember
+          ? "成员正在处理任务，完成后团队会继续整理结论。"
+          : hasPendingMember
+            ? "成员记录已准备好，负责人会继续自动安排；正常情况下不需要你手动推进。"
+            : "团队会继续自动处理；需要你确认时会在卡片里明确提示。",
+      state: hasRunningMember || hasPendingMember ? "pending" : "running",
+    });
+  }
+  return nodes;
 }
 
 function SubagentBatchCard({
@@ -3159,25 +3670,6 @@ function SubagentBatchCard({
       </div>
     </div>
   );
-}
-
-function subagentRoleLabel(role: string | undefined): string {
-  if (role === "rag") return "知识库";
-  if (role === "research") return "研究";
-  if (role === "code-review") return "审计";
-  if (role === "implementation") return "实现";
-  if (role === "general") return "通用";
-  return "通用";
-}
-
-function subagentStatusLabel(status: string): string {
-  if (status === "completed") return "已完成";
-  if (status === "running") return "执行中";
-  if (status === "pending") return "排队中";
-  if (status === "failed") return "失败";
-  if (status === "aborted") return "已中止";
-  if (status === "timeout") return "已超时";
-  return status;
 }
 
 function ThinkingBlock({

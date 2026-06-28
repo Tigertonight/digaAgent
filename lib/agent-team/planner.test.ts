@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { createInitialAgentTeamRun } from "./mock";
+import { createInitialAgentTeamRun } from "./initial-run";
 import {
   inferAgentTeamPlannerTags,
   planAgentTeamDeterministic,
 } from "./planner";
 
 const baseSettings = {
+  mode: "collaboration" as const,
   memberScale: "standard" as const,
   allowNetwork: false,
   allowWrite: false,
@@ -89,5 +90,29 @@ describe("Agent Team deterministic planner", () => {
       expect.arrayContaining(["code", "writing"])
     );
     expect(run.board.tasks.find((task) => task.id === "evidence")?.description).toContain("代码");
+  });
+
+  it("does not make challenge a blocking dependency in collaboration mode", () => {
+    const run = createInitialAgentTeamRun("只读确认 app/page.tsx 是否存在", {
+      mode: "collaboration",
+      allowChallenges: true,
+    });
+    const challenge = run.board.tasks.find((task) => task.id === "challenge");
+    const synthesis = run.board.tasks.find((task) => task.id === "synthesis");
+
+    expect(challenge?.required).toBe(false);
+    expect(synthesis?.dependsOnTaskIds).toEqual(["evidence"]);
+  });
+
+  it("keeps challenge as a blocking dependency in audit mode", () => {
+    const run = createInitialAgentTeamRun("严格审计 app/page.tsx 是否存在", {
+      mode: "audit",
+      allowChallenges: true,
+    });
+    const challenge = run.board.tasks.find((task) => task.id === "challenge");
+    const synthesis = run.board.tasks.find((task) => task.id === "synthesis");
+
+    expect(challenge?.required).toBe(true);
+    expect(synthesis?.dependsOnTaskIds).toEqual(["challenge"]);
   });
 });

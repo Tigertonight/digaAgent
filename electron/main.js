@@ -224,7 +224,8 @@ function npmCommand() {
 }
 
 async function ensureDevServer(url) {
-  const existing = await waitForHttp(url, 1500);
+  const healthUrl = new URL("/api/health", url).toString();
+  const existing = (await waitForHttp(healthUrl, 5000)) || (await waitForHttp(url, 3000));
   if (existing) {
     console.log(`[electron] dev server already reachable at ${url}`);
     return;

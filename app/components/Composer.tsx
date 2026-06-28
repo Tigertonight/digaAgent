@@ -248,6 +248,8 @@ export function Composer(props: ComposerProps) {
   //   - send/steer/followUp/abort/applyAutocomplete 前必须 flushSync 一次到上层，
   //     保证父组件的 useCallback 闭包（依赖 input）读到最新值
   const [localInput, setLocalInput] = useState<string>(input);
+  const localInputRef = useRef<string>(input);
+  localInputRef.current = localInput;
   const composingRef = useRef(false);
   // 记录"我们最近一次写给 setInput 的值"，避免 input prop 回流时把 local 覆盖回去
   const lastFlushedRef = useRef<string>(input);
@@ -423,10 +425,10 @@ export function Composer(props: ComposerProps) {
   const [filesPopoverOpen, setFilesPopoverOpen] = useState(false);
 
   // textarea handlers
-  const onTextareaChange = useCallback(
-    (e: ChangeEvent<HTMLTextAreaElement>) => {
-      const v = e.target.value;
-      const caret = e.target.selectionStart ?? v.length;
+  const syncTextareaValue = useCallback(
+    (target: HTMLTextAreaElement) => {
+      const v = target.value;
+      const caret = target.selectionStart ?? v.length;
       // 结构化：仅在还没选中 mode 时检测。识别到后提为 chip，
       // textarea 清空为该 mode 之后的正文。
       if (!composerModeRef.current) {
@@ -450,6 +452,27 @@ export function Composer(props: ComposerProps) {
     },
     []
   );
+  const onTextareaChange = useCallback(
+    (e: ChangeEvent<HTMLTextAreaElement>) => {
+      syncTextareaValue(e.target);
+    },
+    [syncTextareaValue]
+  );
+  const onTextareaInput = useCallback(
+    (e: SyntheticEvent<HTMLTextAreaElement>) => {
+      syncTextareaValue(e.currentTarget);
+    },
+    [syncTextareaValue]
+  );
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const el = inputRef.current;
+      if (!el || document.activeElement !== el) return;
+      if (el.value === localInputRef.current) return;
+      syncTextareaValue(el);
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [inputRef, syncTextareaValue]);
   const onTextareaSelect = useCallback(
     (e: SyntheticEvent<HTMLTextAreaElement>) => {
       if (composingRef.current) return;
@@ -672,6 +695,7 @@ export function Composer(props: ComposerProps) {
             ref={inputRef}
             value={localInput}
             onChange={onTextareaChange}
+            onInput={onTextareaInput}
             onSelect={onTextareaSelect}
             onBlur={onTextareaBlur}
             onCompositionStart={onCompositionStart}

@@ -52,7 +52,7 @@ import {
   setInput as setStoreInput,
 } from "@/lib/composer/input-store";
 
-function makeClientRequestId(): string {
+export function makeClientRequestId(): string {
   // F3：optimistic dedupe key。如果 crypto.randomUUID 不可用则 fallback。
   if (
     typeof crypto !== "undefined" &&
@@ -63,8 +63,127 @@ function makeClientRequestId(): string {
   return `crid-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function isLocalAgentAnswerResult(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { localTeamAnswer?: unknown }).localTeamAnswer === true
+  );
+}
+
+type LocalAgentMessage = {
+  role: string;
+  timestamp?: number;
+  responseId?: string;
+  provider?: string;
+  model?: string;
+  api?: string;
+  stopReason?: string;
+  errorMessage?: string;
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+    totalTokens?: number;
+    cost?:
+      | number
+      | {
+          input?: number;
+          output?: number;
+          cacheRead?: number;
+          cacheWrite?: number;
+          total?: number;
+        };
+  };
+  content?: Array<{ type: string; text?: string; thinking?: string; data?: string; mimeType?: string }>;
+};
+
+function localAgentAnswerMessages(value: unknown): {
+  userMessage?: LocalAgentMessage;
+  message?: LocalAgentMessage;
+} | null {
+  if (!isLocalAgentAnswerResult(value)) return null;
+  const localMessages = (value as { localMessages?: unknown }).localMessages;
+  if (typeof localMessages !== "object" || localMessages === null) return null;
+  const userMessage = (localMessages as { userMessage?: unknown }).userMessage;
+  const message = (localMessages as { message?: unknown }).message;
+  return {
+    userMessage: normalizeLocalAgentMessage(userMessage),
+    message: normalizeLocalAgentMessage(message),
+  };
+}
+
+function normalizeLocalAgentMessage(value: unknown): LocalAgentMessage | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    typeof (value as { role?: unknown }).role !== "string"
+  ) {
+    return undefined;
+  }
+  const raw = value as {
+    role: string;
+    content?: unknown;
+    timestamp?: unknown;
+    responseId?: unknown;
+    provider?: unknown;
+    model?: unknown;
+    api?: unknown;
+    stopReason?: unknown;
+    errorMessage?: unknown;
+    usage?: LocalAgentMessage["usage"];
+  };
+  const content =
+    typeof raw.content === "string"
+      ? [{ type: "text", text: raw.content }]
+      : Array.isArray(raw.content)
+        ? raw.content
+            .map((part) => {
+              if (
+                typeof part !== "object" ||
+                part === null ||
+                typeof (part as { type?: unknown }).type !== "string"
+              ) {
+                return null;
+              }
+              const item = part as {
+                type: string;
+                text?: unknown;
+                thinking?: unknown;
+                data?: unknown;
+                mimeType?: unknown;
+              };
+              return {
+                type: item.type,
+                text: typeof item.text === "string" ? item.text : undefined,
+                thinking:
+                  typeof item.thinking === "string" ? item.thinking : undefined,
+                data: typeof item.data === "string" ? item.data : undefined,
+                mimeType:
+                  typeof item.mimeType === "string" ? item.mimeType : undefined,
+              };
+            })
+            .filter((part): part is NonNullable<typeof part> => Boolean(part))
+        : undefined;
+  return {
+    role: raw.role,
+    content,
+    timestamp: typeof raw.timestamp === "number" ? raw.timestamp : undefined,
+    responseId: typeof raw.responseId === "string" ? raw.responseId : undefined,
+    provider: typeof raw.provider === "string" ? raw.provider : undefined,
+    model: typeof raw.model === "string" ? raw.model : undefined,
+    api: typeof raw.api === "string" ? raw.api : undefined,
+    stopReason: typeof raw.stopReason === "string" ? raw.stopReason : undefined,
+    errorMessage:
+      typeof raw.errorMessage === "string" ? raw.errorMessage : undefined,
+    usage: raw.usage,
+  };
+}
+
 type Updater<T> = T | ((prev: T) => T);
-export type SubmitMode = "prompt" | "goal" | "workflow";
+export type SubmitMode = "prompt" | "goal" | "workflow" | "team";
 
 export function createSubmitGate() {
   const inFlight = new Set<string>();
@@ -182,6 +301,7 @@ export interface UseChatStreamParams {
     aid: string,
     ownerKey?: RunnerKey,
   ) => void | Promise<void>;
+  onLocalAgentAnswer?: (ownerKey: RunnerKey, aid: string) => void | Promise<void>;
 }
 
 export interface UseChatStreamReturn {
@@ -234,6 +354,7 @@ export function useChatStream(
     setSessions,
     refreshStats,
     refreshToolsCount,
+    onLocalAgentAnswer,
   } = params;
   const submitGateRef = useRef<ReturnType<typeof createSubmitGate> | null>(
     null,
@@ -556,7 +677,7 @@ export function useChatStream(
         // 滚动行为：发送后保持贴底跟随（不锚顶）。stickToBottomRef 由滚动监听维护，
         // streamSignature effect 会在 user 气泡 + 后续 token 流入时持续 snap 到底。
         try {
-          await agentAction(aid, {
+          const result = await agentAction(aid, {
             type: "prompt",
             text: promptText,
             images: images.length > 0 ? images : undefined,
@@ -564,6 +685,32 @@ export function useChatStream(
               attachmentPaths.length > 0 ? attachmentPaths : undefined,
             clientRequestId,
           });
+          if (isLocalAgentAnswerResult(result)) {
+            const localMessages = localAgentAnswerMessages(result);
+            if (localMessages?.userMessage || localMessages?.message) {
+              updateRunner(ownerKey, (state) => {
+                let chatState = state.chatState;
+                if (localMessages.userMessage) {
+                  chatState = applyEvent(chatState, {
+                    type: "message_start",
+                    message: localMessages.userMessage,
+                  });
+                }
+                if (localMessages.message) {
+                  chatState = applyEvent(chatState, {
+                    type: "message_start",
+                    message: localMessages.message,
+                  });
+                  chatState = applyEvent(chatState, {
+                    type: "message_end",
+                    message: localMessages.message,
+                  });
+                }
+                return { chatState };
+              });
+            }
+            await onLocalAgentAnswer?.(ownerKey, aid);
+          }
         } catch {
           /* error 已被 agentAction 设置 */
           // F3：标记发送失败，供用户可见。
@@ -591,6 +738,7 @@ export function useChatStream(
       setError,
       claimSubmit,
       activeKeyRef,
+      onLocalAgentAnswer,
     ],
   );
 

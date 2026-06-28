@@ -564,6 +564,22 @@ export function useAgentEvents(
           }));
           return;
 
+        // ===== Agent Team board 状态 =====
+        // Team 的成员领取任务、运行、结果入库和最终总结都通过这些事件同步。
+        // 启动 Team 后 run_until_idle 会在后台跑一段时间；如果这里不消费事件，
+        // 主卡片只能等 HTTP 请求结束才更新，看起来就像卡在“等待成员推进”。
+        case "agent_team_run_start":
+        case "agent_team_run_update":
+        case "agent_team_run_finalized":
+          updateRunner(ownerKey, (s) => ({
+            chatState: normalizeReducerChatState(
+              applyEvent(s.chatState, ev),
+              ev.type,
+              aidForEvents
+            ),
+          }));
+          return;
+
         default:
           return;
       }

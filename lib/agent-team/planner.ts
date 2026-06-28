@@ -160,13 +160,14 @@ function taskBase(input: AgentTeamPlanInput, tags: AgentTeamPlannerTag[]): Agent
   ];
 
   if (settings.allowChallenges) {
+    const challengeRequired = settings.mode === "audit";
     tasks.push({
       id: "challenge",
       title: tags.includes("qa") ? "风险与回归挑战" : "挑战结论",
       description: "对关键发现做反证、找冲突、标出需要继续探索的地方。",
       status: "pending",
       priority: "normal",
-      required: true,
+      required: challengeRequired,
       findingIds: [],
       dependsOnTaskIds: ["evidence"],
       expectedOutput: "review",
@@ -197,7 +198,10 @@ function taskBase(input: AgentTeamPlanInput, tags: AgentTeamPlannerTag[]): Agent
     priority: "high",
     required: true,
     findingIds: [],
-    dependsOnTaskIds: settings.allowChallenges ? ["challenge"] : ["evidence"],
+    dependsOnTaskIds:
+      settings.allowChallenges && settings.mode === "audit"
+        ? ["challenge"]
+        : ["evidence"],
     expectedOutput: "decision_input",
     evidenceRequired: true,
   });

@@ -336,8 +336,9 @@ export function useSessions(opts: UseSessionsOptions): UseSessionsReturn {
   const selectedIdRef = useRef<string | null>(selectedId);
   useEffect(() => {
     selectedIdRef.current = selectedId;
+    if (!selectedId && sessions.length === 0) return;
     writeSelectedSessionToStorage(selectedId);
-  }, [selectedId]);
+  }, [selectedId, sessions.length]);
 
   const lastSeenMapRef = useRef<Record<string, string>>(lastSeenMap);
   useEffect(() => {

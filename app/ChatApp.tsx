@@ -18,13 +18,15 @@ import {
   deleteInput as deleteStoreInput,
 } from "@/lib/composer/input-store";
 import { parseSlashCommand } from "@/lib/slash-command";
-import { ArrowDown, CheckCircle2, Download, FileText, Loader2, RotateCcw, Users, X } from "lucide-react";
+import { sanitizeAgentTeamObjective } from "@/lib/agent-team/objective";
+import { ArrowDown, CheckCircle2, Download, FileText, Loader2, RotateCcw, X } from "lucide-react";
 import type {
   SessionInfoLite,
   ChatMessage,
   MessagePart,
   ImageContentLite,
   ForkableUserMessage,
+  ProvidersResponse,
 } from "@/lib/types";
 import type {
   WorkflowDebugBundle,
@@ -50,7 +52,10 @@ import {
   createInitialState,
   ctxToMessages,
 } from "@/lib/chat-reducer";
+import { mergeMissingChatMessages } from "@/lib/chat-message-merge";
 import type { AgentTeamRun, AgentTeamSettings } from "@/lib/agent-team/types";
+import { shouldAutoKickAgentTeamRun } from "@/lib/agent-team/auto-kick";
+import { findSessionForFile } from "@/lib/sessions/find-session";
 import { userFacingMessage } from "@/lib/user-facing-error";
 import type { SubagentBatch } from "@/lib/subagents/types";
 import {
@@ -64,7 +69,11 @@ import { useRunners } from "./hooks/useRunners";
 import { useSseManager } from "./hooks/useSseManager";
 import { useAgentEvents } from "./hooks/useAgentEvents";
 import { useSessions } from "./hooks/useSessions";
-import { useChatStream } from "./hooks/useChatStream";
+import {
+  createSubmitGate,
+  makeClientRequestId,
+  useChatStream,
+} from "./hooks/useChatStream";
 import { useComposerAttachments } from "./hooks/useComposerAttachments";
 import { useMissingFileCheck } from "./hooks/useMissingFileCheck";
 import { usePetPusher } from "./hooks/usePetPusher";
@@ -103,12 +112,14 @@ import { resolveRuntimeIdentity } from "@/lib/runtime/identity";
 interface Props {
   initialSessions: SessionInfoLite[];
   defaultCwd: string;
+  initialProvidersData?: ProvidersResponse | null;
 }
 
 type Theme = "dark" | "light";
 const INPUT_HISTORY_KEY = "diga:composer:history:v1";
 const INPUT_HISTORY_LIMIT = 100;
 const DEFAULT_TEAM_LAUNCH_SETTINGS: AgentTeamSettings = {
+  mode: "collaboration",
   memberScale: "standard",
   allowNetwork: false,
   allowWrite: false,
@@ -130,35 +141,37 @@ function createDefaultTeamLaunchSettings(): AgentTeamSettings {
   };
 }
 
-function describeTeamMemberScale(scale: AgentTeamSettings["memberScale"]): string {
-  if (scale === "small") return "快速小队";
-  if (scale === "deep") return "深度团队";
-  return "标准 5";
-}
-
 function inferTeamLaunchSettings(objective: string): AgentTeamSettings {
   const text = objective.toLowerCase();
   const wantsDeep =
-    /深度|全面|严格|发布前|风险|架构|复盘|审查|验收|回归|多视角|可追溯|challenge|critic|release|risk|architecture|audit|review/.test(
+    /深度|全面|严格|发布前|风险|架构|复盘|多视角|可追溯|challenge|critic|release|risk|architecture|audit/.test(
       text
     );
-  const wantsQuick = /快速|简单|粗看|大概|quick|brief/.test(text);
+  const wantsReview = /审查|验收|回归|review/.test(text);
+  const wantsQuick =
+    /快速|简单|粗看|大概|范围极小|范围小|小范围|最小|只读检查|minimal|tiny|quick|brief/.test(
+      text
+    );
+  const wantsAudit = /严格审计|审计模式|强证据|必须证据|audit mode|strict audit/.test(text);
   const wantsWrite =
     /修复|实现|修改|改一下|提交|commit|push|落地|改代码|fix|implement|write/.test(text);
   const wantsReadonly = /只读|不要改|不修改|只看|readonly|read only/.test(text);
   const wantsNetwork =
     /联网|网页|最新|资料|竞品|市场|搜索|查一下|browser|web|latest|search/.test(text);
   const wantsNoNetwork = /不联网|不要联网|只看当前项目|no web|offline/.test(text);
-  const memberScale: AgentTeamSettings["memberScale"] = wantsDeep
-    ? "deep"
-    : wantsQuick
-      ? "small"
-      : "standard";
+  const memberScale: AgentTeamSettings["memberScale"] = wantsQuick
+    ? "small"
+    : wantsDeep
+      ? "deep"
+      : wantsReview
+        ? "standard"
+        : "standard";
   const allowWrite = wantsWrite && !wantsReadonly;
   const allowNetwork = wantsNetwork && !wantsNoNetwork;
 
   return {
     ...createDefaultTeamLaunchSettings(),
+    mode: wantsAudit ? "audit" : "collaboration",
     memberScale,
     allowNetwork,
     allowWrite,
@@ -171,22 +184,6 @@ function inferTeamLaunchSettings(objective: string): AgentTeamSettings {
   };
 }
 
-function teamLaunchConfigSummary(settings: AgentTeamSettings): string[] {
-  const scale =
-    settings.memberScale === "small"
-      ? "快速小队 · 3 人"
-      : settings.memberScale === "deep"
-        ? "深度团队 · 8 人左右"
-        : "标准团队 · 5 人";
-  return [
-    scale,
-    settings.allowWrite ? "需要时会先确认再改文件" : "只看不改",
-    settings.allowNetwork ? "需要时可查外部资料" : "只看当前上下文",
-    settings.allowChallenges ? "会互相校验" : "快速收敛",
-    "完成后直接给你结论",
-  ];
-}
-
 function teamOperationErrorMessage(
   error: unknown,
   fallback: string,
@@ -194,24 +191,35 @@ function teamOperationErrorMessage(
   const raw = typeof error === "string" ? error : "";
   const normalized = raw.toLowerCase();
   if (normalized.includes("no runnable task or teammate")) {
-    return "团队暂时没有可自动推进的事项。可以补充目标，或等当前成员结果返回后再推进。";
+    return "团队暂时没有可自动处理的事项。可以补充目标，或等当前成员结果返回后再试。";
   }
   if (normalized.includes("waiting for dependencies")) {
-    return "团队在等待前置证据或成员结果。可以点击“继续推进”，负责人会优先处理可继续的部分。";
+    return "团队在等待前置证据或成员结果。可以让团队重试自动处理，负责人会优先处理可继续的部分。";
   }
   if (normalized.includes("no dispatch plan") || normalized.includes("no runnable")) {
-    return "团队暂时没有可继续分派的事项。可以补充目标，或等当前成员结果返回后再推进。";
+    return "团队暂时没有可继续分派的事项。可以补充目标，或等当前成员结果返回后再试。";
   }
   if (normalized.includes("team run not found")) {
     return "这次团队协作已不可用，请重新启动一次。";
   }
+  if (
+    normalized.includes("no model") ||
+    normalized.includes("model") && normalized.includes("not found") ||
+    raw.includes("没有可用模型")
+  ) {
+    return "团队没有拿到可用模型。请先切换到一个能正常回复的模型，再重新启动团队协作。";
+  }
   if (normalized.includes("open challenges")) {
     return "还有待确认的问题，解决后才能生成最终总结。";
   }
-  if (normalized.includes("critical tasks")) {
-    return "还有关键任务未完成，完成后才能生成最终总结。";
+  if (
+    normalized.includes("critical tasks") ||
+    normalized.includes("required task") ||
+    raw.includes("required task 未完成")
+  ) {
+    return "还有关键任务没处理完；协作模式会尽量带风险总结，严格审计模式需要先补齐任务。";
   }
-  if (normalized.includes("lead final synthesis")) {
+  if (normalized.includes("lead final synthesis") || raw.includes("尚未形成可追溯最终综合")) {
     return "负责人还没有给出最终判断，暂时不能结束。";
   }
   if (normalized.includes("worktree")) {
@@ -237,16 +245,47 @@ function formatWorkflowTime(ms: number | undefined): string {
 }
 
 function collectAgentTeamRuns(messages: ChatMessage[]): AgentTeamRun[] {
-  const runs: AgentTeamRun[] = [];
-  const seen = new Set<string>();
+  const latestById = new Map<string, AgentTeamRun>();
   for (const message of messages) {
     for (const part of message.parts ?? []) {
-      if (part.kind !== "agent_team_run" || seen.has(part.run.id)) continue;
-      seen.add(part.run.id);
-      runs.push(part.run);
+      if (part.kind !== "agent_team_run") continue;
+      const previous = latestById.get(part.run.id);
+      if (!previous || (part.run.updatedAt ?? 0) >= (previous.updatedAt ?? 0)) {
+        latestById.set(part.run.id, part.run);
+      }
     }
   }
-  return runs.sort((a, b) => b.updatedAt - a.updatedAt);
+  return Array.from(latestById.values()).sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+function collectMissingAgentTeamFinalIds(messages: ChatMessage[]): string[] {
+  const seenRuns = new Set<string>();
+  const completedRuns = new Set<string>();
+  const finalMarkers = new Set<string>();
+  for (const message of messages) {
+    for (const part of message.parts ?? []) {
+      if (part.kind === "agent_team_run") {
+        seenRuns.add(part.run.id);
+        if (part.run.status === "completed") {
+          completedRuns.add(part.run.id);
+        }
+        continue;
+      }
+      if (part.kind !== "text") continue;
+      const text = part.text;
+      const matcher = /agent-team-final:([^\s>]+)/g;
+      let match: RegExpExecArray | null;
+      while ((match = matcher.exec(text)) != null) {
+        if (match[1]) finalMarkers.add(match[1]);
+      }
+    }
+  }
+  return Array.from(
+    new Set([
+      ...Array.from(completedRuns).filter((id) => !finalMarkers.has(id)),
+      ...Array.from(finalMarkers).filter((id) => !seenRuns.has(id)),
+    ])
+  );
 }
 
 function shortWorkflowJson(value: unknown, maxChars = 5000): string {
@@ -745,7 +784,11 @@ function WorkflowHistoryPanel({
   );
 }
 
-export default function ChatApp({ initialSessions, defaultCwd }: Props) {
+export default function ChatApp({
+  initialSessions,
+  defaultCwd,
+  initialProvidersData = null,
+}: Props) {
   // setError 需要在 useSessions（B1）之前声明，作为 onError 回调注入。
   // 顶层 error 用于 UI banner 展示；useState setter 身份稳定，可安全提前。
   const [error, setError] = useState<string | null>(null);
@@ -788,6 +831,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   // 同 handleAgentEvent / updateRunner，用 ref 转发避免时序倒置。
   const refreshForkListRef = useRef<
     ((agentId: string, ownerKey: RunnerKey) => void) | null
+  >(null);
+  const refreshContextForRunnerRef = useRef<
+    ((ownerKey: RunnerKey, ownerAgentId: string) => Promise<void>) | null
   >(null);
 
   // 性能：batchUpdates 是 useRunners 在后面的调用里才能拿到的。
@@ -927,7 +973,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     modelId,
     setModelId,
     reloadProviders,
-  } = useProviderModel();
+  } = useProviderModel(initialProvidersData);
 
   // thinking 字段(thinkingLevel / availableThinkingLevels / supportsThinking)
   // 已挪到 RunnerState。见下方 activeSnapshot 解构区。
@@ -1171,12 +1217,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   /** RFC-2 Phase A3：Budget 命中后由 useBudgetEnforcer 设置；非 null 时弹 BudgetExceededModal */
   const [budgetPausedTrigger, setBudgetPausedTrigger] =
     useState<BudgetTrigger | null>(null);
-  const [pendingTeamLaunch, setPendingTeamLaunch] = useState<{
-    objective: string;
-  } | null>(null);
-  const [teamLaunchSettings, setTeamLaunchSettings] =
-    useState<AgentTeamSettings>(() => createDefaultTeamLaunchSettings());
-  const [teamLaunchAdvancedOpen, setTeamLaunchAdvancedOpen] = useState(false);
   // sseStatus 已挪到 RunnerState(每个会话独立的 SSE 状态)。
   // forksCollapsed / toggleForks 已挪到 useForkable hook（C1）
   /** 当前打开 ⋯ 菜单的 session id；renaming 时存 inline edit 状态 */
@@ -1776,7 +1816,168 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   const messages = messageRenderState.messages;
   const visibleMessageCount = messageRenderState.visibleMessageCount;
   const agentTeamRuns = useMemo(() => collectAgentTeamRuns(messages), [messages]);
+  const missingAgentTeamFinalIds = useMemo(
+    () => collectMissingAgentTeamFinalIds(chatState.messages),
+    [chatState.messages]
+  );
+  const agentTeamRunBackfillAttemptsRef = useRef(new Set<string>());
+  const agentTeamAutoKickRef = useRef(
+    new Map<string, { key: string; at: number; inFlight: boolean }>()
+  );
   const messageRefs = useMessageRefs(visibleMessageCount);
+
+  useEffect(() => {
+    if (!selectedId || chatState.messages.length === 0) return;
+    if (agentTeamRuns.length > 0 && missingAgentTeamFinalIds.length === 0) return;
+    const sel = sessions.find((s) => s.id === selectedId);
+    if (!sel) return;
+    const ownerKey = sel.path;
+    const wanted = new Set(missingAgentTeamFinalIds);
+    const attemptKey = `${selectedId}:${wanted.size ? Array.from(wanted).sort().join(",") : "all"}`;
+    if (agentTeamRunBackfillAttemptsRef.current.has(attemptKey)) return;
+    agentTeamRunBackfillAttemptsRef.current.add(attemptKey);
+    let cancelled = false;
+    void fetch(`/api/sessions/${selectedId}/context`)
+      .then((response) => response.json())
+      .then((ctx) => {
+        if (cancelled || ctx?.error) return;
+        const allRuns = Array.isArray(ctx.agentTeamRuns)
+          ? (ctx.agentTeamRuns as AgentTeamRun[])
+          : [];
+        const runs = wanted.size
+          ? allRuns.filter((run) => wanted.has(run.id))
+          : allRuns;
+        const contextMessages = ctxToMessages(ctx.messages ?? [], {
+          unfinishedToolStatus: "running",
+          unfinishedToolResult: "仍在等待工具返回结果。",
+        });
+        if (runs.length === 0 && contextMessages.length === 0) return;
+        updateRunner(ownerKey, (state) => {
+          const existingTeamFinalMarkers = new Set(
+            state.chatState.messages.flatMap((message) =>
+              (message.parts ?? [])
+                .filter(
+                  (part): part is Extract<MessagePart, { kind: "text" }> =>
+                    part.kind === "text" && part.text.includes("agent-team-final:")
+                )
+                .map((part) => {
+                  const match = part.text.match(/agent-team-final:[^\s>]+/);
+                  return match?.[0] ?? part.text;
+                })
+            )
+          );
+          let mergedMessages = state.chatState.messages;
+          for (const message of contextMessages) {
+            const marker = (message.parts ?? [])
+              .filter(
+                (part): part is Extract<MessagePart, { kind: "text" }> =>
+                  part.kind === "text"
+              )
+              .map((part) => part.text.match(/agent-team-final:[^\s>]+/)?.[0])
+              .find(Boolean);
+            if (!marker || existingTeamFinalMarkers.has(marker)) continue;
+            mergedMessages = [...mergedMessages, message];
+            existingTeamFinalMarkers.add(marker);
+          }
+          const messagesWithRuns = appendRestoredAgentTeamRuns(
+            mergedMessages,
+            runs
+          );
+          if (messagesWithRuns === state.chatState.messages) return {};
+          return {
+            chatState: {
+              ...state.chatState,
+              messages: messagesWithRuns,
+            },
+          };
+        });
+      })
+      .catch((err) => {
+        console.warn("[diga-agent] failed to restore Team final card", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    agentTeamRuns.length,
+    chatState.messages.length,
+    missingAgentTeamFinalIds,
+    selectedId,
+    sessions,
+    updateRunner,
+  ]);
+
+  const backfillAgentTeamFinalMessages = useCallback(
+    async (targetRunIds?: string[]) => {
+      if (!selectedId) return;
+      const sel = sessions.find((s) => s.id === selectedId);
+      if (!sel) return;
+      const ownerKey = sel.path;
+      const wanted = new Set(targetRunIds ?? []);
+      const markerAllowed = (marker: string | undefined) => {
+        if (!marker) return false;
+        if (wanted.size === 0) return true;
+        const runId = marker.match(/agent-team-final:([^\s>]+)/)?.[1];
+        return Boolean(runId && wanted.has(runId));
+      };
+      try {
+        const response = await fetch(`/api/sessions/${selectedId}/context`);
+        const ctx = await response.json().catch(() => null);
+        if (!response.ok || ctx?.error) return;
+        const contextMessages = ctxToMessages(ctx.messages ?? [], {
+          unfinishedToolStatus: "running",
+          unfinishedToolResult: "仍在等待工具返回结果。",
+        });
+        const allRuns = Array.isArray(ctx.agentTeamRuns)
+          ? (ctx.agentTeamRuns as AgentTeamRun[])
+          : [];
+        const runs = wanted.size
+          ? allRuns.filter((run) => wanted.has(run.id))
+          : allRuns;
+        updateRunner(ownerKey, (state) => {
+          const existingMarkers = new Set(
+            state.chatState.messages.flatMap((message) =>
+              (message.parts ?? [])
+                .filter(
+                  (part): part is Extract<MessagePart, { kind: "text" }> =>
+                    part.kind === "text" && part.text.includes("agent-team-final:")
+                )
+                .map((part) => part.text.match(/agent-team-final:[^\s>]+/)?.[0])
+                .filter((marker): marker is string => Boolean(marker))
+            )
+          );
+          let mergedMessages = state.chatState.messages;
+          for (const message of contextMessages) {
+            const marker = (message.parts ?? [])
+              .filter(
+                (part): part is Extract<MessagePart, { kind: "text" }> =>
+                  part.kind === "text"
+              )
+              .map((part) => part.text.match(/agent-team-final:[^\s>]+/)?.[0])
+              .find(Boolean);
+            if (!markerAllowed(marker)) continue;
+            if (marker && existingMarkers.has(marker)) continue;
+            mergedMessages = [...mergedMessages, message];
+            if (marker) existingMarkers.add(marker);
+          }
+          const nextMessages = appendRestoredAgentTeamRuns(
+            mergedMessages,
+            runs.length > 0 ? runs : undefined
+          );
+          if (nextMessages === state.chatState.messages) return {};
+          return {
+            chatState: {
+              ...state.chatState,
+              messages: nextMessages,
+            },
+          };
+        });
+      } catch (err) {
+        console.warn("[diga-agent] failed to backfill Team final answer", err);
+      }
+    },
+    [selectedId, sessions, updateRunner]
+  );
 
   useEffect(() => {
     if (!agentId) return;
@@ -1978,6 +2179,93 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       startTransition(() => {
         switchTo(key);
       });
+      void fetch(`/api/sessions/${selectedId}/context`)
+        .then((r) => r.json())
+        .then((ctx) => {
+          if (ctx?.error) return;
+          const contextMessages = ctxToMessages(ctx.messages ?? [], {
+            unfinishedToolStatus: sel.isRunning ? "running" : "error",
+            unfinishedToolResult: sel.isRunning
+              ? "仍在等待工具返回结果。"
+              : "上次运行在工具返回前被中断。可以重新发送或继续任务。",
+          });
+          const subagentBatches = Array.isArray(ctx.subagentBatches)
+            ? (ctx.subagentBatches as SubagentBatch[])
+            : undefined;
+          const agentTeamRunsFromContext = Array.isArray(ctx.agentTeamRuns)
+            ? (ctx.agentTeamRuns as AgentTeamRun[])
+            : undefined;
+          updateRunner(key, (state) => {
+            if (state.streaming && sel.isRunning) {
+              return {
+                ...(Array.isArray(ctx.forkableUserMessages)
+                  ? {
+                      forkableUserMessages:
+                        ctx.forkableUserMessages as ForkableUserMessage[],
+                    }
+                  : {}),
+                ...(ctx.progress
+                  ? { progress: ctx.progress as AgentProgress }
+                  : {}),
+              };
+            }
+            const shouldRebuildFromContext =
+              !sel.isRunning &&
+              contextMessages.length > state.chatState.messages.length;
+            if (shouldRebuildFromContext) {
+              return {
+                chatState: createInitialState(
+                  appendRestoredAgentTeamRuns(
+                    appendRestoredSubagentBatches(
+                      contextMessages,
+                      subagentBatches
+                    ),
+                    agentTeamRunsFromContext
+                  )
+                ),
+                ...(Array.isArray(ctx.forkableUserMessages)
+                  ? {
+                      forkableUserMessages:
+                        ctx.forkableUserMessages as ForkableUserMessage[],
+                    }
+                  : {}),
+                ...(ctx.progress
+                  ? { progress: ctx.progress as AgentProgress }
+                  : {}),
+              };
+            }
+            const mergedMessages = mergeMissingChatMessages(
+              state.chatState.messages,
+              contextMessages
+            );
+            const restoredMessages = appendRestoredAgentTeamRuns(
+              appendRestoredSubagentBatches(mergedMessages, subagentBatches),
+              agentTeamRunsFromContext
+            );
+            return {
+              ...(restoredMessages !== state.chatState.messages
+                ? {
+                    chatState: {
+                      ...state.chatState,
+                      messages: restoredMessages,
+                    },
+                  }
+                : {}),
+              ...(Array.isArray(ctx.forkableUserMessages)
+                ? {
+                    forkableUserMessages:
+                      ctx.forkableUserMessages as ForkableUserMessage[],
+                  }
+                : {}),
+              ...(ctx.progress
+                ? { progress: ctx.progress as AgentProgress }
+                : {}),
+            };
+          });
+        })
+        .catch((e) => {
+          console.warn("[diga-agent] failed to reconcile existing session", e);
+        });
       return;
     }
 
@@ -2061,38 +2349,37 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
               ctx.messages ?? [],
               restoreToolOptions
             );
-            const hasTeamFinalMarker = (message: ChatMessage) =>
-              (message.parts ?? []).some(
-                (part) =>
-                  part.kind === "text" && part.text.includes("agent-team-final:")
-              );
-            const existingTeamFinalMarkers = new Set(
-              cur.chatState.messages.flatMap((message) =>
-                (message.parts ?? [])
-                  .filter(
-                    (part): part is Extract<MessagePart, { kind: "text" }> =>
-                      part.kind === "text" && part.text.includes("agent-team-final:")
+            if (!sel.isRunning && contextMessages.length > cur.chatState.messages.length) {
+              updateRunner(key, {
+                contextLoading: false,
+                contextError: null,
+                chatState: createInitialState(
+                  appendRestoredAgentTeamRuns(
+                    appendRestoredSubagentBatches(
+                      contextMessages,
+                      Array.isArray(ctx.subagentBatches)
+                        ? (ctx.subagentBatches as SubagentBatch[])
+                        : undefined
+                    ),
+                    agentTeamRunsFromContext
                   )
-                  .map((part) => {
-                    const match = part.text.match(/agent-team-final:[^\\s>]+/);
-                    return match?.[0] ?? part.text;
-                  })
-              )
-            );
-            let mergedMessages = cur.chatState.messages;
-            for (const message of contextMessages) {
-              if (!hasTeamFinalMarker(message)) continue;
-              const marker = (message.parts ?? [])
-                .filter(
-                  (part): part is Extract<MessagePart, { kind: "text" }> =>
-                    part.kind === "text"
-                )
-                .map((part) => part.text.match(/agent-team-final:[^\\s>]+/)?.[0])
-                .find(Boolean);
-              if (marker && existingTeamFinalMarkers.has(marker)) continue;
-              mergedMessages = [...mergedMessages, message];
-              if (marker) existingTeamFinalMarkers.add(marker);
+                ),
+                ...(Array.isArray(ctx.forkableUserMessages)
+                  ? {
+                      forkableUserMessages:
+                        ctx.forkableUserMessages as ForkableUserMessage[],
+                    }
+                  : {}),
+                ...(ctx.progress
+                  ? { progress: ctx.progress as AgentProgress }
+                  : {}),
+              });
+              return;
             }
+            const mergedMessages = mergeMissingChatMessages(
+              cur.chatState.messages,
+              contextMessages
+            );
             const restoredTeamMessages = agentTeamRunsFromContext?.length
               ? appendRestoredAgentTeamRuns(
                   mergedMessages,
@@ -2339,21 +2626,33 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         const forkable = Array.isArray(ctx.forkableUserMessages)
           ? (ctx.forkableUserMessages as ForkableUserMessage[])
           : undefined;
-        updateRunner(ownerKey, {
-          ...(skipChatStateOverwrite
-            ? {}
-            : {
-                chatState: createInitialState(
-                  appendRestoredAgentTeamRuns(
-                    appendRestoredSubagentBatches(
-                      ctxToMessages(ctx.messages ?? [], restoreToolOptions),
-                      subagentBatches
+        updateRunner(ownerKey, (state) => {
+          const restoredMessages = appendRestoredAgentTeamRuns(
+            appendRestoredSubagentBatches(
+              ctxToMessages(ctx.messages ?? [], restoreToolOptions),
+              subagentBatches
+            ),
+            agentTeamRunsFromContext
+          );
+          return {
+            ...(skipChatStateOverwrite
+              ? {
+                  chatState: {
+                    ...state.chatState,
+                    messages: appendRestoredAgentTeamRuns(
+                      mergeMissingChatMessages(
+                        state.chatState.messages,
+                        restoredMessages
+                      ),
+                      agentTeamRunsFromContext
                     ),
-                    agentTeamRunsFromContext
-                  )
-                ),
-              }),
+                  },
+                }
+              : {
+                  chatState: createInitialState(restoredMessages),
+                }),
           ...(forkable ? { forkableUserMessages: forkable } : {}),
+          };
         });
       } catch (e) {
         console.warn("[diga-agent] refreshContextForRunner exception", e);
@@ -2361,6 +2660,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     },
     [runnersRef, sessions, updateRunner]
   );
+  useEffect(() => {
+    refreshContextForRunnerRef.current = refreshContextForRunner;
+  }, [refreshContextForRunner]);
 
   // 把 handleAgentEvent 绑到 ref，供 useSseManager 的 onEvent 回调使用。
   // handleAgentEvent 是函数声明（hoisted），每次 render 重建；通过 ref 转发避免
@@ -2569,6 +2871,8 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     setSessions,
     refreshStats,
     refreshToolsCount,
+    onLocalAgentAnswer: (ownerKey, aid) =>
+      refreshContextForRunnerRef.current?.(ownerKey, aid),
   });
 
   const updateAgentTeamRun = useCallback(
@@ -2584,84 +2888,162 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     [activeKeyRef, updateRunner]
   );
 
+  const teamSubmitGateRef = useRef(createSubmitGate());
+
   const startTeam = useCallback(
     async (objective: string, settings: AgentTeamSettings) => {
-      const text = objective.trim();
+      const text = sanitizeAgentTeamObjective(objective);
       if (!text) return;
-      const ensured = await ensureAgent();
-      if (!ensured) return;
-      updateRunner(ensured.ownerKey, (state) => ({
-        chatState: applyEvent(state.chatState, {
-          type: "__optimistic_user",
-          text,
-          composerMode: "team",
-          pending: false,
-        }),
-      }));
-      const response = await fetch(`/api/agent/${ensured.aid}/teams`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "start", objective: text, settings }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data?.run) {
-        setError(
-          teamOperationErrorMessage(
-            data?.error,
-            `启动团队协作失败：HTTP ${response.status}`,
-          ),
-        );
-        return;
+      const activeKeyAtStart = activeKeyRef.current ?? DRAFT_KEY;
+      if (selectedId) {
+        const selectedSession = sessions.find((s) => s.id === selectedId);
+        if (
+          selectedSession?.path &&
+          activeKeyAtStart !== DRAFT_KEY &&
+          selectedSession.path !== activeKeyAtStart
+        ) {
+          setError("当前窗口还未完成 session 切换，请稍后再试。");
+          return;
+        }
       }
-      const run = data.run as AgentTeamRun;
-      updateRunner(ensured.ownerKey, (state) => ({
-        chatState: applyEvent(state.chatState, {
-          type: "__agent_team_start",
-          teamRun: run,
-        }),
-      }));
-      setError(null);
-      setWorkbenchView({ type: "team", teamId: run.id });
-      setWorkbenchOpen(true);
-      persistWorkbench(true, { type: "team", teamId: run.id });
+      const releaseSubmit = teamSubmitGateRef.current.claim(
+        activeKeyAtStart,
+        "team",
+      );
+      if (!releaseSubmit) return;
+      const clientRequestId = makeClientRequestId();
+      let ownerKeyForFailure: RunnerKey | null = null;
+      try {
+        const ensured = await ensureAgent();
+        if (!ensured) return;
+        ownerKeyForFailure = ensured.ownerKey;
+        updateRunner(ensured.ownerKey, (state) => ({
+          chatState: applyEvent(state.chatState, {
+            type: "__optimistic_user",
+            clientRequestId,
+            text,
+            composerMode: "team",
+          }),
+        }));
+        const response = await fetch(`/api/agent/${ensured.aid}/teams`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "start",
+            objective: text,
+            settings,
+            clientRequestId,
+          }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (response.ok && data?.deduped) {
+          updateRunner(ensured.ownerKey, (state) => ({
+            chatState: applyEvent(state.chatState, {
+              type: "optimistic_user_ack",
+              clientRequestId,
+              displayText: text,
+            }),
+          }));
+          setError(null);
+          return;
+        }
+        if (!response.ok || !data?.run) {
+          setError(
+            teamOperationErrorMessage(
+              data?.error,
+              `启动团队协作失败：HTTP ${response.status}`,
+            ),
+          );
+          updateRunner(ensured.ownerKey, (state) => ({
+            chatState: applyEvent(state.chatState, {
+              type: "__optimistic_user_failed",
+              clientRequestId,
+              reason: "failed",
+            }),
+          }));
+          return;
+        }
+        const run = data.run as AgentTeamRun;
+        updateRunner(ensured.ownerKey, (state) => ({
+          chatState: applyEvent(
+            applyEvent(state.chatState, {
+              type: "optimistic_user_ack",
+              clientRequestId,
+              displayText: text,
+            }),
+            {
+              type: "__agent_team_start",
+              teamRun: run,
+            },
+          ),
+        }));
+        setError(null);
+        setWorkbenchView({ type: "team", teamId: run.id });
+        setWorkbenchOpen(true);
+        persistWorkbench(true, { type: "team", teamId: run.id });
+        void (async () => {
+          const autoResponse = await fetch(`/api/agent/${ensured.aid}/teams`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              type: "run_until_idle",
+              teamId: run.id,
+              maxDispatches: 4,
+              maxRounds: 6,
+            }),
+          });
+          const autoData = await autoResponse.json().catch(() => ({}));
+          if (autoData?.run) {
+            updateRunner(ensured.ownerKey, (state) => ({
+              chatState: applyEvent(state.chatState, {
+                type: "__agent_team_update",
+                teamRun: autoData.run as AgentTeamRun,
+              }),
+            }));
+          }
+          if (!autoResponse.ok || autoData?.error) {
+            setError(
+              teamOperationErrorMessage(
+                autoData?.error,
+                "团队暂时没有新的自动动作，可以点“重试自动处理”兜底处理。",
+              ),
+            );
+          }
+        })();
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "启动团队协作失败";
+        setError(teamOperationErrorMessage(message, "启动团队协作失败"));
+        if (ownerKeyForFailure) {
+          updateRunner(ownerKeyForFailure, (state) => ({
+            chatState: applyEvent(state.chatState, {
+              type: "__optimistic_user_failed",
+              clientRequestId,
+              reason: "failed",
+            }),
+          }));
+        }
+      } finally {
+        releaseSubmit();
+      }
     },
-    [ensureAgent, persistWorkbench, setError, updateRunner]
+    [activeKeyRef, ensureAgent, persistWorkbench, selectedId, sessions, setError, updateRunner]
   );
 
   const requestTeamLaunch = useCallback(
-    (objective: string) => {
-      const text = objective.trim();
+    async (objective: string) => {
+      const text = sanitizeAgentTeamObjective(objective);
       if (!text) {
         setError("请输入 Team 目标描述");
         return;
       }
-      setTeamLaunchSettings(inferTeamLaunchSettings(text));
-      setTeamLaunchAdvancedOpen(false);
-      setPendingTeamLaunch({ objective: text });
+      setInput("");
+      setComposerMode(null);
+      await startTeam(text, inferTeamLaunchSettings(text));
       setError(null);
     },
-    [setError]
+    [setComposerMode, setError, setInput, startTeam]
   );
-
-  const cancelTeamLaunch = useCallback(() => {
-    setPendingTeamLaunch(null);
-    setTeamLaunchAdvancedOpen(false);
-  }, []);
-
-  const confirmTeamLaunch = useCallback(async () => {
-    if (!pendingTeamLaunch) return;
-    const objective = pendingTeamLaunch.objective;
-    setPendingTeamLaunch(null);
-    setInput("");
-    setComposerMode(null);
-    await startTeam(objective, teamLaunchSettings);
-  }, [
-    pendingTeamLaunch,
-    setComposerMode,
-    setInput,
-    startTeam,
-    teamLaunchSettings,
-  ]);
 
   // RFC-2 Phase A3：Budget 触发后执行 abort/pause
   useBudgetEnforcer({
@@ -2916,9 +3298,10 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
     await agentAction(owner.agentId, { type: "goal_clear" }).catch(() => {});
   }, [captureGoalOwner, agentAction]);
 
-  const sendWithHistory = useCallback(async () => {
-    // P1-E: input 不再是 ChatApp 订阅状态，在交互时点同步读一次 store 快照。
-    const current = getCurrentInput();
+  const sendWithHistory = useCallback(async (textOverride?: string) => {
+    // P1-E: 点击 Send 时 Composer 会传最新 localInput；键盘路径没有 override
+    // 时再同步读一次 store 快照。
+    const current = textOverride ?? getCurrentInput();
     // 如果用户已经有 mode chip，又在正文里输入另一个 slash mode（例如
     // Workflow chip + "/goal"），优先尊重新的显式命令，避免把 /goal 当成
     // workflow 目标原文发给模型。
@@ -2968,7 +3351,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         return;
       }
       rememberComposerInput(current);
-      requestTeamLaunch(current);
+      await requestTeamLaunch(current);
       return;
     }
     // 兑底路径：老习惯“/goal foo” “/workflow bar” 还能走。
@@ -2981,13 +3364,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         return;
       }
       rememberComposerInput(parsedTeam.rest);
-      setInput(parsedTeam.rest);
-      setComposerMode("team");
-      requestTeamLaunch(parsedTeam.rest);
+      await requestTeamLaunch(parsedTeam.rest);
       return;
     }
     rememberComposerInput(current);
-    await send();
+    await send(current);
   }, [
     composerMode,
     getCurrentInput,
@@ -3295,17 +3676,60 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   );
 
   const openSubagentSessionFromCard = useCallback(
-    (sessionFile: string) => {
-      const target = sessions.find((session) => session.path === sessionFile);
+    async (sessionFile: string, options?: { quiet?: boolean }) => {
+      const target = findSessionForFile(sessions, sessionFile);
       if (!target) {
-        refreshSessions();
-        setError("找不到这个 child subagent session；已刷新 session 列表");
-        return;
+        try {
+          const response = await fetch("/api/sessions");
+          const data = (await response.json().catch(() => null)) as {
+            sessions?: SessionInfoLite[];
+          } | null;
+          const refreshedSessions = data?.sessions ?? [];
+          const refreshedTarget = findSessionForFile(refreshedSessions, sessionFile);
+          if (refreshedSessions.length > 0) {
+            setSessions(refreshedSessions);
+          }
+          if (refreshedTarget) {
+            setError(null);
+            setSelectedId(refreshedTarget.id);
+            return true;
+          }
+          if (!options?.quiet) {
+            setError("成员记录暂时没有出现在会话列表里，已刷新列表。");
+          }
+          console.warn("[diga-agent] child session not found after refresh", {
+            sessionFile,
+          });
+        } catch (error) {
+          refreshSessions();
+          if (!options?.quiet) {
+            setError("成员记录暂时打不开，已刷新会话列表。");
+          }
+          console.warn("[diga-agent] child session refresh failed", {
+            sessionFile,
+            error,
+          });
+        }
+        return false;
       }
       setError(null);
       setSelectedId(target.id);
+      return true;
     },
-    [refreshSessions, sessions, setSelectedId]
+    [refreshSessions, sessions, setError, setSelectedId, setSessions]
+  );
+
+  const openAgentTeamMemberSessionFromSidebar = useCallback(
+    (sessionFile: string) => openSubagentSessionFromCard(sessionFile, { quiet: true }),
+    [openSubagentSessionFromCard]
+  );
+
+  const openAgentTeamMemberFromCard = useCallback(
+    (teamId: string, memberId: string) => {
+      setError(null);
+      openWorkbench({ type: "team", teamId, memberId });
+    },
+    [openWorkbench]
   );
 
   const openAgentTeamWorkspace = useCallback(
@@ -3316,27 +3740,56 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
   );
 
   const handleAgentTeamAction = useCallback(
-    async (teamId: string, action: "pause" | "resume" | "finalize" | "stop") => {
+    async (
+      teamId: string,
+      action: "pause" | "resume" | "finalize" | "stop",
+      leadAgentId?: string
+    ) => {
+      const knownRun = agentTeamRuns.find((run) => run.id === teamId);
       const ensured = await ensureAgent();
-      if (!ensured) {
+      const targetAgentId = ensured?.aid;
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[agent-team-ui] action requested", {
+          teamId,
+          action,
+          targetAgentId: targetAgentId ?? null,
+          leadAgentId: leadAgentId ?? null,
+          knownRunStatus: knownRun?.status ?? null,
+        });
+      }
+      if (!targetAgentId) {
         setError("当前没有可用的 agent，无法操作 Team");
         return;
       }
       const statusByAction = {
         pause: "paused",
-        finalize: "completed",
         stop: "aborted",
       } as const;
-      const response = await fetch(`/api/agent/${ensured.aid}/teams`, {
+      if (action === "stop") {
+        const now = Date.now();
+        updateAgentTeamRun({
+          id: teamId,
+          status: "aborted",
+          endedAt: now,
+          updatedAt: now,
+        });
+      }
+      const response = await fetch(`/api/agent/${targetAgentId}/teams`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
           action === "resume"
             ? { type: "resume", teamId }
+            : action === "finalize" && knownRun?.settings.mode !== "audit"
+              ? {
+                  type: "finalize_with_risks",
+                  teamId,
+                  reason: "用户点击生成总结；基于当前已有结果给出结论，并把未完成部分作为风险说明。",
+                }
             : {
                 type: "transition",
                 teamId,
-                status: statusByAction[action],
+                status: action === "finalize" ? "completed" : statusByAction[action],
               }
         ),
       });
@@ -3350,7 +3803,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         );
         return;
       }
-      updateAgentTeamRun(data.run as AgentTeamRun);
+      const nextRun = data.run as AgentTeamRun;
+      updateAgentTeamRun(nextRun);
+      if (nextRun.status === "completed") {
+        void backfillAgentTeamFinalMessages([nextRun.id]);
+      }
       const blockedReasons = Array.isArray(data.blockedReasons)
         ? (data.blockedReasons as string[])
         : [];
@@ -3365,7 +3822,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         setError(null);
       }
     },
-    [ensureAgent, setError, updateAgentTeamRun]
+    [agentTeamRuns, backfillAgentTeamFinalMessages, ensureAgent, setError, updateAgentTeamRun]
   );
 
   const handleAgentTeamCommand = useCallback(
@@ -3389,6 +3846,12 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         | { type: "promote_member"; memberId: string }
         | { type: "configure_hook"; hookId: string; enabled?: boolean; severity?: "info" | "warning" | "blocking" }
         | { type: "retry_task"; taskId: string }
+        | { type: "diagnose_team" }
+        | { type: "recover_team" }
+        | { type: "repair_result"; resultId: string }
+        | { type: "manual_submit_finding"; taskId: string; memberId: string; claim: string; evidenceRefs?: string[]; confidence?: "low" | "medium" | "high" }
+        | { type: "skip_task_with_reason"; taskId?: string; reason?: string }
+        | { type: "finalize_with_risks"; reason?: string }
         | { type: "summarize_available"; reason?: string }
         | { type: "replace_member"; memberId: string }
         | { type: "merge_worktree"; memberId: string; strategy: "accept" | "discard" | "keep_branch" }
@@ -3409,7 +3872,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
       });
       const data = await response.json().catch(() => ({}));
       if (data?.run) {
-        updateAgentTeamRun(data.run as AgentTeamRun);
+        const nextRun = data.run as AgentTeamRun;
+        updateAgentTeamRun(nextRun);
+        if (nextRun.status === "completed") {
+          void backfillAgentTeamFinalMessages([nextRun.id]);
+        }
       }
       if (!response.ok || !data?.run) {
         setError(
@@ -3439,8 +3906,93 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
         refreshSessions();
       }
     },
-    [ensureAgent, refreshSessions, setError, updateAgentTeamRun]
+    [backfillAgentTeamFinalMessages, ensureAgent, refreshSessions, setError, updateAgentTeamRun]
   );
+
+  useEffect(() => {
+    if (agentTeamRuns.length === 0) return undefined;
+    let cancelled = false;
+    const runAutoKick = async () => {
+      const now = Date.now();
+      const candidate = agentTeamRuns.find((run) =>
+        shouldAutoKickAgentTeamRun(run, now)
+      );
+      if (!candidate) return;
+      const pendingTaskIds = candidate.board.tasks
+        .filter((task) => task.status === "pending")
+        .map((task) => task.id)
+        .sort()
+        .join(",");
+      const key = `${candidate.id}:${candidate.updatedAt}:${pendingTaskIds}`;
+      const previous = agentTeamAutoKickRef.current.get(candidate.id);
+      if (previous?.inFlight) return;
+      if (previous?.key === key) return;
+      if (previous && now - previous.at < 60_000) return;
+      agentTeamAutoKickRef.current.set(candidate.id, {
+        key,
+        at: now,
+        inFlight: true,
+      });
+      try {
+        const ensured = await ensureAgent();
+        if (!ensured || cancelled) return;
+        const response = await fetch(`/api/agent/${ensured.aid}/teams`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "run_until_idle",
+            teamId: candidate.id,
+            maxDispatches: 4,
+            maxRounds: 4,
+          }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        if (data?.run) {
+          const nextRun = data.run as AgentTeamRun;
+          updateAgentTeamRun(nextRun);
+          if (nextRun.status === "completed") {
+            void backfillAgentTeamFinalMessages([nextRun.id]);
+          }
+        }
+        if (!response.ok && process.env.NODE_ENV !== "production") {
+          console.debug("[agent-team-ui] auto kick did not advance", {
+            teamId: candidate.id,
+            status: response.status,
+            error: data?.error ?? null,
+          });
+        }
+      } catch (error) {
+        if (process.env.NODE_ENV !== "production") {
+          console.debug("[agent-team-ui] auto kick failed", {
+            teamId: candidate.id,
+            error,
+          });
+        }
+      } finally {
+        const current = agentTeamAutoKickRef.current.get(candidate.id);
+        if (current?.key === key) {
+          agentTeamAutoKickRef.current.set(candidate.id, {
+            ...current,
+            inFlight: false,
+          });
+        }
+      }
+    };
+    void runAutoKick();
+    const timer = window.setInterval(() => {
+      void runAutoKick();
+    }, 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    agentTeamRuns,
+    backfillAgentTeamFinalMessages,
+    ensureAgent,
+    updateAgentTeamRun,
+  ]);
 
   // ===== Autocomplete + Slash 命令（RFC-1 阶段 C2，已抽到 useAutocomplete） =====
   // 抽离内容：4 个 AC state + 3 个 handler + runSlashCommand(7 case) + onKeyDown 拦截块。
@@ -3695,6 +4247,11 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           不一致。min-w-0 足够保证 truncate 生效。 */}
       <main
         className="flex flex-1 flex-col min-w-0 relative"
+        style={{
+          maxWidth: workbenchOpen
+            ? `calc(100% - ${sidebarWidth + SPLITTER_WIDTH + filesContainerWidth}px)`
+            : undefined,
+        }}
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -3838,7 +4395,9 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
               onResumeSubagentBatch={resumeSubagentBatchFromCard}
               onOpenSubagentSession={openSubagentSessionFromCard}
               onOpenAgentTeamWorkspace={openAgentTeamWorkspace}
+              onOpenAgentTeamMember={openAgentTeamMemberFromCard}
               onAgentTeamAction={handleAgentTeamAction}
+              agentTeamRuns={agentTeamRuns}
             />
           </UiFaultBoundary>
         )}
@@ -3969,7 +4528,7 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           onFilesLayoutChange={setFilesLayout}
           onOpenProgressUrl={openUrlInBrowserPanel}
           agentTeamRuns={agentTeamRuns}
-          onOpenAgentTeamMember={openSubagentSessionFromCard}
+          onOpenAgentTeamMember={openAgentTeamMemberSessionFromSidebar}
           onAgentTeamCommand={handleAgentTeamCommand}
           onAnnotate={(annotations: BrowserAnnotation[]) => {
             if (annotations.length === 0) return;
@@ -4008,273 +4567,6 @@ export default function ChatApp({ initialSessions, defaultCwd }: Props) {
           }}
         />
       )}
-      {pendingTeamLaunch ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6"
-          style={{ background: "var(--color-overlay)" }}
-          onClick={cancelTeamLaunch}
-        >
-          <section
-            className="flex max-h-[88vh] w-full max-w-[640px] flex-col overflow-hidden rounded-lg border shadow-modal"
-            style={{
-              background: "var(--bg)",
-              borderColor: "var(--border)",
-              color: "var(--text)",
-            }}
-            aria-label="团队协作启动确认"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div
-              className="flex items-start gap-3 border-b px-5 py-4"
-              style={{ borderColor: "var(--border)" }}
-            >
-              <span
-                className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
-                style={{
-                  borderColor: "var(--border)",
-                  background: "var(--bg-panel)",
-                  color: "var(--accent)",
-                }}
-              >
-                <Users size={18} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="text-token-ui font-semibold">准备启动团队协作</div>
-                <p
-                  className="mt-1 text-token-sm leading-5"
-                  style={{ color: "var(--text-muted)" }}
-                >
-                  我会让一个小团队分工处理、互相校验，最后用普通回复给你综合结论。
-                </p>
-              </div>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-              <div
-                className="rounded-md border p-3"
-                style={{
-                  borderColor: "var(--border)",
-                  background: "var(--bg-panel)",
-                }}
-              >
-                <div
-                  className="text-token-xs font-medium uppercase tracking-wide"
-                  style={{ color: "var(--text-muted)" }}
-                >
-                  目标
-                </div>
-                <div className="mt-1 break-words text-token-ui">
-                  {pendingTeamLaunch.objective}
-                </div>
-              </div>
-
-              <div
-                className="mt-4 rounded-md border p-3"
-                style={{
-                  borderColor: "var(--border)",
-                  background: "var(--bg-subtle)",
-                }}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-token-sm font-semibold">推荐配置</div>
-                    <div className="mt-1 text-token-xs" style={{ color: "var(--text-muted)" }}>
-                      已根据你的任务自动选择，通常不用调整。
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    className="shrink-0 rounded border px-2.5 py-1 text-token-xs font-medium hover:bg-[color:var(--bg-hover)]"
-                    style={{ borderColor: "var(--border)", color: "var(--text)" }}
-                    onClick={() => setTeamLaunchAdvancedOpen((open) => !open)}
-                  >
-                    {teamLaunchAdvancedOpen ? "收起调整" : "调整"}
-                  </button>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {teamLaunchConfigSummary(teamLaunchSettings).map((item) => (
-                    <span
-                      key={item}
-                      className="rounded-full border px-2.5 py-1 text-token-xs"
-                      style={{
-                        borderColor: "var(--border-soft)",
-                        background: "var(--bg)",
-                        color: "var(--text-muted)",
-                      }}
-                    >
-                      {item}
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              {teamLaunchAdvancedOpen ? (
-                <div
-                  className="mt-4 space-y-4 rounded-md border p-3"
-                  style={{
-                    borderColor: "var(--border)",
-                    background: "var(--bg-panel)",
-                  }}
-                >
-                  <div>
-                    <div className="text-token-sm font-semibold">团队规模</div>
-                    <div className="mt-2 grid grid-cols-3 gap-2">
-                      {(["small", "standard", "deep"] as const).map((scale) => (
-                        <button
-                          key={scale}
-                          type="button"
-                          className="rounded-md border px-2 py-2 text-token-sm transition-colors"
-                          style={{
-                            borderColor:
-                              teamLaunchSettings.memberScale === scale
-                                ? "var(--accent)"
-                                : "var(--border)",
-                            background:
-                              teamLaunchSettings.memberScale === scale
-                                ? "color-mix(in srgb, var(--accent) 12%, var(--bg-panel))"
-                                : "var(--bg-panel)",
-                            color: "var(--text)",
-                          }}
-                          onClick={() =>
-                            setTeamLaunchSettings((prev) => ({
-                              ...prev,
-                              memberScale: scale,
-                            }))
-                          }
-                        >
-                          {describeTeamMemberScale(scale)}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="text-token-sm font-semibold">处理方式</div>
-                    <div className="mt-2 grid gap-2 md:grid-cols-3">
-                      {([
-                        ["readonly", "只看不改"],
-                        ["write", "可以帮我改"],
-                        ["network", "需要查资料"],
-                      ] as const).map(([mode, label]) => {
-                        const active =
-                          mode === "readonly"
-                            ? !teamLaunchSettings.allowWrite && !teamLaunchSettings.allowNetwork
-                            : mode === "write"
-                              ? teamLaunchSettings.allowWrite
-                              : teamLaunchSettings.allowNetwork;
-                        return (
-                          <button
-                            key={mode}
-                            type="button"
-                            className="rounded-md border px-3 py-2 text-token-sm transition-colors"
-                            style={{
-                              borderColor: active ? "var(--accent)" : "var(--border)",
-                              background: active
-                                ? "color-mix(in srgb, var(--accent) 12%, var(--bg-panel))"
-                                : "var(--bg-panel)",
-                              color: "var(--text)",
-                            }}
-                            onClick={() =>
-                              setTeamLaunchSettings((prev) => {
-                                if (mode === "readonly") {
-                                  return {
-                                    ...prev,
-                                    allowWrite: false,
-                                    allowNetwork: false,
-                                    writePolicy: "read_only",
-                                    networkPolicy: "disabled",
-                                  };
-                                }
-                                if (mode === "write") {
-                                  return {
-                                    ...prev,
-                                    allowWrite: !prev.allowWrite,
-                                    requirePlanApproval: !prev.allowWrite ? true : prev.requirePlanApproval,
-                                    writePolicy: !prev.allowWrite ? "plan_approval" : "read_only",
-                                  };
-                                }
-                                return {
-                                  ...prev,
-                                  allowNetwork: !prev.allowNetwork,
-                                  networkPolicy: !prev.allowNetwork ? "lead_only" : "disabled",
-                                };
-                              })
-                            }
-                          >
-                            {label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="text-token-sm font-semibold">协作方式</div>
-                    <div className="mt-2 flex flex-wrap gap-3 text-token-sm">
-                      <label className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={teamLaunchSettings.allowChallenges}
-                          onChange={(event) => {
-                            const checked = event.currentTarget.checked;
-                            setTeamLaunchSettings((prev) => ({
-                              ...prev,
-                              allowChallenges: checked,
-                            }));
-                          }}
-                        />
-                        互相校验结论
-                      </label>
-                      <label className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={teamLaunchSettings.requirePlanApproval}
-                          onChange={(event) => {
-                            const checked = event.currentTarget.checked;
-                            setTeamLaunchSettings((prev) => ({
-                              ...prev,
-                              requirePlanApproval: checked,
-                              writePolicy:
-                                prev.allowWrite && checked
-                                  ? "plan_approval"
-                                  : prev.allowWrite
-                                    ? "write_allowed"
-                                    : "read_only",
-                            }));
-                          }}
-                        />
-                        改文件前先给计划
-                      </label>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-            <div
-              className="flex flex-col gap-2 border-t px-5 py-4 sm:flex-row sm:items-center sm:justify-between"
-              style={{ borderColor: "var(--border)" }}
-            >
-              <div className="text-token-xs" style={{ color: "var(--text-muted)" }}>
-                只有你确认后才会启动；过程中只有真正需要你判断时才会打断。
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button variant="ghost" onClick={cancelTeamLaunch}>
-                  取消
-                </Button>
-                <Button
-                  variant="solid"
-                  tone="accent"
-                  leading={<Users size={15} />}
-                  onClick={() => {
-                    void confirmTeamLaunch();
-                  }}
-                >
-                  开始
-                </Button>
-              </div>
-            </div>
-          </section>
-        </div>
-      ) : null}
       <ChatModals
         cwd={cwd}
         agentId={agentId}

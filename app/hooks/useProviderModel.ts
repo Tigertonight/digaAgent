@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useProviderStatus } from "./useProviderStatus";
 import type { ProviderInfo } from "@/lib/types";
+import type { ProvidersResponse } from "@/lib/types";
 import {
   DEFAULT_MODEL_ID,
   DEFAULT_PROVIDER_ID,
@@ -100,8 +101,23 @@ function clearLegacyLocal() {
   }
 }
 
-export function useProviderModel() {
-  const { providers, reloadProviders: fetchProviders } = useProviderStatus();
+function visibleProviderOptions(data?: ProvidersResponse | null): ProviderInfo[] {
+  return (data?.providers ?? []).filter(
+    (provider) => provider.hasAuth && provider.models.length > 0
+  );
+}
+
+export function useProviderModel(initialProvidersData?: ProvidersResponse | null) {
+  const { providers, reloadProviders: fetchProviders } = useProviderStatus({
+    initialProvidersData,
+  });
+  const initialSelection = normalizeProviderModelSelection(
+    visibleProviderOptions(initialProvidersData),
+    "",
+    "",
+    initialProvidersData?.defaultProvider,
+    initialProvidersData?.defaultModelId
+  );
   const visibleProviders = useMemo(
     () =>
       providers.filter(
@@ -109,8 +125,10 @@ export function useProviderModel() {
       ),
     [providers]
   );
-  const [providerId, setProviderId] = useState<string>("");
-  const [modelId, setModelId] = useState<string>("");
+  const [providerId, setProviderId] = useState<string>(
+    initialSelection.providerId
+  );
+  const [modelId, setModelId] = useState<string>(initialSelection.modelId);
   // hydration 信号：true 之后我们才允许“用户切换 → 写服务端”。
   // 避免 mount 期 setState (hydrate) 触发的 effect 把同样的值再写一次。
   const hydratedRef = useRef(false);

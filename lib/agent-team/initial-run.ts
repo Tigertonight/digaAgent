@@ -11,6 +11,7 @@ function makeId(prefix: string): string {
 }
 
 const DEFAULT_SETTINGS: AgentTeamSettings = {
+  mode: "collaboration",
   memberScale: "standard",
   allowNetwork: false,
   allowWrite: false,
@@ -18,7 +19,7 @@ const DEFAULT_SETTINGS: AgentTeamSettings = {
   allowChallenges: true,
   requirePlanApproval: true,
   displayMode: "workspace",
-  writePolicy: "plan_approval",
+  writePolicy: "read_only",
   networkPolicy: "disabled",
   worktreePolicy: "none",
   resultIngestionMode: "structured",

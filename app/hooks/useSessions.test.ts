@@ -69,6 +69,7 @@ describe("useSessions selected session persistence", () => {
 
     expect(source).toContain("pi-selected-session-id");
     expect(source).toContain("readSelectedSessionFromStorage(initialSessions)");
+    expect(source).toContain("if (!selectedId && sessions.length === 0) return;");
     expect(source).toContain("writeSelectedSessionToStorage(selectedId)");
     expect(source).toContain("readSelectedSessionFromStorage(next)");
   });

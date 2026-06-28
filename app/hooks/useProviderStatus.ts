@@ -27,14 +27,19 @@ export interface AuthStatusResponse {
 interface UseProviderStatusOptions {
   autoLoadProviders?: boolean;
   autoLoadAuth?: boolean;
+  initialProvidersData?: ProvidersResponse | null;
 }
 
 export function useProviderStatus(
   opts: UseProviderStatusOptions = {}
 ) {
-  const { autoLoadProviders = false, autoLoadAuth = false } = opts;
+  const {
+    autoLoadProviders = false,
+    autoLoadAuth = false,
+    initialProvidersData = null,
+  } = opts;
   const [providersData, setProvidersData] =
-    useState<ProvidersResponse | null>(null);
+    useState<ProvidersResponse | null>(initialProvidersData);
   const [authData, setAuthData] = useState<AuthStatusResponse | null>(null);
   const [providersLoading, setProvidersLoading] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
@@ -45,8 +50,23 @@ export function useProviderStatus(
     setProvidersLoading(true);
     setProvidersError(null);
     try {
-      const r = await fetch("/api/providers");
-      const data = (await r.json()) as ProvidersResponse & { error?: string };
+      const fetchProviders = async (url: string) => {
+        const r = await fetch(url, { cache: "no-store" });
+        const data = (await r.json()) as ProvidersResponse & { error?: string };
+        return { r, data };
+      };
+      const primary = await fetchProviders("/api/providers").catch(() => null);
+      let { r, data } =
+        primary ?? (await fetchProviders("/provider-status"));
+      if (!r.ok || data.error) {
+        const fallback = await fetchProviders("/provider-status").catch(
+          () => null
+        );
+        if (fallback) {
+          r = fallback.r;
+          data = fallback.data;
+        }
+      }
       if (!r.ok || data.error) {
         const msg = data.error ?? `HTTP ${r.status}`;
         setProvidersError(userFacingMessage(msg));

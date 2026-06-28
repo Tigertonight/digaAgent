@@ -8,12 +8,21 @@ import type {
   AgentTeamMessage,
   AgentTeamPlan,
   AgentTeamQualityGate,
+  AgentTeamRecoveryAttempt,
   AgentTeamResult,
   AgentTeamRun,
   AgentTeamRunStatus,
   AgentTeamTask,
 } from "./types";
-import { parseAgentTeamResultText } from "./result-ingestion";
+import { isUsableAgentTeamResultText, normalizeAgentTeamResult } from "./result-ingestion";
+import {
+  attachAgentTeamDiagnostics,
+  classifyAgentTeamBlockReason,
+  createRecoveryAttempt,
+  diagnoseAgentTeamRun,
+  isRecoverableAgentTeamProviderFailure,
+} from "./diagnostics";
+import { agentTeamFinalAnswerPromptGuidelines } from "./final-summary";
 
 export interface AgentTeamFinalizeCheck {
   ok: boolean;
@@ -93,6 +102,24 @@ function acceptedFindings(run: AgentTeamRun): AgentTeamFinding[] {
   return run.board.findings.filter((finding) => isAcceptedForDecision(run, finding));
 }
 
+/**
+ * 一个发现是否“有实质内容、值得纳入最终综合”。
+ *
+ * 注意：evidence ref 是“加分项”而非“硬门槛”。此前要求必须带 file:/session:/
+ * artifact:/task: ref，导致子 agent 给了真实结论但没附引用时被整体丢弃，
+ * 最终综合落到“不通过：无法形成可靠结论”的兜底（issue 复现根因）。
+ * 现在只要 claim 是实质内容（非占位/空洞/进程自述）即视为可用；缺 evidence
+ * 由上层（decision 层的 hasTraceableDecision + finalize 门禁）作为风险/可追溯性
+ * 把关，而不是在 finding 层直接忽略结论。
+ */
+function isSubstantiveFinding(finding: AgentTeamFinding): boolean {
+  return finding.id !== "f-mode" && isUsableAgentTeamResultText(finding.claim);
+}
+
+function acceptedSubstantiveFindings(run: AgentTeamRun): AgentTeamFinding[] {
+  return acceptedFindings(run).filter(isSubstantiveFinding);
+}
+
 function acceptedDecisions(run: AgentTeamRun) {
   return run.board.decisions.filter((decision) => (decision.status ?? "accepted") === "accepted");
 }
@@ -111,10 +138,11 @@ function makeEvent(
   message: string,
   data?: Record<string, unknown>
 ): AgentTeamEvent {
+  const now = Date.now();
   return {
-    id: `${run.id}:event:${Date.now()}:${run.board.events.length + 1}`,
+    id: `${run.id}:event:${now}:${run.board.events.length + 1}:${Math.random().toString(36).slice(2, 8)}`,
     type,
-    at: Date.now(),
+    at: now,
     actorAgentId: run.leadAgentId,
     message,
     ...(data ? { data } : {}),
@@ -164,23 +192,29 @@ function dependenciesComplete(run: AgentTeamRun, taskId: string): boolean {
   if (!task?.dependsOnTaskIds?.length) return true;
   const completed = new Set(
     run.board.tasks
-      .filter((item) => item.status === "completed")
+      .filter((item) => isTerminalTaskStatus(item.status))
       .map((item) => item.id)
   );
   return task.dependsOnTaskIds.every((id) => completed.has(id));
 }
 
+function isTerminalTaskStatus(status: AgentTeamTask["status"]): boolean {
+  return status === "completed" || status === "skipped";
+}
+
 function runnableTasks(run: AgentTeamRun): AgentTeamTask[] {
-  return run.board.tasks
+  const candidates = run.board.tasks
     .filter((task) =>
-      (task.status === "pending" || task.status === "blocked") &&
+      task.status === "pending" &&
       dependenciesComplete(run, task.id)
     )
-    .sort((a, b) => {
-      const prio = (task: AgentTeamTask) =>
-        task.priority === "high" ? 0 : task.priority === "normal" ? 1 : 2;
-      return prio(a) - prio(b);
-    });
+  const required = candidates.filter((task) => task.required);
+  const prioritized = required.length > 0 ? required : candidates;
+  return prioritized.sort((a, b) => {
+    const prio = (task: AgentTeamTask) =>
+      task.priority === "high" ? 0 : task.priority === "normal" ? 1 : 2;
+    return prio(a) - prio(b);
+  });
 }
 
 export function recoverStaleAgentTeamTasks(
@@ -190,6 +224,7 @@ export function recoverStaleAgentTeamTasks(
   const now = opts.now ?? Date.now();
   const staleMs = Math.max(1, opts.staleMs ?? 2 * 60 * 1000);
   const recoveredTaskIds: string[] = [];
+  const recoveryAttempts = [...(run.recoveryAttempts ?? [])];
   const nextTasks = run.board.tasks.map((task) => {
     if (task.status !== "claimed" && task.status !== "running") return task;
     const lastTouched = task.claimedAt ?? run.updatedAt ?? run.createdAt;
@@ -197,6 +232,15 @@ export function recoverStaleAgentTeamTasks(
     const hasResult = (run.board.results ?? []).some((result) => result.taskId === task.id);
     if (hasResult) return task;
     recoveredTaskIds.push(task.id);
+    recoveryAttempts.push(createRecoveryAttempt({
+      run,
+      reasonCode: "member_timeout",
+      action: "recover_stale_task",
+      status: "succeeded",
+      taskId: task.id,
+      memberId: task.ownerAgentId,
+      now,
+    }));
     return {
       ...task,
       status: dependenciesComplete(run, task.id) ? ("pending" as const) : ("blocked" as const),
@@ -221,7 +265,7 @@ export function recoverStaleAgentTeamTasks(
   ];
   return {
     recoveredTaskIds,
-    run: refreshAgentTeamQualityGates(patchAgentTeamRun(run, {
+    run: attachAgentTeamDiagnostics(refreshAgentTeamQualityGates(patchAgentTeamRun(run, {
       board: {
         ...run.board,
         tasks: nextTasks,
@@ -239,7 +283,226 @@ export function recoverStaleAgentTeamTasks(
             }
           : member
       ),
-    })),
+      recoveryAttempts,
+    }))),
+  };
+}
+
+function recoveryEventMessage(attempt: AgentTeamRecoveryAttempt): string {
+  if (attempt.status === "failed") {
+    if (attempt.error === "recovery attempts exhausted") {
+      return "自动恢复次数已用完，需要重试、换成员或带风险总结。";
+    }
+    return "自动恢复失败，需要你处理。";
+  }
+  if (attempt.action === "adapt_result") {
+    return "已自动整理成员回复，并写入团队结果。";
+  }
+  if (attempt.reasonCode === "provider_stream_error") {
+    return "成员模型临时中断，已收回任务并准备自动重试。";
+  }
+  if (attempt.reasonCode === "member_timeout") {
+    return "成员处理超时，已收回任务并准备自动重派。";
+  }
+  if (attempt.reasonCode === "member_unavailable") {
+    return "成员记录不可用，已收回任务并准备重新分配。";
+  }
+  return "已收回阻塞任务，准备自动推进。";
+}
+
+export function recoverBlockedAgentTeamRun(
+  run: AgentTeamRun,
+  opts: { now?: number; maxAttempts?: number } = {}
+): { run: AgentTeamRun; recoveredTaskIds: string[]; attempts: AgentTeamRecoveryAttempt[] } {
+  const now = opts.now ?? Date.now();
+  const maxAttempts = Math.max(1, opts.maxAttempts ?? 2);
+  const reasons = diagnoseAgentTeamRun(run);
+  const attempts: AgentTeamRecoveryAttempt[] = [];
+  const providerFailureTextFor = (taskId?: string, resultId?: string, memberId?: string): string => {
+    const task = taskId ? run.board.tasks.find((item) => item.id === taskId) : undefined;
+    const result = resultId ? run.board.results?.find((item) => item.id === resultId) : undefined;
+    const member = memberId ? run.members.find((item) => item.id === memberId) : undefined;
+    return [
+      task?.blocker,
+      task?.lastError,
+      task?.attempts?.at(-1)?.error,
+      result?.parseWarnings.join("; "),
+      result?.rawText,
+      member?.latestOutput,
+    ].filter(Boolean).join("; ");
+  };
+  for (const reason of reasons) {
+    if (
+      reason.code !== "missing_structured_result" &&
+      reason.code !== "missing_findings" &&
+      reason.code !== "missing_evidence"
+    ) continue;
+    const resultId = reason.entityRefs.resultId;
+    const taskId = reason.entityRefs.taskId;
+    const memberId = reason.entityRefs.memberId;
+    if (!resultId || !taskId || !memberId) continue;
+    const result = run.board.results?.find((item) => item.id === resultId);
+    const task = run.board.tasks.find((item) => item.id === taskId);
+    if (!result || !task || isTerminalTaskStatus(task.status)) continue;
+    const adapted = normalizeAgentTeamResult({
+      rawText: result.rawText,
+      mode: run.settings.mode ?? "collaboration",
+      taskTitle: task.title,
+      taskDescription: task.description,
+      sessionFile: result.sessionFile,
+    });
+    const adapterWouldBlock = run.settings.mode === "audit" &&
+      adapted.warnings.some((warning) => warning.toLowerCase().includes("no evidence"));
+    const adapterSucceeded = adapted.source === "adapter" && adapted.findings.length > 0 && !adapterWouldBlock;
+    const attempt = createRecoveryAttempt({
+      run,
+      reasonCode: reason.code,
+      action: "adapt_result",
+      status: adapterSucceeded ? "succeeded" : "failed",
+      taskId,
+      memberId,
+      resultId,
+      error: adapted.findings.length === 0
+        ? "result adapter could not extract findings"
+        : adapterWouldBlock
+          ? "audit mode requires evidence refs"
+          : undefined,
+      now,
+    });
+    attempts.push(attempt);
+    if (attempt.status !== "succeeded") continue;
+    const baseRun = patchAgentTeamRun(run, {
+      board: {
+        ...run.board,
+        results: (run.board.results ?? []).map((item) =>
+          item.id === resultId ? { ...item, status: "rejected" as const } : item
+        ),
+        events: [
+          ...run.board.events,
+          {
+            ...makeEvent(run, "task_retried", "已自动整理成员回复，并写入团队结果。", {
+              recoveryAttemptId: attempt.id,
+              reasonCode: attempt.reasonCode,
+              sourceResultId: resultId,
+            }),
+            taskId,
+            targetAgentId: memberId,
+          },
+        ],
+      },
+      recoveryAttempts: [...(run.recoveryAttempts ?? []), attempt],
+    });
+    const submitted = submitAgentTeamResult(baseRun, {
+      taskId,
+      memberId,
+      rawText: result.rawText,
+      sessionFile: result.sessionFile,
+      dispatchMode: "single",
+    });
+    if (!submitted.error) {
+      return {
+        run: attachAgentTeamDiagnostics(submitted.run),
+        recoveredTaskIds: [taskId],
+        attempts,
+      };
+    }
+  }
+  const recoverableTaskIds = new Set<string>();
+  for (const reason of reasons) {
+    const taskId = reason.entityRefs.taskId;
+    if (!taskId) continue;
+    const task = run.board.tasks.find((item) => item.id === taskId);
+    if (!task || isTerminalTaskStatus(task.status)) continue;
+    if (
+      reason.code === "provider_stream_error" &&
+      !isRecoverableAgentTeamProviderFailure(providerFailureTextFor(taskId, reason.entityRefs.resultId, reason.entityRefs.memberId))
+    ) {
+      continue;
+    }
+    if ((task.retryCount ?? 0) >= maxAttempts) {
+      attempts.push(createRecoveryAttempt({
+        run,
+        reasonCode: reason.code,
+        action: "recover_blocked_task",
+        status: "failed",
+        taskId,
+        memberId: reason.entityRefs.memberId,
+        resultId: reason.entityRefs.resultId,
+        error: "recovery attempts exhausted",
+        now,
+      }));
+      continue;
+    }
+    if (!reason.autoActions.includes("recover_team") && !reason.autoActions.includes("retry_task")) continue;
+    recoverableTaskIds.add(taskId);
+    attempts.push(createRecoveryAttempt({
+      run,
+      reasonCode: reason.code,
+      action: "recover_blocked_task",
+      status: "succeeded",
+      taskId,
+      memberId: reason.entityRefs.memberId,
+      resultId: reason.entityRefs.resultId,
+      now,
+    }));
+  }
+  if (recoverableTaskIds.size === 0 && attempts.length === 0) {
+    return { run: attachAgentTeamDiagnostics(run), recoveredTaskIds: [], attempts };
+  }
+  const recoveredTaskIds = Array.from(recoverableTaskIds);
+  const recoveredMemberIds = new Set(
+    attempts
+      .filter((attempt) => attempt.status === "succeeded" && attempt.memberId)
+      .map((attempt) => attempt.memberId!)
+  );
+  const nextRun = patchAgentTeamRun(run, {
+    board: {
+      ...run.board,
+      tasks: run.board.tasks.map((task) =>
+        recoverableTaskIds.has(task.id)
+          ? {
+              ...task,
+              status: dependenciesComplete(run, task.id) ? ("pending" as const) : ("blocked" as const),
+              ownerAgentId: undefined,
+              blocker: dependenciesComplete(run, task.id)
+                ? undefined
+                : `Waiting for dependencies: ${(task.dependsOnTaskIds ?? []).join(", ")}`,
+              retryCount: (task.retryCount ?? 0) + 1,
+              lastError: undefined,
+            }
+          : task
+      ),
+      events: [
+        ...run.board.events,
+        ...attempts.map((attempt) => ({
+          ...makeEvent(run, attempt.status === "succeeded" ? "task_retried" : "quality_gate_failed", recoveryEventMessage(attempt), {
+            recoveryAttemptId: attempt.id,
+            reasonCode: attempt.reasonCode,
+            error: attempt.error,
+          }),
+          taskId: attempt.taskId,
+          targetAgentId: attempt.memberId,
+        })),
+      ],
+    },
+    members: run.members.map((member) =>
+      (member.currentTaskId && recoverableTaskIds.has(member.currentTaskId)) ||
+      (member.status === "blocked" && recoveredMemberIds.has(member.id))
+        ? {
+            ...member,
+            status: "idle" as const,
+            currentTaskId: undefined,
+            latestOutput: "任务已交回队列，等待自动重派。",
+            lastActiveAt: now,
+          }
+        : member
+    ),
+    recoveryAttempts: [...(run.recoveryAttempts ?? []), ...attempts],
+  });
+  return {
+    run: attachAgentTeamDiagnostics(refreshAgentTeamQualityGates(nextRun)),
+    recoveredTaskIds,
+    attempts,
   };
 }
 
@@ -379,7 +642,7 @@ function evaluateHookRule(
       : null;
   }
   if (hook.rule === "idle_requires_no_runnable_tasks") {
-    const runnable = runnableTasks(run).filter((task) => task.status !== "completed");
+    const runnable = runnableTasks(run).filter((task) => !isTerminalTaskStatus(task.status));
     return runnable.length > 0
       ? `${runnable.length} runnable task(s) remain while teammate idle was evaluated.`
       : null;
@@ -465,6 +728,7 @@ export function createAgentTeamDispatchPlan(run: AgentTeamRun): AgentTeamDispatc
     task.expectedOutput === "decision_input"
       ? [
           "For synthesis: write the summary as the final answer to the user's Team objective, not as an internal process report.",
+          agentTeamFinalAnswerPromptGuidelines(),
           "Start with the direct conclusion, then summarize the strongest reasons and any remaining caveats or next steps.",
           "Use proposed and accepted findings plus resolved/open challenges above to make a traceable decision.",
           "Do not refuse merely because Lead has not accepted findings yet; the Team runtime will accept/resolve after your synthesis if your result cites evidence.",
@@ -472,8 +736,11 @@ export function createAgentTeamDispatchPlan(run: AgentTeamRun): AgentTeamDispatc
         ].join(" ")
       : "Use the board context to avoid repeating previous work and to challenge or refine existing findings.",
     "",
-    "Return a concise task result with evidence. If you find a risk, include it explicitly.",
-    "Use the TEAM_RESULT_JSON contract exactly so the Team board can ingest your real output.",
+    "Return a concise task result in natural language. Include concrete conclusions, evidence sources such as file paths/session refs when available, and any risk or open question.",
+    "If the task is a simple existence, verification, or yes/no check, stop after the first concrete proof and answer directly.",
+    "Do not run broad searches, inspect unrelated files, or perform extra validation unless the assigned task truly requires it.",
+    "Keep the result short: at most 5 bullets, one caveat line if needed, and no process diary.",
+    "The Team runtime will organize your reply into the Team board; use structured submission only if it is already available.",
   ].join("\n");
   return { task, memberId, prompt, mailboxMessages };
 }
@@ -541,20 +808,26 @@ function unblockReadyTasks(run: AgentTeamRun, events: AgentTeamEvent[]): AgentTe
 
 export function evaluateAgentTeamFinalize(run: AgentTeamRun): AgentTeamFinalizeCheck {
   const now = Date.now();
+  const stop = run.settings.stopConditions ?? {
+    requiredTasksComplete: true,
+    noOpenBlockingChallenges: true,
+    leadFinalSynthesis: true,
+  };
   const requiredIncomplete = run.board.tasks.filter(
     (task) => task.required && task.status !== "completed"
   );
   const openBlockingChallenges = run.board.challenges.filter(isOpenChallenge);
   const activeWorktrees = unmergedWorktreeMembers(run);
   const decisions = acceptedDecisions(run);
+  const substantiveAcceptedFindingIds = new Set(
+    acceptedSubstantiveFindings(run).map((finding) => finding.id)
+  );
   const hasTraceableDecision = decisions.some(
     (decision) =>
-      decision.acceptedFindingIds.some((id) =>
-        run.board.findings.some((finding) => finding.id === id && isAcceptedForDecision(run, finding))
-      ) &&
+      decision.acceptedFindingIds.some((id) => substantiveAcceptedFindingIds.has(id)) &&
       (decision.evidenceRefs?.length || decision.sourceResultIds?.length)
   );
-  const leadReady = run.leadState === "finalized" || hasTraceableDecision;
+  const leadReady = hasTraceableDecision;
 
   const baseGates =
     run.settings.worktreePolicy && run.settings.worktreePolicy !== "none"
@@ -575,6 +848,15 @@ export function evaluateAgentTeamFinalize(run: AgentTeamRun): AgentTeamFinalizeC
       : run.board.qualityGates;
   const gates: AgentTeamQualityGate[] = baseGates.map((gate) => {
     if (gate.id === "gate-required-tasks") {
+      if (stop.requiredTasksComplete === false) {
+        return {
+          ...gate,
+          status: "passed",
+          checkedAt: now,
+          relatedTaskIds: [],
+          message: "Required task gate is disabled for this Team.",
+        };
+      }
       return {
         ...gate,
         status: requiredIncomplete.length === 0 ? "passed" : "failed",
@@ -587,6 +869,15 @@ export function evaluateAgentTeamFinalize(run: AgentTeamRun): AgentTeamFinalizeC
       };
     }
     if (gate.id === "gate-open-challenges") {
+      if (stop.noOpenBlockingChallenges === false) {
+        return {
+          ...gate,
+          status: "passed",
+          checkedAt: now,
+          relatedChallengeIds: [],
+          message: "Open challenge gate is disabled for this Team.",
+        };
+      }
       return {
         ...gate,
         status: openBlockingChallenges.length === 0 ? "passed" : "failed",
@@ -599,13 +890,21 @@ export function evaluateAgentTeamFinalize(run: AgentTeamRun): AgentTeamFinalizeC
       };
     }
     if (gate.id === "gate-lead-synthesis") {
+      if (stop.leadFinalSynthesis === false) {
+        return {
+          ...gate,
+          status: "passed",
+          checkedAt: now,
+          message: "Lead synthesis gate is disabled for this Team.",
+        };
+      }
       return {
         ...gate,
         status: leadReady ? "passed" : "failed",
         checkedAt: now,
         message: leadReady
-          ? "Lead 已形成带 evidence / finding 追溯的最终综合判断。"
-          : "Lead 尚未形成可追溯最终综合判断。",
+          ? "Lead 已形成带真实 evidence / finding 追溯的最终综合判断。"
+          : "Lead 尚未形成可追溯最终综合判断，或目前只有空输出/系统占位 finding。",
       };
     }
     if (gate.id === "gate-worktrees-merged") {
@@ -661,37 +960,89 @@ export function transitionAgentTeamRun(
   status: AgentTeamRunStatus
 ): { run: AgentTeamRun; blockedReasons: string[] } {
   const now = Date.now();
+  if (run.status === "aborted" && status !== "aborted") {
+    return {
+      run,
+      blockedReasons: ["Team has already been stopped."],
+    };
+  }
   if (status === "completed") {
     const check = evaluateAgentTeamFinalize(run);
     if (!check.ok) {
-      const event = makeEvent(run, "quality_gate_failed", "Finalize blocked by quality gates.", {
+      const event = makeEvent(run, "quality_gate_failed", "最终总结暂未通过检查。", {
         blockingReasons: check.blockingReasons,
       });
       return {
-        run: patchAgentTeamRun(run, {
+        run: attachAgentTeamDiagnostics(patchAgentTeamRun(run, {
           status: "running",
           board: {
             ...run.board,
             qualityGates: check.gates,
             events: [...run.board.events, event],
           },
-        }),
+        })),
         blockedReasons: check.blockingReasons,
       };
     }
+    const terminalTaskIds = new Set(
+      run.board.tasks
+        .filter((task) => task.status !== "completed")
+        .map((task) => task.id)
+    );
+    const terminalTasks = run.board.tasks.map((task) => ({
+      ...task,
+      ...(terminalTaskIds.has(task.id)
+        ? {
+            status: "skipped" as const,
+            ownerAgentId: task.ownerAgentId ?? run.leadAgentId,
+            completedAt: now,
+            completionSource: "lead_override" as const,
+          }
+        : {}),
+      blocker: undefined,
+      lastError: undefined,
+    }));
+    const releasedLocks = (run.board.fileLocks ?? []).map((lock) =>
+      lock.status === "active"
+        ? { ...lock, status: "released" as const, releasedAt: now }
+        : lock
+    );
+    const terminalMembers = run.members.map((member) =>
+      member.currentTaskId && terminalTaskIds.has(member.currentTaskId)
+        ? {
+            ...member,
+            status: "done" as const,
+            currentTaskId: undefined,
+            latestOutput: "最终总结已生成，剩余任务已随本次结论归档。",
+            lastActiveAt: now,
+          }
+        : member.status === "working"
+          ? {
+              ...member,
+              status: "done" as const,
+              currentTaskId: undefined,
+              latestOutput: member.latestOutput ?? "最终总结已生成，成员已停止处理。",
+              lastActiveAt: now,
+            }
+          : member
+    );
     return {
       run: patchAgentTeamRun(run, {
         status: "completed",
         leadState: "finalized",
         endedAt: now,
+        blockReasons: [],
         board: {
           ...run.board,
+          tasks: terminalTasks,
+          fileLocks: releasedLocks,
           qualityGates: check.gates,
           events: [
             ...run.board.events,
-            makeEvent(run, "team_finalized", "Team finalized after all quality gates passed."),
+            makeEvent(run, "team_finalized", "团队已经完成总结。"),
           ],
         },
+        members: terminalMembers,
       }),
       blockedReasons: [],
     };
@@ -729,6 +1080,7 @@ export function transitionAgentTeamRun(
     run: patchAgentTeamRun(run, {
       status,
       ...(status === "aborted" ? { endedAt: now } : {}),
+      ...(status === "aborted" ? { blockReasons: [] } : {}),
       board: {
         ...run.board,
         fileLocks: releasedLocks,
@@ -775,9 +1127,12 @@ export function synthesizeAgentTeamFromAvailableWork(
   const forcedTasks = run.board.tasks.filter(
     (task) => task.required && task.status !== "completed"
   );
+  const archivedTasks = run.board.tasks.filter(
+    (task) => task.status !== "completed" && !forcedTasks.some((forced) => forced.id === task.id)
+  );
   const openChallenges = run.board.challenges.filter(isOpenChallenge);
   const reusableFindings = run.board.findings.filter(
-    (finding) => finding.status !== "rejected"
+    (finding) => finding.status !== "rejected" && isSubstantiveFinding(finding)
   );
   const fallbackFindingId = `${run.id}:finding:available:${now}`;
   const acceptedFindingIds =
@@ -785,19 +1140,24 @@ export function synthesizeAgentTeamFromAvailableWork(
       ? reusableFindings.map((finding) => finding.id)
       : [fallbackFindingId];
   const sourceResultIds = (run.board.results ?? []).map((result) => result.id);
-  const evidenceRefs =
+  const resultEvidenceRefs = (run.board.results ?? [])
+    .map((result) => result.sessionFile ? `session:${result.sessionFile}` : "")
+    .filter(Boolean);
+  const taskEvidenceRefs = run.board.tasks
+    .filter((task) => task.status === "completed" || forcedTasks.some((item) => item.id === task.id))
+    .map((task) => `task:${task.id}`);
+  const evidenceRefs = Array.from(new Set([...resultEvidenceRefs, ...taskEvidenceRefs]));
+  const fallbackClaim =
     sourceResultIds.length > 0
-      ? []
-      : run.board.tasks
-          .filter((task) => task.status === "completed" || forcedTasks.some((item) => item.id === task.id))
-          .map((task) => `task:${task.id}`);
+      ? "不通过：当前无法形成可靠结论，部分检查没有拿到可采纳结果，因此只能给出带风险的阶段性判断。"
+      : "不通过：当前无法形成可靠结论，现有信息不足以支撑最终判断。";
   const fallbackFinding: AgentTeamFinding | null =
     reusableFindings.length === 0
       ? {
           id: fallbackFindingId,
           taskId: forcedTasks[0]?.id,
           authorAgentId: actorAgentId,
-          claim: "基于当前团队过程，已有信息足以给出阶段性综合；未完成部分需要在结论中说明风险。",
+          claim: fallbackClaim,
           evidenceRefs,
           confidence: "medium",
           status: "accepted",
@@ -812,8 +1172,12 @@ export function synthesizeAgentTeamFromAvailableWork(
       : null;
   const forcedTaskIds = forcedTasks.map((task) => task.id);
   const forcedTaskSet = new Set(forcedTaskIds);
+  const primaryRationale =
+    reusableFindings.length === 0
+      ? fallbackClaim
+      : opts.reason?.trim() || "基于当前已有发现给出阶段性结论，并保留未完成部分的风险。";
   const rationale = [
-    opts.reason?.trim() || "用户选择使用当前已有结果收束，避免团队卡在失败成员或未完成整理任务上。",
+    primaryRationale,
     forcedTasks.length > 0
       ? `未完成关键任务已由负责人接管：${forcedTasks.map((task) => task.title).join("、")}。`
       : "关键任务已完成。",
@@ -846,26 +1210,34 @@ export function synthesizeAgentTeamFromAvailableWork(
         }
       : challenge
   );
+  const terminalTaskSet = new Set([
+    ...forcedTaskIds,
+    ...archivedTasks.map((task) => task.id),
+  ]);
   const nextTasks = run.board.tasks.map((task) =>
-    forcedTaskSet.has(task.id)
+    terminalTaskSet.has(task.id)
       ? {
           ...task,
-          status: "completed" as const,
+          status: "skipped" as const,
           ownerAgentId: task.ownerAgentId ?? actorAgentId,
           completedAt: now,
-          findingIds: Array.from(new Set([...task.findingIds, ...acceptedFindingIds])),
+          findingIds: Array.from(new Set([
+            ...task.findingIds,
+            ...(forcedTaskSet.has(task.id) ? acceptedFindingIds : []),
+          ])),
           completionSource: "lead_override" as const,
           blocker: undefined,
+          lastError: undefined,
         }
       : task
   );
   const releasedLocks = (run.board.fileLocks ?? []).map((lock) =>
-    forcedTaskSet.has(lock.taskId) && lock.status === "active"
+    terminalTaskSet.has(lock.taskId) && lock.status === "active"
       ? { ...lock, status: "released" as const, releasedAt: now }
       : lock
   );
   const nextMembers = run.members.map((member) =>
-    member.currentTaskId && forcedTaskSet.has(member.currentTaskId)
+    member.currentTaskId && terminalTaskSet.has(member.currentTaskId)
       ? {
           ...member,
           status: "idle" as const,
@@ -892,7 +1264,7 @@ export function synthesizeAgentTeamFromAvailableWork(
   const events: AgentTeamEvent[] = [
     ...run.board.events,
     ...forcedTasks.map((task) => ({
-      ...eventWithActor(run, "task_completed", actorAgentId, `${task.title} completed by lead override.`, {
+      ...eventWithActor(run, "task_completed", actorAgentId, `${task.title} skipped with risk summary.`, {
         reason: opts.reason,
       }),
       taskId: task.id,
@@ -925,8 +1297,12 @@ export function synthesizeAgentTeamFromAvailableWork(
       }),
     },
   ];
-  const prepared = patchAgentTeamRun(run, {
+  const finalizedAt = now;
+  const finalized = patchAgentTeamRun(run, {
+    status: "completed",
     leadState: "finalized",
+    endedAt: finalizedAt,
+    updatedAt: finalizedAt,
     board: {
       ...run.board,
       tasks: nextTasks,
@@ -940,14 +1316,18 @@ export function synthesizeAgentTeamFromAvailableWork(
         gap: "已支持用户触发降级收束；后续可在连续失败时自动建议该动作。",
         nextStep: "把连续失败阈值接入自动恢复建议。",
       }),
-      events,
+      events: [
+        ...events,
+        makeEvent(run, "team_finalized", "团队已带风险生成最终总结。", {
+          forcedTaskIds,
+        }),
+      ],
     },
     members: nextMembers,
   });
-  const finalized = transitionAgentTeamRun(prepared, "completed");
   return {
-    run: finalized.run,
-    blockedReasons: finalized.blockedReasons,
+    run: finalized,
+    blockedReasons: [],
     forcedTaskIds,
   };
 }
@@ -965,7 +1345,7 @@ export function claimAgentTeamTask(
   const member = run.members.find((item) => item.id === memberId);
   if (!task) return { run, error: "task not found" };
   if (!member) return { run, error: "member not found" };
-  if (task.status === "completed") return { run, error: "task already completed" };
+  if (isTerminalTaskStatus(task.status)) return { run, error: "task already completed" };
   if (!dependenciesComplete(run, taskId)) {
     const blocker = `Waiting for dependencies: ${(task.dependsOnTaskIds ?? []).join(", ")}`;
     const nextTasks = run.board.tasks.map((item) =>
@@ -1087,11 +1467,11 @@ export function claimAgentTeamTask(
         events: [
           ...run.board.events,
           {
-            ...eventWithActor(run, "task_claimed", memberId, `${member.name} claimed ${task.title}.`),
+            ...eventWithActor(run, "task_claimed", memberId, `已领取「${task.title}」。`),
             taskId,
           },
           ...newLocks.map((lock) => ({
-            ...eventWithActor(run, "file_lock_acquired", memberId, `${member.name} locked ${lock.path}.`, {
+              ...eventWithActor(run, "file_lock_acquired", memberId, `已锁定 ${lock.path}。`, {
               lockId: lock.id,
             }),
             taskId,
@@ -1114,7 +1494,7 @@ export function recordAgentTeamToolWrite(
   const taskId = member.currentTaskId;
   if (!taskId) return { run };
   const task = run.board.tasks.find((item) => item.id === taskId);
-  if (!task || task.status === "completed") return { run };
+  if (!task || isTerminalTaskStatus(task.status)) return { run };
   const requestedWritePaths = paths.map(normalizePathForLock).filter(Boolean);
   if (requestedWritePaths.length === 0) return { run };
   const conflict = findFileLockConflict(run, requestedWritePaths, memberId);
@@ -1435,10 +1815,31 @@ export function submitAgentTeamResult(
   const member = run.members.find((item) => item.id === opts.memberId);
   if (!task) return { run, error: "task not found" };
   if (!member) return { run, error: "member not found" };
-  const parsed = parseAgentTeamResultText(opts.rawText);
+  const parsed = normalizeAgentTeamResult({
+    rawText: opts.rawText,
+    mode: run.settings.mode ?? "collaboration",
+    taskTitle: task.title,
+    taskDescription: task.description,
+    sessionFile: opts.sessionFile,
+  });
+  // “缺 evidence” 不再作为阻断性 warning（无论 collaboration 还是 audit 模式）：
+  // 子 agent 给了实质发现却没附规范引用时，过去 audit 模式会让整条 result 进
+  // needs_review、findings 被整体丢弃，导致 board 为空、synthesize 凭空生成
+  // pessimistic 兜底（用户复现的 bug）。现在缺 evidence 只把发现降为 low 置信
+  // 作为风险保留；真正阻断只发生在“完全没提取到任何可用发现”时。
+  const blockingWarnings = parsed.warnings.filter((warning) => {
+    const lower = warning.toLowerCase();
+    if (lower.includes("adapted from teammate natural language reply")) return false;
+    if (lower.includes("no evidence")) return false; // evidence 缺失改为软降级
+    return true;
+  });
   const resultId = `${opts.taskId}:result:${now}`;
   const findingIds = parsed.findings.map((_, index) => `${resultId}:finding:${index + 1}`);
   const challengeIds = parsed.challenges.map((_, index) => `${resultId}:challenge:${index + 1}`);
+  // evidence 缺失时把发现置信降为 low（audit 模式更敏感），作为风险提示保留。
+  const evidenceMissing = parsed.warnings.some((warning) =>
+    warning.toLowerCase().includes("no evidence")
+  );
   const result: AgentTeamResult = {
     id: resultId,
     taskId: opts.taskId,
@@ -1447,19 +1848,24 @@ export function submitAgentTeamResult(
     rawText: opts.rawText,
     summary: parsed.summary,
     parsedAt: now,
-    status: parsed.findings.length > 0 && parsed.warnings.length === 0 ? "parsed" : "needs_review",
+    status: parsed.findings.length > 0 && blockingWarnings.length === 0 ? "parsed" : "needs_review",
     findingIds,
     challengeIds,
     evidenceRefs: Array.from(new Set(parsed.findings.flatMap((finding) => finding.evidenceRefs ?? []))),
     parseWarnings: parsed.warnings,
+    source: parsed.source,
+    adaptedFromNaturalLanguage: parsed.adaptedFromNaturalLanguage,
   };
+  // needs_review 仅在“没有可用发现”或“有非 evidence 的阻断性问题”时触发；
+  // 仅缺 evidence 的实质发现已不会落到这里（status 会是 parsed，正常入库）。
   if (result.status === "needs_review") {
     const blocker =
       parsed.findings.length === 0
-        ? "Teammate result needs review: no structured findings were provided."
-        : `Teammate result needs review: ${parsed.warnings.join("; ")}`;
+        ? "成员结果待整理：没有提取到可采纳发现。"
+        : `Teammate result needs review: ${blockingWarnings.join("; ")}`;
+    const reasonCode = parsed.reasonCodes[0] ?? classifyAgentTeamBlockReason(blocker);
     return {
-      run: patchAgentTeamRun(run, {
+      run: attachAgentTeamDiagnostics(patchAgentTeamRun(run, {
         board: {
           ...run.board,
           results: [...(run.board.results ?? []), result],
@@ -1471,6 +1877,19 @@ export function submitAgentTeamResult(
                   blocker,
                   resultId,
                   lastError: blocker,
+                  attempts: [
+                    ...(item.attempts ?? []),
+                    {
+                      attempt: (item.attempts?.length ?? 0) + 1,
+                      memberId: opts.memberId,
+                      status: "needs_review" as const,
+                      startedAt: now,
+                      endedAt: now,
+                      resultId,
+                      error: blocker,
+                      reasonCode,
+                    },
+                  ],
                 }
               : item
           ),
@@ -1502,7 +1921,7 @@ export function submitAgentTeamResult(
               }
             : item
         ),
-      }),
+      })),
       error: blocker,
     };
   }
@@ -1513,7 +1932,8 @@ export function submitAgentTeamResult(
     authorAgentId: opts.memberId,
     claim: finding.claim,
     evidenceRefs: finding.evidenceRefs ?? [],
-    confidence: finding.confidence ?? "medium",
+    // 缺 evidence 的发现降为 low 置信（保留为风险提示），而不是被丢弃。
+    confidence: evidenceMissing ? "low" : finding.confidence ?? "medium",
     status: "proposed",
     challengeIds: [],
     sourceResultId: resultId,
@@ -1651,11 +2071,12 @@ function autoSettleSynthesisResult(
   }
   const openChallenges = nextRun.board.challenges.filter(isOpenChallenge);
   for (const challenge of openChallenges) {
+    if ((nextRun.settings.mode ?? "collaboration") === "audit") break;
     const resolved = resolveAgentTeamChallenge(
       nextRun,
       challenge.id,
       nextRun.leadAgentId,
-      "Lead accepted the synthesis result as the resolution for this open challenge.",
+      "负责人已采纳整理结果，这个分歧已作为最终结论的一部分收束。",
       synthesisFindingIds
     );
     nextRun = resolved.run;
@@ -1681,7 +2102,7 @@ function autoSettleSynthesisResult(
 }
 
 export function settleAgentTeamCompletedSynthesis(run: AgentTeamRun): AgentTeamRun {
-  if (run.status === "completed") return run;
+  if (run.status === "completed" || run.status === "aborted") return run;
   const synthesisTask = run.board.tasks.find(
     (task) =>
       task.status === "completed" &&
@@ -2290,7 +2711,7 @@ export function retryAgentTeamTask(
 ): { run: AgentTeamRun; error?: string } {
   const task = run.board.tasks.find((item) => item.id === taskId);
   if (!task) return { run, error: "task not found" };
-  if (task.status === "completed") return { run, error: "task already completed" };
+  if (isTerminalTaskStatus(task.status)) return { run, error: "task already completed" };
   return {
     run: patchAgentTeamRun(run, {
       board: {
@@ -2315,7 +2736,7 @@ export function retryAgentTeamTask(
         events: [
           ...run.board.events,
           {
-            ...makeEvent(run, "task_retried", `${task.title} returned to pending queue.`),
+            ...makeEvent(run, "task_retried", `「${task.title}」已交回队列，等待重新处理。`),
             taskId,
           },
         ],

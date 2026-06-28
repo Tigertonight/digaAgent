@@ -1,7 +1,11 @@
 "use client";
 
-import type { RefObject } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import type {
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+  RefObject,
+} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, Loader2, Pause, Target, XCircle } from "lucide-react";
 import { MessageView } from "./MessageView";
 import { UiFaultBoundary } from "./UiFaultBoundary";
@@ -11,6 +15,7 @@ import type { MessagePart } from "@/lib/types";
 import type { AgentPhase } from "@/lib/session-runner";
 import type { ProviderInfo } from "@/lib/types";
 import type { AgentGoal } from "@/lib/goal/types";
+import type { AgentTeamRun } from "@/lib/agent-team/types";
 import type { WorkflowWorktreeAction } from "./MessageView";
 import { goalAcceptanceSummary, goalStatusLabel } from "@/lib/goal/labels";
 import {
@@ -85,11 +90,16 @@ interface MessagesScrollAreaProps {
   onOpenSubagentSession?: (sessionFile: string) => void;
   /** Agent Team：打开共享白板工作区 */
   onOpenAgentTeamWorkspace?: (teamId: string) => void;
+  /** Agent Team：打开成员记录；找不到子会话时降级到 Team 工作区。 */
+  onOpenAgentTeamMember?: (teamId: string, memberId: string, sessionFile?: string) => void;
   /** Agent Team：轻量运行控制 */
   onAgentTeamAction?: (
     teamId: string,
-    action: "pause" | "resume" | "finalize" | "stop"
+    action: "pause" | "resume" | "finalize" | "stop",
+    leadAgentId?: string
   ) => void;
+  /** Agent Team：当前会话里同 ID run 的最新版，用于修正历史消息快照。 */
+  agentTeamRuns?: AgentTeamRun[];
 }
 
 export function MessagesScrollArea({
@@ -129,7 +139,9 @@ export function MessagesScrollArea({
   onResumeSubagentBatch,
   onOpenSubagentSession,
   onOpenAgentTeamWorkspace,
+  onOpenAgentTeamMember,
   onAgentTeamAction,
+  agentTeamRuns = [],
 }: MessagesScrollAreaProps) {
   const [visibleItemLimit, setVisibleItemLimit] = useState(
     INITIAL_RENDER_ITEM_WINDOW
@@ -145,6 +157,16 @@ export function MessagesScrollArea({
     () => buildVisibleOrdinalByMessageIndex(messages),
     [messages]
   );
+  const latestAgentTeamRunById = useMemo(() => {
+    const map = new Map<string, AgentTeamRun>();
+    for (const run of agentTeamRuns) {
+      const previous = map.get(run.id);
+      if (!previous || (run.updatedAt ?? 0) >= (previous.updatedAt ?? 0)) {
+        map.set(run.id, run);
+      }
+    }
+    return map;
+  }, [agentTeamRuns]);
 
   // 性能：逐条派生数据【ref-cached】。
   // 上一版用 useMemo + [messages]，但 reducer 每次 token 都会返回新的 messages 数组，
@@ -233,15 +255,78 @@ export function MessagesScrollArea({
     return out;
   }, [messages, currentProvider, modelId, providerKey]);
 
-  const hiddenItemCount = Math.max(0, renderItems.length - visibleItemLimit);
-  const visibleRenderItems =
-    hiddenItemCount > 0 ? renderItems.slice(hiddenItemCount) : renderItems;
+  const { hiddenItemCount, visibleRenderItems } = useMemo(
+    () => selectVisibleRenderItemsForWindow(renderItems, visibleItemLimit),
+    [renderItems, visibleItemLimit]
+  );
+  const lastAgentTeamActionRef = useRef<{
+    key: string;
+    at: number;
+  } | null>(null);
+  const dispatchAgentTeamActionFromButton = useCallback(
+    (
+      button: HTMLButtonElement,
+      event?: { preventDefault: () => void; stopPropagation: () => void }
+    ) => {
+      if (!onAgentTeamAction) return;
+      if (!button || button.disabled) return;
+      const action = button.dataset.agentTeamAction;
+      if (
+        action !== "pause" &&
+        action !== "resume" &&
+        action !== "finalize" &&
+        action !== "stop"
+      ) {
+        return;
+      }
+      const teamId = button.dataset.agentTeamId;
+      if (!teamId) return;
+      const leadAgentId = button.dataset.agentTeamLeadId;
+      event?.preventDefault();
+      event?.stopPropagation();
+      const key = `${teamId}:${action}`;
+      const now = Date.now();
+      const last = lastAgentTeamActionRef.current;
+      if (last?.key === key && now - last.at < 500) return;
+      lastAgentTeamActionRef.current = { key, at: now };
+      onAgentTeamAction(teamId, action, leadAgentId);
+    },
+    [onAgentTeamAction]
+  );
+  const handleAgentTeamActionCapture = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement> | ReactPointerEvent<HTMLDivElement>) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const button = target?.closest<HTMLButtonElement>(
+        "button[data-agent-team-id][data-agent-team-action]"
+      );
+      if (button) dispatchAgentTeamActionFromButton(button, event);
+    },
+    [dispatchAgentTeamActionFromButton]
+  );
+
+  useEffect(() => {
+    const node = messagesScrollRef.current;
+    if (!node) return;
+    const handleNativePointerDown = (event: PointerEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const button = target?.closest<HTMLButtonElement>(
+        "button[data-agent-team-id][data-agent-team-action]"
+      );
+      if (button) dispatchAgentTeamActionFromButton(button, event);
+    };
+    node.addEventListener("pointerdown", handleNativePointerDown, true);
+    return () => {
+      node.removeEventListener("pointerdown", handleNativePointerDown, true);
+    };
+  }, [dispatchAgentTeamActionFromButton, messagesScrollRef]);
 
   return (
     <div className="relative flex flex-1 overflow-hidden">
       <div
         ref={messagesScrollRef}
         onScroll={onScroll}
+        onClickCapture={handleAgentTeamActionCapture}
+        onPointerDownCapture={handleAgentTeamActionCapture}
         className="flex-1 overflow-y-auto"
         // 【产品规则】关掉浏览器默认的 scroll anchoring。
         //
@@ -357,7 +442,9 @@ export function MessagesScrollArea({
                     onResumeSubagentBatch={onResumeSubagentBatch}
                     onOpenSubagentSession={onOpenSubagentSession}
                     onOpenAgentTeamWorkspace={onOpenAgentTeamWorkspace}
+                    onOpenAgentTeamMember={onOpenAgentTeamMember}
                     onAgentTeamAction={onAgentTeamAction}
+                    agentTeamRunsById={latestAgentTeamRunById}
                   />
                 </UiFaultBoundary>
               );
@@ -569,6 +656,46 @@ type RenderItem =
       kind: "process_group";
       messages: Array<{ message: ChatMessage; index: number }>;
     };
+
+export function selectVisibleRenderItemsForWindow(
+  renderItems: RenderItem[],
+  visibleItemLimit: number
+): { hiddenItemCount: number; visibleRenderItems: RenderItem[] } {
+  const hiddenItemCount = Math.max(0, renderItems.length - visibleItemLimit);
+  if (hiddenItemCount <= 0) {
+    return { hiddenItemCount: 0, visibleRenderItems: renderItems };
+  }
+  const visible = renderItems.slice(hiddenItemCount);
+  const visibleFinalMarkers = new Set(visible.flatMap(agentTeamFinalMarkersForRenderItem));
+  const retainedFinals = renderItems
+    .slice(0, hiddenItemCount)
+    .filter((item) => {
+      const markers = agentTeamFinalMarkersForRenderItem(item);
+      return markers.length > 0 && markers.some((marker) => !visibleFinalMarkers.has(marker));
+    })
+    .slice(-3);
+  return {
+    hiddenItemCount,
+    visibleRenderItems: retainedFinals.length > 0 ? [...retainedFinals, ...visible] : visible,
+  };
+}
+
+function agentTeamFinalMarkersForRenderItem(item: RenderItem): string[] {
+  const messages =
+    item.kind === "message" ? [item.message] : item.messages.map((entry) => entry.message);
+  const markers: string[] = [];
+  for (const message of messages) {
+    for (const part of messageParts(message)) {
+      if (part.kind !== "text") continue;
+      const matcher = /agent-team-final:[^\s>]+/g;
+      let match: RegExpExecArray | null;
+      while ((match = matcher.exec(part.text)) != null) {
+        markers.push(match[0]);
+      }
+    }
+  }
+  return markers;
+}
 
 function buildVisibleOrdinalByMessageIndex(messages: ChatMessage[]): number[] {
   const ordinals: number[] = [];
@@ -786,13 +913,21 @@ function isCollapsibleProcessAssistant(
   if (message.role !== "assistant") return false;
   const parts = messageParts(message);
   if (parts.some(isPendingUserBlockerPart)) return false;
+  if (parts.some((part) => part.kind === "agent_team_run")) return false;
+  if (
+    parts.some(
+      (part) =>
+        part.kind === "text" && part.text.includes("agent-team-final:")
+    )
+  ) {
+    return false;
+  }
   if (message.stopReason === "tool_use") return true;
   if (!isLastAssistantInBlock(messages, index, blockEnd)) return true;
   // Some SDK turns only carry model/usage metadata. Rendering them as standalone
   // assistant messages creates the repeated “GPT-5.5 + token row” whitespace; in
   // the conversation hierarchy they are part of the surrounding execution trace.
   if (parts.length === 0) return Boolean(message.meta?.usage || message.meta?.model);
-  if (parts.some((part) => part.kind === "agent_team_run")) return false;
   return !parts.some((part) => part.kind === "text" && part.text.trim().length > 0);
 }
 

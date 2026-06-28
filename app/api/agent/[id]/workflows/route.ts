@@ -8,7 +8,7 @@ import {
   retryWorkflowScriptForParent,
 } from "@/lib/agent-registry";
 import { buildWorkflowDebugBundle } from "@/lib/workflows/debug-bundle";
-import { createGitWorktreeManager } from "@/lib/workflows/git-worktree";
+import { createGitWorktreeManager } from "@/lib/shared/git-worktree";
 import {
   getWorkflowRun,
   listWorkflowRuns,

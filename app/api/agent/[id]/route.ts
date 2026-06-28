@@ -38,6 +38,7 @@ import {
   finishStreamingAfterPromptError,
   finishStreamingAfterAbort,
 } from "@/lib/agent-registry";
+import type { AgentRecord } from "@/lib/agent-registry";
 import {
   clearGoal,
   findAgentIdBySessionId,
@@ -89,6 +90,12 @@ import type { ProgressUpdateInput } from "@/lib/progress/types";
 import type { ThinkingLevel, ImageContentLite } from "@/lib/types";
 import { agentBrowserId } from "@/lib/browser/browser-id";
 import { clearInAppBrowserPendingCommands } from "@/lib/browser/runtime";
+import {
+  listAgentTeamRuns,
+  listAgentTeamRunsByParentSessionPath,
+} from "@/lib/agent-team/server-store";
+import type { AgentTeamRun } from "@/lib/agent-team/types";
+import { getAgentTeamFinalSummary } from "@/lib/agent-team/final-summary";
 
 const WORKFLOW_MODE_TOOL_NAMES = [
   "run_workflow_script",
@@ -103,6 +110,307 @@ const WORKFLOW_MODE_TOOL_NAMES = [
 ] as const;
 
 const DIRECT_DELEGATE_TOOL_NAME = "delegate_subagents";
+
+const ZERO_ASSISTANT_USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+function textFromAgentMessageContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) =>
+      part && typeof part === "object" && "text" in part
+        ? String((part as { text?: unknown }).text ?? "")
+        : ""
+    )
+    .join("");
+}
+
+function repairPersistedAgentTeamFinalMessages(rec: AgentRecord): void {
+  const messages = (rec.session.agent?.state?.messages ?? []) as Array<{
+    role?: string;
+    content?: unknown;
+    usage?: unknown;
+    api?: string;
+  }>;
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    if (!textFromAgentMessageContent(message.content).includes("agent-team-final:")) continue;
+    if (!message.usage) message.usage = ZERO_ASSISTANT_USAGE;
+    if (!message.api) {
+      message.api =
+        (rec.session.model as { api?: string } | undefined)?.api ?? "agent-team";
+    }
+  }
+}
+
+function stripModelHiddenText(text: string): string {
+  return text
+    .replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, "\n")
+    .replace(/<think\b[^>]*>[\s\S]*$/gi, "")
+    .replace(/<\/think>/gi, "")
+    .replace(/\n?<!--\s*agent-team-final:[^>]+-->\s*/g, "")
+    .trim();
+}
+
+function cleanMessageContentForModel(content: unknown): unknown {
+  if (typeof content === "string") return stripModelHiddenText(content);
+  if (!Array.isArray(content)) return content;
+  return content.map((part) => {
+    if (!part || typeof part !== "object" || !("text" in part)) return part;
+    const text = (part as { text?: unknown }).text;
+    if (typeof text !== "string") return part;
+    return { ...part, text: stripModelHiddenText(text) };
+  });
+}
+
+function sanitizePersistedModelHistory(rec: AgentRecord): void {
+  const messages = (rec.session.agent?.state?.messages ?? []) as Array<{
+    content?: unknown;
+  }>;
+  for (const message of messages) {
+    message.content = cleanMessageContentForModel(message.content);
+  }
+}
+
+function shouldAttachRecentTeamFinalContext(text: string): boolean {
+  const normalized = stripContextAside(text).replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  if (normalized.length > 260) return false;
+  return /这个|这条|上面|刚才|上一|结论|结果|总结|解释|原因|为什么|通过|不通过|团队|team/i.test(
+    normalized
+  );
+}
+
+function completedTeamFinalRationale(run: AgentTeamRun): string | null {
+  if (run.status !== "completed") return null;
+  const rationale = run.board.decisions.at(-1)?.rationale?.trim();
+  return rationale || null;
+}
+
+function completedTeamFinalContext(run: AgentTeamRun): string | null {
+  if (run.status !== "completed") return null;
+  const summary = (() => {
+    try {
+      return getAgentTeamFinalSummary(run);
+    } catch {
+      return null;
+    }
+  })();
+  if (summary) {
+    const lines = [
+      `结论：${summary.verdict}`,
+      summary.bullets[0] ? `关键依据：${summary.bullets.slice(0, 2).join("；")}` : "",
+      summary.risk ? `风险：${summary.risk}` : "",
+    ].filter(Boolean);
+    return lines.join("\n");
+  }
+  return completedTeamFinalRationale(run);
+}
+
+function recentCompletedTeamRunWithContext(
+  agentId: string,
+  rec: AgentRecord
+): AgentTeamRun | null {
+  const runs = recentCompletedTeamRunsForAgent(agentId, rec);
+  const currentSessionRuns = rec.session.sessionFile
+    ? runs.filter((item) => item.parentSessionPath === rec.session.sessionFile)
+    : [];
+  return (
+    [...currentSessionRuns, ...runs].find((item) =>
+      Boolean(completedTeamFinalContext(item))
+    ) ?? null
+  );
+}
+
+function extractTeamEvidencePaths(text: string): string[] {
+  const matches = text.match(
+    /(?:file:)?(?:(?:app|lib|docs|scripts|electron|public|src|test|tests)\/[A-Za-z0-9._/@+:_-]+|(?:package|tsconfig|next\.config|vitest\.config|playwright\.config|eslint\.config|postcss\.config|tailwind\.config)\.(?:json|tsx?|mjs|cjs|js|md|yml|yaml))/g
+  );
+  return Array.from(
+    new Set(
+      (matches ?? [])
+        .map((item) => item.replace(/^file:/, "").replace(/[),.;，。；、]+$/g, ""))
+        .filter(Boolean)
+    )
+  );
+}
+
+function isRecentTeamEvidenceQuestion(text: string): boolean {
+  const normalized = stripContextAside(text).replace(/\s+/g, " ").trim();
+  if (!normalized || normalized.length > 120) return false;
+  if (!/证据|依据|来源|来自哪里|哪个文件|哪一个文件|文件/.test(normalized)) {
+    return false;
+  }
+  return /刚才|上面|这个|这条|结论|团队|team/i.test(normalized) || normalized.length <= 60;
+}
+
+function isRecentTeamExplanationQuestion(text: string): boolean {
+  const normalized = stripContextAside(text).replace(/\s+/g, " ").trim();
+  if (!normalized || normalized.length > 140) return false;
+  if (!/刚才|上面|这个|这条|结论|结果|总结|团队|team/i.test(normalized)) {
+    return false;
+  }
+  return /解释|原因|为什么|怎么理解|什么意思|一句话|结论是什么|结果是什么|通过|不通过|存在|不存在/i.test(
+    normalized
+  );
+}
+
+function buildRecentTeamLocalAnswer(
+  agentId: string,
+  rec: AgentRecord,
+  text: string
+): string | null {
+  if (!isRecentTeamEvidenceQuestion(text) && !isRecentTeamExplanationQuestion(text)) {
+    return null;
+  }
+  const run = recentCompletedTeamRunWithContext(agentId, rec);
+  if (!run) return null;
+  const summary = (() => {
+    try {
+      return getAgentTeamFinalSummary(run);
+    } catch {
+      return null;
+    }
+  })();
+  const context = [
+    summary?.verdict,
+    summary?.rationale,
+    ...(summary?.bullets ?? []),
+    completedTeamFinalRationale(run),
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const paths = Array.from(
+    new Set([
+      ...extractTeamEvidencePaths(run.objective),
+      ...extractTeamEvidencePaths(context),
+    ])
+  );
+  const verdict = summary?.verdict || completedTeamFinalRationale(run) || "刚才的团队结论";
+  if (!isRecentTeamEvidenceQuestion(text)) {
+    const risk = summary?.risk ? `风险：${summary.risk}` : "";
+    return [verdict, risk].filter(Boolean).join(" ");
+  }
+  if (paths.length === 0) return null;
+  const evidence = paths
+    .slice(0, 2)
+    .map((item) => `\`${item}\``)
+    .join("、");
+  return `证据来自 ${evidence}；${verdict}`;
+}
+
+function pushLocalAssistantText(
+  rec: AgentRecord,
+  userText: string,
+  text: string
+): { userMessage: Record<string, unknown>; message: Record<string, unknown> } {
+  const responseId = `local-team-followup-${Date.now()}`;
+  const now = Date.now();
+  const userMessage = {
+    role: "user" as const,
+    content: userText,
+    timestamp: now,
+  };
+  const message = {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text }],
+    responseId,
+    timestamp: now + 1,
+    provider: "local",
+    model: "agent-team-result",
+    api: "local",
+    usage: ZERO_ASSISTANT_USAGE,
+    stopReason: "stop" as const,
+  };
+  const messages = rec.session.agent?.state?.messages as unknown;
+  if (Array.isArray(messages)) {
+    messages.push(userMessage);
+    messages.push(message);
+  }
+  appendSessionMessage(rec, userMessage);
+  appendSessionMessage(rec, message);
+  flushSessionFile(rec);
+  pushExternalEvent(rec, { type: "message_start", message: userMessage });
+  pushExternalEvent(rec, { type: "message_start", message });
+  pushExternalEvent(rec, { type: "message_end", message });
+  return { userMessage, message };
+}
+
+function appendSessionMessage(rec: AgentRecord, message: unknown): void {
+  const sessionManager = rec.session.sessionManager as unknown as {
+    appendMessage?: (message: unknown) => void;
+  };
+  sessionManager.appendMessage?.(message);
+}
+
+function flushSessionFile(rec: AgentRecord): void {
+  const sessionManager = rec.session.sessionManager as unknown as {
+    _rewriteFile?: () => void;
+    flushed?: boolean;
+  };
+  sessionManager._rewriteFile?.();
+  sessionManager.flushed = true;
+}
+
+function recentCompletedTeamRunsForAgent(
+  agentId: string,
+  rec: AgentRecord
+): AgentTeamRun[] {
+  const bySession = rec.session.sessionFile
+    ? listAgentTeamRunsByParentSessionPath(rec.session.sessionFile)
+    : [];
+  const seen = new Set<string>();
+  return [...listAgentTeamRuns(agentId), ...bySession]
+    .filter((run) => {
+      if (seen.has(run.id)) return false;
+      seen.add(run.id);
+      return run.parentAgentId === agentId || run.parentSessionPath === rec.session.sessionFile;
+    })
+    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+}
+
+function withRecentTeamFinalContext(
+  agentId: string,
+  rec: AgentRecord,
+  text: string
+): string {
+  if (!shouldAttachRecentTeamFinalContext(text)) return text;
+  const run = recentCompletedTeamRunWithContext(agentId, rec);
+  const rationale = run ? completedTeamFinalContext(run) : null;
+  if (!run || !rationale) return text;
+  const objective = run.objective.replace(/\s+/g, " ").trim();
+  const clippedObjective =
+    objective.length > 180 ? `${objective.slice(0, 180)}...` : objective;
+  const context = completedTeamFinalContext(run) ?? rationale;
+  const clippedRationale =
+    context.length > 500 ? `${context.slice(0, 500)}...` : context;
+  return [
+    text,
+    "",
+    CONTEXT_ASIDE_OPEN,
+    "下面是最近一次团队协作已经给出的可见结论。用户追问“这个/上面/刚才的结论”时，优先引用它；不要复述内部过程。",
+    `团队目标：${clippedObjective}`,
+    `团队结论：${clippedRationale}`,
+    CONTEXT_ASIDE_CLOSE,
+  ].join("\n");
+}
+
+function emptyStats() {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cost: 0,
+  };
+}
 
 /** 校验并清洗 body.images */
 function parseImages(raw: unknown): ImageContentLite[] | undefined {
@@ -367,10 +675,19 @@ export async function GET(
           : null,
       });
     } catch (e) {
-      return NextResponse.json(
-        { error: (e as Error).message },
-        { status: 500 },
-      );
+      return NextResponse.json({
+        stats: emptyStats(),
+        contextUsage: null,
+        contextWindow: rec.session.model?.contextWindow ?? null,
+        model: rec.session.model
+          ? {
+              provider: rec.session.model.provider,
+              id: rec.session.model.id,
+              name: rec.session.model.name,
+            }
+          : null,
+        warning: e instanceof Error ? e.message : String(e),
+      });
     }
   }
 
@@ -510,8 +827,13 @@ export async function POST(
         const specialistIds = listDefinitions(rec.cwd).map((d) => d.id);
         const { displayText, finalText, mentionDirective } =
           composePromptWithAside(text, attachments, { specialistIds });
+        const finalTextWithTeamContext = withRecentTeamFinalContext(
+          id,
+          rec,
+          finalText
+        );
         const finalTextWithMode = withCommunicationInstructions(
-          finalText,
+          finalTextWithTeamContext,
           await getCommunicationSettings(),
         );
 
@@ -546,7 +868,26 @@ export async function POST(
               });
             }
           }
+          const localTeamAnswer = buildRecentTeamLocalAnswer(id, rec, finalText);
+          if (
+            localTeamAnswer &&
+            images.length === 0 &&
+            attachments.length === 0 &&
+            !workflowMode
+          ) {
+            const localMessages = pushLocalAssistantText(
+              rec,
+              displayText,
+              localTeamAnswer
+            );
+            return NextResponse.json({
+              ok: true,
+              localTeamAnswer: true,
+              localMessages,
+            });
+          }
           if (isLocalCodingAssistantAgent(rec)) {
+            sanitizePersistedModelHistory(rec);
             await promptLocalCodingAssistantAgent(rec, finalTextWithMode);
             return NextResponse.json({
               ok: true,
@@ -555,6 +896,8 @@ export async function POST(
                 : {}),
             });
           }
+          repairPersistedAgentTeamFinalMessages(rec);
+          sanitizePersistedModelHistory(rec);
           // 如果当前在 streaming，默认按 followUp 处理；否则正常 prompt
           // P3 修复：`images` 在上面被 `?? []` 归一为数组，虚假 truthy，
           // 会让无图请求也传 `{ images: [] }`。该参数必须是
@@ -566,8 +909,10 @@ export async function POST(
                 streamingBehavior: "followUp",
                 ...(imagesOpt ?? {}),
               });
-            } else {
+            } else if (imagesOpt) {
               await rec.session.prompt(finalTextWithMode, imagesOpt);
+            } else {
+              await rec.session.prompt(finalTextWithMode);
             }
           };
           if (workflowMode) {
@@ -600,8 +945,13 @@ export async function POST(
         const { finalText } = composePromptWithAside(text, attachments, {
           specialistIds: [],
         });
+        const finalTextWithTeamContext = withRecentTeamFinalContext(
+          id,
+          rec,
+          finalText
+        );
         const finalTextWithMode = withCommunicationInstructions(
-          finalText,
+          finalTextWithTeamContext,
           await getCommunicationSettings(),
         );
         const images = parseImages(body.images);
@@ -625,8 +975,13 @@ export async function POST(
         const { finalText } = composePromptWithAside(text, attachments, {
           specialistIds: [],
         });
+        const finalTextWithTeamContext = withRecentTeamFinalContext(
+          id,
+          rec,
+          finalText
+        );
         const finalTextWithMode = withCommunicationInstructions(
-          finalText,
+          finalTextWithTeamContext,
           await getCommunicationSettings(),
         );
         const images = parseImages(body.images);

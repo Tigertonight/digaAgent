@@ -47,9 +47,9 @@ import {
 } from "./server-store";
 import { appendWorkflowNetworkAudit } from "./network-policy";
 import { schemaInstruction, validateJsonSchema } from "./json-schema";
+import { RUNTIME_LIMITS } from "@/lib/shared/runtime-limits";
 
-const DEFAULT_SCRIPT_TIMEOUT_MS = 24 * 60 * 60 * 1000;
-const MAX_SCRIPT_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+const MAX_SCRIPT_TIMEOUT_MS = RUNTIME_LIMITS.workflowMaxTimeoutMs;
 const DEFAULT_MAX_AGENTS = 8;
 const DEFAULT_MAX_CONCURRENCY = 4;
 const MAX_SCRIPT_CHARS = 50000;
@@ -434,7 +434,7 @@ function normalizeManifest(input: RunWorkflowScriptInput): WorkflowManifest {
     timeoutMs: Math.max(
       1000,
       Math.min(
-        input.timeoutMs ?? DEFAULT_SCRIPT_TIMEOUT_MS,
+        input.timeoutMs ?? RUNTIME_LIMITS.workflowDefaultTimeoutMs(),
         MAX_SCRIPT_TIMEOUT_MS,
       ),
     ),
